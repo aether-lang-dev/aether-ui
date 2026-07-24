@@ -31,7 +31,10 @@
 import ui (
     window, vstack, hstack, text, btn, textfield,
     listbox, listbox_update, listbox_select, listbox_count, on_select,
+    style_font_family, style_font_size,
     picker, picker_add, enable_test_server, shortcut,
+    edge_insets, style_corner_radius, style_border, style_bg_color,
+    style_text_color, style_hover,
     ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg, canvas_region)
@@ -54,12 +57,13 @@ extern string_substring(s: string, start: int, end: int) -> string
 const FP_PREVIEW: string = "Handgloves 123"
 
 // One visible row: the family index plus the strings the row renders.
-struct Row { fi: int label: string cat: string }
-mk_row(fi: int, label: string, cat: string) -> ptr {
-    r = malloc(32) as *Row
+struct Row { fi: int label: string cat: string fam: string }
+mk_row(fi: int, label: string, cat: string, fam: string) -> ptr {
+    r = malloc(48) as *Row
     r.fi = fi
     r.label = label
     r.cat = cat
+    r.fam = fam
     return r as ptr
 }
 
@@ -71,6 +75,10 @@ struct App {
     lb: ptr            // the font listbox
     scene: ptr         // vg scene for the preview canvas
     variant_idx: int   // index into the selected family's variants
+    chip_sans: int     // the category chips, restyled on every refresh
+    chip_serif: int
+    chip_mono: int
+    chip_disp: int
 }
 mk_app() -> *App {
     a = malloc(64) as *App
@@ -80,6 +88,10 @@ mk_app() -> *App {
     a.lb = null
     a.scene = null
     a.variant_idx = 0
+    a.chip_sans = 0
+    a.chip_serif = 0
+    a.chip_mono = 0
+    a.chip_disp = 0
     return a
 }
 
@@ -158,13 +170,34 @@ category_for(face: string) -> string {
     return "display"
 }
 
-// Picker index → the engine's key strings (upstream uses <option value>).
-category_at(i: int) -> string {
-    if i == 1 { return "sans-serif" }
-    if i == 2 { return "serif" }
-    if i == 3 { return "monospace" }
-    if i == 4 { return "display" }
-    return "all"
+// A category pill: toggles its category in the engine's SET and restyles
+// itself to show the state. The whole vocabulary this needed — padding,
+// radius, border, hover — landed in the toolkit as the coverage gaps
+// were closed; before that this control could not be drawn.
+chip(_ctx: ptr, app: *App, cat: string) -> int {
+    // The handle isn't in scope inside its own callback, so the chip is
+    // restyled by refresh_list (which knows every chip) rather than here.
+    b = btn(_ctx, cat) callback {
+        _on = picker_engine.pl_toggle_category(app.list, cat)
+        refresh_list(app)
+    }
+    style_chip(b, 0)
+    return b
+}
+
+// Chip appearance for a state: outline when off, filled when on.
+style_chip(h: int, on: int) {
+    _p = edge_insets(h, 6.0, 14.0, 6.0, 14.0)
+    _r = style_corner_radius(h, 999.0)
+    _bd = style_border(h, 1.0, 0.10, 0.45, 0.91)
+    if on == 1 {
+        _bg = style_bg_color(h, 0.10, 0.45, 0.91, 1.0)
+        _fg = style_text_color(h, 1.0, 1.0, 1.0)
+    } else {
+        _bg = style_bg_color(h, 1.0, 1.0, 1.0, 1.0)
+        _fg = style_text_color(h, 0.10, 0.45, 0.91)
+    }
+    _hv = style_hover(h, 0.91, 0.94, 0.99)
 }
 sort_at(i: int) -> string {
     if i == 1 { return "popularity" }
@@ -188,10 +221,20 @@ refresh_list(app: *App) {
         nm = picker_engine.fam_name(fam)
         mark = ""
         if picker_engine.pl_is_fav(app.list, fi) == 1 { mark = "* " }
-        _ = list.list_add_raw(items, mk_row(fi, "${mark}${nm}", picker_engine.fam_category(fam)))
+        // The family NAME doubles as the font to typeset the row in — the
+        // defining feature of a font picker: you choose by SEEING the face.
+        _ = list.list_add_raw(items,
+            mk_row(fi, "${mark}${nm}", picker_engine.fam_category(fam), nm))
         i = i + 1
     }
     listbox_update(app.lb, items)
+    // Chips reflect the engine's category set.
+    if app.chip_sans != 0 {
+        style_chip(app.chip_sans, picker_engine.pl_category_on(app.list, "sans-serif"))
+        style_chip(app.chip_serif, picker_engine.pl_category_on(app.list, "serif"))
+        style_chip(app.chip_mono, picker_engine.pl_category_on(app.list, "monospace"))
+        style_chip(app.chip_disp, picker_engine.pl_category_on(app.list, "display"))
+    }
     total = picker_engine.pl_count(app.list)
     favs = picker_engine.pl_fav_count(app.list)
     if app.st_status != 0 {
@@ -270,15 +313,12 @@ main() {
                     picker_engine.pl_set_query(app.list, q)
                     refresh_list(app)
                 }
-                cats = picker() callback |idx: int| {
-                    picker_engine.pl_set_category(app.list, category_at(idx))
-                    refresh_list(app)
-                }
-                picker_add(cats, "all")
-                picker_add(cats, "sans-serif")
-                picker_add(cats, "serif")
-                picker_add(cats, "monospace")
-                picker_add(cats, "display")
+                // Category CHIPS — multi-select, like upstream's pills
+                // (filters.categories is a list, not a single value).
+                app.chip_sans = chip(app, "sans-serif")
+                app.chip_serif = chip(app, "serif")
+                app.chip_mono = chip(app, "monospace")
+                app.chip_disp = chip(app, "display")
             }
 
             // ── Sort row (upstream: sort key + direction toggle) ──
@@ -308,7 +348,10 @@ main() {
             // ── The font list (rows are real widgets, upstream's fp__fonts) ──
             app.lb = listbox(2) callback |item: ptr, i: int, row: int| {
                 r = item as *Row
-                _n = text(row, r.label)
+                nm = text(row, r.label)
+                // Each row in ITS OWN typeface (upstream's per-row rendering).
+                _f = style_font_family(nm, r.fam)
+                _z = style_font_size(nm, 16.0)
                 _c = text(row, r.cat)
             }
             on_select(app.lb) callback |i: int| {

@@ -129,6 +129,33 @@ main() {
     picker_engine.pl_apply(l)
     assert_eq_int("subset 'all' passes everything", picker_engine.pl_visible_count(l), 4)
 
+    println("-- category is a SET [upstream: categories.includes()]")
+    picker_engine.pl_clear_filters(l)
+    // Upstream keeps filters.categories as a LIST; a pill click toggles one
+    // entry, and familyFilter passes a family whose category is IN the list.
+    on1 = picker_engine.pl_toggle_category(l, "serif")
+    assert_eq_int("toggling serif lights it", on1, 1)
+    assert_eq_int("serif reported on", picker_engine.pl_category_on(l, "serif"), 1)
+    picker_engine.pl_apply(l)
+    n_serif = picker_engine.pl_visible_count(l)
+    assert_eq_int("serif alone -> Georgia only", n_serif, 1)
+    // A SECOND category widens the result (a set, not a replacement).
+    on2 = picker_engine.pl_toggle_category(l, "sans-serif")
+    assert_eq_int("sans-serif also lights", on2, 1)
+    picker_engine.pl_apply(l)
+    assert_eq_int("serif + sans-serif -> both kinds",
+                  picker_engine.pl_visible_count(l) > n_serif, 1)
+    // Toggling off returns to unrestricted.
+    _o3 = picker_engine.pl_toggle_category(l, "serif")
+    _o4 = picker_engine.pl_toggle_category(l, "sans-serif")
+    assert_eq_int("all chips off -> nothing lit",
+                  picker_engine.pl_category_on(l, "serif"), 0)
+    picker_engine.pl_apply(l)
+    // Four families exist at this point (the metric'd one is added below).
+    assert_eq_int("…and everything is visible again",
+                  picker_engine.pl_visible_count(l), 4)
+    picker_engine.pl_clear_filters(l)
+
     println("-- metric filter ['all' passes; undefined metrics fail a value]")
     picker_engine.pl_set_metric(l, 0, "0.5")
     picker_engine.pl_apply(l)

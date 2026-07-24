@@ -44,7 +44,8 @@ exports (
     font_label, font_concise, weight_name, variant_weight, variant_italic,
     leven,
     pl_new, pl_add, pl_count, pl_at,
-    pl_set_query, pl_set_subset, pl_set_category, pl_set_metric,
+    pl_set_query, pl_set_subset, pl_set_category, pl_toggle_category,
+    pl_category_on, pl_set_metric,
     pl_set_sort, pl_set_reverse, pl_reverse, pl_clear_filters,
     pl_toggle_fav, pl_is_fav, pl_fav_count,
     pl_set_selected, pl_selected,
@@ -344,7 +345,9 @@ struct PickList {
     fav: ptr             // floatarr, 1.0 per favourited family
     query: string
     subset: string
-    category: string     // "all" or a single category (upstream keeps a list)
+    category: string     // comma-joined SET of enabled categories, "all" =
+                         // no restriction (upstream: filters.categories, a
+                         // list tested with .includes)
     m_thickness: string  // "all" or a decimal string, per upstream Metric
     m_width: string
     m_complexity: string
@@ -392,7 +395,51 @@ pl_at(lp: ptr, i: int) -> ptr {
 
 pl_set_query(lp: ptr, q: string) { l = lp as *PickList; string_retain(q); l.query = q }
 pl_set_subset(lp: ptr, s: string) { l = lp as *PickList; string_retain(s); l.subset = s }
+// The whole set at once (comma-joined), e.g. "serif,monospace"; "all"
+// clears the restriction.
 pl_set_category(lp: ptr, c: string) { l = lp as *PickList; string_retain(c); l.category = c }
+
+// Toggle ONE category in the set — what a pill click does. Returns 1 if the
+// category is now enabled. Toggling the last one off restores "all", which
+// is upstream's behaviour when no chip is lit.
+pl_toggle_category(lp: ptr, c: string) -> int {
+    l = lp as *PickList
+    cur = l.category
+    if string.equals(cur, "all") == 1 {
+        string_retain(c)
+        l.category = c
+        return 1
+    }
+    if csv_has(cur, c) == 1 {
+        // remove it
+        out = ""
+        n = csv_count(cur)
+        i = 0
+        while i < n {
+            t = csv_at(cur, i)
+            if string.equals(t, c) == 0 {
+                if string.length(out) == 0 { out = t }
+                else { out = "${out},${t}" }
+            }
+            i = i + 1
+        }
+        if string.length(out) == 0 { out = "all" }
+        string_retain(out)
+        l.category = out
+        return 0
+    }
+    joined = "${cur},${c}"
+    string_retain(joined)
+    l.category = joined
+    return 1
+}
+
+// Is `c` currently enabled? ("all" = everything passes, so nothing is lit.)
+pl_category_on(lp: ptr, c: string) -> int {
+    l = lp as *PickList
+    if string.equals(l.category, "all") == 1 { return 0 }
+    return csv_has(l.category, c)
+}
 pl_set_metric(lp: ptr, which: int, v: string) {
     l = lp as *PickList
     string_retain(v)
@@ -466,7 +513,8 @@ fam_passes(lp: ptr, fp: ptr) -> int {
         if csv_has(f.subsets, l.subset) == 0 { return 0 }
     }
     if string.equals(l.category, "all") == 0 {
-        if string.equals(f.category, l.category) == 0 { return 0 }
+        // upstream: categories.includes(a.category)
+        if csv_has(l.category, f.category) == 0 { return 0 }
     }
     if metric_passes(f.has_metrics, f.thickness, l.m_thickness) == 0 { return 0 }
     if metric_passes(f.has_metrics, f.width, l.m_width) == 0 { return 0 }

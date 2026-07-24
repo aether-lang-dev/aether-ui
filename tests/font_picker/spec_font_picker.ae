@@ -34,12 +34,47 @@ main() {
             aeocha.assert_contains(body, "DejaVu", "a real font family is listed")
         }
 
+        aeocha.it("category chips multi-select [upstream: categories list]") callback {
+            // Upstream keeps filters.categories as a LIST; chips are the UI
+            // for it. Clicking one narrows the list; the chip fills to show
+            // its state (border + hover + fill all came from the toolkit
+            // coverage work).
+            mono = uidriver.widget_id_of("button", "monospace")
+            aeocha.assert_gt(mono, 0, "monospace chip present")
+            uidriver.click_widget(mono)
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "monospace", 20),
+                "list narrowed to monospace")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_false(string.contains(body, "DejaVu Serif Bold"),
+                "non-monospace families filtered out")
+            // A second chip WIDENS (set semantics, not replacement).
+            serif = uidriver.widget_id_of("button", "serif")
+            uidriver.click_widget(serif)
+            b2 = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b2, "DejaVu Serif", "serif came back alongside mono")
+            // Toggle both off to leave the list unrestricted for later its.
+            uidriver.click_widget(mono)
+            uidriver.click_widget(serif)
+        }
+
         aeocha.it("per-face categories come from the engine's records") callback {
             // category_for(): "…Sans…" → sans-serif. (Mono/serif faces are
             // present on desktop Linux/BSD but not on every CI box, so the
             // portable assertion is the vendored DejaVu Sans Bold's.)
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "sans-serif", "a sans face categorised")
+        }
+
+        aeocha.it("each row is typeset in ITS OWN face") callback {
+            // The defining feature of a font picker: you choose by SEEING
+            // the face. Each row's label carries its family, so the driver
+            // can prove the per-row font reached the backend.
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"fontFamily\":\"DejaVu Sans\"",
+                "a sans row in its own face")
+            aeocha.assert_contains(body, "\"fontFamily\":\"DejaVu Serif\"",
+                "a serif row in its own face")
         }
 
         aeocha.it("fuzzy search filters the list [familyFilter/leven]") callback {
