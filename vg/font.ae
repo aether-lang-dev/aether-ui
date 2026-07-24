@@ -36,6 +36,7 @@
 
 exports (
     font_load, font_ok, font_upem, font_nglyphs, font_name,
+    font_is_monospace, font_is_serif,
     font_glyph_index, font_glyph_advance, font_kern, font_text_width,
     font_glyph_outlines, font_text_outlines, font_text_outlines_norm,
     outl_ok, outl_npts, outl_nctrs, outl_px, outl_py, outl_ctr_end,
@@ -69,6 +70,8 @@ struct TtfFont {
     hmtx: int
     kern0: int        // abs offset of the kern format-0 pair block (0 = none)
     name0: int        // abs offset of the `name` table (0 = none)
+    post0: int        // abs offset of `post` (isFixedPitch)
+    os2: int          // abs offset of `OS/2` (PANOSE)
 }
 
 // ─── Byte readers (big-endian, bounds-safe) ──────────────────────────────────
@@ -121,6 +124,8 @@ font_load(path: string) -> ptr {
     f.nglyphs = 0; f.nhm = 0; f.cmap4 = 0; f.glyf = 0; f.loca = 0; f.hmtx = 0
     f.kern0 = 0
     f.name0 = 0
+    f.post0 = 0
+    f.os2 = 0
     data, len, err = read_binary(path)
     if string.length(err) > 0 { return f as ptr }
     if len < 12 { return f as ptr }
@@ -144,6 +149,8 @@ font_load(path: string) -> ptr {
         if tag_is(f, rec, "hmtx") == 1 { f.hmtx = off }
         if tag_is(f, rec, "kern") == 1 { f.kern0 = off }
         if tag_is(f, rec, "name") == 1 { f.name0 = off }
+        if tag_is(f, rec, "post") == 1 { f.post0 = off }
+        if tag_is(f, rec, "OS/2") == 1 { f.os2 = off }
         i = i + 1
     }
     if head == 0 || maxp == 0 || cmap == 0 || hhea == 0 { return f as ptr }
@@ -184,6 +191,30 @@ font_load(path: string) -> ptr {
 }
 
 font_ok(fp: ptr) -> int { f = fp as *TtfFont; return f.ok }
+
+// Is this a MONOSPACED face? From `post`.isFixedPitch (offset 12) — the
+// font's own declaration, so it works for Consolas and Courier New alike,
+// where guessing from the NAME does not.
+font_is_monospace(fp: ptr) -> int {
+    f = fp as *TtfFont
+    if f.ok == 0 || f.post0 == 0 { return 0 }
+    if rd32(f, f.post0 + 12) != 0 { return 1 }
+    return 0
+}
+
+// Is this a SERIF face? From OS/2 PANOSE (offset 32): byte 0 is the family
+// kind (2 = latin text), byte 1 the serif style — 2..10 are the serif
+// classes, 11..15 the sans ones. Again the font's own declaration, so
+// "Times New Roman" and "Georgia" classify correctly without name guessing.
+font_is_serif(fp: ptr) -> int {
+    f = fp as *TtfFont
+    if f.ok == 0 || f.os2 == 0 { return 0 }
+    fam = rd8(f, f.os2 + 32)
+    serif_style = rd8(f, f.os2 + 32 + 1)
+    if fam != 2 { return 0 }
+    if serif_style >= 2 && serif_style <= 10 { return 1 }
+    return 0
+}
 
 // The face's FULL NAME ("DejaVu Sans Bold") from the `name` table.
 //

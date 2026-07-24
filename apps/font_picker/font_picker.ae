@@ -37,6 +37,7 @@ import ui (
     style_text_color, style_hover,
     ui_state_s, ui_set_s, bind_text
 )
+import vg.font
 import vg.live (vg, canvas_region)
 import vg (
     view_box, rect, fill, use_font, text_path, typeface, text_paths_width,
@@ -112,12 +113,17 @@ scan_dir(app: *App, dir: string, cat: string, subsets: string) -> int {
         nm = dir_list_get(dl, i)
         if is_ttf(nm) == 1 {
             path = "${dir}/${nm}"
-            if use_font(path) == 1 {
-                face = typeface()
-                if string.length(face) == 0 { face = strip_ext(nm) }
+            fh = font.font_load(path)
+            if font.font_ok(fh) == 1 {
+                face = font_name_of(fh, nm)
                 // The upstream compressed record: name/category/variants/subsets
                 vars = variants_for(face)
-                fcat = category_for(face)
+                // Classify from the font's OWN tables (post.isFixedPitch,
+                // OS/2 PANOSE). Guessing from the NAME fails for Consolas,
+                // Times New Roman, Georgia — most of the Windows set.
+                fcat = "sans-serif"
+                if font.font_is_serif(fh) == 1 { fcat = "serif" }
+                if font.font_is_monospace(fh) == 1 { fcat = "monospace" }
                 rec = "${face}/${fcat}/${vars}/${subsets}"
                 fam = picker_engine.fam_parse(rec, path)
                 if picker_engine.pl_add(app.list, fam) == 1 { added = added + 1 }
@@ -126,6 +132,13 @@ scan_dir(app: *App, dir: string, cat: string, subsets: string) -> int {
         i = i + 1
     }
     return added
+}
+
+// The face's own name, falling back to the filename.
+font_name_of(fh: ptr, nm: string) -> string {
+    n = font.font_name(fh)
+    if string.length(n) > 0 { return n }
+    return strip_ext(nm)
 }
 
 is_ttf(nm: string) -> int {
