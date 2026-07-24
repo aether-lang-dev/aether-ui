@@ -1,10 +1,14 @@
 // spec_tumbling_cube.ae — drives the tumbling cube over the AetherUIDriver:
-// chrome present, then a real press→drag→release canvas gesture lands as a
-// completed drag with the yaw/pitch readout updated. Proves the gesture layer
-// (canvas_on_click/move/release → Spin state → label) is wired end-to-end.
+// chrome, the REAL-toggle/face-checkbox mirror in BOTH directions, and the
+// press→drag→release gesture layer.
+//
+// Runs with AEVG_FREEZE=1 (spec_matrix extra env / ci.sh) so the pose is the
+// deterministic startup orientation — the projected Spin checkbox's viewBox
+// position is then a known constant (the tap target below).
 //
 // Run via ci.sh Phase 5l / tests/spec_matrix.sh, or by hand:
-//   AETHER_UI_TEST_PORT=9222 ./target/build/apps/tumbling_cube/bin/tumbling_cube &
+//   AEVG_FREEZE=1 AETHER_UI_TEST_PORT=9222 \
+//     ./target/build/apps/tumbling_cube/bin/tumbling_cube &
 //   UI_SPEC=tumbling_cube/spec_tumbling_cube tests/run_spec.sh
 import aeocha
 import uidriver
@@ -15,7 +19,7 @@ main() {
     uidriver.wait_server()
 
     aeocha.describe(fw, "tumbling_cube over AetherUIDriver") {
-        aeocha.it("shows the chrome (canvas + drag counter + hint)") callback {
+        aeocha.it("shows the chrome (canvas + labels + REAL toggles, both on)") callback {
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
             aeocha.assert_contains(body, "Drags: 0", "no drags yet")
@@ -23,6 +27,33 @@ main() {
             // The writing: vg.font parsed the vendored TrueType file and
             // extracted "AeVG" as 6 outline contours (A:2, e:2, V:1, G:1).
             aeocha.assert_contains(body, "type: 6 contours", "typeface outlines loaded")
+            aeocha.assert_contains(body, "\"text\":\"Spin\"", "Spin toggle present")
+            aeocha.assert_contains(body, "\"text\":\"Glass\"", "Glass toggle present")
+            aeocha.assert_false(string.contains(body, "\"active\":false"),
+                "both toggles start on")
+        }
+
+        aeocha.it("a TAP on the projected Spin checkbox flips the REAL toggle") callback {
+            // The Spin box centre at the frozen pose is viewBox (213.7, 214.9);
+            // scale to canvas pixels. Click+release at one point = a tap.
+            cwf = uidriver.canvas_w() * 1.0
+            tx = 213.7 * cwf / 420.0
+            ty = 214.9 * cwf / 420.0
+            uidriver.click(tx, ty)
+            uidriver.post_ok("/canvas/1/release?x=${tx}&y=${ty}", "tap release")
+            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "\"active\":false", 20),
+                "the real Spin toggle went off")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "Drags: 0", "a tap is not a drag")
+        }
+
+        aeocha.it("the chrome Glass toggle drives the glass state") callback {
+            gid = uidriver.widget_id_of("toggle", "Glass")
+            aeocha.assert_gt(gid, 0, "Glass toggle id")
+            uidriver.toggle_widget(gid)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_false(string.contains(body, "\"active\":true"),
+                "both toggles now off")
         }
 
         aeocha.it("a press→drag→release tumbles the cube and counts the drag") callback {

@@ -112,7 +112,7 @@ SUITES=(
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
   "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"
-  "tumbling_cube|apps/tumbling_cube|tumbling_cube/spec_tumbling_cube|"
+  "tumbling_cube|apps/tumbling_cube|tumbling_cube/spec_tumbling_cube|AEVG_FREEZE=1"
   "lismusic|apps/LisMusic|LisMusic/spec_lismusic|LIS_OFFLINE=1"
 )
 

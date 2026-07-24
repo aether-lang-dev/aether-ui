@@ -614,7 +614,7 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=rubiks_cube/spec_rubiks_cube \
     run_server_test "$(AEVG_BIN rubiks_cube)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" rubiks_cube || FAIL=$((FAIL + 1))
-    UI_SPEC=tumbling_cube/spec_tumbling_cube \
+    UI_SPEC=tumbling_cube/spec_tumbling_cube AEVG_FREEZE=1 \
     run_server_test "$(AEVG_BIN tumbling_cube)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" tumbling_cube || FAIL=$((FAIL + 1))
 fi

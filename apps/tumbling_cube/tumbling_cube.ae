@@ -26,7 +26,7 @@
 //   Drag to tumble. Release with speed to throw.
 
 import ui (
-    window, vstack, text, enable_test_server,
+    window, vstack, hstack, text, toggle, set_toggle, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_release,
     ui_state_s, ui_set_s, bind_text
 )
@@ -103,9 +103,17 @@ struct Spin {
     lbl: int           // ui_state_s handle the status label is bound to
     frozen: int        // AEVG_FREEZE=1 — hold the pose (screenshots / goldens)
     word: ptr          // the writing's Outl (vg.font), null if no font found
+    spin_on: int       // Spin checkbox state — 0 pauses the idle tumble
+    alpha: float       // face alpha — the Glass checkbox toggles 0.55 / 0.98
+    cb_spin: int       // the REAL toggle widgets the faces mirror
+    cb_glass: int
+    px0: float         // press origin (viewBox) — tap-vs-drag discrimination
+    py0: float
+    lbl_spin: ptr      // face-label outlines (vg.font), null if no font
+    lbl_glass: ptr
 }
 mk_spin() -> *Spin {
-    s = malloc(112) as *Spin
+    s = malloc(192) as *Spin
     s.ax = 0.0 - 0.42
     s.ay = 0.62
     s.vx = 0.35
@@ -116,6 +124,12 @@ mk_spin() -> *Spin {
     s.lbl = 0
     s.frozen = 0
     s.word = null
+    s.spin_on = 1
+    s.alpha = AEVG_FACE_ALPHA
+    s.cb_spin = 0
+    s.cb_glass = 0
+    s.lbl_spin = null
+    s.lbl_glass = null
     if os_getenv("AEVG_FREEZE") != null { s.frozen = 1 }
     return s
 }
@@ -133,6 +147,18 @@ proj(x: float, y: float, z: float, ax: float, ay: float) -> (float, float) {
     f = AEVG_SCALE / (AEVG_DIST - rz)
     return AEVG_MIDX + rx * f, AEVG_MIDY + ry * f
 }
+// Face-local (u right, v down) → 3D, for the faces that carry controls.
+// Face 0 (+z): plane z=+1. Face 2 (+x): plane x=+1, u runs along -z so the
+// face reads unmirrored when it fronts the camera.
+face_pt(f: int, u: float, v: float) -> (float, float, float) {
+    if f == 0 { return u, v, 1.0 }
+    return 1.0, v, 0.0 - u
+}
+proj_face(f: int, u: float, v: float, ax: float, ay: float) -> (float, float) {
+    x, y, z = face_pt(f, u, v)
+    return proj(x, y, z, ax, ay)
+}
+
 // Just the rotated z of a point — all depth sorting needs.
 rotz(x: float, y: float, z: float, ax: float, ay: float) -> float {
     z1 = z * math.cos(ay) - x * math.sin(ay)
@@ -174,12 +200,20 @@ face_path(f: int, ax: float, ay: float) -> string {
 draw_one_face(rn: ptr, st: *Spin, f: int) {
     p = path(rn, face_path(f, st.ax, st.ay))
     fill(p, FACE_COLORS[f])
-    opacity(p, AEVG_FACE_ALPHA)
+    opacity(p, st.alpha)
     stroke(p, "#0c0c12", 2.0)
-    // The writing rides its face: drawn right after it in depth order, so
-    // nearer translucent faces glaze over it — correct through-glass look
-    // (mirrored when the lettered face is at the back).
-    if f == 0 { draw_writing(rn, st.ax, st.ay, st.word) }
+    // Face furniture rides its face: drawn right after it in depth order,
+    // so nearer translucent faces glaze over it — correct through-glass
+    // look (mirrored when the face is at the back).
+    if f == 0 {
+        draw_writing(rn, st.ax, st.ay, st.word)
+        draw_checkbox(rn, 0, st.spin_on, st.lbl_spin, st.ax, st.ay)
+    }
+    if f == 2 {
+        on = 0
+        if st.alpha < 0.9 { on = 1 }
+        draw_checkbox(rn, 2, on, st.lbl_glass, st.ax, st.ay)
+    }
 }
 
 draw_scene(rn: ptr, st: *Spin) {
@@ -239,17 +273,22 @@ f1(v: float) -> string {
     return "${whole}.${frac}"
 }
 
-// "<cmd> x y" for face-local (u, v) projected at the cube's orientation.
+// "<cmd> x y" for face-local (u, v) on face 0, projected.
 wseg(cmd: string, u: float, v: float, ax: float, ay: float) -> string {
-    sx, sy = proj(u, v, 1.0, ax, ay)
+    return wseg2(0, cmd, u, v, ax, ay)
+}
+// Same for an arbitrary control-bearing face.
+wseg2(f: int, cmd: string, u: float, v: float, ax: float, ay: float) -> string {
+    sx, sy = proj_face(f, u, v, ax, ay)
     xs = f1(sx)
     ys = f1(sy)
     return "${cmd} ${xs} ${ys}"
 }
 
-draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
-    if ow == null { return }
-    if outl_ok(ow) == 0 { return }
+// Draw a normalized outline (word/label) on face f at offset (ox,oy),
+// scaled by k — the generalized form of draw_writing's projection loop.
+draw_outl(rn: ptr, ow: ptr, f: int, ox: float, oy: float, k: float,
+          color: string, ax: float, ay: float) {
     s = ""
     start = 0
     ci = 0
@@ -259,7 +298,7 @@ draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
         while j <= last {
             cmd = " L"
             if j == start { cmd = "M" }
-            seg = wseg(cmd, outl_px(ow, j), outl_py(ow, j), ax, ay)
+            seg = wseg2(f, cmd, ox + outl_px(ow, j) * k, oy + outl_py(ow, j) * k, ax, ay)
             s = "${s}${seg}"
             j = j + 1
         }
@@ -268,7 +307,75 @@ draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
         ci = ci + 1
     }
     p = path(rn, s)
-    fill(p, "#f2f5f8")
+    fill(p, color)
+}
+
+draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
+    if ow == null { return }
+    if outl_ok(ow) == 0 { return }
+    draw_outl(rn, ow, 0, 0.0, 0.0, 1.0, "#f2f5f8", ax, ay)
+}
+
+// ─── Face checkboxes: the REAL chrome toggles, mirrored in perspective ───────
+// Each checkbox is drawn from the same state the native toggle holds; a TAP
+// on a front-facing box flips the real widget (set_toggle) — the hybrid
+// drawn-control pattern (real widget owns state/a11y, vg draws the skin).
+// Spin lives on face 0 (+z, under the writing); Glass on face 2 (+x).
+const CB_SPIN_U0: float = -0.82      // box corner (face-local, u right v down)
+const CB_SPIN_V0: float = 0.44
+const CB_GLASS_U0: float = -0.72
+const CB_GLASS_V0: float = -0.14
+const CB_SIZE: float = 0.30
+
+cb_u0(f: int) -> float { if f == 0 { return CB_SPIN_U0 } return CB_GLASS_U0 }
+cb_v0(f: int) -> float { if f == 0 { return CB_SPIN_V0 } return CB_GLASS_V0 }
+
+// One projected quad corner of face f's checkbox; k = 0..3 CW.
+cb_corner(f: int, k: int, ax: float, ay: float) -> (float, float) {
+    u = cb_u0(f)
+    v = cb_v0(f)
+    if k == 1 || k == 2 { u = u + CB_SIZE }
+    if k == 2 || k == 3 { v = v + CB_SIZE }
+    return proj_face(f, u, v, ax, ay)
+}
+
+quad_d(f: int, ax: float, ay: float) -> string {
+    s = ""
+    k = 0
+    while k < 4 {
+        cx, cy = cb_corner(f, k, ax, ay)
+        xs = f1(cx)
+        ys = f1(cy)
+        cmd = " L"
+        if k == 0 { cmd = "M" }
+        s = "${s}${cmd} ${xs} ${ys}"
+        k = k + 1
+    }
+    return "${s} Z"
+}
+
+// Draw face f's checkbox: box, check mark when on, label to the right.
+draw_checkbox(rn: ptr, f: int, on: int, lblo: ptr, ax: float, ay: float) {
+    box = path(rn, quad_d(f, ax, ay))
+    fill(box, "#f2f5f8")
+    opacity(box, 0.92)
+    stroke(box, "#0c0c12", 2.0)
+    if on == 1 {
+        u = cb_u0(f)
+        v = cb_v0(f)
+        s = CB_SIZE
+        a = wseg2(f, "M", u + s * 0.22, v + s * 0.52, ax, ay)
+        b = wseg2(f, " L", u + s * 0.42, v + s * 0.76, ax, ay)
+        c = wseg2(f, " L", u + s * 0.80, v + s * 0.24, ax, ay)
+        mark = path(rn, "${a}${b}${c}")
+        stroke(mark, "#1c7a3c", 3.5)
+    }
+    // Label: real-typeface outlines, centred right of the box.
+    if lblo != null {
+        if outl_ok(lblo) == 1 {
+            draw_outl(rn, lblo, f, cb_u0(f) + CB_SIZE + 0.42, cb_v0(f) + CB_SIZE / 2.0, 0.7, "#f2f5f8", ax, ay)
+        }
+    }
 }
 
 // ─── Physics: integrate spin each frame; damp toward a lazy idle tumble ──────
@@ -279,6 +386,7 @@ step(st: *Spin, t: float) {
     if dt < 0.0 { dt = 0.0 }
     if dt > 0.05 { dt = 0.05 }
     if st.frozen == 1 { return }          // deterministic pose for screenshots
+    if st.spin_on == 0 { return }         // the Spin checkbox pauses the tumble
     if st.dragging == 1 { return }        // pointer owns the orientation
     st.ax = st.ax + st.vx * dt
     st.ay = st.ay + st.vy * dt
@@ -297,7 +405,48 @@ step(st: *Spin, t: float) {
 on_press(st: *Spin, x: float, y: float) {
     st.dragging = 1
     st.lx = x; st.ly = y
+    st.px0 = x; st.py0 = y
     st.vx = 0.0; st.vy = 0.0                // grabbing stops the spin
+}
+
+// Point-in-projected-quad (cross-product signs; convex, consistent winding).
+xsign(ax0: float, ay0: float, bx: float, by: float, px: float, py: float) -> int {
+    cr = (bx - ax0) * (py - ay0) - (by - ay0) * (px - ax0)
+    if cr > 0.0 { return 1 }
+    if cr < 0.0 { return -1 }
+    return 0
+}
+cb_hit(f: int, x: float, y: float, ax: float, ay: float) -> int {
+    // Only a FRONT-facing box is clickable (no clicking through the glass).
+    if face_depth(f, ax, ay) * AEVG_DIST <= 1.0 { return 0 }
+    x0, y0 = cb_corner(f, 0, ax, ay)
+    x1, y1 = cb_corner(f, 1, ax, ay)
+    x2, y2 = cb_corner(f, 2, ax, ay)
+    x3, y3 = cb_corner(f, 3, ax, ay)
+    s1 = xsign(x0, y0, x1, y1, x, y)
+    s2 = xsign(x1, y1, x2, y2, x, y)
+    s3 = xsign(x2, y2, x3, y3, x, y)
+    s4 = xsign(x3, y3, x0, y0, x, y)
+    if s1 >= 0 && s2 >= 0 && s3 >= 0 && s4 >= 0 { return 1 }
+    if s1 <= 0 && s2 <= 0 && s3 <= 0 && s4 <= 0 { return 1 }
+    return 0
+}
+
+// Flip helpers — shared by face taps; the chrome callbacks assign instead
+// (idempotent), so no feedback loop whichever side initiates.
+flip_spin(st: *Spin) {
+    st.spin_on = 1 - st.spin_on
+    rc = set_toggle(st.cb_spin, st.spin_on)
+    if rc < 0 { return }
+}
+flip_glass(st: *Spin) {
+    on = 0
+    if st.alpha < 0.9 { on = 1 }
+    on = 1 - on
+    st.alpha = 0.98
+    if on == 1 { st.alpha = AEVG_FACE_ALPHA }
+    rc = set_toggle(st.cb_glass, on)
+    if rc < 0 { return }
 }
 on_drag(st: *Spin, x: float, y: float) {
     if st.dragging == 0 { return }
@@ -314,6 +463,14 @@ on_release_pt(st: *Spin, x: float, y: float) {
     if st.dragging == 0 { return }
     on_drag(st, x, y)
     st.dragging = 0
+    // A TAP (barely moved) aims at a face checkbox, not a tumble.
+    ddx = x - st.px0
+    ddy = y - st.py0
+    if ddx * ddx + ddy * ddy < 64.0 {
+        if cb_hit(0, x, y, st.ax, st.ay) == 1 { flip_spin(st); return }
+        if cb_hit(2, x, y, st.ax, st.ay) == 1 { flip_glass(st); return }
+        return
+    }
     // Clamp the throw so a wild swipe stays watchable.
     if st.vx > 5.0 { st.vx = 5.0 }
     if st.vx < 0.0 - 5.0 { st.vx = 0.0 - 5.0 }
@@ -349,6 +506,8 @@ main() {
     type_desc = "type: unavailable"
     if font_ok(wf) == 1 {
         st.word = font_text_outlines_norm(wf, "AeVG", 4, 1.76)
+        st.lbl_spin = font_text_outlines_norm(wf, "Spin", 3, 1.0)
+        st.lbl_glass = font_text_outlines_norm(wf, "Glass", 3, 1.0)
         nctrs = outl_nctrs(st.word)
         type_desc = "type: ${nctrs} contours"
     }
@@ -386,6 +545,21 @@ main() {
                     on_release_pt(st, scene_px_to_vb_x(scene, rx), scene_px_to_vb_y(scene, ry))
                 }
             }
+
+            // The REAL toggles the cube faces mirror: flip either here or by
+            // tapping the projected checkbox on a front-facing cube face.
+            hstack(10) {
+                st.cb_spin = toggle("Spin") callback |active: int| {
+                    st.spin_on = active
+                }
+                st.cb_glass = toggle("Glass") callback |active: int| {
+                    st.alpha = 0.98
+                    if active == 1 { st.alpha = AEVG_FACE_ALPHA }
+                }
+            }
+            tg1 = set_toggle(st.cb_spin, 1)
+            tg2 = set_toggle(st.cb_glass, 1)
+            if tg1 < 0 || tg2 < 0 { println("toggle init failed") }
 
             text("Drag the cube to tumble it — release with speed to throw")
         }
