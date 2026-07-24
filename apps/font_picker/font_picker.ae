@@ -243,11 +243,17 @@ main() {
 
     // Discover fonts. Upstream loads a catalogue; we take what this
     // machine really has, in the same record format.
-    n1 = scan_dir(app, "fonts", "sans-serif", "latin")
-    n2 = scan_dir(app, "/usr/share/fonts/truetype/dejavu", "sans-serif", "latin,greek,cyrillic")
-    n3 = scan_dir(app, "/usr/share/fonts/truetype/liberation", "sans-serif", "latin")
-    n4 = scan_dir(app, "/usr/local/share/fonts/dejavu", "sans-serif", "latin")
-    found = n1 + n2 + n3 + n4
+    // Every platform's usual font homes; missing dirs are skipped silently,
+    // so the same binary populates on Linux, BSD, Windows and macOS.
+    found = scan_dir(app, "fonts", "sans-serif", "latin")
+    found = found + scan_dir(app, "/usr/share/fonts/truetype/dejavu", "sans-serif", "latin,greek,cyrillic")
+    found = found + scan_dir(app, "/usr/share/fonts/truetype/liberation", "sans-serif", "latin")
+    found = found + scan_dir(app, "/usr/local/share/fonts/dejavu", "sans-serif", "latin")
+    found = found + scan_dir(app, "/usr/local/share/fonts/DejaVu", "sans-serif", "latin")
+    found = found + scan_dir(app, "/usr/local/share/fonts/liberation-fonts-ttf", "sans-serif", "latin")
+    found = found + scan_dir(app, "C:/Windows/Fonts", "sans-serif", "latin")
+    found = found + scan_dir(app, "/System/Library/Fonts", "sans-serif", "latin")
+    found = found + scan_dir(app, "/Library/Fonts", "sans-serif", "latin")
 
     window("Font Picker", 620, 720) {
         vstack(6) {

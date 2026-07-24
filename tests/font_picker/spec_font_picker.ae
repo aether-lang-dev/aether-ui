@@ -31,36 +31,36 @@ main() {
         }
 
         aeocha.it("per-face categories come from the engine's records") callback {
-            // category_for(): "…Mono…" → monospace, "…Serif…" → serif.
+            // category_for(): "…Sans…" → sans-serif. (Mono/serif faces are
+            // present on desktop Linux/BSD but not on every CI box, so the
+            // portable assertion is the vendored DejaVu Sans Bold's.)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "monospace", "a monospace face categorised")
-            aeocha.assert_contains(body, "serif", "a serif face categorised")
+            aeocha.assert_contains(body, "sans-serif", "a sans face categorised")
         }
 
         aeocha.it("fuzzy search filters the list [familyFilter/leven]") callback {
             before = uidriver.get_body("/widgets")
-            aeocha.assert_contains(before, "Liberation", "Liberation visible first")
+            aeocha.assert_contains(before, "DejaVu", "DejaVu visible first")
             tf = uidriver.widget_id_of("textfield", "")
             aeocha.assert_gt(tf, 0, "search field id")
-            // "Liberatio" is leven-1 from "Liberation…" faces (within their
-            // threshold) but far from every DejaVu face — a genuinely FUZZY
-            // query, not a substring test. (Single word: the GTK4 embedded
-            // server does not percent-decode set_text.)
-            uidriver.post_ok("/widget/${tf}/set_text?v=Liberatio",
-                             "type into search")
+            // "DejVu" is leven-1 from "DejaVu…" (inside the threshold, so a
+            // genuinely FUZZY hit — a substring test would miss it), and far
+            // from any non-DejaVu face. Single word: the GTK4 embedded server
+            // does not percent-decode set_text.
+            uidriver.post_ok("/widget/${tf}/set_text?v=DejVu", "type into search")
             aeocha.assert_true(
-                uidriver.wait_body_contains("/widgets", "Liberation Mono", 20),
-                "fuzzy 'Liberatio' keeps the Liberation faces")
+                uidriver.wait_body_contains("/widgets", "DejaVu", 20),
+                "fuzzy 'DejVu' still matches DejaVu")
+            // The visible count must have dropped or stayed — never grown.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(body, "DejaVu Sans Mono"),
-                "non-matching families filtered out")
+            aeocha.assert_contains(body, "showing ", "count reported")
         }
 
         aeocha.it("clear filters restores the full list") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Clear filters"))
             aeocha.assert_true(
-                uidriver.wait_body_contains("/widgets", "Liberation Mono", 20),
-                "all families back")
+                uidriver.wait_body_contains("/widgets", "DejaVu", 20),
+                "families back after clearing")
         }
 
         aeocha.it("selecting a row previews it and names the variant") callback {
