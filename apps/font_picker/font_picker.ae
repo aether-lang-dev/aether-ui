@@ -43,6 +43,7 @@ import vg (
     view_box, rect, fill, use_font, text_path, typeface, text_paths_width,
     vg_root, node_scene, scene_set_refreshing
 )
+import ui.disclosure (disclosure)
 import picker_engine
 import std.string
 import std.list
@@ -320,8 +321,9 @@ main() {
             t_status = text("scanning…")
             bind_text(t_status, status)
 
-            // ── Filters row (upstream: search + subset + categories) ──
-            hstack(6) {
+            // ── Filters section (upstream's first accordion) ──
+            disclosure("Filters", 1) callback |fbody: int| {
+            hstack(fbody, 6) {
                 textfield("search fonts…") callback |q: string| {
                     picker_engine.pl_set_query(app.list, q)
                     refresh_list(app)
@@ -334,8 +336,11 @@ main() {
                 app.chip_disp = chip(app, "display")
             }
 
-            // ── Sort row (upstream: sort key + direction toggle) ──
-            hstack(6) {
+            }
+
+            // ── Sort section (upstream's third accordion) ──
+            disclosure("Sort", 1) callback |sbody: int| {
+            hstack(sbody, 6) {
                 sorts = picker() callback |idx: int| {
                     picker_engine.pl_set_sort(app.list, sort_at(idx))
                     refresh_list(app)
@@ -356,6 +361,8 @@ main() {
                     picker_engine.pl_clear_filters(app.list)
                     refresh_list(app)
                 }
+            }
+
             }
 
             // ── The font list (rows are real widgets, upstream's fp__fonts) ──
