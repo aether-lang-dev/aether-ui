@@ -16,6 +16,20 @@ import aeocha
 import uidriver
 import std.string
 
+// "showing N/M" → N. The spec asserts relative counts so it holds on any
+// machine's font set.
+shown_count(body: string) -> int {
+    at = string.string_index_of(body, "showing ")
+    if at < 0 { return 0 - 1 }
+    rest = string.string_substring(body, at + 8, string.length(body))
+    sl = string.string_index_of(rest, "/")
+    if sl < 0 { return 0 - 1 }
+    num = string.string_substring(rest, 0, sl)
+    v, err = string.to_int(num)
+    if string.length(err) > 0 { return 0 - 1 }
+    return v
+}
+
 main() {
     fw = aeocha.init()
     uidriver.wait_server()
@@ -48,11 +62,15 @@ main() {
             body = uidriver.get_body("/widgets")
             aeocha.assert_false(string.contains(body, "DejaVu Serif Bold"),
                 "non-monospace families filtered out")
-            // A second chip WIDENS (set semantics, not replacement).
+            // A second chip WIDENS (set semantics, not replacement). Assert
+            // on the COUNT rather than a family name: which faces exist
+            // differs per platform (winbaz has Consolas/Georgia, not DejaVu
+            // Serif), but "more visible than with one chip" is universal.
+            n1 = shown_count(uidriver.get_body("/widgets"))
             serif = uidriver.widget_id_of("button", "serif")
             uidriver.click_widget(serif)
-            b2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b2, "DejaVu Serif", "serif came back alongside mono")
+            n2 = shown_count(uidriver.get_body("/widgets"))
+            aeocha.assert_true(n2 > n1, "a second category WIDENS the list")
             // Toggle both off to leave the list unrestricted for later its.
             uidriver.click_widget(mono)
             uidriver.click_widget(serif)
