@@ -1,0 +1,111 @@
+// ui/icons.ae — vector icons, drawn not loaded.
+//
+// The gap this closes: every modern dialog pairs glyphs with its labels (a
+// ✕ to close, a magnifier by the search field, hearts for favourites, arrows
+// for sort direction), and aether-ui had no way to express one. The image
+// widget takes a FILE PATH or encoded bytes, which means shipping assets and
+// depending on a platform icon theme — neither portable, and neither
+// themeable by AeCS.
+//
+// So icons here are PATH DATA, drawn through vg into a small canvas: no
+// asset files, no icon theme, identical pixels on GTK4 / win32 / macOS, and
+// recolourable per use because the colour is just a fill.
+//
+//   hstack(6) {
+//       icon(ICON_SEARCH, 16, "#5f6368")
+//       textfield("Search") callback |s: string| { … }
+//   }
+//
+// The set is deliberately small — the vocabulary the reference dialogs
+// actually use. Paths are authored on a 24×24 grid (the de-facto icon
+// viewBox) so they compose at any size.
+
+exports (
+    icon, icon_button, icon_path,
+    ICON_CLOSE, ICON_SEARCH, ICON_HEART, ICON_HEART_OUTLINE,
+    ICON_CHECK, ICON_SORT, ICON_FILTER, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP
+)
+
+import ui (hstack, text)
+import vg.live (vg)
+import vg (view_box, path, fill, stroke)
+
+// Icon ids. Names, not path strings, so a later themed//asset-backed
+// implementation can swap the drawing without touching call sites.
+const ICON_CLOSE: int = 0
+const ICON_SEARCH: int = 1
+const ICON_HEART: int = 2
+const ICON_HEART_OUTLINE: int = 3
+const ICON_CHECK: int = 4
+const ICON_SORT: int = 5
+const ICON_FILTER: int = 6
+const ICON_CHEVRON_DOWN: int = 7
+const ICON_CHEVRON_UP: int = 8
+
+// The 24×24 path data for an icon id. Exposed so an app can hand the same
+// geometry to vg directly (e.g. to project an icon onto a 3D face, or to
+// stroke-outline it) rather than only through the widget form.
+icon_path(id: int) -> string {
+    if id == ICON_CLOSE {
+        return "M5 5 L 19 19 M 19 5 L 5 19"
+    }
+    if id == ICON_SEARCH {
+        return "M11 4 A 7 7 0 1 0 11 18 A 7 7 0 1 0 11 4 Z M 16 16 L 21 21"
+    }
+    if id == ICON_HEART {
+        return "M12 21 C 12 21 3 14.5 3 8.8 A 4.8 4.8 0 0 1 12 6.6 A 4.8 4.8 0 0 1 21 8.8 C 21 14.5 12 21 12 21 Z"
+    }
+    if id == ICON_HEART_OUTLINE {
+        return "M12 21 C 12 21 3 14.5 3 8.8 A 4.8 4.8 0 0 1 12 6.6 A 4.8 4.8 0 0 1 21 8.8 C 21 14.5 12 21 12 21 Z"
+    }
+    if id == ICON_CHECK {
+        return "M4 12.5 L 9.5 18 L 20 6"
+    }
+    if id == ICON_SORT {
+        return "M3 9 L 7 5 L 11 9 M 7 5 L 7 19 M 21 15 L 17 19 L 13 15 M 17 19 L 17 5"
+    }
+    if id == ICON_FILTER {
+        return "M3 4 L 21 4 L 14 12.5 L 14 20 L 10 17 L 10 12.5 Z"
+    }
+    if id == ICON_CHEVRON_DOWN {
+        return "M6 9 L 12 15 L 18 9"
+    }
+    return "M6 15 L 12 9 L 18 15"          // ICON_CHEVRON_UP
+}
+
+// Filled icons carry area (hearts, the filter funnel); the rest are strokes.
+// Drawing a stroke-only glyph as a fill turns it into a blob, so the table
+// belongs with the paths rather than at the call site.
+_icon_is_filled(id: int) -> int {
+    if id == ICON_HEART { return 1 }
+    if id == ICON_FILTER { return 1 }
+    return 0
+}
+
+// icon(id, size_px, "#rrggbb") — a square vector icon, drawn inline.
+icon(_ctx: ptr, id: int, size: int, color: string) {
+    d = icon_path(id)
+    filled = _icon_is_filled(id)
+    vg(view_box(0, 0, 24, 24), size, size) {
+        p = path(d)
+        if filled == 1 {
+            fill(p, color)
+        } else {
+            // vg FILLS a path by default, so a stroke-only glyph must clear
+            // the fill explicitly — otherwise a closed outline (the search
+            // ring, a chevron) renders as a solid blob.
+            fill(p, "none")
+            stroke(p, color, 2.0)
+        }
+    }
+}
+
+// icon_button(id, size, colour, label) callback { … } — the icon+label pair
+// the reference's footer buttons use. The row is clickable as a whole, so
+// the icon is not a separate hit target.
+icon_button(_ctx: ptr, id: int, size: int, color: string, label: string) -> int {
+    row = hstack(_ctx, 6)
+    icon(row, id, size, color)
+    _l = text(row, label)
+    return row
+}

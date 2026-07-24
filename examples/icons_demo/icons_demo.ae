@@ -1,0 +1,81 @@
+// icons_demo.ae — vector icons, drawn not loaded.
+//
+// The gap: every modern dialog pairs glyphs with labels — a ✕ to close, a
+// magnifier by the search box, hearts for favourites, arrows for sort
+// direction — and aether-ui had no way to express one. The image widget
+// wants a FILE PATH or encoded bytes, i.e. shipped assets or a platform
+// icon theme: not portable, not recolourable, not themeable.
+//
+// ui/icons.ae draws them with vg instead: path data on a 24x24 grid,
+// rendered into a small canvas. No assets, identical on every backend,
+// and the colour is just a fill so one icon serves every context.
+//
+// Run: DISPLAY=:0 ./target/build/examples/icons_demo/bin/icons_demo
+
+import ui (
+    window, vstack, hstack, text, btn, textfield, enable_test_server,
+    edge_insets, style_corner_radius, style_bg_color, style_text_color,
+    style_border, style_hover
+)
+import ui.icons (
+    icon, icon_path,
+    ICON_CLOSE, ICON_SEARCH, ICON_HEART, ICON_HEART_OUTLINE,
+    ICON_CHECK, ICON_SORT, ICON_FILTER, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP
+)
+import std.string
+import std.os (os_getenv)
+
+const ACCENT: string = "#1a73e8"
+const MUTED: string = "#5f6368"
+
+main() {
+    window("Icons — drawn, not loaded", 520, 300) {
+        vstack(10) {
+            text("The icon vocabulary a picker dialog needs:")
+
+            hstack(12) {
+                icon(ICON_SEARCH, 20, ACCENT)
+                icon(ICON_FILTER, 20, ACCENT)
+                icon(ICON_SORT, 20, ACCENT)
+                icon(ICON_HEART, 20, "#e8455f")
+                icon(ICON_CHECK, 20, "#1c7a3c")
+                icon(ICON_CLOSE, 20, MUTED)
+                icon(ICON_CHEVRON_DOWN, 20, MUTED)
+                icon(ICON_CHEVRON_UP, 20, MUTED)
+            }
+
+            text("In context — a search row and a chip with a leading glyph:")
+
+            // The composition the reference dialog actually uses.
+            hstack(6) {
+                icon(ICON_SEARCH, 16, MUTED)
+                _tf = textfield("Search fonts…") callback |s: string| { }
+            }
+
+            hstack(8) {
+                chip = btn("Favourites") callback { }
+                _cp = edge_insets(chip, 8.0, 16.0, 8.0, 16.0)
+                _cr = style_corner_radius(chip, 999.0)
+                _cb = style_bg_color(chip, 1.0, 1.0, 1.0, 1.0)
+                _ct = style_text_color(chip, 0.10, 0.45, 0.91)
+                _cd = style_border(chip, 1.0, 0.10, 0.45, 0.91)
+                _ch = style_hover(chip, 0.91, 0.94, 0.99)
+            }
+
+            // Icons scale: the same path at three sizes stays crisp because
+            // it is geometry, not a bitmap.
+            text("One path, three sizes — geometry, not pixels:")
+            hstack(10) {
+                icon(ICON_HEART, 12, "#e8455f")
+                icon(ICON_HEART, 20, "#e8455f")
+                icon(ICON_HEART, 32, "#e8455f")
+            }
+
+            // Proof for the spec: the path data is queryable, so a test can
+            // assert the geometry reached the app without pixel-diffing.
+            plen = string.length(icon_path(ICON_HEART))
+            text("heart path length: ${plen}")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
