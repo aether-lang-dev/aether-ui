@@ -1,0 +1,210 @@
+// test_picker_engine.ae — unit tests for the ported Font Picker logic.
+//
+// The expected values here were computed from the UPSTREAM behaviour
+// (Javascript Font Picker, MIT, © 2024-2025 Zygomatic): getDefaultVariant's
+// nearest-400 rule with its tie-to-earlier-entry, `leven` distances against
+// the (name.length − query.length) threshold, familySort's ascending name /
+// ascending popularity / DESCENDING metrics, and the favourites-then-
+// selected hoist order of sortFamilies.
+//
+// Headless, pure Aether:
+//   aetherc --lib . apps/font_picker/test_picker_engine.ae /tmp/t.c \
+//     && gcc /tmp/t.c $(ae cflags) -o /tmp/t && /tmp/t
+
+import picker_engine
+import std.string
+
+extern exit(code: int)
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+// The upstream system-font record format, verbatim shape.
+ARIAL() -> string { return "Arial/sans-serif/400,400i,700,700i/latin,greek,cyrillic" }
+GEORGIA() -> string { return "Georgia/serif/400,400i,700,700i/latin,greek" }
+IMPACT() -> string { return "Impact/sans-serif/400/latin,latin-ext" }
+
+main() {
+    println("=== test_picker_engine ===")
+
+    println("-- compressed record parsing [FontFamily.parse]")
+    a = picker_engine.fam_parse(ARIAL(), "/fonts/arial.ttf")
+    assert_eq_str("name", picker_engine.fam_name(a), "Arial")
+    assert_eq_str("category", picker_engine.fam_category(a), "sans-serif")
+    assert_eq_str("variants", picker_engine.fam_variants(a), "400,400i,700,700i")
+    assert_eq_int("variant count", picker_engine.fam_variant_count(a), 4)
+    assert_eq_str("variant[2]", picker_engine.fam_variant_at(a, 2), "700")
+    assert_eq_str("subsets", picker_engine.fam_subsets(a), "latin,greek,cyrillic")
+    assert_eq_int("no popularity → flag 0", picker_engine.fam_has_popularity(a), 0)
+    assert_eq_int("no metrics → flag 0", picker_engine.fam_has_metrics(a), 0)
+
+    // Full record with popularity + the four metrics.
+    full = picker_engine.fam_parse(
+        "Roboto/sans-serif/400,700/latin/12/0.5/0.25/0.75/0.125", "/f/roboto.ttf")
+    assert_eq_int("popularity parsed", picker_engine.fam_popularity(full), 12)
+    assert_eq_int("has_popularity", picker_engine.fam_has_popularity(full), 1)
+    assert_eq_int("has_metrics", picker_engine.fam_has_metrics(full), 1)
+
+    println("-- default variant [getDefaultVariant: nearest 400, tie→earlier]")
+    assert_eq_str("400,400i,700,700i → 400", picker_engine.fam_default_variant(a), "400")
+    two = picker_engine.fam_parse("X/serif/300,500/latin", "")
+    assert_eq_str("300,500 → 300 (tie keeps earlier)",
+                  picker_engine.fam_default_variant(two), "300")
+    ext = picker_engine.fam_parse("Y/serif/100,900/latin", "")
+    assert_eq_str("100,900 → 100 (tie keeps earlier)",
+                  picker_engine.fam_default_variant(ext), "100")
+    one = picker_engine.fam_parse("Z/serif/700/latin", "")
+    assert_eq_str("700 alone → 700", picker_engine.fam_default_variant(one), "700")
+
+    println("-- variant decoding + labels [Font.weightNames/toString/toConcise]")
+    assert_eq_int("weight of 700i", picker_engine.variant_weight("700i"), 700)
+    assert_eq_int("italic of 700i", picker_engine.variant_italic("700i"), 1)
+    assert_eq_int("italic of 700", picker_engine.variant_italic("700"), 0)
+    assert_eq_str("weight name 600", picker_engine.weight_name(600), "Semi Bold")
+    assert_eq_str("weight name 900", picker_engine.weight_name(900), "Black")
+    assert_eq_str("default variant → bare family name",
+                  picker_engine.font_label(a, "400"), "Arial")
+    assert_eq_str("non-default → full label",
+                  picker_engine.font_label(a, "700i"), "Arial Bold Italic (700i)")
+    assert_eq_str("non-default roman",
+                  picker_engine.font_label(a, "700"), "Arial Bold (700)")
+    assert_eq_str("concise default", picker_engine.font_concise(a, "400"), "Arial")
+    assert_eq_str("concise variant", picker_engine.font_concise(a, "700i"), "Arial:700i")
+
+    println("-- Levenshtein [leven package]")
+    assert_eq_int("arial/arial", picker_engine.leven("Arial", "arial"), 0)
+    assert_eq_int("verdana/verd", picker_engine.leven("Verdana", "verd"), 3)
+    assert_eq_int("tahoma/tahom", picker_engine.leven("Tahoma", "tahom"), 1)
+    assert_eq_int("impact/arial", picker_engine.leven("Impact", "arial"), 5)
+    assert_eq_int("empty vs word", picker_engine.leven("", "abc"), 3)
+
+    println("-- fuzzy filter [familyFilter: leven > name.len - query.len fails]")
+    l = picker_engine.pl_new()
+    _a1 = picker_engine.pl_add(l, a)
+    _a2 = picker_engine.pl_add(l, picker_engine.fam_parse(GEORGIA(), ""))
+    _a3 = picker_engine.pl_add(l, picker_engine.fam_parse(IMPACT(), ""))
+    picker_engine.pl_apply(l)
+    assert_eq_int("no filters → all visible", picker_engine.pl_visible_count(l), 3)
+
+    picker_engine.pl_set_query(l, "arial")
+    picker_engine.pl_apply(l)
+    assert_eq_int("query 'arial' matches only Arial",
+                  picker_engine.pl_visible_count(l), 1)
+    assert_eq_str("…and it is Arial",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 0))), "Arial")
+
+    picker_engine.pl_set_query(l, "georgia")
+    picker_engine.pl_apply(l)
+    assert_eq_int("exact name matches", picker_engine.pl_visible_count(l), 1)
+
+    // 'tahom' vs 'Tahoma': leven 1, threshold 1 → passes (fuzzy, not prefix).
+    tah = picker_engine.fam_parse("Tahoma/sans-serif/400,700/latin", "")
+    _a4 = picker_engine.pl_add(l, tah)
+    picker_engine.pl_set_query(l, "tahom")
+    picker_engine.pl_apply(l)
+    assert_eq_int("fuzzy 'tahom' finds Tahoma", picker_engine.pl_visible_count(l), 1)
+
+    picker_engine.pl_clear_filters(l)
+    picker_engine.pl_apply(l)
+    assert_eq_int("clear_filters restores all", picker_engine.pl_visible_count(l), 4)
+
+    println("-- category + subset filters")
+    picker_engine.pl_set_category(l, "serif")
+    picker_engine.pl_apply(l)
+    assert_eq_int("category serif → Georgia only", picker_engine.pl_visible_count(l), 1)
+    picker_engine.pl_clear_filters(l)
+    picker_engine.pl_set_subset(l, "cyrillic")
+    picker_engine.pl_apply(l)
+    assert_eq_int("subset cyrillic → Arial only", picker_engine.pl_visible_count(l), 1)
+    picker_engine.pl_set_subset(l, "all")
+    picker_engine.pl_apply(l)
+    assert_eq_int("subset 'all' passes everything", picker_engine.pl_visible_count(l), 4)
+
+    println("-- metric filter ['all' passes; undefined metrics fail a value]")
+    picker_engine.pl_set_metric(l, 0, "0.5")
+    picker_engine.pl_apply(l)
+    assert_eq_int("no family has metrics → none match",
+                  picker_engine.pl_visible_count(l), 0)
+    _a5 = picker_engine.pl_add(l, full)          // thickness 0.5
+    picker_engine.pl_apply(l)
+    assert_eq_int("the metric'd family matches", picker_engine.pl_visible_count(l), 1)
+    picker_engine.pl_clear_filters(l)
+
+    println("-- sorting [familySort]")
+    // Selection hoisting is independent of filters (upstream's clear-filters
+    // button resets `override` only), so clear it before asserting pure order.
+    picker_engine.pl_set_selected(l, 0 - 1)
+    picker_engine.pl_set_sort(l, "name")
+    picker_engine.pl_apply(l)
+    assert_eq_str("name sort, first is Arial",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 0))), "Arial")
+    assert_eq_str("name sort, last is Tahoma",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l,
+                          picker_engine.pl_visible_count(l) - 1))), "Tahoma")
+    picker_engine.pl_set_reverse(l, 1)
+    picker_engine.pl_apply(l)
+    assert_eq_str("reverse flips the order",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 0))), "Tahoma")
+    picker_engine.pl_set_reverse(l, 0)
+
+    // Metrics sort DESCENDING upstream, and families without metrics sink.
+    hi = picker_engine.fam_parse("Heavy/serif/400/latin/1/0.9/0.5/0.5/0.5", "")
+    _a6 = picker_engine.pl_add(l, hi)
+    picker_engine.pl_set_sort(l, "thickness")
+    picker_engine.pl_apply(l)
+    assert_eq_str("thickness sorts DESC (0.9 first)",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 0))), "Heavy")
+
+    println("-- favourites + selection hoisting [sortFamilies prepend order]")
+    picker_engine.pl_set_sort(l, "name")
+    picker_engine.pl_set_reverse(l, 0)
+    // Favourite Tahoma (index 3): it must jump to the top.
+    _f1 = picker_engine.pl_toggle_fav(l, 3)
+    assert_eq_int("fav count", picker_engine.pl_fav_count(l), 1)
+    picker_engine.pl_apply(l)
+    assert_eq_str("favourite hoisted to top",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 0))), "Tahoma")
+    // Selecting Georgia (index 1) puts it ABOVE the favourite.
+    picker_engine.pl_set_selected(l, 1)
+    picker_engine.pl_apply(l)
+    assert_eq_str("selected hoisted above favourites",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 0))), "Georgia")
+    assert_eq_str("favourite still second",
+                  picker_engine.fam_name(picker_engine.pl_at(l,
+                      picker_engine.pl_visible_at(l, 1))), "Tahoma")
+    _f2 = picker_engine.pl_toggle_fav(l, 3)
+    assert_eq_int("toggle off", picker_engine.pl_fav_count(l), 0)
+
+    println("-- keyboard navigation [selectClosestFont, clamped at ends]")
+    picker_engine.pl_set_selected(l, 0 - 1)
+    picker_engine.pl_apply(l)
+    first = picker_engine.pl_select_first(l)
+    assert_eq_int("PageUp → first visible", first, picker_engine.pl_visible_at(l, 0))
+    nxt = picker_engine.pl_move_selection(l, 1)
+    assert_eq_int("ArrowDown → second visible", nxt, picker_engine.pl_visible_at(l, 1))
+    prv = picker_engine.pl_move_selection(l, 0 - 1)
+    assert_eq_int("ArrowUp → back to first", prv, picker_engine.pl_visible_at(l, 0))
+    up_again = picker_engine.pl_move_selection(l, 0 - 1)
+    assert_eq_int("ArrowUp at top clamps", up_again, picker_engine.pl_visible_at(l, 0))
+    last = picker_engine.pl_select_last(l)
+    n = picker_engine.pl_visible_count(l)
+    assert_eq_int("PageDown → last visible", last, picker_engine.pl_visible_at(l, n - 1))
+    dn_again = picker_engine.pl_move_selection(l, 1)
+    assert_eq_int("ArrowDown at bottom clamps", dn_again,
+                  picker_engine.pl_visible_at(l, n - 1))
+
+    println("ALL PASS")
+}

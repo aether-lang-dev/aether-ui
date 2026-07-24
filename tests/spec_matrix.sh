@@ -114,6 +114,7 @@ SUITES=(
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
   "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"
   "tumbling_cube|apps/tumbling_cube|tumbling_cube/spec_tumbling_cube|AEVG_FREEZE=1"
+  "font_picker|apps/font_picker|font_picker/spec_font_picker|"
   "lismusic|apps/LisMusic|LisMusic/spec_lismusic|LIS_OFFLINE=1"
 )
 

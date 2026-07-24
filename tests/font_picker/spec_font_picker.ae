@@ -1,0 +1,105 @@
+// spec_font_picker.ae — drives the ported Font Picker over AetherUIDriver.
+//
+// The port's logic is unit-tested against upstream's rules in
+// apps/font_picker/test_picker_engine.ae (ci.sh Phase 0). THIS spec proves
+// the wiring: that the dialog's search / category / sort / favourite /
+// selection controls actually drive that engine and update the UI.
+//
+// Run via ci.sh Phase 5l / tests/spec_matrix.sh, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/apps/font_picker/bin/font_picker &
+//   UI_SPEC=font_picker/spec_font_picker tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "font_picker over AetherUIDriver") {
+        aeocha.it("shows the picker chrome and finds real fonts") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "found ", "font scan reported")
+            aeocha.assert_contains(body, "\"textfield\"", "search field present")
+            aeocha.assert_contains(body, "\"canvas\"", "preview canvas present")
+            aeocha.assert_gt(uidriver.widget_id_of("button", "Clear filters"), 0,
+                "clear-filters button")
+            aeocha.assert_gt(uidriver.widget_id_of("button", "Favourite (f)"), 0,
+                "favourite button")
+            // Font discovery must have found the vendored DejaVu at minimum.
+            aeocha.assert_contains(body, "DejaVu", "a real font family is listed")
+        }
+
+        aeocha.it("per-face categories come from the engine's records") callback {
+            // category_for(): "…Mono…" → monospace, "…Serif…" → serif.
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "monospace", "a monospace face categorised")
+            aeocha.assert_contains(body, "serif", "a serif face categorised")
+        }
+
+        aeocha.it("fuzzy search filters the list [familyFilter/leven]") callback {
+            before = uidriver.get_body("/widgets")
+            aeocha.assert_contains(before, "Liberation", "Liberation visible first")
+            tf = uidriver.widget_id_of("textfield", "")
+            aeocha.assert_gt(tf, 0, "search field id")
+            // "Liberatio" is leven-1 from "Liberation…" faces (within their
+            // threshold) but far from every DejaVu face — a genuinely FUZZY
+            // query, not a substring test. (Single word: the GTK4 embedded
+            // server does not percent-decode set_text.)
+            uidriver.post_ok("/widget/${tf}/set_text?v=Liberatio",
+                             "type into search")
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "Liberation Mono", 20),
+                "fuzzy 'Liberatio' keeps the Liberation faces")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_false(string.contains(body, "DejaVu Sans Mono"),
+                "non-matching families filtered out")
+        }
+
+        aeocha.it("clear filters restores the full list") callback {
+            uidriver.click_widget(uidriver.widget_id_of("button", "Clear filters"))
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "Liberation Mono", 20),
+                "all families back")
+        }
+
+        aeocha.it("selecting a row previews it and names the variant") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "no selection", "starts unselected")
+            row = first_row_id()
+            aeocha.assert_gt(row, 0, "found a font row")
+            uidriver.click_widget(row)
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "selected: ", 20),
+                "selection label updated")
+            b2 = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b2, "selected: DejaVu", "…with the family name")
+        }
+
+        aeocha.it("favouriting marks the row and counts it [sortFamilies hoist]") callback {
+            uidriver.click_widget(uidriver.widget_id_of("button", "Favourite (f)"))
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "favourites 1", 20),
+                "favourite counted")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "* DejaVu", "row marked as favourite")
+        }
+
+        aeocha.it("Pick reports the chosen font [Font.toString]") callback {
+            uidriver.click_widget(uidriver.widget_id_of("button", "Pick"))
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "picked: ", 20),
+                "pick recorded")
+        }
+    }
+    aeocha.run_summary(fw)
+}
+
+// A font row is an hstack whose first child text is the family name;
+// clicking the ROW (not the label) is what selects, so walk from the
+// label to its parent.
+first_row_id() -> int {
+    lbl = uidriver.widget_id_of("text", "DejaVu Sans")
+    if lbl <= 0 { return 0 - 1 }
+    return uidriver.widget_int_field_by_id(lbl, "parent")
+}

@@ -1,0 +1,18 @@
+import build
+import aether
+import aether (source, output, no_closure_regen, lib)
+import aetherui (ui_backend)
+
+main() {
+    b = build.start()
+    root = build._get(b, "root")
+    aether.program(b) {
+        source("font_picker.ae")
+        output("font_picker")
+        lib("${root}")
+        lib(".")
+        no_closure_regen()
+        ui_backend(root)
+    }
+    return 0
+}

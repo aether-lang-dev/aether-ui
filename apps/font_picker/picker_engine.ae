@@ -1,0 +1,631 @@
+// picker_engine.ae — the Font Picker's pure logic layer.
+//
+// PORTED from Javascript Font Picker (https://www.jsfontpicker.com/),
+// MIT License, Copyright (c) 2024-2025 Zygomatic — see LICENSE-jsfontpicker
+// in this directory. This module reproduces that project's model and
+// behaviour as faithfully as Aether allows; the UI lives in font_picker.ae.
+//
+// What is ported, rule for rule (upstream file in brackets):
+//   * The compressed family format
+//     "name/category/variants/subsets[/popularity/thickness/width/complexity/curvature]"
+//     [helpers/FontFamily.ts: FontFamily.parse]
+//   * getDefaultVariant: the variant whose weight is nearest 400, ties to
+//     the earlier entry [helpers/FontFamily.ts]
+//   * Font naming: default variant → bare family name; otherwise
+//     "Family Weight[ Italic] (variant)" with the 100..900 weight names
+//     [helpers/Font.ts: weightNames, toString, toConcise, variant]
+//   * Fuzzy name search: Levenshtein distance vs. a threshold of
+//     (name length − query length); `leven` upstream [util/sortUtil.ts]
+//   * familyFilter: fuzzy name, subset ("all" passes), category-in-list,
+//     and the four metric equality tests (undefined metric fails unless
+//     the target is "all") [util/sortUtil.ts]
+//   * familySort: name (lexicographic), popularity ascending with
+//     undefined pushed last, and metrics DESCENDING for width/thickness/
+//     complexity/curvature [util/sortUtil.ts]
+//   * List order: sorted, then favourites hoisted to the top, then the
+//     selected family hoisted above those [core/PickerDialog.ts:
+//     sortFamilies]
+//
+// Deliberately NOT ported: Google-fonts network loading, translations,
+// the CSS/DOM layer, and browser localStorage persistence (favourites
+// live in memory here). Where upstream stores `undefined`, this port
+// uses explicit has_* flags, which is the same information.
+
+exports (
+    Fam, PickList,
+    fam_parse, fam_name, fam_category, fam_variants, fam_subsets,
+    fam_popularity, fam_has_popularity, fam_metric, fam_has_metrics, fam_path,
+    fam_default_variant, fam_variant_count, fam_variant_at,
+    font_label, font_concise, weight_name, variant_weight, variant_italic,
+    leven,
+    pl_new, pl_add, pl_count, pl_at,
+    pl_set_query, pl_set_subset, pl_set_category, pl_set_metric,
+    pl_set_sort, pl_set_reverse, pl_reverse, pl_clear_filters,
+    pl_toggle_fav, pl_is_fav, pl_fav_count,
+    pl_set_selected, pl_selected,
+    pl_apply, pl_visible_count, pl_visible_at, pl_visible_index_of,
+    pl_move_selection, pl_select_first, pl_select_last
+)
+
+import std.string
+import std.math
+import std.floatarr
+import std.list
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_retain(s: string)
+extern string_char_at(s: string, index: int) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_compare(a: string, b: string) -> int
+extern lrint(x: float) -> long
+
+// ─── Fam: one font family ────────────────────────────────────────────────────
+// Mirrors upstream's FamilyProps. Metric values are the raw 0..1-ish floats
+// from the compressed record; has_metrics == 0 is upstream's `undefined`.
+struct Fam {
+    name: string
+    category: string
+    variants: string       // comma-joined, as in the compressed record
+    subsets: string        // comma-joined
+    popularity: int
+    has_popularity: int
+    thickness: float
+    width: float
+    complexity: float
+    curvature: float
+    has_metrics: int
+    path: string           // OUR addition: the file this family renders from
+}
+
+fam_name(f: ptr) -> string { fm = f as *Fam; return fm.name }
+fam_category(f: ptr) -> string { fm = f as *Fam; return fm.category }
+fam_variants(f: ptr) -> string { fm = f as *Fam; return fm.variants }
+fam_subsets(f: ptr) -> string { fm = f as *Fam; return fm.subsets }
+fam_popularity(f: ptr) -> int { fm = f as *Fam; return fm.popularity }
+fam_has_popularity(f: ptr) -> int { fm = f as *Fam; return fm.has_popularity }
+fam_has_metrics(f: ptr) -> int { fm = f as *Fam; return fm.has_metrics }
+fam_path(f: ptr) -> string { fm = f as *Fam; return fm.path }
+
+// metric by name: 0=thickness 1=width 2=complexity 3=curvature
+fam_metric(f: ptr, which: int) -> float {
+    fm = f as *Fam
+    if which == 0 { return fm.thickness }
+    if which == 1 { return fm.width }
+    if which == 2 { return fm.complexity }
+    return fm.curvature
+}
+
+// Split helper: the n-th "/"-separated field of `raw`, "" when absent.
+field_at(raw: string, idx: int) -> string {
+    n = string.length(raw)
+    seen = 0
+    start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        c = 0
+        if i < n { c = string_char_at(raw, i) }
+        if at_end == 1 || c == 47 {          // '/'
+            if seen == idx { return string_substring(raw, start, i) }
+            seen = seen + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Count of comma-separated entries in `csv` ("" → 0).
+csv_count(csv: string) -> int {
+    if string.length(csv) == 0 { return 0 }
+    n = 1
+    i = 0
+    len = string.length(csv)
+    while i < len {
+        if string_char_at(csv, i) == 44 { n = n + 1 }   // ','
+        i = i + 1
+    }
+    return n
+}
+
+// The i-th comma-separated entry of `csv`.
+csv_at(csv: string, idx: int) -> string {
+    n = string.length(csv)
+    seen = 0
+    start = 0
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 }
+        c = 0
+        if i < n { c = string_char_at(csv, i) }
+        if at_end == 1 || c == 44 {
+            if seen == idx { return string_substring(csv, start, i) }
+            seen = seen + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Is `needle` one of the comma-separated entries of `csv`?
+csv_has(csv: string, needle: string) -> int {
+    n = csv_count(csv)
+    i = 0
+    while i < n {
+        if string.equals(csv_at(csv, i), needle) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fam_variant_count(f: ptr) -> int { fm = f as *Fam; return csv_count(fm.variants) }
+fam_variant_at(f: ptr, i: int) -> string { fm = f as *Fam; return csv_at(fm.variants, i) }
+
+// Parse the compressed record. `path` is our extension: the font file this
+// family renders from (upstream loads by CSS family name instead).
+fam_parse(raw: string, path: string) -> ptr {
+    fm = malloc(128) as *Fam
+    nm = field_at(raw, 0)
+    ca = field_at(raw, 1)
+    va = field_at(raw, 2)
+    su = field_at(raw, 3)
+    string_retain(nm); string_retain(ca); string_retain(va); string_retain(su)
+    string_retain(path)
+    fm.name = nm
+    fm.category = ca
+    fm.variants = va
+    fm.subsets = su
+    fm.path = path
+    fm.popularity = 0
+    fm.has_popularity = 0
+    fm.has_metrics = 0
+    fm.thickness = 0.0
+    fm.width = 0.0
+    fm.complexity = 0.0
+    fm.curvature = 0.0
+    popu = field_at(raw, 4)
+    if string.length(popu) > 0 {
+        pv, perr = string.to_int(popu)
+        if string.length(perr) == 0 { fm.popularity = pv; fm.has_popularity = 1 }
+    }
+    thic = field_at(raw, 5)
+    widt = field_at(raw, 6)
+    comp = field_at(raw, 7)
+    curv = field_at(raw, 8)
+    if string.length(thic) > 0 && string.length(widt) > 0 {
+        if string.length(comp) > 0 && string.length(curv) > 0 {
+            t, e1 = string.to_float(thic)
+            w, e2 = string.to_float(widt)
+            c, e3 = string.to_float(comp)
+            u, e4 = string.to_float(curv)
+            eok = string.length(e1) + string.length(e2) + string.length(e3) + string.length(e4)
+            if eok == 0 {
+                fm.thickness = t; fm.width = w
+                fm.complexity = c; fm.curvature = u
+                fm.has_metrics = 1
+            }
+        }
+    }
+    return fm as ptr
+}
+
+// ─── Variants and names ──────────────────────────────────────────────────────
+// "700i" → 700, "400" → 400. Upstream: parseInt(variant).
+variant_weight(v: string) -> int {
+    n = string.length(v)
+    acc = 0
+    i = 0
+    while i < n {
+        c = string_char_at(v, i)
+        if c < 48 || c > 57 { return acc }
+        acc = acc * 10 + (c - 48)
+        i = i + 1
+    }
+    return acc
+}
+variant_italic(v: string) -> int {
+    n = string.length(v)
+    if n == 0 { return 0 }
+    if string_char_at(v, n - 1) == 105 { return 1 }    // trailing 'i'
+    return 0
+}
+
+// The variant whose weight is nearest 400 (upstream sorts by
+// |weight-400| and takes the first; a stable sort keeps the earlier
+// entry on a tie, which this loop reproduces with a strict <).
+fam_default_variant(f: ptr) -> string {
+    n = fam_variant_count(f)
+    if n == 0 { return "400" }
+    best = fam_variant_at(f, 0)
+    bd = iabs(variant_weight(best) - 400)
+    i = 1
+    while i < n {
+        v = fam_variant_at(f, i)
+        d = iabs(variant_weight(v) - 400)
+        if d < bd { best = v; bd = d }
+        i = i + 1
+    }
+    return best
+}
+iabs(v: int) -> int { if v < 0 { return 0 - v } return v }
+
+// Upstream Font.weightNames.
+weight_name(w: int) -> string {
+    if w == 100 { return "Thin" }
+    if w == 200 { return "Extra Light" }
+    if w == 300 { return "Light" }
+    if w == 400 { return "Normal" }
+    if w == 500 { return "Medium" }
+    if w == 600 { return "Semi Bold" }
+    if w == 700 { return "Bold" }
+    if w == 800 { return "Extra Bold" }
+    if w == 900 { return "Black" }
+    return "Normal"
+}
+
+// Font.toString(): the default variant renders as the bare family name.
+font_label(f: ptr, variant: string) -> string {
+    nm = fam_name(f)
+    if string.equals(fam_default_variant(f), variant) == 1 { return nm }
+    wn = weight_name(variant_weight(variant))
+    if variant_italic(variant) == 1 { return "${nm} ${wn} Italic (${variant})" }
+    return "${nm} ${wn} (${variant})"
+}
+
+// Font.toConcise(): "Family" or "Family:variant".
+font_concise(f: ptr, variant: string) -> string {
+    nm = fam_name(f)
+    if string.equals(fam_default_variant(f), variant) == 1 { return nm }
+    return "${nm}:${variant}"
+}
+
+// ─── Levenshtein distance (upstream's `leven` package) ───────────────────────
+// Two-row dynamic programme; ASCII-lowercased comparison, matching the
+// upstream call which lowercases both sides.
+leven(a: string, b: string) -> int {
+    la = string.length(a)
+    lb = string.length(b)
+    if la == 0 { return lb }
+    if lb == 0 { return la }
+    prev, _pe = floatarr.new(lb + 1)
+    cur, _ce = floatarr.new(lb + 1)
+    j = 0
+    while j <= lb { floatarr.set_unchecked(prev, j, j * 1.0); j = j + 1 }
+    i = 1
+    while i <= la {
+        floatarr.set_unchecked(cur, 0, i * 1.0)
+        ca = lower(string_char_at(a, i - 1))
+        j = 1
+        while j <= lb {
+            cb = lower(string_char_at(b, j - 1))
+            cost = 1
+            if ca == cb { cost = 0 }
+            del = iof(floatarr.get_unchecked(prev, j)) + 1
+            ins = iof(floatarr.get_unchecked(cur, j - 1)) + 1
+            sub = iof(floatarr.get_unchecked(prev, j - 1)) + cost
+            m = del
+            if ins < m { m = ins }
+            if sub < m { m = sub }
+            floatarr.set_unchecked(cur, j, m * 1.0)
+            j = j + 1
+        }
+        j = 0
+        while j <= lb {
+            floatarr.set_unchecked(prev, j, floatarr.get_unchecked(cur, j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    out = iof(floatarr.get_unchecked(prev, lb))
+    floatarr.free(prev)
+    floatarr.free(cur)
+    return out
+}
+iof(v: float) -> int { return lrint(v) as int }
+lower(c: int) -> int { if c >= 65 && c <= 90 { return c + 32 } return c }
+
+// ─── PickList: the families plus filter/sort/selection state ─────────────────
+const FP_MAX: int = 512
+
+struct PickList {
+    fams: ptr            // std.list of *Fam
+    n: int
+    vis: ptr             // floatarr of visible family indices after apply()
+    nvis: int
+    fav: ptr             // floatarr, 1.0 per favourited family
+    query: string
+    subset: string
+    category: string     // "all" or a single category (upstream keeps a list)
+    m_thickness: string  // "all" or a decimal string, per upstream Metric
+    m_width: string
+    m_complexity: string
+    m_curvature: string
+    sort_key: string     // name | popularity | width | thickness | complexity | curvature
+    reverse: int
+    selected: int        // index into fams, -1 for none
+}
+
+pl_new() -> ptr {
+    l = malloc(160) as *PickList
+    l.fams = list.list_new()
+    vis, _ve = floatarr.new(FP_MAX)
+    fav, _fe = floatarr.new(FP_MAX)
+    l.vis = vis
+    l.fav = fav
+    l.n = 0
+    l.nvis = 0
+    l.query = ""
+    l.subset = "all"
+    l.category = "all"
+    l.m_thickness = "all"
+    l.m_width = "all"
+    l.m_complexity = "all"
+    l.m_curvature = "all"
+    l.sort_key = "name"
+    l.reverse = 0
+    l.selected = -1
+    return l as ptr
+}
+
+pl_add(lp: ptr, fam: ptr) -> int {
+    l = lp as *PickList
+    if l.n >= FP_MAX { return 0 }
+    _ = list.list_add_raw(l.fams, fam)
+    floatarr.set_unchecked(l.fav, l.n, 0.0)
+    l.n = l.n + 1
+    return 1
+}
+pl_count(lp: ptr) -> int { l = lp as *PickList; return l.n }
+pl_at(lp: ptr, i: int) -> ptr {
+    l = lp as *PickList
+    return list.list_get_raw(l.fams, i)
+}
+
+pl_set_query(lp: ptr, q: string) { l = lp as *PickList; string_retain(q); l.query = q }
+pl_set_subset(lp: ptr, s: string) { l = lp as *PickList; string_retain(s); l.subset = s }
+pl_set_category(lp: ptr, c: string) { l = lp as *PickList; string_retain(c); l.category = c }
+pl_set_metric(lp: ptr, which: int, v: string) {
+    l = lp as *PickList
+    string_retain(v)
+    if which == 0 { l.m_thickness = v; return }
+    if which == 1 { l.m_width = v; return }
+    if which == 2 { l.m_complexity = v; return }
+    l.m_curvature = v
+}
+pl_set_sort(lp: ptr, k: string) { l = lp as *PickList; string_retain(k); l.sort_key = k }
+pl_set_reverse(lp: ptr, r: int) { l = lp as *PickList; l.reverse = r }
+pl_reverse(lp: ptr) -> int { l = lp as *PickList; return l.reverse }
+
+// Upstream's "clear filters" button: filters reset, sort untouched.
+pl_clear_filters(lp: ptr) {
+    l = lp as *PickList
+    l.query = ""
+    l.subset = "all"
+    l.category = "all"
+    l.m_thickness = "all"
+    l.m_width = "all"
+    l.m_complexity = "all"
+    l.m_curvature = "all"
+}
+
+pl_toggle_fav(lp: ptr, i: int) -> int {
+    l = lp as *PickList
+    v = 1 - iof(floatarr.get_unchecked(l.fav, i))
+    floatarr.set_unchecked(l.fav, i, v * 1.0)
+    return v
+}
+pl_is_fav(lp: ptr, i: int) -> int {
+    l = lp as *PickList
+    return iof(floatarr.get_unchecked(l.fav, i))
+}
+pl_fav_count(lp: ptr) -> int {
+    l = lp as *PickList
+    n = 0
+    i = 0
+    while i < l.n {
+        if iof(floatarr.get_unchecked(l.fav, i)) == 1 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+pl_set_selected(lp: ptr, i: int) { l = lp as *PickList; l.selected = i }
+pl_selected(lp: ptr) -> int { l = lp as *PickList; return l.selected }
+
+// ─── Filtering (upstream familyFilter) ───────────────────────────────────────
+metric_passes(has: int, value: float, target: string) -> int {
+    if string.equals(target, "all") == 1 { return 1 }
+    if has == 0 { return 0 }
+    t, terr = string.to_float(target)
+    if string.length(terr) > 0 { return 1 }
+    d = value - t
+    if d < 0.0 { d = 0.0 - d }
+    if d < 0.0001 { return 1 }
+    return 0
+}
+
+fam_passes(lp: ptr, fp: ptr) -> int {
+    l = lp as *PickList
+    f = fp as *Fam
+    if string.length(l.query) > 0 {
+        // Upstream: leven(name, query) > (name.length - query.length) fails.
+        diff = leven(f.name, l.query)
+        threshold = string.length(f.name) - string.length(l.query)
+        if diff > threshold { return 0 }
+    }
+    if string.equals(l.subset, "all") == 0 {
+        if csv_has(f.subsets, l.subset) == 0 { return 0 }
+    }
+    if string.equals(l.category, "all") == 0 {
+        if string.equals(f.category, l.category) == 0 { return 0 }
+    }
+    if metric_passes(f.has_metrics, f.thickness, l.m_thickness) == 0 { return 0 }
+    if metric_passes(f.has_metrics, f.width, l.m_width) == 0 { return 0 }
+    if metric_passes(f.has_metrics, f.complexity, l.m_complexity) == 0 { return 0 }
+    if metric_passes(f.has_metrics, f.curvature, l.m_curvature) == 0 { return 0 }
+    return 1
+}
+
+// ─── Sorting (upstream familySort) ───────────────────────────────────────────
+// Returns <0 when a sorts before b. Metrics sort DESCENDING upstream
+// (b - a); undefined popularity/metrics sink to the end.
+fam_cmp(ap: ptr, bp: ptr, key: string) -> int {
+    a = ap as *Fam
+    b = bp as *Fam
+    if string.equals(key, "name") == 1 { return string_compare(a.name, b.name) }
+    if string.equals(key, "popularity") == 1 {
+        if a.has_popularity == 0 && b.has_popularity == 0 { return 0 }
+        if a.has_popularity == 0 { return 1 }
+        if b.has_popularity == 0 { return 0 - 1 }
+        return a.popularity - b.popularity
+    }
+    if a.has_metrics == 0 && b.has_metrics == 0 { return 0 }
+    if a.has_metrics == 0 { return 1 }
+    if b.has_metrics == 0 { return 0 - 1 }
+    av = 0.0
+    bv = 0.0
+    if string.equals(key, "complexity") == 1 { av = a.complexity; bv = b.complexity }
+    else { if string.equals(key, "curvature") == 1 { av = a.curvature; bv = b.curvature }
+    else { if string.equals(key, "thickness") == 1 { av = a.thickness; bv = b.thickness }
+    else { if string.equals(key, "width") == 1 { av = a.width; bv = b.width }
+    else { return 0 } } } }
+    if bv > av { return 1 }
+    if bv < av { return 0 - 1 }
+    return 0
+}
+
+// Rebuild the visible list: filter, sort, then hoist favourites and the
+// selected family to the top (upstream sortFamilies' prepend order).
+pl_apply(lp: ptr) {
+    l = lp as *PickList
+    // filter
+    m = 0
+    i = 0
+    while i < l.n {
+        if fam_passes(lp, pl_at(lp, i)) == 1 {
+            floatarr.set_unchecked(l.vis, m, i * 1.0)
+            m = m + 1
+        }
+        i = i + 1
+    }
+    // insertion sort — stable, which is what upstream relies on JS's
+    // Array.sort for; n is small (system font list).
+    i = 1
+    while i < m {
+        k = vget(l.vis, i)
+        j = i - 1
+        placing = 1
+        while j >= 0 && placing == 1 {
+            if fam_cmp(pl_at(lp, vget(l.vis, j)), pl_at(lp, k), l.sort_key) > 0 {
+                floatarr.set_unchecked(l.vis, j + 1, vget(l.vis, j) * 1.0)
+                j = j - 1
+            } else {
+                placing = 0
+            }
+        }
+        floatarr.set_unchecked(l.vis, j + 1, k * 1.0)
+        i = i + 1
+    }
+    if l.reverse == 1 {
+        a = 0
+        b = m - 1
+        while a < b {
+            t = vget(l.vis, a)
+            floatarr.set_unchecked(l.vis, a, vget(l.vis, b) * 1.0)
+            floatarr.set_unchecked(l.vis, b, t * 1.0)
+            a = a + 1; b = b - 1
+        }
+    }
+    // hoist favourites to the front (stable), then the selected above them
+    tmp, _te = floatarr.new(FP_MAX)
+    w = 0
+    i = 0
+    while i < m {
+        idx = vget(l.vis, i)
+        if pl_is_fav(lp, idx) == 1 { floatarr.set_unchecked(tmp, w, idx * 1.0); w = w + 1 }
+        i = i + 1
+    }
+    i = 0
+    while i < m {
+        idx = vget(l.vis, i)
+        if pl_is_fav(lp, idx) == 0 { floatarr.set_unchecked(tmp, w, idx * 1.0); w = w + 1 }
+        i = i + 1
+    }
+    i = 0
+    while i < m {
+        floatarr.set_unchecked(l.vis, i, floatarr.get_unchecked(tmp, i))
+        i = i + 1
+    }
+    floatarr.free(tmp)
+    if l.selected >= 0 { hoist_one(l.vis, m, l.selected) }
+    l.nvis = m
+}
+
+vget(arr: ptr, i: int) -> int { return iof(floatarr.get_unchecked(arr, i)) }
+
+// Move family index `idx` to the front of the visible list, if present.
+hoist_one(vis: ptr, m: int, idx: int) {
+    at = 0 - 1
+    i = 0
+    while i < m {
+        if vget(vis, i) == idx { at = i }
+        i = i + 1
+    }
+    if at <= 0 { return }
+    j = at
+    while j > 0 {
+        floatarr.set_unchecked(vis, j, floatarr.get_unchecked(vis, j - 1))
+        j = j - 1
+    }
+    floatarr.set_unchecked(vis, 0, idx * 1.0)
+}
+
+pl_visible_count(lp: ptr) -> int { l = lp as *PickList; return l.nvis }
+pl_visible_at(lp: ptr, i: int) -> int {
+    l = lp as *PickList
+    if i < 0 || i >= l.nvis { return 0 - 1 }
+    return vget(l.vis, i)
+}
+// Position of family `idx` in the visible list, or -1.
+pl_visible_index_of(lp: ptr, idx: int) -> int {
+    l = lp as *PickList
+    i = 0
+    while i < l.nvis {
+        if vget(l.vis, i) == idx { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// Keyboard navigation: ArrowUp/ArrowDown move within the VISIBLE list
+// (upstream selectClosestFont with wrap disabled at the ends).
+pl_move_selection(lp: ptr, delta: int) -> int {
+    l = lp as *PickList
+    if l.nvis == 0 { return 0 - 1 }
+    at = pl_visible_index_of(lp, l.selected)
+    if at < 0 {
+        at = 0
+    } else {
+        at = at + delta
+        if at < 0 { at = 0 }
+        if at >= l.nvis { at = l.nvis - 1 }
+    }
+    l.selected = vget(l.vis, at)
+    return l.selected
+}
+pl_select_first(lp: ptr) -> int {
+    l = lp as *PickList
+    if l.nvis == 0 { return 0 - 1 }
+    l.selected = vget(l.vis, 0)
+    return l.selected
+}
+pl_select_last(lp: ptr) -> int {
+    l = lp as *PickList
+    if l.nvis == 0 { return 0 - 1 }
+    l.selected = vget(l.vis, l.nvis - 1)
+    return l.selected
+}

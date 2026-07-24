@@ -1,0 +1,391 @@
+// font_picker.ae — a font picker for aether-ui.
+//
+// PORTED from Javascript Font Picker (https://www.jsfontpicker.com/),
+// MIT License, Copyright (c) 2024-2025 Zygomatic. The upstream project is
+// a browser component; this is the same picker as a native app on all
+// three aether-ui backends. Its logic layer — the compressed family
+// format, fuzzy search, filters, sorting, favourites and keyboard map —
+// is ported rule-for-rule in picker_engine.ae (see the header there and
+// LICENSE-jsfontpicker beside this file).
+//
+// The dialog mirrors upstream's layout (templates/dialogContent.html):
+//   search + subset + category filters | sort key + direction |
+//   the font list | a live preview | the variant row | footer actions.
+//
+// WHERE THIS PORT DIVERGES, deliberately:
+//   * Font list: real files discovered on this machine, not Google's
+//     catalogue (no network). Each family's record is built in the
+//     upstream compressed format so the engine is exercised as written.
+//   * Previews are drawn from the ACTUAL font file via vg.font +
+//     vg.text_path — real outlines, not a CSS font-family switch. That
+//     is aether-ui's own capability and makes the preview honest even
+//     for a face the desktop has no CSS handle on.
+//   * Favourites are in-memory (upstream persists to localStorage).
+//
+// Run: DISPLAY=:0 ./target/build/apps/font_picker/bin/font_picker
+
+import ui (
+    window, vstack, hstack, text, btn, textfield,
+    listbox, listbox_update, listbox_select, listbox_count, on_select,
+    picker, picker_add, enable_test_server, shortcut,
+    ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg, canvas_region)
+import vg (
+    view_box, rect, fill, use_font, text_path, typeface, text_paths_width,
+    vg_root, node_scene, scene_set_refreshing
+)
+import picker_engine
+import std.string
+import std.list
+import std.fs (list_dir, dir_list_count, dir_list_get)
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+extern string_to_lower(s: string) -> string
+extern string_contains(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+
+const FP_PREVIEW: string = "Handgloves 123"
+
+// One visible row: the family index plus the strings the row renders.
+struct Row { fi: int label: string cat: string }
+mk_row(fi: int, label: string, cat: string) -> ptr {
+    r = malloc(32) as *Row
+    r.fi = fi
+    r.label = label
+    r.cat = cat
+    return r as ptr
+}
+
+// ─── App state ───────────────────────────────────────────────────────────────
+struct App {
+    list: ptr          // PickList (engine)
+    st_status: int     // bound status label
+    st_sel: int        // bound selection label
+    lb: ptr            // the font listbox
+    scene: ptr         // vg scene for the preview canvas
+    variant_idx: int   // index into the selected family's variants
+}
+mk_app() -> *App {
+    a = malloc(64) as *App
+    a.list = picker_engine.pl_new()
+    a.st_status = 0
+    a.st_sel = 0
+    a.lb = null
+    a.scene = null
+    a.variant_idx = 0
+    return a
+}
+
+// ─── Font discovery: build upstream-format records from real files ───────────
+// Upstream ships a compressed catalogue; we synthesise the same records
+// from what vg.font can actually open, so the engine's parser, filters and
+// sorts are exercised on genuine data.
+// `cat` is retained for call-site documentation; the real category is
+// derived per FACE (upstream ships a curated one per family).
+scan_dir(app: *App, dir: string, cat: string, subsets: string) -> int {
+    _cat_hint = cat
+    added = 0
+    dl, err = list_dir(dir)
+    if string.length(err) > 0 { return 0 }
+    n = dir_list_count(dl)
+    i = 0
+    while i < n {
+        nm = dir_list_get(dl, i)
+        if is_ttf(nm) == 1 {
+            path = "${dir}/${nm}"
+            if use_font(path) == 1 {
+                face = typeface()
+                if string.length(face) == 0 { face = strip_ext(nm) }
+                // The upstream compressed record: name/category/variants/subsets
+                vars = variants_for(face)
+                fcat = category_for(face)
+                rec = "${face}/${fcat}/${vars}/${subsets}"
+                fam = picker_engine.fam_parse(rec, path)
+                if picker_engine.pl_add(app.list, fam) == 1 { added = added + 1 }
+            }
+        }
+        i = i + 1
+    }
+    return added
+}
+
+is_ttf(nm: string) -> int {
+    n = string.length(nm)
+    if n < 5 { return 0 }
+    tail = string_substring(nm, n - 4, n)
+    if string.equals(tail, ".ttf") == 1 { return 1 }
+    if string.equals(tail, ".ttc") == 1 { return 1 }
+    return 0
+}
+strip_ext(nm: string) -> string {
+    n = string.length(nm)
+    if n < 5 { return nm }
+    return string_substring(nm, 0, n - 4)
+}
+
+// Weight/italic variants inferred from the face name — the file-level twin
+// of upstream's per-family variant list.
+variants_for(face: string) -> string {
+    lower = string_to_lower(face)
+    w = "400"
+    if string_contains(lower, "bold") == 1 { w = "700" }
+    if string_contains(lower, "light") == 1 { w = "300" }
+    if string_contains(lower, "black") == 1 { w = "900" }
+    if string_contains(lower, "thin") == 1 { w = "100" }
+    ital = 0
+    if string_contains(lower, "italic") == 1 { ital = 1 }
+    if string_contains(lower, "oblique") == 1 { ital = 1 }
+    if ital == 1 { return "${w}i" }
+    return w
+}
+
+// Category guess from the face name (upstream ships a curated category).
+category_for(face: string) -> string {
+    lower = string_to_lower(face)
+    if string_contains(lower, "mono") == 1 { return "monospace" }
+    if string_contains(lower, "serif") == 1 {
+        if string_contains(lower, "sans") == 1 { return "sans-serif" }
+        return "serif"
+    }
+    if string_contains(lower, "sans") == 1 { return "sans-serif" }
+    return "display"
+}
+
+// Picker index → the engine's key strings (upstream uses <option value>).
+category_at(i: int) -> string {
+    if i == 1 { return "sans-serif" }
+    if i == 2 { return "serif" }
+    if i == 3 { return "monospace" }
+    if i == 4 { return "display" }
+    return "all"
+}
+sort_at(i: int) -> string {
+    if i == 1 { return "popularity" }
+    if i == 2 { return "width" }
+    if i == 3 { return "thickness" }
+    if i == 4 { return "complexity" }
+    if i == 5 { return "curvature" }
+    return "name"
+}
+
+// ─── List rendering ──────────────────────────────────────────────────────────
+refresh_list(app: *App) {
+    picker_engine.pl_apply(app.list)
+    if app.lb == null { return }
+    items = list.list_new()
+    n = picker_engine.pl_visible_count(app.list)
+    i = 0
+    while i < n {
+        fi = picker_engine.pl_visible_at(app.list, i)
+        fam = picker_engine.pl_at(app.list, fi)
+        nm = picker_engine.fam_name(fam)
+        mark = ""
+        if picker_engine.pl_is_fav(app.list, fi) == 1 { mark = "* " }
+        _ = list.list_add_raw(items, mk_row(fi, "${mark}${nm}", picker_engine.fam_category(fam)))
+        i = i + 1
+    }
+    listbox_update(app.lb, items)
+    total = picker_engine.pl_count(app.list)
+    favs = picker_engine.pl_fav_count(app.list)
+    if app.st_status != 0 {
+        s = ui_set_s(app.st_status, "showing ${n}/${total} · favourites ${favs}")
+        if s < 0 { return }
+    }
+}
+
+// The selected family's current variant label (upstream Font.toString).
+sel_label(app: *App) -> string {
+    si = picker_engine.pl_selected(app.list)
+    if si < 0 { return "no selection" }
+    fam = picker_engine.pl_at(app.list, si)
+    nv = picker_engine.fam_variant_count(fam)
+    vi = app.variant_idx
+    if vi >= nv { vi = 0 }
+    v = picker_engine.fam_variant_at(fam, vi)
+    return picker_engine.font_label(fam, v)
+}
+
+refresh_selection(app: *App) {
+    if app.st_sel == 0 { return }
+    lbl = sel_label(app)
+    s = ui_set_s(app.st_sel, "selected: ${lbl}")
+    if s < 0 { return }
+}
+
+// ─── Preview: drawn from the real font file (aether-ui's own twist) ──────────
+draw_preview(app: *App, rn: ptr) {
+    bg = rect(rn, 0.0, 0.0, 460.0, 90.0)
+    fill(bg, "#14141c")
+    si = picker_engine.pl_selected(app.list)
+    if si < 0 { return }
+    fam = picker_engine.pl_at(app.list, si)
+    path = picker_engine.fam_path(fam)
+    if string.length(path) == 0 { return }
+    if use_font(path) == 0 { return }
+    // Scale to fit the panel: shrink until the sample fits 440 units.
+    size = 44.0
+    w = text_paths_width(FP_PREVIEW, size)
+    if w > 440.0 { size = size * 440.0 / w }
+    t = text_path(rn, 16.0, 62.0, size, FP_PREVIEW)
+    fill(t, "#e8ecf2")
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+main() {
+    app = mk_app()
+    status = ui_state_s("scanning…")
+    seltext = ui_state_s("no selection")
+    app.st_status = status
+    app.st_sel = seltext
+
+    // Discover fonts. Upstream loads a catalogue; we take what this
+    // machine really has, in the same record format.
+    n1 = scan_dir(app, "fonts", "sans-serif", "latin")
+    n2 = scan_dir(app, "/usr/share/fonts/truetype/dejavu", "sans-serif", "latin,greek,cyrillic")
+    n3 = scan_dir(app, "/usr/share/fonts/truetype/liberation", "sans-serif", "latin")
+    n4 = scan_dir(app, "/usr/local/share/fonts/dejavu", "sans-serif", "latin")
+    found = n1 + n2 + n3 + n4
+
+    window("Font Picker", 620, 720) {
+        vstack(6) {
+            t_status = text("scanning…")
+            bind_text(t_status, status)
+
+            // ── Filters row (upstream: search + subset + categories) ──
+            hstack(6) {
+                textfield("search fonts…") callback |q: string| {
+                    picker_engine.pl_set_query(app.list, q)
+                    refresh_list(app)
+                }
+                cats = picker() callback |idx: int| {
+                    picker_engine.pl_set_category(app.list, category_at(idx))
+                    refresh_list(app)
+                }
+                picker_add(cats, "all")
+                picker_add(cats, "sans-serif")
+                picker_add(cats, "serif")
+                picker_add(cats, "monospace")
+                picker_add(cats, "display")
+            }
+
+            // ── Sort row (upstream: sort key + direction toggle) ──
+            hstack(6) {
+                sorts = picker() callback |idx: int| {
+                    picker_engine.pl_set_sort(app.list, sort_at(idx))
+                    refresh_list(app)
+                }
+                picker_add(sorts, "name")
+                picker_add(sorts, "popularity")
+                picker_add(sorts, "width")
+                picker_add(sorts, "thickness")
+                picker_add(sorts, "complexity")
+                picker_add(sorts, "curvature")
+                btn("Reverse") callback {
+                    cur = 0
+                    if picker_engine.pl_reverse(app.list) == 0 { cur = 1 }
+                    picker_engine.pl_set_reverse(app.list, cur)
+                    refresh_list(app)
+                }
+                btn("Clear filters") callback {
+                    picker_engine.pl_clear_filters(app.list)
+                    refresh_list(app)
+                }
+            }
+
+            // ── The font list (rows are real widgets, upstream's fp__fonts) ──
+            app.lb = listbox(2) callback |item: ptr, i: int, row: int| {
+                r = item as *Row
+                _n = text(row, r.label)
+                _c = text(row, r.cat)
+            }
+            on_select(app.lb) callback |i: int| {
+                fi = picker_engine.pl_visible_at(app.list, i)
+                picker_engine.pl_set_selected(app.list, fi)
+                app.variant_idx = 0
+                refresh_selection(app)
+            }
+
+            // ── Live preview, drawn from the real font file ──
+            vg(view_box(0, 0, 460, 90), 470, 95) {
+                anchor = rect(0, 0, 0, 0)
+                root_node = vg_root(node_scene(anchor))
+                app.scene = node_scene(root_node)
+                scene_set_refreshing(app.scene, 1)
+                canvas_region(root_node, 0.0, 0.0, 460.0, 90.0)
+                    callback |rn: ptr, t: float| {
+                        draw_preview(app, rn)
+                    }
+            }
+
+            t_sel = text("no selection")
+            bind_text(t_sel, seltext)
+
+            // ── Footer actions (upstream: favourite / variant / pick) ──
+            hstack(6) {
+                btn("Favourite (f)") callback {
+                    si = picker_engine.pl_selected(app.list)
+                    if si >= 0 {
+                        _t = picker_engine.pl_toggle_fav(app.list, si)
+                        refresh_list(app)
+                    }
+                }
+                btn("Variant ▸") callback {
+                    si = picker_engine.pl_selected(app.list)
+                    if si >= 0 {
+                        fam = picker_engine.pl_at(app.list, si)
+                        nv = picker_engine.fam_variant_count(fam)
+                        app.variant_idx = (app.variant_idx + 1) % nv
+                        refresh_selection(app)
+                    }
+                }
+                btn("Pick") callback {
+                    lbl = sel_label(app)
+                    s = ui_set_s(seltext, "picked: ${lbl}")
+                    if s < 0 { return }
+                }
+            }
+
+            text("↑/↓ move · f favourite · Enter pick — ported from jsfontpicker (MIT)")
+        }
+
+        // Upstream keyboard map (onKeyPressed): the subset that maps
+        // cleanly onto a native window.
+        shortcut("Down") callback {
+            _m = picker_engine.pl_move_selection(app.list, 1)
+            sync_listbox(app)
+        }
+        shortcut("Up") callback {
+            _m = picker_engine.pl_move_selection(app.list, 0 - 1)
+            sync_listbox(app)
+        }
+        shortcut("f") callback {
+            si = picker_engine.pl_selected(app.list)
+            if si >= 0 {
+                _t = picker_engine.pl_toggle_fav(app.list, si)
+                refresh_list(app)
+            }
+        }
+        shortcut("Return") callback {
+            lbl = sel_label(app)
+            s = ui_set_s(seltext, "picked: ${lbl}")
+            if s < 0 { return }
+        }
+
+        refresh_list(app)
+        s0 = ui_set_s(status, "found ${found} fonts")
+        if s0 < 0 { println("status failed") }
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
+
+// Keep the listbox highlight in step with the engine's selection.
+sync_listbox(app: *App) {
+    si = picker_engine.pl_selected(app.list)
+    at = picker_engine.pl_visible_index_of(app.list, si)
+    if at >= 0 && app.lb != 0 { listbox_select(app.lb, at) }
+    refresh_selection(app)
+}
