@@ -19,7 +19,7 @@ main() {
     aeocha.describe(fw, "font_picker over AetherUIDriver") {
         aeocha.it("shows the picker chrome and finds real fonts") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "found ", "font scan reported")
+            aeocha.assert_contains(body, "showing ", "list status reported")
             aeocha.assert_contains(body, "\"textfield\"", "search field present")
             aeocha.assert_contains(body, "\"canvas\"", "preview canvas present")
             aeocha.assert_gt(uidriver.widget_id_of("button", "Clear filters"), 0,

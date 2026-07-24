@@ -380,9 +380,13 @@ main() {
             if s < 0 { return }
         }
 
-        refresh_list(app)
+        // Report the scan total FIRST, then let refresh_list own the status
+        // line from here on (it prints "showing N/M · favourites K"). Doing
+        // it the other way round leaves whichever call lands last in charge,
+        // which differed per backend.
         s0 = ui_set_s(status, "found ${found} fonts")
         if s0 < 0 { println("status failed") }
+        refresh_list(app)
 
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
