@@ -185,9 +185,14 @@ font_load(path: string) -> ptr {
 
 font_ok(fp: ptr) -> int { f = fp as *TtfFont; return f.ok }
 
-// The face's FULL NAME ("DejaVu Sans Bold") from the `name` table: prefer
-// the Macintosh-platform ASCII record (nameID 4), fall back to the Windows
-// UTF-16BE one (Latin BMP chars taken from the low byte). "" if absent.
+// The face's FULL NAME ("DejaVu Sans Bold") from the `name` table.
+//
+// nameID 4, preferring the Macintosh-platform ENGLISH record (langID 0 —
+// plain ASCII in the file), else the Windows English record (langID 0x409,
+// UTF-16BE). Language matters: fonts commonly carry the same nameID in
+// several languages (e.g. IPAexMincho also stores "IPAex明朝"), and picking
+// a non-English record yields mojibake or, once non-Latin codepoints are
+// skipped, a truncated fragment. "" if absent.
 font_name(fp: ptr) -> string {
     f = fp as *TtfFont
     if f.ok == 0 || f.name0 == 0 { return "" }
@@ -199,12 +204,27 @@ font_name(fp: ptr) -> string {
     while i < count {
         rec = f.name0 + 6 + i * 12
         plat = rd16(f, rec)
+        lang = rd16(f, rec + 4)
         nid = rd16(f, rec + 6)
         if nid == 4 {
-            if plat == 1 && best_plat != 1 { best = rec; best_plat = 1 }
-            if plat == 3 && best_plat == -1 { best = rec; best_plat = 3 }
+            // Mac/English (langID 0) wins outright; Windows/English
+            // (0x409 = 1033) is the fallback.
+            if plat == 1 && lang == 0 && best_plat != 1 { best = rec; best_plat = 1 }
+            if plat == 3 && lang == 1033 && best_plat == 0 - 1 { best = rec; best_plat = 3 }
         }
         i = i + 1
+    }
+    // Nothing English: take any nameID 4 rather than reporting no name.
+    if best < 0 {
+        i = 0
+        while i < count {
+            rec = f.name0 + 6 + i * 12
+            if rd16(f, rec + 6) == 4 && best < 0 {
+                best = rec
+                best_plat = rd16(f, rec)
+            }
+            i = i + 1
+        }
     }
     if best < 0 { return "" }
     nlen = rd16(f, best + 8)

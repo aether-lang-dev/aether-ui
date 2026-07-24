@@ -7,6 +7,7 @@
 
 import vg.font
 import std.math
+import std.string
 
 extern exit(code: int)
 
@@ -116,6 +117,18 @@ main() {
     assert_eq("contour ends strictly increasing", ok_ends, 1)
     assert_eq("last contour end is last point", prev, n - 1)
     font.outl_free(ow)
+
+    println("test_font: name table")
+    // nameID 4, English record. A font carrying the same name in several
+    // languages must NOT yield the non-English one (which, after non-Latin
+    // codepoints are skipped, would come back as a truncated fragment).
+    nm = font.font_name(f)
+    if string.equals(nm, "DejaVu Sans Bold") == 1 {
+        println("  PASS: font_name reads the English full name ('${nm}')")
+    } else {
+        println("  FAIL: font_name: got '${nm}' want 'DejaVu Sans Bold'")
+        exit(1)
+    }
 
     println("test_font: missing file")
     fbad = font.font_load("fonts/no-such-font.ttf")
