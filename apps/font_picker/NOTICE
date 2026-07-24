@@ -8,21 +8,4 @@ License.
     Portions Copyright (c) 2024-2025 Zygomatic
     Portions Copyright (c) 2026 Aether developers
 
-The Zygomatic portions are the original work this port derives from: the
-font-picker model and behaviour reproduced in picker_engine.ae — the
-compressed family record format, the default-variant selection rule, the
-font naming scheme, Levenshtein fuzzy search with its length-difference
-threshold, the family filter and sort comparators, and the list ordering
-that hoists favourites and the current selection. Upstream's licence
-notice is reproduced verbatim and unaltered in LICENSE-jsfontpicker, as
-that licence requires.
-
-The Aether developers portions are the work done to make it an aether-ui
-application: the Aether implementations themselves, the native dialog in
-font_picker.ae, font discovery from the local filesystem, previews
-rendered from real font files through vg.font and vg.text_path, the unit
-tests in test_picker_engine.ae, and the driver spec in
-tests/font_picker/spec_font_picker.ae.
-
-Both sets of portions are offered under the same MIT terms; see
-LICENSE-jsfontpicker for the full text.
+MIT license - see LICENSE file in this folder.
