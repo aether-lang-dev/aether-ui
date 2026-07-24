@@ -71,6 +71,14 @@ static inline void invoke_closure(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
 }
 
+// Text-entry closures take the CURRENT TEXT (|s: string|) — GTK4 passes it
+// (on_entry_changed → c->fn(env, text)), so win32 must too or the callback
+// reads an uninitialised argument. Used by every EN_CHANGE path and by the
+// driver's set_text.
+static inline void invoke_closure_str(AeClosure* c, const char* s) {
+    if (c && c->fn) ((void (*)(void*, const char*))c->fn)(c->env, s ? s : "");
+}
+
 // Tabs strip clicks are resolved in WM_COMMAND, which is defined long before
 // the tabs implementation; forward-declare the two hooks it needs.
 typedef struct TabsState TabsState;
@@ -1322,7 +1330,9 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     }
                 } else if ((cw->kind == WK_TEXTFIELD || cw->kind == WK_SECUREFIELD
                             || cw->kind == WK_TEXTAREA) && code == EN_CHANGE) {
-                    if (!cw->sealed) invoke_closure(cw->on_change);
+                    if (!cw->sealed)
+                        invoke_closure_str(cw->on_change,
+                                           aether_ui_textfield_get_text(ch));
                     // Two-way bind_value: mirror the field into its state
                     // (compare-first, so the state→widget push doesn't echo).
                     if (cw->bound_state > 0) {
@@ -5616,7 +5626,9 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     // — while GTK4's gtk_entry_buffer_set_text DOES notify.
                     // Fire the same path EN_CHANGE takes, for parity.
                     if (w->kind != WK_TEXT) {
-                        if (!w->sealed) invoke_closure(w->on_change);
+                        if (!w->sealed)
+                            invoke_closure_str(w->on_change,
+                                               aether_ui_textfield_get_text(ctx->handle));
                         if (w->bound_state > 0) {
                             const char* t = aether_ui_textfield_get_text(ctx->handle);
                             StateCell* sc = state_cell(w->bound_state);
