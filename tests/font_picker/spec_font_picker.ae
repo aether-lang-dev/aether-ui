@@ -95,11 +95,14 @@ main() {
     aeocha.run_summary(fw)
 }
 
-// A font row is an hstack whose first child text is the family name;
-// clicking the ROW (not the label) is what selects, so walk from the
-// label to its parent.
+// The first font row. Rows are hstacks inside the listbox whose first
+// child text is the family name; clicking the ROW (not its label) selects.
+// The vendored DejaVu Sans Bold is the one face present on every platform,
+// but its exact label varies with what else is installed — so find its
+// label by exact text and walk up to the row.
 first_row_id() -> int {
-    lbl = uidriver.widget_id_of("text", "DejaVu Sans")
+    lbl = uidriver.widget_id_of("text", "DejaVu Sans Bold")
+    if lbl <= 0 { lbl = uidriver.widget_id_of("text", "DejaVu Sans") }
     if lbl <= 0 { return 0 - 1 }
     return uidriver.widget_int_field_by_id(lbl, "parent")
 }
