@@ -57,6 +57,9 @@ main() {
     // A failed use_font must not clobber the working font.
     assert_true("font survives failed swap",
                 vg.text_paths_width("A", 100.0) > 50.0)
+    // The face names itself from its own `name` table.
+    assert_eq_str("typeface() reads the name table",
+                  vg.typeface(), "DejaVu Sans Bold")
 
     println("-- text_paths geometry")
     d = vg.text_paths("A", 0.0, 0.0, 100.0)

@@ -35,7 +35,7 @@
 // A/e survive).
 
 exports (
-    font_load, font_ok, font_upem, font_nglyphs,
+    font_load, font_ok, font_upem, font_nglyphs, font_name,
     font_glyph_index, font_glyph_advance, font_kern, font_text_width,
     font_glyph_outlines, font_text_outlines, font_text_outlines_norm,
     outl_ok, outl_npts, outl_nctrs, outl_px, outl_py, outl_ctr_end,
@@ -68,6 +68,7 @@ struct TtfFont {
     loca: int
     hmtx: int
     kern0: int        // abs offset of the kern format-0 pair block (0 = none)
+    name0: int        // abs offset of the `name` table (0 = none)
 }
 
 // ─── Byte readers (big-endian, bounds-safe) ──────────────────────────────────
@@ -119,6 +120,7 @@ font_load(path: string) -> ptr {
     f.data = ""; f.len = 0; f.ok = 0; f.upem = 0; f.loca_fmt = 0
     f.nglyphs = 0; f.nhm = 0; f.cmap4 = 0; f.glyf = 0; f.loca = 0; f.hmtx = 0
     f.kern0 = 0
+    f.name0 = 0
     data, len, err = read_binary(path)
     if string.length(err) > 0 { return f as ptr }
     if len < 12 { return f as ptr }
@@ -141,6 +143,7 @@ font_load(path: string) -> ptr {
         if tag_is(f, rec, "glyf") == 1 { f.glyf = off }
         if tag_is(f, rec, "hmtx") == 1 { f.hmtx = off }
         if tag_is(f, rec, "kern") == 1 { f.kern0 = off }
+        if tag_is(f, rec, "name") == 1 { f.name0 = off }
         i = i + 1
     }
     if head == 0 || maxp == 0 || cmap == 0 || hhea == 0 { return f as ptr }
@@ -181,6 +184,51 @@ font_load(path: string) -> ptr {
 }
 
 font_ok(fp: ptr) -> int { f = fp as *TtfFont; return f.ok }
+
+// The face's FULL NAME ("DejaVu Sans Bold") from the `name` table: prefer
+// the Macintosh-platform ASCII record (nameID 4), fall back to the Windows
+// UTF-16BE one (Latin BMP chars taken from the low byte). "" if absent.
+font_name(fp: ptr) -> string {
+    f = fp as *TtfFont
+    if f.ok == 0 || f.name0 == 0 { return "" }
+    count = rd16(f, f.name0 + 2)
+    strs = f.name0 + rd16(f, f.name0 + 4)
+    best = -1
+    best_plat = -1
+    i = 0
+    while i < count {
+        rec = f.name0 + 6 + i * 12
+        plat = rd16(f, rec)
+        nid = rd16(f, rec + 6)
+        if nid == 4 {
+            if plat == 1 && best_plat != 1 { best = rec; best_plat = 1 }
+            if plat == 3 && best_plat == -1 { best = rec; best_plat = 3 }
+        }
+        i = i + 1
+    }
+    if best < 0 { return "" }
+    nlen = rd16(f, best + 8)
+    noff = strs + rd16(f, best + 10)
+    // Macintosh-platform records are plain ASCII bytes in the file — the
+    // name IS a substring of the font data.
+    if best_plat == 1 {
+        return string.substring_n(f.data, f.len, noff, noff + nlen)
+    }
+    // Windows UTF-16BE: keep BMP Latin chars (hi byte 0) by slicing each
+    // low byte out of the data; skip anything wider.
+    out = ""
+    j = 0
+    while j + 1 < nlen {
+        hi = rd8(f, noff + j)
+        lo = rd8(f, noff + j + 1)
+        if hi == 0 && lo >= 32 {
+            ch = string.substring_n(f.data, f.len, noff + j + 1, noff + j + 2)
+            out = "${out}${ch}"
+        }
+        j = j + 2
+    }
+    return out
+}
 font_upem(fp: ptr) -> int { f = fp as *TtfFont; return f.upem }
 font_nglyphs(fp: ptr) -> int { f = fp as *TtfFont; return f.nglyphs }
 

@@ -20,7 +20,7 @@ import ui (
 import vg.live (vg)
 import vg (
     view_box, rect, fill, stroke, transform,
-    text_path, text_path_anchored, text_paths_width
+    text_path, text_path_anchored, text_paths_width, typeface
 )
 import std.string
 import std.os (os_getenv)
@@ -59,10 +59,12 @@ main() {
             text("text as paths: fill · stroke-outline · rotate · anchors")
         }
 
-        // The falsifiable readout: kerned advance width of the headline, in
-        // tenths of a viewBox unit (integral → exact cross-platform assert).
+        // The falsifiable readout: the loaded face's name (from the font's
+        // own `name` table) + the headline's kerned advance width in tenths
+        // of a viewBox unit (integral → exact cross-platform assert).
+        face = typeface()
         w10 = lrint(text_paths_width("Aether type", 44.0) * 10.0) as int
-        st = ui_set_s(status, "textpath: w10=${w10}")
+        st = ui_set_s(status, "face: ${face} · w10=${w10}")
         if st < 0 { println("status set failed") }
 
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }

@@ -40,7 +40,7 @@
 exports (
     view_box,
     circle, rect, line, path, text, text_sized, text_anchored, g,
-    use_font, text_paths, text_paths_width, text_path, text_path_anchored,
+    use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
@@ -398,6 +398,14 @@ _tp_font() -> ptr {
         return aether_ui_vgfont_get()
     }
     return null
+}
+
+// The current outline font's full face name ("DejaVu Sans Bold"), or ""
+// when no font could be loaded — show it wherever text_path type appears.
+typeface() -> string {
+    fh = _tp_font()
+    if fh == null { return "" }
+    return font.font_name(fh)
 }
 
 // One-decimal float → string for path data.

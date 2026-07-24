@@ -28,8 +28,10 @@ main() {
         aeocha.it("kerned advance width is exact (pure-Aether font math)") callback {
             // 'Aether type' at 44px em, DejaVu Sans Bold, kern pairs applied:
             // 294.2 viewBox units → w10=2942. Same bytes on every platform.
+            // The face name comes from the font's own `name` table.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "textpath: w10=2942", "width readout exact")
+            aeocha.assert_contains(body, "face: DejaVu Sans Bold", "typeface named")
+            aeocha.assert_contains(body, "w10=2942", "width readout exact")
         }
     }
     aeocha.run_summary(fw)
