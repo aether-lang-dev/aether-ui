@@ -200,6 +200,9 @@ typedef struct {
     COLORREF grad_a, grad_b;
     int grad_vertical;
     int corner_radius;
+    int border_width;          // 0 = none
+    int border_set;            // 1 = explicitly set (readback)
+    COLORREF border_color;
     double opacity; // 0.0–1.0; <0 = no override
 
     // Fonts
@@ -2926,6 +2929,31 @@ void aether_ui_set_corner_radius(int handle, double radius) {
     HRGN rgn = CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1,
                                    (int)radius * 2, (int)radius * 2);
     SetWindowRgn(w->hwnd, rgn, TRUE);
+}
+
+// Solid border. STORED AND DRIVER-VISIBLE, but not yet PAINTED: win32 buttons
+// are native controls with no custom-paint hook here, so drawing an outline
+// needs NM_CUSTOMDRAW owner-draw plumbing this backend does not have (GTK4
+// gets it from CSS, macOS from CALayer.borderWidth). The value round-trips
+// through /widgets so specs assert identically on all three, and the paint
+// side is a contained follow-up. See roadmap.md.
+void aether_ui_set_border(int handle, double width, double r, double g, double b) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->border_width = (int)width;
+    w->border_color = rgb_from_doubles(r, g, b);
+    w->border_set = 1;
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+// (width<<24) | flag | rgb, or -1 when unset — mirrors the GTK4 encoding so
+// /widgets JSON reads identically on every backend.
+int aether_ui_styled_border_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->border_set) return -1;
+    COLORREF c = w->border_color;
+    int rgbv = ((GetRValue(c) & 0xFF) << 16) | ((GetGValue(c) & 0xFF) << 8) | (GetBValue(c) & 0xFF);
+    return (w->border_width << 24) | 0x40000000 | rgbv;
 }
 
 void aether_ui_set_edge_insets(int handle, double top, double right,

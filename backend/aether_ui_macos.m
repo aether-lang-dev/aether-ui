@@ -2237,6 +2237,31 @@ void aether_ui_set_corner_radius(int handle, double radius) {
     v.layer.masksToBounds = YES;
 }
 
+// Solid border via the backing layer (same mechanism as cornerRadius, so a
+// bordered pill composes correctly). width 0 clears it.
+void aether_ui_set_border(int handle, double width, double r, double g, double b) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    [v setWantsLayer:YES];
+    v.layer.borderWidth = width;
+    if (width > 0.0) {
+        v.layer.borderColor = [[NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0] CGColor];
+    }
+    objc_setAssociatedObject(v, "aeui-styled-border",
+        @(((int)width << 24) | 0x40000000
+          | (((int)(r*255) & 0xFF) << 16) | (((int)(g*255) & 0xFF) << 8)
+          | ((int)(b*255) & 0xFF)),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// (width<<24) | flag | rgb, or -1 — same encoding as GTK4/win32.
+int aether_ui_styled_border_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, "aeui-styled-border");
+    return n ? [n intValue] : -1;
+}
+
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);

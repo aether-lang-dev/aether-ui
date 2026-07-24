@@ -167,6 +167,7 @@ void aether_ui_set_font_family(int handle, const char* family);
 const char* aether_ui_styled_font_family_impl(int handle);   // "" unset
 const char* aether_ui_styled_weight_impl(int handle);        // ""/"bold"/"normal"
 int aether_ui_styled_opacity_impl(int handle);               // 0..100, -1 unset
+int aether_ui_styled_border_impl(int handle);                // (w<<24)|flag|rgb, -1 unset
 
 // AeCS v1.2 — current sheet (use_styles: constructors consult it) +
 // appearance-change registry (styles_for_mode auto re-theme). The holders

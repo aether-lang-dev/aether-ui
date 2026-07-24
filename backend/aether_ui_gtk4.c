@@ -2202,6 +2202,37 @@ void aether_ui_set_corner_radius(int handle, double radius) {
     aether_ui_apply_css(handle, w, prop);
 }
 
+// Solid border. width 0 clears it (border: none), so a re-theme can remove a
+// border the previous sheet set — same two-valued discipline as font weight.
+void aether_ui_set_border(int handle, double width, double r, double g, double b) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    char prop[128];
+    if (width <= 0.0) {
+        snprintf(prop, sizeof(prop), "border: none;");
+    } else {
+        snprintf(prop, sizeof(prop), "border: %dpx solid rgb(%d,%d,%d);",
+            (int)width, (int)(r * 255), (int)(g * 255), (int)(b * 255));
+    }
+    aether_ui_apply_css(handle, w, prop);
+    // Stash for driver readback, so a spec can prove the border reached the
+    // backend rather than merely being recorded in the model.
+    g_object_set_data(G_OBJECT(w), "aeui-styled-border",
+                      GINT_TO_POINTER(((int)width << 24) | 0x40000000
+                                      | (((int)(r*255) & 0xFF) << 16)
+                                      | (((int)(g*255) & 0xFF) << 8)
+                                      | ((int)(b*255) & 0xFF)));
+}
+
+// (width<<24) | flag | rgb, or -1 when unset. Width 0 with the flag set means
+// an explicit "no border" (a re-theme clearing one).
+int aether_ui_styled_border_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return -1;
+    int v = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-styled-border"));
+    return (v & 0x40000000) ? v : -1;
+}
+
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -5133,6 +5164,12 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
         int op = aether_ui_styled_opacity_impl(handle);
         if (op >= 0) n += snprintf(buf + n, bufsize - n, ",\"opacity\":%.2f", op / 100.0);
+        int bd = aether_ui_styled_border_impl(handle);
+        if (bd >= 0) {
+            n += snprintf(buf + n, bufsize - n,
+                          ",\"borderWidth\":%d,\"borderColor\":\"#%06x\"",
+                          (bd >> 24) & 0x3F, bd & 0xFFFFFF);
+        }
     }
 
     // Accessibility: effective role + accessible name (emitted only when

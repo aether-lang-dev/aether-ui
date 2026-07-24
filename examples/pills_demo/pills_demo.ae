@@ -1,0 +1,93 @@
+// pills_demo.ae — the chrome vocabulary AeCS was missing: BORDERS.
+//
+// Padding (edge_insets / st_insets), corner radius and colours already
+// existed; what could not be expressed was a border, and without one an
+// "outline" control — a pill that is a RING rather than a fill — is
+// unreachable. That shape is everywhere in modern UI (filter chips, tag
+// pickers, segmented controls), so this demo is the acceptance test for
+// st_border / style_border.
+//
+// Three states side by side, the pattern a filter-chip row needs:
+//   outline  — 1px ring, transparent-ish fill, accent text
+//   filled   — accent background, white text, no ring
+//   cleared  — a border explicitly REMOVED (width 0), proving a re-theme
+//              can take one away, not just add it (the same two-valued
+//              discipline font weight has)
+//
+// Run: DISPLAY=:0 ./target/build/examples/pills_demo/bin/pills_demo
+
+import ui (
+    window, vstack, hstack, text, btn, enable_test_server,
+    edge_insets, style_border, style_corner_radius,
+    style_bg_color, style_text_color,
+    create_styles, st_bg, st_color, st_radius, st_insets, st_border,
+    apply_styles, add_css_class
+)
+import std.os (os_getenv)
+
+// Pill geometry: generous horizontal padding is what turns a button into a
+// chip — without it a radius alone just rounds a cramped default button.
+const PILL_TB: float = 8.0
+const PILL_LR: float = 18.0
+const PILL_R: float = 999.0        // >= half the height = a capsule
+
+main() {
+    // The sheet is built up front so it is in scope for the apply_styles
+    // call after the tree exists.
+    sheet = create_styles()
+    st_bg(sheet, "chip", 0xFFFFFF)
+    st_color(sheet, "chip", 0x2176FE)
+    st_radius(sheet, "chip", PILL_R)
+    st_insets(sheet, "chip", PILL_TB, PILL_LR, PILL_TB, PILL_LR)
+    st_border(sheet, "chip", 2.0, 0x2176FE)
+
+    window("Pills — borders in AeCS", 560, 260) {
+        vstack(10) {
+            text("Per-widget: outline · filled · border cleared")
+
+            hstack(8) {
+                // OUTLINE: the shape that needed st_border to exist at all.
+                a = btn("Serif") callback { }
+                _ap = edge_insets(a, PILL_TB, PILL_LR, PILL_TB, PILL_LR)
+                _ar = style_corner_radius(a, PILL_R)
+                _ab = style_bg_color(a, 1.0, 1.0, 1.0, 1.0)
+                _at = style_text_color(a, 0.13, 0.45, 0.98)
+                _abd = style_border(a, 1.0, 0.13, 0.45, 0.98)
+
+                // FILLED: the selected state of the same chip.
+                b = btn("Sans-serif") callback { }
+                _bp = edge_insets(b, PILL_TB, PILL_LR, PILL_TB, PILL_LR)
+                _br = style_corner_radius(b, PILL_R)
+                _bb = style_bg_color(b, 0.13, 0.45, 0.98, 1.0)
+                _bt = style_text_color(b, 1.0, 1.0, 1.0)
+                _bbd = style_border(b, 0.0, 0.0, 0.0, 0.0)
+
+                // CLEARED: given a border, then explicitly taken away.
+                c = btn("Display") callback { }
+                _cp = edge_insets(c, PILL_TB, PILL_LR, PILL_TB, PILL_LR)
+                _cr = style_corner_radius(c, PILL_R)
+                _cb = style_bg_color(c, 0.94, 0.95, 0.97, 1.0)
+                _c1 = style_border(c, 3.0, 0.9, 0.2, 0.2)
+                _c2 = style_border(c, 0.0, 0.0, 0.0, 0.0)   // re-theme removes it
+            }
+
+            text("Via a stylesheet: st_border on a class")
+
+            // The same chip through AeCS (sheet built above), so the cascade
+            // is exercised too — one rule expresses the whole shape.
+            hstack(8) {
+                d = btn("Handwriting") callback { }
+                add_css_class(d, "chip")
+                e = btn("Monospace") callback { }
+                add_css_class(e, "chip")
+            }
+
+            text("A ring, a fill, and a border removed — all now expressible.")
+        }
+        // apply_styles walks the LIVE widget registry, so it must run after
+        // the tree is built — not inline mid-construction.
+        apply_styles(0, sheet)
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

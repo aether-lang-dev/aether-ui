@@ -36,10 +36,10 @@ exports (
     bg_color, text_color, font_size, font_bold, corner_radius,
     opacity, enabled, tooltip, onclick,
     style_bg_color, style_text_color, style_font_size, style_font_bold,
-    style_bg_gradient, style_corner_radius, style_opacity,
+    style_bg_gradient, style_corner_radius, style_opacity, style_border,
     style_enabled, style_tooltip,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
-    st_radius, st_font_family, st_opacity, st_gradient, st_insets,
+    st_radius, st_font_family, st_opacity, st_gradient, st_insets, st_border,
     apply_styles, style_id, styles_for_mode,
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     load_styles,
@@ -237,6 +237,7 @@ extern aether_ui_set_font_size(handle: int, size: float)
 extern aether_ui_set_font_bold(handle: int, bold: int)
 extern aether_ui_set_font_family(handle: int, family: string)
 extern aether_ui_set_corner_radius(handle: int, radius: float)
+extern aether_ui_set_border(handle: int, width: float, r: float, g: float, b: float)
 extern aether_ui_set_edge_insets(handle: int, top: float, right: float,
                                  bottom: float, left: float)
 extern aether_ui_set_width(handle: int, width: int)
@@ -1281,6 +1282,12 @@ style_bg_gradient(handle: int, r1: float, g1: float, b1: float,
     return handle
 }
 
+// style_border(handle, width_px, r, g, b) — solid border, 0..1 colour
+// components. width 0 clears it.
+style_border(handle: int, width: float, r: float, g: float, b: float) -> int {
+    aether_ui_set_border(handle, width, r, g, b)
+    return 1
+}
 style_corner_radius(handle: int, radius: float) -> int {
     aether_ui_set_corner_radius(handle, radius)
     return handle
@@ -1333,7 +1340,8 @@ struct StyleRule {
     has_family: int, family: string,// font family (verbatim to the platform)
     has_opacity: int, opacity: float,
     has_grad: int, grad1: int, grad2: int,   // vertical bg gradient (packed hex)
-    has_insets: int, in_t: float, in_r: float, in_b: float, in_l: float
+    has_insets: int, in_t: float, in_r: float, in_b: float, in_l: float,
+    has_border: int, bord_w: float, bord_col: int   // width px + packed 0xRRGGBB
 }
 
 struct StyleSheet { rules: ptr }    // std.list of *StyleRule
@@ -1362,7 +1370,7 @@ _style_rule_of(sp: ptr, sel: string) -> ptr {
     found = _style_find(sp, sel)
     if found != null { return found }
     s = sp as *StyleSheet
-    r = malloc(224) as *StyleRule
+    r = malloc(288) as *StyleRule
     r.sel = sel
     r.has_color = 0
     r.has_bg = 0
@@ -1373,6 +1381,7 @@ _style_rule_of(sp: ptr, sel: string) -> ptr {
     r.has_opacity = 0
     r.has_grad = 0
     r.has_insets = 0
+    r.has_border = 0
     _ = list.add(s.rules, r as ptr)
     return r as ptr
 }
@@ -1428,6 +1437,15 @@ st_insets(sp: ptr, sel: string, top: float, right: float,
     r.in_b = bottom
     r.in_l = left
 }
+// st_border(sheet, sel, width_px, 0xRRGGBB) — a solid border. Width 0 clears
+// it. The commonest chrome after background+radius: without a border an
+// "outline" style (a pill that is a ring rather than a fill) is unreachable.
+st_border(sp: ptr, sel: string, width: float, hex: int) {
+    r = _style_rule_of(sp, sel) as *StyleRule
+    r.has_border = 1
+    r.bord_w = width
+    r.bord_col = hex
+}
 st_radius(sp: ptr, sel: string, radius: float) {
     r = _style_rule_of(sp, sel) as *StyleRule
     r.has_radius = 1
@@ -1446,7 +1464,8 @@ _rule_has(rp: ptr, prop: int) -> int {
     if prop == 5 { return r.has_family }
     if prop == 6 { return r.has_opacity }
     if prop == 7 { return r.has_grad }
-    return r.has_insets
+    if prop == 8 { return r.has_insets }
+    return r.has_border
 }
 
 // A candidate selector defines `prop`? (empty selector never matches)
@@ -1597,6 +1616,14 @@ _style_apply_one(sp: ptr, h: int, kind: string) {
     if ri != null {
         r9 = ri as *StyleRule
         _ = edge_insets(h, r9.in_t, r9.in_r, r9.in_b, r9.in_l)
+    }
+    rb = _style_resolve(sp, 9, cls, kind, alias)
+    if rb != null {
+        r10 = rb as *StyleRule
+        bc = r10.bord_col
+        _ = style_border(h, r10.bord_w,
+            ((bc / 65536) % 256) / 255.0, ((bc / 256) % 256) / 255.0,
+            (bc % 256) / 255.0)
     }
 }
 

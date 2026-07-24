@@ -1,0 +1,57 @@
+// spec_pills_demo.ae — borders reach the backend, per-widget AND via AeCS.
+//
+// The readback is the point: /widgets carries borderWidth + borderColor
+// only when a border was explicitly set, so a spec can prove the property
+// crossed the C ABI rather than merely sitting in the style model.
+//
+// Encoding note: the stash packs (width << 24) | flag | rgb, with the flag
+// clear of both fields — the first cut ORed it into the RED byte and
+// corrupted every colour, which is exactly the class of bug this readback
+// exists to catch.
+//
+// Run via ci.sh Phase 5 / tests/spec_matrix.sh, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/pills_demo/bin/pills_demo &
+//   UI_SPEC=pills_demo/spec_pills_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "pills_demo over AetherUIDriver") {
+        aeocha.it("shows the chip rows") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_gt(uidriver.widget_id_of("button", "Serif"), 0, "outline chip")
+            aeocha.assert_gt(uidriver.widget_id_of("button", "Sans-serif"), 0, "filled chip")
+            aeocha.assert_gt(uidriver.widget_id_of("button", "Handwriting"), 0, "sheet chip")
+            aeocha.assert_contains(body, "borderWidth", "border readback present")
+        }
+
+        aeocha.it("per-widget style_border sets width AND colour") callback {
+            body = uidriver.get_body("/widgets")
+            // The outline chip: 1px in the accent colour. 0.13/0.45/0.98 →
+            // 33/114/249 → #2172f9 (int truncation, not rounding).
+            aeocha.assert_contains(body, "\"borderWidth\":1", "1px border")
+            aeocha.assert_contains(body, "\"borderColor\":\"#2172f9\"", "accent colour")
+        }
+
+        aeocha.it("width 0 records a border explicitly CLEARED") callback {
+            // The filled + cleared chips set width 0: a re-theme must be able
+            // to REMOVE a border, not only add one (the two-valued discipline
+            // font weight already has). Absent ≠ zero: absent emits nothing.
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"borderWidth\":0", "cleared border recorded")
+        }
+
+        aeocha.it("st_border flows through the AeCS cascade") callback {
+            // The bottom row is styled ONLY by the sheet's `chip` class rule.
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"borderWidth\":2", "2px from the sheet")
+            aeocha.assert_contains(body, "\"borderColor\":\"#2176fe\"", "sheet colour")
+            aeocha.assert_contains(body, "\"classes\":\"chip\"", "class carried")
+        }
+    }
+    aeocha.run_summary(fw)
+}

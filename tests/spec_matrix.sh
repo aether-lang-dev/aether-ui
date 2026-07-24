@@ -110,6 +110,7 @@ SUITES=(
   "states|examples/states_demo|states_demo/spec_states_demo|"
   "undo|examples/undo_demo|undo_demo/spec_undo_demo|"
   "textpath|examples/textpath_demo|textpath_demo/spec_textpath_demo|"
+  "pills|examples/pills_demo|pills_demo/spec_pills_demo|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
   "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"

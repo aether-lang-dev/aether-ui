@@ -297,6 +297,12 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
         int op = aether_ui_styled_opacity_impl(handle);
         if (op >= 0) n += snprintf(buf + n, bufsize - n, ",\"opacity\":%.2f", op / 100.0);
+        int bd = aether_ui_styled_border_impl(handle);
+        if (bd >= 0) {
+            n += snprintf(buf + n, bufsize - n,
+                          ",\"borderWidth\":%d,\"borderColor\":\"#%06x\"",
+                          (bd >> 24) & 0x3F, bd & 0xFFFFFF);
+        }
     }
 
     // Accessibility: the widget's effective role + accessible name (auto when
