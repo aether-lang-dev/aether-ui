@@ -12,3 +12,10 @@ double aether_ui_text_measure(double size, const char* text) { (void)size; (void
 double aether_ui_font_ascent(double size)  { (void)size; return 0.0; }
 double aether_ui_font_descent(double size) { (void)size; return 0.0; }
 double aether_ui_font_height(double size)  { (void)size; return 0.0; }
+
+/* vg outline-font holder — REAL (4-line) implementation, not a zero stub:
+ * Phase-0 tests exercising text_path need use_font() to actually stick.
+ * Mirrors backend/aether_ui_system_extras.c. */
+static void* g_aeui_vgfont = 0;
+void* aether_ui_vgfont_get(void) { return g_aeui_vgfont; }
+void aether_ui_vgfont_set(void* f) { g_aeui_vgfont = f; }

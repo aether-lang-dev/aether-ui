@@ -40,6 +40,7 @@
 exports (
     view_box,
     circle, rect, line, path, text, text_sized, text_anchored, g,
+    use_font, text_paths, text_paths_width, text_path, text_path_anchored,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
@@ -86,6 +87,7 @@ import vg.grammar.bind
 import vg.grammar.animations
 import vg.region
 import vg.svg.parser
+import vg.font
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
@@ -349,6 +351,116 @@ path(_ctx: ptr, d: string) -> ptr {
     }
     el = shapes.shape_path(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
+}
+
+// ─── Text as paths: real type, first-class geometry ──────────────────────────
+//
+// `text_path(x, y, size, "Hello") { fill("#fff"); transform("rotate(30)") }`
+// puts a word into the scene as an ordinary PATH element built from the
+// current outline font's glyph contours (vg.font — the pure-Aether TTF
+// reader). Because the element IS a path, every path capability applies
+// unchanged: full transforms (rotate/skew/matrix, not just origin moves),
+// stroke (outline type), opacity, bindings, interaction, hit-testing —
+// on every backend, with no backend text machinery involved.
+//
+// (x, y) is the BASELINE origin, matching text()/SVG semantics; size is the
+// em height in viewBox units. UTF-8 runs, pair-kerned (`kern` format 0).
+//
+// The font is process-wide (a C-side holder — Aether has no module
+// globals): use_font(path) sets it explicitly; otherwise the first
+// text-path call lazy-loads the vendored default ($AEVG_FONT override,
+// then fonts/DejaVuSans-Bold.ttf, then system DejaVu paths).
+extern aether_ui_vgfont_get() -> ptr
+extern aether_ui_vgfont_set(f: ptr)
+
+// Load a TTF/TTC and make it the outline font. Returns 1 on success.
+use_font(path: string) -> int {
+    fh = font.font_load(path)
+    if font.font_ok(fh) == 1 {
+        aether_ui_vgfont_set(fh)
+        return 1
+    }
+    return 0
+}
+
+_tp_font() -> ptr {
+    fh = aether_ui_vgfont_get()
+    if fh != null { return fh }
+    envp = os_getenv("AEVG_FONT")
+    if envp != null {
+        if use_font(envp) == 1 { return aether_ui_vgfont_get() }
+    }
+    if use_font("fonts/DejaVuSans-Bold.ttf") == 1 { return aether_ui_vgfont_get() }
+    if use_font("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf") == 1 {
+        return aether_ui_vgfont_get()
+    }
+    if use_font("/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf") == 1 {
+        return aether_ui_vgfont_get()
+    }
+    return null
+}
+
+// One-decimal float → string for path data.
+_tp_f1(v: float) -> string {
+    n = lrint(v * 10.0) as int
+    whole = n / 10
+    frac = n % 10
+    if frac < 0 { frac = 0 - frac }
+    if n < 0 && whole == 0 { return "-0.${frac}" }
+    return "${whole}.${frac}"
+}
+
+// The word as SVG path data ("M … Z M … Z"), baseline origin (x, y), em
+// height `size`. Counters keep their winding — nonzero fill cuts the holes.
+// "" when no outline font could be loaded (callers degrade gracefully).
+text_paths(txt: string, x: float, y: float, size: float) -> string {
+    fh = _tp_font()
+    if fh == null { return "" }
+    sc = size / (font.font_upem(fh) * 1.0)
+    ow = font.font_text_outlines(fh, txt, 4)
+    d = ""
+    start = 0
+    ci = 0
+    while ci < font.outl_nctrs(ow) {
+        last = font.outl_ctr_end(ow, ci)
+        j = start
+        while j <= last {
+            px = _tp_f1(x + font.outl_px(ow, j) * sc)
+            py = _tp_f1(y - font.outl_py(ow, j) * sc)   // font y-up → screen y-down
+            cmd = " L"
+            if j == start { cmd = "M" }
+            d = "${d}${cmd} ${px} ${py}"
+            j = j + 1
+        }
+        d = "${d} Z "
+        start = last + 1
+        ci = ci + 1
+    }
+    font.outl_free(ow)
+    return d
+}
+
+// Advance width of txt at `size` (viewBox units), kerning included — the
+// layout companion to text_paths.
+text_paths_width(txt: string, size: float) -> float {
+    fh = _tp_font()
+    if fh == null { return 0.0 }
+    return font.font_text_width(fh, txt) * size / (font.font_upem(fh) * 1.0)
+}
+
+// The DSL shape: a word as a live path element. All path modifiers apply.
+text_path(_ctx: ptr, x: float, y: float, size: float, txt: string) -> ptr {
+    return path(_ctx, text_paths(txt, x, y, size))
+}
+
+// Anchored variant, mirroring text_anchored: "start" | "middle" | "end".
+text_path_anchored(_ctx: ptr, x: float, y: float, size: float,
+                   anchor: string, txt: string) -> ptr {
+    ax = x
+    w = text_paths_width(txt, size)
+    if string.equals(anchor, "middle") == 1 { ax = x - w / 2.0 }
+    if string.equals(anchor, "end") == 1 { ax = x - w }
+    return text_path(_ctx, ax, y, size, txt)
 }
 
 // text differs from the other shapes: shapes.shape_text takes a

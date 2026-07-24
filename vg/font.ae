@@ -13,8 +13,12 @@
 //   * `cmap` format 4 (the BMP segment mapping every practical Latin font
 //     carries), `loca` short+long, `hmtx` advances, `.ttc` collections
 //     (first font).
-//   * ASCII text runs (font_text_outlines walks bytes); any Unicode
-//     codepoint via font_glyph_index + font_glyph_outlines.
+//   * UTF-8 text runs (font_text_outlines decodes multi-byte sequences;
+//     cmap format 4 covers the BMP); any codepoint directly via
+//     font_glyph_index + font_glyph_outlines.
+//   * Pair kerning from the legacy `kern` table (format 0, binary search)
+//     — applied in font_text_outlines / font_text_width. GPOS kerning is
+//     NOT read (a full OpenType layout engine is out of scope).
 //   * NOT parsed: CFF/OTF `CFF ` outlines (cubic, different container),
 //     kerning, hinting — flattened outlines at showcase sizes don't need
 //     them.
@@ -32,7 +36,7 @@
 
 exports (
     font_load, font_ok, font_upem, font_nglyphs,
-    font_glyph_index, font_glyph_advance,
+    font_glyph_index, font_glyph_advance, font_kern, font_text_width,
     font_glyph_outlines, font_text_outlines, font_text_outlines_norm,
     outl_ok, outl_npts, outl_nctrs, outl_px, outl_py, outl_ctr_end,
     outl_adv, outl_free
@@ -63,6 +67,7 @@ struct TtfFont {
     glyf: int
     loca: int
     hmtx: int
+    kern0: int        // abs offset of the kern format-0 pair block (0 = none)
 }
 
 // ─── Byte readers (big-endian, bounds-safe) ──────────────────────────────────
@@ -110,9 +115,10 @@ imod16(v: int) -> int {
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
 font_load(path: string) -> ptr {
-    f = malloc(96) as *TtfFont
+    f = malloc(112) as *TtfFont
     f.data = ""; f.len = 0; f.ok = 0; f.upem = 0; f.loca_fmt = 0
     f.nglyphs = 0; f.nhm = 0; f.cmap4 = 0; f.glyf = 0; f.loca = 0; f.hmtx = 0
+    f.kern0 = 0
     data, len, err = read_binary(path)
     if string.length(err) > 0 { return f as ptr }
     if len < 12 { return f as ptr }
@@ -134,6 +140,7 @@ font_load(path: string) -> ptr {
         if tag_is(f, rec, "loca") == 1 { f.loca = off }
         if tag_is(f, rec, "glyf") == 1 { f.glyf = off }
         if tag_is(f, rec, "hmtx") == 1 { f.hmtx = off }
+        if tag_is(f, rec, "kern") == 1 { f.kern0 = off }
         i = i + 1
     }
     if head == 0 || maxp == 0 || cmap == 0 || hhea == 0 { return f as ptr }
@@ -152,6 +159,23 @@ font_load(path: string) -> ptr {
     }
     if f.cmap4 == 0 { return f as ptr }
     if f.upem <= 0 { return f as ptr }
+    // Legacy `kern` table: walk subtables for a horizontal format-0 one and
+    // remember its pair block. Absent/unsupported → kern0 = 0 (no-op).
+    if f.kern0 != 0 {
+        kt = f.kern0
+        f.kern0 = 0
+        nsub = rd16(f, kt + 2)
+        sub = kt + 4
+        si = 0
+        while si < nsub {
+            cov = rd16(f, sub + 4)
+            fmt = cov / 256
+            horiz = cov % 2
+            if fmt == 0 && horiz == 1 && f.kern0 == 0 { f.kern0 = sub + 6 }
+            sub = sub + rd16(f, sub + 2)
+            si = si + 1
+        }
+    }
     f.ok = 1
     return f as ptr
 }
@@ -206,6 +230,78 @@ font_glyph_advance(fp: ptr, gid: int) -> int {
     if g >= f.nhm { g = f.nhm - 1 }
     if g < 0 { return 0 }
     return rd16(f, f.hmtx + g * 4)
+}
+
+// Pair kern (font units, usually negative) between two GLYPH IDs, from the
+// format-0 pair block: binary search over (left<<16|right)-sorted entries.
+font_kern(fp: ptr, gl: int, gr: int) -> int {
+    f = fp as *TtfFont
+    if f.ok == 0 || f.kern0 == 0 { return 0 }
+    npairs = rd16(f, f.kern0)
+    base = f.kern0 + 8               // past nPairs, searchRange, entrySel, rangeShift
+    key = gl * 65536 + gr
+    lo = 0
+    hi = npairs - 1
+    while lo <= hi {
+        mid = (lo + hi) / 2
+        rec = base + mid * 6
+        rkey = rd16(f, rec) * 65536 + rd16(f, rec + 2)
+        if rkey == key { return rd16s(f, rec + 4) }
+        if rkey < key { lo = mid + 1 } else { hi = mid - 1 }
+    }
+    return 0
+}
+
+// ─── UTF-8: decode the codepoint at byte i; returns (cp, next_i) ─────────────
+// Malformed sequences yield U+FFFD and advance one byte (never stalls).
+utf8_at(text: string, n: int, i: int) -> (int, int) {
+    b0 = string_char_at_n(text, n, i)
+    if b0 < 0 { b0 = b0 + 256 }
+    if b0 < 128 { return b0, i + 1 }
+    if b0 >= 192 && b0 < 224 && i + 1 < n {
+        b1 = cont(text, n, i + 1)
+        if b1 >= 0 { return (b0 - 192) * 64 + b1, i + 2 }
+    }
+    if b0 >= 224 && b0 < 240 && i + 2 < n {
+        b1 = cont(text, n, i + 1)
+        b2 = cont(text, n, i + 2)
+        if b1 >= 0 && b2 >= 0 { return ((b0 - 224) * 64 + b1) * 64 + b2, i + 3 }
+    }
+    if b0 >= 240 && i + 3 < n {
+        b1 = cont(text, n, i + 1)
+        b2 = cont(text, n, i + 2)
+        b3 = cont(text, n, i + 3)
+        if b1 >= 0 && b2 >= 0 && b3 >= 0 {
+            return (((b0 - 240) * 64 + b1) * 64 + b2) * 64 + b3, i + 4
+        }
+    }
+    return 65533, i + 1
+}
+// Continuation byte value (0..63), or -1 if not a continuation byte.
+cont(text: string, n: int, i: int) -> int {
+    b = string_char_at_n(text, n, i)
+    if b < 0 { b = b + 256 }
+    if b >= 128 && b < 192 { return b - 128 }
+    return -1
+}
+
+// Advance width of a UTF-8 run in FONT UNITS, kerning applied.
+font_text_width(fp: ptr, text: string) -> float {
+    f = fp as *TtfFont
+    if f.ok == 0 { return 0.0 }
+    n = string.length(text)
+    penx = 0.0
+    prev = -1
+    i = 0
+    while i < n {
+        cp, ni = utf8_at(text, n, i)
+        i = ni
+        gid = font_glyph_index(fp, cp)
+        if prev >= 0 { penx = penx + font_kern(fp, prev, gid) * 1.0 }
+        penx = penx + font_glyph_advance(fp, gid) * 1.0
+        prev = gid
+    }
+    return penx
 }
 
 // ─── Outl: flattened contours as flat buffers ────────────────────────────────
@@ -501,20 +597,24 @@ font_glyph_outlines(fp: ptr, gid: int, steps: int) -> ptr {
     return o as ptr
 }
 
-// An ASCII text run, glyphs advanced along x. Font units, y-up.
+// A UTF-8 text run, glyphs advanced along x with pair kerning. Font units,
+// y-up, pen origin at (0,0).
 font_text_outlines(fp: ptr, text: string, steps: int) -> ptr {
     f = fp as *TtfFont
     o = mk_outl()
     if f.ok == 0 { o.ok = 0; return o as ptr }
     penx = 0.0
+    prev = -1
     n = string.length(text)
     i = 0
     while i < n {
-        cp = string_char_at(text, i)
+        cp, ni = utf8_at(text, n, i)
+        i = ni
         gid = font_glyph_index(fp, cp)
+        if prev >= 0 { penx = penx + font_kern(fp, prev, gid) * 1.0 }
         glyph_outline(f, gid, 1.0, 0.0, 0.0, 1.0, penx, 0.0, steps, o, 0)
         penx = penx + font_glyph_advance(fp, gid) * 1.0
-        i = i + 1
+        prev = gid
     }
     o.adv = penx
     return o as ptr

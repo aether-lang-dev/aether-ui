@@ -1,0 +1,113 @@
+// vg/test/test_text_path.ae — the text-as-paths DSL surface: use_font /
+// text_paths / text_paths_width / text_path / text_path_anchored.
+//
+// Headless (recording backend, Phase 0). Run from the repo root (the
+// vendored font path is relative):
+//   aetherc --lib . vg/test/test_text_path.ae /tmp/t.c && gcc /tmp/t.c \
+//     vg/test/text_metrics_stub.c $(ae cflags) -o /tmp/t && /tmp/t
+
+import std.string
+import vg
+import vg.grammar.context
+import vg.grammar.element
+import vg.backend.record
+import vg.geom.transform
+
+extern exit(code: int)
+
+assert_true(label: string, got: int) {
+    if got == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label}"); exit(1) }
+}
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+assert_near(label: string, got: float, want: float, eps: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < eps { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+// Contours in a d-string = number of "M" commands.
+count_m(d: string) -> int {
+    n = 0
+    i = 0
+    len = string.length(d)
+    while i < len {
+        if string_char_at(d, i) == 77 { n = n + 1 }   // 'M'
+        i = i + 1
+    }
+    return n
+}
+extern string_char_at(s: string, index: int) -> int
+
+main() {
+    println("=== test_text_path ===")
+
+    println("-- font selection")
+    assert_true("use_font(vendored) loads", vg.use_font("fonts/DejaVuSans-Bold.ttf"))
+    assert_eq_int("use_font(missing) fails cleanly",
+                  vg.use_font("fonts/no-such.ttf"), 0)
+    // A failed use_font must not clobber the working font.
+    assert_true("font survives failed swap",
+                vg.text_paths_width("A", 100.0) > 50.0)
+
+    println("-- text_paths geometry")
+    d = vg.text_paths("A", 0.0, 0.0, 100.0)
+    assert_true("d non-empty", string.length(d) > 0)
+    assert_eq_int("'A' has 2 contours (outer + counter)", count_m(d), 2)
+    assert_true("closes contours", string.contains(d, " Z "))
+    d3 = vg.text_paths("AeVG", 0.0, 0.0, 100.0)
+    assert_eq_int("'AeVG' has 6 contours", count_m(d3), 6)
+    assert_eq_str("empty text -> empty d", vg.text_paths("", 0.0, 0.0, 100.0), "")
+
+    println("-- UTF-8 runs")
+    de = vg.text_paths("é", 0.0, 0.0, 100.0)
+    assert_eq_int("'é' (2-byte UTF-8, composite glyph) has 3 contours",
+                  count_m(de), 3)
+
+    println("-- kerning (DejaVu Bold kern table: AV = -139/2048 em)")
+    wa = vg.text_paths_width("A", 100.0)
+    wv = vg.text_paths_width("V", 100.0)
+    wav = vg.text_paths_width("AV", 100.0)
+    assert_true("A width positive", wa > 0.0)
+    assert_near("AV narrower than A+V by the kern pair",
+                (wa + wv) - wav, 139.0 * 100.0 / 2048.0, 0.5)
+
+    println("-- the DSL element IS a path")
+    id = transform.affine_identity()
+    m = context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)
+    ctx = context.new_context(m)
+    bk = record.backend_new()
+    scene = vg.scene_new(ctx, bk)
+    root = vg.vg_root(scene)
+    tnode = vg.text_path(root, 10.0, 60.0, 24.0, "Ae")
+    assert_eq_str("text_path dispatches as a path",
+                  record.backend_kind(bk, 0), "path")
+    vg.fill(tnode, "#0f0")
+    assert_eq_str("path modifiers apply (fill cached)",
+                  element.element_last_fill(vg.node_element(tnode)), "#0f0")
+    vg.stroke(tnode, "#f00", 2.0)
+    assert_eq_str("outline type: stroke cached",
+                  element.element_last_stroke_color(vg.node_element(tnode)), "#f00")
+
+    println("-- anchoring")
+    wm = vg.text_paths_width("Ae", 24.0)
+    dm = vg.text_paths("Ae", 50.0 - wm / 2.0, 60.0, 24.0)
+    danch = ""
+    n2 = vg.text_path_anchored(root, 50.0, 60.0, 24.0, "middle", "Ae")
+    // The anchored element's d equals the manually-centred one: compare via
+    // the recording backend's second dispatched path.
+    danch = record.backend_opt_get(bk, 1, "d")
+    assert_eq_str("middle anchor centres on x", danch, dm)
+    keep = vg.node_element(n2)
+    if keep == null { println("  (n2 element null)") }
+
+    println("ALL PASS")
+}

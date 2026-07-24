@@ -1,0 +1,36 @@
+// spec_textpath_demo.ae — drives the text-as-paths demo over AetherUIDriver.
+//
+// The vg elements themselves aren't in /widgets (they live inside the
+// canvas), so the spec's teeth are the WIDTH READOUT: the app computes the
+// headline's kerned advance width with vg.text_paths_width — pure-Aether
+// font math over the vendored TTF — and puts it in a bound label. The
+// value is byte-identical on every platform, so the assert is EXACT:
+// wrong parse, wrong kerning, wrong scaling, or a missing font all break it.
+//
+// Run via ci.sh / tests/spec_matrix.sh, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/textpath_demo/bin/textpath_demo &
+//   UI_SPEC=textpath_demo/spec_textpath_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "textpath_demo over AetherUIDriver") {
+        aeocha.it("shows the chrome (canvas + caption)") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
+            aeocha.assert_contains(body, "text as paths", "caption present")
+        }
+
+        aeocha.it("kerned advance width is exact (pure-Aether font math)") callback {
+            // 'Aether type' at 44px em, DejaVu Sans Bold, kern pairs applied:
+            // 294.2 viewBox units → w10=2942. Same bytes on every platform.
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "textpath: w10=2942", "width readout exact")
+        }
+    }
+    aeocha.run_summary(fw)
+}

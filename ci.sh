@@ -60,11 +60,11 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo)
+EXAMPLES=(textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
-SMOKE_EXAMPLES=(counter form picker styled system canvas)
+SMOKE_EXAMPLES=(textpath_demo counter form picker styled system canvas)
 FAIL=0
 
 OS="$(uname -s)"
@@ -183,7 +183,7 @@ run_smoke_test() {
 # AeVG port unit tests — pure Aether (no GTK/display), so they run even
 # under SKIP_RUNTIME. Each is a self-contained `main()` that exits non-zero
 # on the first failed assertion. Append new modules' tests here as they land.
-AEVG_TESTS=(test_font test_transform test_normalizer test_easing test_parser test_bbox test_blur test_rasterize test_grammar_utils test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_render_as_raster test_grammar_bind test_grammar_reactive test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing test_gradient_fill test_vg test_transpiler test_grammar_interaction test_vg_interactive test_vg_when test_vg_bindto test_vg_bindpos test_vg_clock test_vg_hidpi test_vg_anim test_live_region test_effects test_behavior test_base64)
+AEVG_TESTS=(test_font test_text_path test_transform test_normalizer test_easing test_parser test_bbox test_blur test_rasterize test_grammar_utils test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_render_as_raster test_grammar_bind test_grammar_reactive test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing test_gradient_fill test_vg test_transpiler test_grammar_interaction test_vg_interactive test_vg_when test_vg_bindto test_vg_bindpos test_vg_clock test_vg_hidpi test_vg_anim test_live_region test_effects test_behavior test_base64)
 # Tests that exercise the REAL cairo text metrics — linked against the GTK4
 # backend (the pure-Aether AEVG_TESTS link with $(ae cflags) only).
 AEVG_GTK_TESTS=(test_text_metrics test_group_pixels)
@@ -598,6 +598,9 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=undo_demo/spec_undo_demo \
     run_server_test "$(EX_BIN undo_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" undo_demo || FAIL=$((FAIL + 1))
+    UI_SPEC=textpath_demo/spec_textpath_demo \
+    run_server_test "$(EX_BIN textpath_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" textpath_demo || FAIL=$((FAIL + 1))
 fi
 
 echo "=== Phase 5l: AetherUIDriver game/demo specs (falling_blocks / svg_tetris / rubiks_cube / tumbling_cube) ==="

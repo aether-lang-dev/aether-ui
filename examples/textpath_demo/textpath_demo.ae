@@ -1,0 +1,70 @@
+// textpath_demo.ae — text as paths: real type as first-class vg geometry.
+//
+// The showcase for `text_path` / `text_path_anchored` / `text_paths_width`:
+// a word enters the scene as an ordinary PATH element built from glyph
+// outlines (vg.font, the pure-Aether TTF reader), so every path capability
+// applies to type unchanged — full transforms (a real rotate, not an origin
+// move), stroke-only outline type, anchoring off true kerned advance widths
+// — identically on every backend, with no backend text machinery involved.
+//
+// The status line carries the computed advance width: pure-Aether font math,
+// so the number is BYTE-IDENTICAL on every platform — the spec asserts it
+// exactly.
+//
+// Run: DISPLAY=:0 ./target/build/examples/textpath_demo/bin/textpath_demo
+
+import ui (
+    window, vstack, text, enable_test_server,
+    ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg)
+import vg (
+    view_box, rect, fill, stroke, transform,
+    text_path, text_path_anchored, text_paths_width
+)
+import std.string
+import std.os (os_getenv)
+
+extern lrint(x: float) -> long
+
+main() {
+    status = ui_state_s("textpath: pending")
+
+    window("Text as paths", 540, 460) {
+        vstack(6) {
+            t1 = text("textpath: pending")
+            bind_text(t1, status)
+
+            vg(view_box(0, 0, 500, 360), 520, 380) {
+                rect(0, 0, 500, 360) { fill("#14141c") }
+
+                // Plain filled type — a path, so fill is just path fill.
+                text_path(24, 64, 44, "Aether type") { fill("#e8ecf2") }
+
+                // Outline type: stroke with NO fill — impossible with the
+                // backend text pipeline, trivial when the word is a path.
+                text_path(24, 130, 44, "Outlined") { stroke("#7ad1ff", 1.6) }
+
+                // A real rotation — the whole word's geometry, not its origin.
+                text_path(300, 220, 40, "Rotated") {
+                    fill("#f0c674")
+                    transform("rotate(-14 300 220)")
+                }
+
+                // Anchoring computed from true kerned advance widths.
+                text_path_anchored(250, 290, 36, "middle", "centred") { fill("#9fd68a") }
+                text_path_anchored(476, 340, 26, "end", "end-anchored") { fill("#c58af9") }
+            }
+
+            text("text as paths: fill · stroke-outline · rotate · anchors")
+        }
+
+        // The falsifiable readout: kerned advance width of the headline, in
+        // tenths of a viewBox unit (integral → exact cross-platform assert).
+        w10 = lrint(text_paths_width("Aether type", 44.0) * 10.0) as int
+        st = ui_set_s(status, "textpath: w10=${w10}")
+        if st < 0 { println("status set failed") }
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

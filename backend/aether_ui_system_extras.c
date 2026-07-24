@@ -441,3 +441,11 @@ int aether_ui_redo_depth_impl(void) { return undo_len - undo_cursor; }
 const char* aether_ui_undo_label_impl(void) {
     return undo_cursor > 0 ? undo_stack[undo_cursor - 1].label : "";
 }
+
+// ─── vg outline-font holder ──────────────────────────────────────────────
+// Aether has no module-level mutable globals, so vg/module.ae's text-path
+// verbs keep the current outline font (a vg.font TtfFont*) here. Process-
+// wide by design: one font serves every scene, use_font() swaps it.
+static void* g_aeui_vgfont = 0;
+void* aether_ui_vgfont_get(void) { return g_aeui_vgfont; }
+void aether_ui_vgfont_set(void* f) { g_aeui_vgfont = f; }
