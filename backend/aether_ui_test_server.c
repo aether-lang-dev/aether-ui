@@ -272,6 +272,13 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
     if (h->widget_rect) {
         int rx = 0, ry = 0, rw = 0, rh = 0;
         if (h->widget_rect(handle, &rx, &ry, &rw, &rh) == 0) {
+            // A HIDDEN widget occupies no space, whatever the platform left
+            // in its last-measured rect. GTK4 zeroes it naturally (unmapped
+            // widgets have no allocation); win32 keeps the stale size, which
+            // made "collapsed" indistinguishable from "just laid out" to a
+            // spec. Normalise here so geometry means the same thing on every
+            // backend.
+            if (!visible) { rw = 0; rh = 0; }
             n += snprintf(buf + n, bufsize - n,
                           ",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d", rx, ry, rw, rh);
         }
