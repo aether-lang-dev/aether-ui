@@ -4532,6 +4532,21 @@ int aether_ui_fire_scroll(int container_handle, int dy) {
     return 1;
 }
 
+// GtkGestureClick "released" marshals (gesture, n_press, x, y, user_data) —
+// a DIFFERENT signature from GtkButton "clicked" (button, user_data). Wiring
+// on_button_clicked here made the handler read n_press (1) as its closure
+// pointer and dereference it: `data=0x1`, SIGSEGV. It only bit where a
+// gesture actually fires during presentation (Wayland realize/present timing
+// differs from X11 — which is why the X11-only Xvfb spec matrix never saw it).
+static void on_gesture_click_released(GtkGestureClick* gesture, int n_press,
+                                      double x, double y, gpointer data) {
+    (void)gesture; (void)n_press; (void)x; (void)y;
+    AeClosure* c = (AeClosure*)data;
+    if (c && c->fn) {
+        ((void(*)(void*))c->fn)(c->env);
+    }
+}
+
 // Click handler (single click on any widget, not just buttons)
 void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -4539,7 +4554,7 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     GtkGesture* gesture = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 1);
     g_signal_connect(gesture, "released",
-        G_CALLBACK(on_button_clicked), boxed_closure);
+        G_CALLBACK(on_gesture_click_released), boxed_closure);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
     // Remember the closure so the AetherUIDriver's /widget/{id}/click can
     // fire gesture-based handlers on NON-buttons (listbox rows are plain
