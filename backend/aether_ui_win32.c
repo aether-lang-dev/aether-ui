@@ -5610,6 +5610,22 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 if (w->kind == WK_TEXT || w->kind == WK_TEXTFIELD
                     || w->kind == WK_SECUREFIELD || w->kind == WK_TEXTAREA) {
                     SetWindowTextW(w->hwnd, utf8_to_wide(ctx->sval));
+                    // SetWindowTextW from CODE does not send EN_CHANGE (only
+                    // user edits do), so the app's on_change would never run
+                    // and a driver-typed value would be invisible to the app
+                    // — while GTK4's gtk_entry_buffer_set_text DOES notify.
+                    // Fire the same path EN_CHANGE takes, for parity.
+                    if (w->kind != WK_TEXT) {
+                        if (!w->sealed) invoke_closure(w->on_change);
+                        if (w->bound_state > 0) {
+                            const char* t = aether_ui_textfield_get_text(ctx->handle);
+                            StateCell* sc = state_cell(w->bound_state);
+                            if (sc && sc->type == AEUI_STATE_STRING
+                                && (!sc->str || strcmp(sc->str, t ? t : "") != 0)) {
+                                aether_ui_state_set_s(w->bound_state, t ? t : "");
+                            }
+                        }
+                    }
                 }
                 break;
             case AETHER_DRV_TOGGLE:
