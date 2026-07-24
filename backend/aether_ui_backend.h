@@ -168,6 +168,7 @@ const char* aether_ui_styled_font_family_impl(int handle);   // "" unset
 const char* aether_ui_styled_weight_impl(int handle);        // ""/"bold"/"normal"
 int aether_ui_styled_opacity_impl(int handle);               // 0..100, -1 unset
 int aether_ui_styled_border_impl(int handle);                // (w<<24)|flag|rgb, -1 unset
+int aether_ui_state_style_impl(int handle, int state);       // 0=hover 1=active, rgb or -1
 
 // AeCS v1.2 — current sheet (use_styles: constructors consult it) +
 // appearance-change registry (styles_for_mode auto re-theme). The holders

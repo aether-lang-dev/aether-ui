@@ -303,6 +303,10 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
                           ",\"borderWidth\":%d,\"borderColor\":\"#%06x\"",
                           (bd >> 24) & 0x3F, bd & 0xFFFFFF);
         }
+        int hv = aether_ui_state_style_impl(handle, 0);
+        int ac = aether_ui_state_style_impl(handle, 1);
+        if (hv >= 0) n += snprintf(buf + n, bufsize - n, ",\"hoverBg\":\"#%06x\"", hv);
+        if (ac >= 0) n += snprintf(buf + n, bufsize - n, ",\"activeBg\":\"#%06x\"", ac);
     }
 
     // Accessibility: the widget's effective role + accessible name (auto when

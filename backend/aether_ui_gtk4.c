@@ -2233,6 +2233,66 @@ int aether_ui_styled_border_impl(int handle) {
     return (v & 0x40000000) ? v : -1;
 }
 
+// ── Interaction states ──────────────────────────────────────────────────
+//
+// A control that does not react to the pointer reads as dead, and until now
+// the only way to get a hover effect was to swap whole stylesheets by hand
+// from an enter/leave handler. GTK4 gives us the pseudo-classes directly:
+// the per-widget class installed by aether_ui_apply_css is the hook, so a
+// hover/active rule is the same class with :hover / :active appended.
+//
+// state: 0 = hover, 1 = active (pressed). Colours are 0..1; a negative
+// bg/fg component means "leave that property alone for this state".
+void aether_ui_set_state_style(int handle, int state,
+                               double br, double bg_, double bb,
+                               double fr, double fg_, double fb) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    char cls[32];
+    snprintf(cls, sizeof(cls), "aui-st-%d", handle);
+    gtk_widget_add_css_class(w, cls);
+    if (GTK_IS_BUTTON(w)) gtk_widget_add_css_class(w, "flat");
+    const char* pseudo = (state == 1) ? "active" : "hover";
+    char decl[256];
+    int n = 0;
+    decl[0] = '\0';
+    if (br >= 0.0) {
+        n += snprintf(decl + n, sizeof(decl) - n,
+                      "background-color: rgb(%d,%d,%d); background-image: none;",
+                      (int)(br * 255), (int)(bg_ * 255), (int)(bb * 255));
+    }
+    if (fr >= 0.0) {
+        n += snprintf(decl + n, sizeof(decl) - n, "color: rgb(%d,%d,%d);",
+                      (int)(fr * 255), (int)(fg_ * 255), (int)(fb * 255));
+    }
+    // Specificity: a bare `.cls:hover` loses to the theme's own
+    // `button:hover`, so qualify with the element like set_bg_color does
+    // (button.flat.CLS), and keep the plain form for non-buttons.
+    char css[512];
+    if (GTK_IS_BUTTON(w)) {
+        snprintf(css, sizeof(css), "button.flat.%s:%s { %s }", cls, pseudo, decl);
+    } else {
+        snprintf(css, sizeof(css), ".%s:%s { %s }", cls, pseudo, decl);
+    }
+    global_css_append(css);
+    global_css_reload();
+    // Driver readback: prove the state style reached the backend.
+    g_object_set_data(G_OBJECT(w),
+                      state == 1 ? "aeui-active-style" : "aeui-hover-style",
+                      GINT_TO_POINTER(0x1000000
+                          | (((int)(br * 255) & 0xFF) << 16)
+                          | (((int)(bg_ * 255) & 0xFF) << 8)
+                          | ((int)(bb * 255) & 0xFF)));
+}
+
+int aether_ui_state_style_impl(int handle, int state) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return -1;
+    int v = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w),
+                state == 1 ? "aeui-active-style" : "aeui-hover-style"));
+    return (v & 0x1000000) ? (v & 0xFFFFFF) : -1;
+}
+
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -5170,6 +5230,10 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
                           ",\"borderWidth\":%d,\"borderColor\":\"#%06x\"",
                           (bd >> 24) & 0x3F, bd & 0xFFFFFF);
         }
+        int hv = aether_ui_state_style_impl(handle, 0);
+        int ac = aether_ui_state_style_impl(handle, 1);
+        if (hv >= 0) n += snprintf(buf + n, bufsize - n, ",\"hoverBg\":\"#%06x\"", hv);
+        if (ac >= 0) n += snprintf(buf + n, bufsize - n, ",\"activeBg\":\"#%06x\"", ac);
     }
 
     // Accessibility: effective role + accessible name (emitted only when

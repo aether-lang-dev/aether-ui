@@ -21,6 +21,7 @@ import ui (
     edge_insets, style_border, style_corner_radius,
     style_bg_color, style_text_color,
     create_styles, st_bg, st_color, st_radius, st_insets, st_border,
+    st_hover, st_active, style_hover, style_active,
     apply_styles, add_css_class
 )
 import std.os (os_getenv)
@@ -40,6 +41,10 @@ main() {
     st_radius(sheet, "chip", PILL_R)
     st_insets(sheet, "chip", PILL_TB, PILL_LR, PILL_TB, PILL_LR)
     st_border(sheet, "chip", 2.0, 0x2176FE)
+    // Interaction states: the chip fills on hover, darkens while pressed —
+    // no enter/leave wiring, just two more rules in the sheet.
+    st_hover(sheet, "chip", 0xE8F0FE)
+    st_active(sheet, "chip", 0x2176FE)
 
     window("Pills — borders in AeCS", 560, 260) {
         vstack(10) {
@@ -53,6 +58,8 @@ main() {
                 _ab = style_bg_color(a, 1.0, 1.0, 1.0, 1.0)
                 _at = style_text_color(a, 0.13, 0.45, 0.98)
                 _abd = style_border(a, 1.0, 0.13, 0.45, 0.98)
+                _ah = style_hover(a, 0.91, 0.94, 0.996)
+                _aa = style_active(a, 0.13, 0.45, 0.98)
 
                 // FILLED: the selected state of the same chip.
                 b = btn("Sans-serif") callback { }
@@ -82,7 +89,8 @@ main() {
                 add_css_class(e, "chip")
             }
 
-            text("A ring, a fill, and a border removed — all now expressible.")
+            text("Hover the chips: they fill. Press: they darken.")
+            text("A ring, a fill, a cleared border, and interaction states.")
         }
         // apply_styles walks the LIVE widget registry, so it must run after
         // the tree is built — not inline mid-construction.

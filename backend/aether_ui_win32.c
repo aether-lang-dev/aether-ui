@@ -203,6 +203,11 @@ typedef struct {
     int border_width;          // 0 = none
     int border_set;            // 1 = explicitly set (readback)
     COLORREF border_color;
+    int hover_set;             // interaction states (0=hover, 1=active)
+    COLORREF hover_bg;
+    int active_set;
+    COLORREF active_bg;
+    int is_hovered;            // tracked via WM_MOUSEMOVE/WM_MOUSELEAVE
     double opacity; // 0.0–1.0; <0 = no override
 
     // Fonts
@@ -1380,18 +1385,19 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             if (cw) {
                 if (cw->fg.has_value) SetTextColor(hdc, cw->fg.color);
                 if (cw->bg.has_value) {
-                    SetBkColor(hdc, cw->bg.color);
+                    COLORREF use = cw->bg.color;
+                    SetBkColor(hdc, use);
                     // Keep a cached brush per-widget (leaked for now; cleaned
                     // in WM_DESTROY via DeleteObject for widgets we know of).
                     static HBRUSH last_brush = NULL;
                     static COLORREF last_color = 0;
-                    if (last_brush && last_color != cw->bg.color) {
+                    if (last_brush && last_color != use) {
                         DeleteObject(last_brush);
                         last_brush = NULL;
                     }
                     if (!last_brush) {
-                        last_brush = CreateSolidBrush(cw->bg.color);
-                        last_color = cw->bg.color;
+                        last_brush = CreateSolidBrush(use);
+                        last_color = use;
                     }
                     return (LRESULT)last_brush;
                 }
@@ -2954,6 +2960,39 @@ int aether_ui_styled_border_impl(int handle) {
     COLORREF c = w->border_color;
     int rgbv = ((GetRValue(c) & 0xFF) << 16) | ((GetGValue(c) & 0xFF) << 8) | (GetBValue(c) & 0xFF);
     return (w->border_width << 24) | 0x40000000 | rgbv;
+}
+
+// Interaction states. STORED AND DRIVER-VISIBLE, but not yet PAINTED: win32
+// has no CSS pseudo-classes and no per-control subclass proc here, so
+// tracking hover per button needs TrackMouseEvent plumbing this backend
+// does not have (GTK4 gets it from :hover/:active, macOS from its existing
+// NSTrackingArea). Same containment as set_border: the value round-trips
+// through /widgets so specs assert identically everywhere, and the paint
+// side is a contained follow-up. See roadmap.md. state: 0=hover, 1=active.
+void aether_ui_set_state_style(int handle, int state,
+                               double br, double bg_, double bb,
+                               double fr, double fg_, double fb) {
+    (void)fr; (void)fg_; (void)fb;   // fg per-state: follow-up
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    if (br < 0.0) return;
+    if (state == 1) {
+        w->active_set = 1;
+        w->active_bg = rgb_from_doubles(br, bg_, bb);
+    } else {
+        w->hover_set = 1;
+        w->hover_bg = rgb_from_doubles(br, bg_, bb);
+    }
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+int aether_ui_state_style_impl(int handle, int state) {
+    Widget* w = widget_at(handle);
+    if (!w) return -1;
+    int set = (state == 1) ? w->active_set : w->hover_set;
+    if (!set) return -1;
+    COLORREF c = (state == 1) ? w->active_bg : w->hover_bg;
+    return ((GetRValue(c) & 0xFF) << 16) | ((GetGValue(c) & 0xFF) << 8) | (GetBValue(c) & 0xFF);
 }
 
 void aether_ui_set_edge_insets(int handle, double top, double right,

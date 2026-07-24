@@ -2262,6 +2262,32 @@ int aether_ui_styled_border_impl(int handle) {
     return n ? [n intValue] : -1;
 }
 
+// Interaction states. macOS already installs an NSTrackingArea for hover
+// (see the hover section), so the colours are stashed on the view and the
+// enter/exit handlers swap the layer background. state: 0=hover, 1=active.
+void aether_ui_set_state_style(int handle, int state,
+                               double br, double bg_, double bb,
+                               double fr, double fg_, double fb) {
+    (void)fr; (void)fg_; (void)fb;   // fg per-state: follow-up
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || br < 0.0) return;
+    [v setWantsLayer:YES];
+    objc_setAssociatedObject(v,
+        state == 1 ? "aeui-active-style" : "aeui-hover-style",
+        @(0x1000000 | (((int)(br*255) & 0xFF) << 16)
+                    | (((int)(bg_*255) & 0xFF) << 8) | ((int)(bb*255) & 0xFF)),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+int aether_ui_state_style_impl(int handle, int state) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v,
+        state == 1 ? "aeui-active-style" : "aeui-hover-style");
+    if (!n) return -1;
+    return [n intValue] & 0xFFFFFF;
+}
+
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);

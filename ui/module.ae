@@ -37,9 +37,11 @@ exports (
     opacity, enabled, tooltip, onclick,
     style_bg_color, style_text_color, style_font_size, style_font_bold,
     style_bg_gradient, style_corner_radius, style_opacity, style_border,
+    style_hover, style_active,
     style_enabled, style_tooltip,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
     st_radius, st_font_family, st_opacity, st_gradient, st_insets, st_border,
+    st_hover, st_active,
     apply_styles, style_id, styles_for_mode,
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     load_styles,
@@ -238,6 +240,8 @@ extern aether_ui_set_font_bold(handle: int, bold: int)
 extern aether_ui_set_font_family(handle: int, family: string)
 extern aether_ui_set_corner_radius(handle: int, radius: float)
 extern aether_ui_set_border(handle: int, width: float, r: float, g: float, b: float)
+extern aether_ui_set_state_style(handle: int, which: int,
+    br: float, bg: float, bb: float, fr: float, fg: float, fb: float)
 extern aether_ui_set_edge_insets(handle: int, top: float, right: float,
                                  bottom: float, left: float)
 extern aether_ui_set_width(handle: int, width: int)
@@ -1282,6 +1286,20 @@ style_bg_gradient(handle: int, r1: float, g1: float, b1: float,
     return handle
 }
 
+// style_hover(handle, r, g, b) — background while the pointer is over the
+// widget. Without this a control reads as dead: the only previous route was
+// swapping whole sheets from an enter/leave handler.
+style_hover(handle: int, r: float, g: float, b: float) -> int {
+    aether_ui_set_state_style(handle, 0, r, g, b, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0)
+    return 1
+}
+
+// style_active(handle, r, g, b) — background while the widget is pressed.
+style_active(handle: int, r: float, g: float, b: float) -> int {
+    aether_ui_set_state_style(handle, 1, r, g, b, 0.0 - 1.0, 0.0 - 1.0, 0.0 - 1.0)
+    return 1
+}
+
 // style_border(handle, width_px, r, g, b) — solid border, 0..1 colour
 // components. width 0 clears it.
 style_border(handle: int, width: float, r: float, g: float, b: float) -> int {
@@ -1341,7 +1359,9 @@ struct StyleRule {
     has_opacity: int, opacity: float,
     has_grad: int, grad1: int, grad2: int,   // vertical bg gradient (packed hex)
     has_insets: int, in_t: float, in_r: float, in_b: float, in_l: float,
-    has_border: int, bord_w: float, bord_col: int   // width px + packed 0xRRGGBB
+    has_border: int, bord_w: float, bord_col: int,  // width px + packed 0xRRGGBB
+    has_hover: int, hover_col: int,                 // interaction states
+    has_active: int, active_col: int
 }
 
 struct StyleSheet { rules: ptr }    // std.list of *StyleRule
@@ -1382,6 +1402,8 @@ _style_rule_of(sp: ptr, sel: string) -> ptr {
     r.has_grad = 0
     r.has_insets = 0
     r.has_border = 0
+    r.has_hover = 0
+    r.has_active = 0
     _ = list.add(s.rules, r as ptr)
     return r as ptr
 }
@@ -1446,6 +1468,18 @@ st_border(sp: ptr, sel: string, width: float, hex: int) {
     r.bord_w = width
     r.bord_col = hex
 }
+// st_hover / st_active(sheet, sel, 0xRRGGBB) — interaction backgrounds, so a
+// theme can express "this chip fills on hover" without any event wiring.
+st_hover(sp: ptr, sel: string, hex: int) {
+    r = _style_rule_of(sp, sel) as *StyleRule
+    r.has_hover = 1
+    r.hover_col = hex
+}
+st_active(sp: ptr, sel: string, hex: int) {
+    r = _style_rule_of(sp, sel) as *StyleRule
+    r.has_active = 1
+    r.active_col = hex
+}
 st_radius(sp: ptr, sel: string, radius: float) {
     r = _style_rule_of(sp, sel) as *StyleRule
     r.has_radius = 1
@@ -1465,7 +1499,9 @@ _rule_has(rp: ptr, prop: int) -> int {
     if prop == 6 { return r.has_opacity }
     if prop == 7 { return r.has_grad }
     if prop == 8 { return r.has_insets }
-    return r.has_border
+    if prop == 9 { return r.has_border }
+    if prop == 10 { return r.has_hover }
+    return r.has_active
 }
 
 // A candidate selector defines `prop`? (empty selector never matches)
@@ -1616,6 +1652,20 @@ _style_apply_one(sp: ptr, h: int, kind: string) {
     if ri != null {
         r9 = ri as *StyleRule
         _ = edge_insets(h, r9.in_t, r9.in_r, r9.in_b, r9.in_l)
+    }
+    rh = _style_resolve(sp, 10, cls, kind, alias)
+    if rh != null {
+        r11 = rh as *StyleRule
+        hc = r11.hover_col
+        _ = style_hover(h, ((hc / 65536) % 256) / 255.0,
+            ((hc / 256) % 256) / 255.0, (hc % 256) / 255.0)
+    }
+    ra = _style_resolve(sp, 11, cls, kind, alias)
+    if ra != null {
+        r12 = ra as *StyleRule
+        ac = r12.active_col
+        _ = style_active(h, ((ac / 65536) % 256) / 255.0,
+            ((ac / 256) % 256) / 255.0, (ac % 256) / 255.0)
     }
     rb = _style_resolve(sp, 9, cls, kind, alias)
     if rb != null {
