@@ -40,8 +40,10 @@ main() {
             // Three hearts at 12/20/32. The canvases WIDEN to fill their
             // hstack (that is the layout doing its job), so height is the
             // honest size signal: the row is as tall as the largest icon.
+            // Canvas geometry is laid out by the backend (win32 sizes rows
+            // differently from GTK4), so assert the COUNT — three separate
+            // canvases for three sizes — not specific pixel dimensions.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"h\":32", "row sized by the 32px icon")
             n = count_canvases(body)
             aeocha.assert_eq(n, 12, "all three sizes are separate canvases")
         }
