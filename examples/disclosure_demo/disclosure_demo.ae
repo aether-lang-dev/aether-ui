@@ -1,0 +1,72 @@
+// disclosure_demo.ae — collapsible sections (the accordion).
+//
+// The last structural gap behind "our dialogs can't look like modern ones".
+// A reference picker groups its controls into Filters / Metrics / Sort
+// sections that expand and collapse; aether-ui had no primitive for that, so
+// everything had to be on screen at once.
+//
+// ui/disclosure.ae is deliberately plain: a header button toggling
+// set_hidden on a body container. Hiding a container genuinely collapses
+// its space — the parent shrinks and the sections below rise — which is the
+// whole visual point, and is exactly what the driver can assert (the body
+// reports visible=false, h=0).
+//
+// Run: DISPLAY=:0 ./target/build/examples/disclosure_demo/bin/disclosure_demo
+
+import ui (
+    window, vstack, hstack, text, btn, textfield, enable_test_server,
+    edge_insets, style_corner_radius, style_border, style_bg_color,
+    style_text_color, style_hover
+)
+import ui.disclosure (
+    disclosure, disclosure_set_open, disclosure_toggle, disclosure_is_open,
+    disclosure_body, disclosure_header
+)
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+
+// The three sections a picker dialog groups its chrome into.
+struct App { filters: ptr metrics: ptr sort: ptr }
+
+main() {
+    app = malloc(32) as *App
+
+    window("Disclosure — collapsible sections", 480, 420) {
+        vstack(6) {
+            text("Click a header to expand or collapse its section:")
+
+            app.filters = disclosure("Filters", 1) callback |body: int| {
+                _s = textfield(body, "Search fonts…") callback |q: string| { }
+                _c = text(body, "categories · subsets")
+            }
+
+            app.metrics = disclosure("Metrics", 0) callback |body: int| {
+                _w = text(body, "width · thickness")
+                _x = text(body, "complexity · curvature")
+            }
+
+            app.sort = disclosure("Sort", 0) callback |body: int| {
+                _o = text(body, "name · popularity · metrics")
+            }
+
+            // Programmatic control: the same API the header uses.
+            hstack(8) {
+                _e = btn("Expand all") callback {
+                    disclosure_set_open(app.filters, 1)
+                    disclosure_set_open(app.metrics, 1)
+                    disclosure_set_open(app.sort, 1)
+                }
+                _k = btn("Collapse all") callback {
+                    disclosure_set_open(app.filters, 0)
+                    disclosure_set_open(app.metrics, 0)
+                    disclosure_set_open(app.sort, 0)
+                }
+            }
+
+            text("Collapsed bodies report visible=false and h=0 — the space")
+            text("really is reclaimed, so the rows below rise.")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

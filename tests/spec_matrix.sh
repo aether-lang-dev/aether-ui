@@ -112,6 +112,7 @@ SUITES=(
   "textpath|examples/textpath_demo|textpath_demo/spec_textpath_demo|"
   "pills|examples/pills_demo|pills_demo/spec_pills_demo|"
   "icons|examples/icons_demo|icons_demo/spec_icons_demo|"
+  "disclosure|examples/disclosure_demo|disclosure_demo/spec_disclosure_demo|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
   "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"

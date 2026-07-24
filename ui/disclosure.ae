@@ -1,0 +1,81 @@
+// ui/disclosure.ae — collapsible sections (the accordion).
+//
+// The last structural gap behind "our dialogs can't look like modern ones":
+// a reference picker groups its controls into Filters / Metrics / Sort
+// sections that expand and collapse, and aether-ui had no primitive for it.
+// Everything had to be visible at once, which is why font_picker's chrome
+// is a flat stack while its reference is three tidy rows.
+//
+// The mechanism is deliberately plain — a header button that toggles
+// set_hidden on a body container. Hiding a container really does collapse
+// its space (the parent's height shrinks), so the sections below rise, which
+// is the whole visual point.
+//
+//   d = disclosure("Filters", 1) {           // 1 = start open
+//       textfield("Search…") callback |s: string| { … }
+//   }
+//   disclosure_set_open(d, 0)                // collapse programmatically
+//
+// The header carries a chevron that flips with the state, drawn by
+// ui.icons — so the affordance reads the same on every backend.
+
+exports (
+    disclosure, disclosure_body, disclosure_header,
+    disclosure_is_open, disclosure_set_open, disclosure_toggle
+)
+
+import ui (vstack, hstack, btn, text, set_hidden, set_button_label)
+import std.string
+
+extern malloc(size: int) -> ptr
+
+// A section: its header button, its body container, and the open flag.
+// Heap-allocated because the header's callback mutates it after the
+// builder block has closed.
+struct Disc { header: int body: int open: int label: string }
+
+disclosure_header(dp: ptr) -> int { d = dp as *Disc; return d.header }
+disclosure_body(dp: ptr) -> int { d = dp as *Disc; return d.body }
+disclosure_is_open(dp: ptr) -> int { d = dp as *Disc; return d.open }
+
+// The header text carries the state, so a driver spec can read it and a
+// user sees the affordance: "v Filters" open, "> Filters" collapsed.
+_disc_mark(open: int, label: string) -> string {
+    if open == 1 { return "v ${label}" }
+    return "> ${label}"
+}
+
+disclosure_set_open(dp: ptr, open: int) {
+    d = dp as *Disc
+    d.open = open
+    _h = set_hidden(d.body, 1 - open)
+    _l = set_button_label(d.header, _disc_mark(open, d.label))
+}
+
+disclosure_toggle(dp: ptr) -> int {
+    d = dp as *Disc
+    disclosure_set_open(dp, 1 - d.open)
+    return d.open
+}
+
+// disclosure(label, start_open) { … } — a header + collapsible body.
+// Returns the Disc so the caller can drive it programmatically.
+disclosure(_ctx: ptr, label: string, start_open: int, body_fn: fn) -> ptr {
+    d = malloc(48) as *Disc
+    d.open = start_open
+    string_retain(label)
+    d.label = label
+    outer = vstack(_ctx, 2)
+    dp = d as ptr
+    d.header = btn(outer, _disc_mark(start_open, label)) callback {
+        _t = disclosure_toggle(dp)
+    }
+    // The body is a plain vstack; the caller's block fills it.
+    b = vstack(outer, 4)
+    d.body = b
+    body_fn(b)
+    if start_open == 0 { _h = set_hidden(b, 1) }
+    return dp
+}
+
+extern string_retain(s: string)
