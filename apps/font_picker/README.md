@@ -1,8 +1,14 @@
 # Font Picker — an aether-ui port of jsfontpicker
 
 Ported from **[Javascript Font Picker](https://www.jsfontpicker.com/)**,
-MIT License, **Copyright (c) 2024-2025 Zygomatic**. The upstream licence is
-kept verbatim beside this file as `LICENSE-jsfontpicker`.
+MIT License.
+
+    Portions Copyright (c) 2024-2025 Zygomatic
+    Portions Copyright (c) 2026 Aether developers
+
+Upstream's licence notice is kept **verbatim and unaltered** beside this
+file as `LICENSE-jsfontpicker` (as the MIT terms require); `NOTICE`
+records which portions came from where.
 
 `picker_engine.ae` reproduces the upstream logic rule-for-rule — the
 compressed family record format, `getDefaultVariant`'s nearest-400 rule,

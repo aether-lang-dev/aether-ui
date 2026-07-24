@@ -1,12 +1,16 @@
 // font_picker.ae — a font picker for aether-ui.
 //
 // PORTED from Javascript Font Picker (https://www.jsfontpicker.com/),
-// MIT License, Copyright (c) 2024-2025 Zygomatic. The upstream project is
-// a browser component; this is the same picker as a native app on all
-// three aether-ui backends. Its logic layer — the compressed family
-// format, fuzzy search, filters, sorting, favourites and keyboard map —
-// is ported rule-for-rule in picker_engine.ae (see the header there and
-// LICENSE-jsfontpicker beside this file).
+// MIT License. The upstream project is a browser component; this is the
+// same picker as a native app on all three aether-ui backends. Its logic
+// layer — the compressed family format, fuzzy search, filters, sorting,
+// favourites and keyboard map — is ported rule-for-rule in
+// picker_engine.ae (see the header there).
+//
+//   Portions Copyright (c) 2024-2025 Zygomatic
+//   Portions Copyright (c) 2026 Aether developers
+//
+// See LICENSE-jsfontpicker (upstream's notice, verbatim) and NOTICE.
 //
 // The dialog mirrors upstream's layout (templates/dialogContent.html):
 //   search + subset + category filters | sort key + direction |

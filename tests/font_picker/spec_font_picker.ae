@@ -1,5 +1,9 @@
 // spec_font_picker.ae — drives the ported Font Picker over AetherUIDriver.
 //
+//   Portions Copyright (c) 2024-2025 Zygomatic
+//   Portions Copyright (c) 2026 Aether developers
+//   MIT — see apps/font_picker/LICENSE-jsfontpicker and NOTICE.
+//
 // The port's logic is unit-tested against upstream's rules in
 // apps/font_picker/test_picker_engine.ae (ci.sh Phase 0). THIS spec proves
 // the wiring: that the dialog's search / category / sort / favourite /

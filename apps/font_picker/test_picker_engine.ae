@@ -1,7 +1,9 @@
 // test_picker_engine.ae — unit tests for the ported Font Picker logic.
 //
 // The expected values here were computed from the UPSTREAM behaviour
-// (Javascript Font Picker, MIT, © 2024-2025 Zygomatic): getDefaultVariant's
+// (Javascript Font Picker, MIT — Portions Copyright (c) 2024-2025
+// Zygomatic; Portions Copyright (c) 2026 Aether developers):
+// getDefaultVariant's
 // nearest-400 rule with its tie-to-earlier-entry, `leven` distances against
 // the (name.length − query.length) threshold, familySort's ascending name /
 // ascending popularity / DESCENDING metrics, and the favourites-then-

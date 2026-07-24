@@ -1,9 +1,14 @@
 // picker_engine.ae — the Font Picker's pure logic layer.
 //
 // PORTED from Javascript Font Picker (https://www.jsfontpicker.com/),
-// MIT License, Copyright (c) 2024-2025 Zygomatic — see LICENSE-jsfontpicker
-// in this directory. This module reproduces that project's model and
-// behaviour as faithfully as Aether allows; the UI lives in font_picker.ae.
+// MIT License. This module reproduces that project's model and behaviour
+// as faithfully as Aether allows; the UI lives in font_picker.ae.
+//
+//   Portions Copyright (c) 2024-2025 Zygomatic
+//   Portions Copyright (c) 2026 Aether developers
+//
+// See LICENSE-jsfontpicker (upstream's notice, verbatim) and NOTICE in
+// this directory.
 //
 // What is ported, rule for rule (upstream file in brackets):
 //   * The compressed family format
