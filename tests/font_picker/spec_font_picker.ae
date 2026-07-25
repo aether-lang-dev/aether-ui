@@ -166,6 +166,21 @@ main() {
                 uidriver.wait_body_contains("/widgets", "picked: ", 20),
                 "pick recorded")
         }
+
+        aeocha.it("has a dialog frame — title and a working close") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "Select a font", "dialog title")
+            // The close is a REAL button (keyboard-reachable, drivable,
+            // a11y-labelled), not decoration.
+            aeocha.assert_contains(body, "\"a11y_name\":\"Close\"",
+                "close is labelled for assistive tech")
+            cid = uidriver.widget_id_of("button", "×")
+            aeocha.assert_gt(cid, 0, "close button")
+            uidriver.click_widget(cid)
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "cancelled", 20),
+                "closing fires the app's handler")
+        }
     }
     aeocha.run_summary(fw)
 }

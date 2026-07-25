@@ -1,0 +1,69 @@
+// ui/dialog.ae — the dialog frame: a titled header with a close affordance.
+//
+// The last piece of visual vocabulary a reference dialog has and we lacked.
+// Upstream's picker is framed: a bold title on the left ("Select a font"),
+// a ✕ at the right, a rule beneath, and the content below that.
+//
+// This is deliberately NOT a modal window. sheet_create/present exist for
+// that, but a real second window is heavier than the job needs and would
+// split the widget tree the driver walks — every spec assumes one window.
+// A dialog HEADER composes into whatever surface you already have, so an
+// app keeps its single window and still reads as a dialog.
+//
+//   dialog_header("Select a font") callback {   // the ✕ handler
+//       ui_set_s(status, "cancelled")
+//   }
+//
+// The ✕ is a real button (drivable, focusable, a11y-labelled) with the
+// icon drawn beside it, so it behaves like a control rather than decoration.
+
+exports (dialog_header, dialog_title_of, dialog_close_of)
+
+import ui (
+    hstack, vstack, text, btn, divider, width, spacer,
+    style_font_size, style_font_bold, style_text_color,
+    style_corner_radius, style_hover, edge_insets, a11y_label
+)
+import ui.icons (icon, ICON_CLOSE)
+
+extern malloc(size: int) -> ptr
+
+// The pieces, so a caller can restyle or drive them.
+struct DlgHdr { title: int close: int }
+
+dialog_title_of(dp: ptr) -> int { d = dp as *DlgHdr; return d.title }
+dialog_close_of(dp: ptr) -> int { d = dp as *DlgHdr; return d.close }
+
+// dialog_header(title) callback { … } — a framed title row. The callback
+// fires when the ✕ is pressed (or driven).
+dialog_header(_ctx: ptr, title: string, on_close: fn) -> ptr {
+    d = malloc(16) as *DlgHdr
+    outer = vstack(_ctx, 4)
+    row = hstack(outer, 8)
+
+    t = text(row, title)
+    _fs = style_font_size(t, 18.0)
+    _fb = style_font_bold(t)
+    d.title = t
+
+    // Push the close button to the right edge, as in the reference.
+    spacer(row)
+
+    // The ✕. A button is NOT a container — an icon parented to one gets a
+    // 0x0 canvas — so the glyph is the button's LABEL. (Aether has no
+    // \uXXXX string escapes: the character goes in literally.) Keeping a
+    // real button means the close affordance stays keyboard-reachable,
+    // drivable and a11y-labelled.
+    x = btn(row, "×") callback { on_close() }
+    _xf = style_font_size(x, 16.0)
+    _xw = width(x, 32)
+    _xp = edge_insets(x, 4.0, 4.0, 4.0, 4.0)
+    _xr = style_corner_radius(x, 6.0)
+    _xh = style_hover(x, 0.92, 0.93, 0.94)
+    _xa = a11y_label(x, "Close")
+    d.close = x
+
+    // The rule under the title, as in the reference.
+    divider(outer)
+    return d as ptr
+}

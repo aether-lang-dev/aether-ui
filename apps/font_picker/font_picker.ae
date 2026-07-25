@@ -44,6 +44,7 @@ import vg (
     vg_root, node_scene, scene_set_refreshing
 )
 import ui.disclosure (disclosure)
+import ui.dialog (dialog_header)
 import ui.icons (
     icon, icon_path, ICON_CLOSE, ICON_SEARCH, ICON_HEART, ICON_HEART_OUTLINE,
     ICON_CHECK, ICON_SORT, ICON_FILTER, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP
@@ -339,6 +340,12 @@ main() {
 
     window("Font Picker", 620, 720) {
         vstack(6) {
+            // The dialog frame: title + close, as in the reference.
+            dialog_header("Select a font") callback {
+                stc = ui_set_s(seltext, "cancelled")
+                if stc < 0 { return }
+            }
+
             t_status = text("scanning…")
             bind_text(t_status, status)
 
