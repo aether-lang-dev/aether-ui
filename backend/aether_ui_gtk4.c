@@ -492,8 +492,28 @@ void aether_ui_surface_flush_deferred_impl(void) {
 // now-populated container) creates the app + runs the loop afterward, via
 // aether_ui_surface_run_impl. This matches the builder "configure then
 // execute" lifecycle: children fill the container, then the body acts.
+// The default window gutter, in px. Matches the 12px calculator already
+// used by hand and the reference dialogs; small enough not to waste space.
+#define AEUI_WINDOW_INSET 12
+
 int aether_ui_surface_container_new_impl(int kind) {
     int container = aether_ui_vstack_create(0);
+    // A WINDOW gets a default content inset. Without it every app's text
+    // sits flush against the frame with its leftmost pixels touching the
+    // edge — which looked like a per-app oversight but was the toolkit
+    // giving no gutter at all. Bounded surfaces (render_to / record) are
+    // measured targets and must stay exactly their requested size, so they
+    // get nothing. Apps that want a different gutter (or none) still call
+    // margin(...) inside the block, which overrides this.
+    if (kind == 0) {
+        GtkWidget* w = aether_ui_get_widget(container);
+        if (w) {
+            gtk_widget_set_margin_start(w, AEUI_WINDOW_INSET);
+            gtk_widget_set_margin_end(w, AEUI_WINDOW_INSET);
+            gtk_widget_set_margin_top(w, AEUI_WINDOW_INSET);
+            gtk_widget_set_margin_bottom(w, AEUI_WINDOW_INSET);
+        }
+    }
     surface_add(container, kind, 0);
     return container;
 }

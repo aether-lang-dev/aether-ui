@@ -1889,8 +1889,24 @@ static SurfaceEntry* surface_add(int container_handle, int kind, int app_handle)
     return s;
 }
 
+// The default window gutter, in px — matches GTK4/macOS so a window looks
+// the same on every backend.
+#define AEUI_WINDOW_INSET 12
+
 int aether_ui_surface_container_new_impl(int kind) {
     int container = aether_ui_vstack_create(0);
+    // A WINDOW gets a default content inset; without one every app's text
+    // sits flush against the frame. Bounded surfaces (render_to / record)
+    // are measured targets and stay exactly their requested size.
+    if (kind == 0) {
+        Widget* w = widget_at(container);
+        if (w) {
+            w->stack.padding_top = AEUI_WINDOW_INSET;
+            w->stack.padding_right = AEUI_WINDOW_INSET;
+            w->stack.padding_bottom = AEUI_WINDOW_INSET;
+            w->stack.padding_left = AEUI_WINDOW_INSET;
+        }
+    }
     surface_add(container, kind, 0);
     return container;
 }
