@@ -138,7 +138,7 @@ case "$OS" in
         ;;
     *)
         echo "Error: Unsupported platform '$OS'."
-        echo "Aether UI supports macOS (AppKit), Linux (GTK4), and Windows (Win32)."
+        echo "Aether UI supports macOS (AppKit), Linux and FreeBSD (GTK4), and Windows (Win32)."
         exit 1
         ;;
 esac

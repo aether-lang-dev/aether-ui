@@ -1,10 +1,10 @@
 # Aether UI for Aether
 
 Port of the [Perry](https://github.com/PerryTS/perry) UI framework to Aether.
-Declarative widget DSL backed by GTK4 (Linux), AppKit (macOS), and a native
-Win32 backend (Windows) — all three implementations share the same ABI
-declared in `aether_ui_backend.h`. Uses Aether's trailing-block builder
-pattern.
+Declarative widget DSL backed by GTK4 (Linux and FreeBSD), AppKit (macOS),
+and a native Win32 backend (Windows) — the three backend implementations
+share the same ABI declared in `aether_ui_backend.h`. Uses Aether's
+trailing-block builder pattern.
 
 ## Credits
 
@@ -28,6 +28,20 @@ sudo apt install libgtk-4-dev   # Debian/Ubuntu
 ./build.sh example_counter.ae build/counter
 ./build/counter
 ```
+
+### FreeBSD / GhostBSD (GTK4)
+
+Same GTK4 backend as Linux; `build.sh` detects FreeBSD and uses clang.
+
+```bash
+sudo pkg install gtk4 pkgconf   # ensure a zlib.pc exists for freetype2 -> zlib
+./build.sh example_counter.ae build/counter
+./build/counter
+```
+
+`tests/spec_matrix.sh` needs no display of its own — on FreeBSD it starts a
+private Xvfb (`pkg install xorg-vfbserver`), unprivileged, and any pre-set
+`$DISPLAY` is respected instead.
 
 ### macOS (AppKit)
 
@@ -214,7 +228,7 @@ including Bash, Python, and JavaScript test-suite skeletons plus the
 
 For most native UI frameworks you have to bolt on Selenium/Appium. With
 aether_ui it's part of the framework and works identically on macOS,
-Linux, and Windows via the shared
+Linux, FreeBSD, and Windows via the shared
 [`aether_ui_test_server.c`](aether_ui_test_server.c).
 
 ### Widget sealing
@@ -234,11 +248,11 @@ capabilities the test harness is denied, not the other way around.
 | Layer | File | Role |
 |-------|------|------|
 | Aether DSL | `ui/module.ae` | Builder-pattern wrappers with `_ctx` auto-injection; surface verbs (`window`/`render_to`/`record`) |
-| GTK4 backend | `aether_ui_gtk4.c` | Linux: GTK4 C API calls, Cairo canvas, test server |
+| GTK4 backend | `aether_ui_gtk4.c` | Linux + FreeBSD: GTK4 C API calls, Cairo canvas, test server |
 | macOS backend | `aether_ui_macos.m` | macOS: AppKit Objective-C |
 | Win32 backend | `aether_ui_win32.c` | Windows: USER32 + GDI+ + Common Controls |
-| C header | `aether_ui_backend.h` | Shared backend ABI — implemented by all three backends |
-| Build script | `build.sh` | Auto-detects platform (Darwin/Linux/MinGW) |
+| C header | `aether_ui_backend.h` | Shared backend ABI — implemented by all three backends (four platforms; FreeBSD shares GTK4) |
+| Build script | `build.sh` | Auto-detects platform (Darwin/Linux/FreeBSD/MinGW) |
 | Test script | `test_automation.sh` | Example curl-based test suite (17 assertions) |
 | Widget tests | `tests/test_widgets.c` | Cross-platform C-level smoke suite (40 assertions) |
 | Driver tests | `tests/test_driver.sh` | HTTP integration against the embedded test server |
@@ -251,6 +265,13 @@ capabilities the test harness is denied, not the other way around.
 | Linux    | GTK4  (`aether_ui_gtk4.c`)      | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
 | macOS    | AppKit (`aether_ui_macos.m`)    | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
 | Windows  | Native Win32 (`aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls; per-monitor DPI v2; immersive dark mode; AetherUIDriver via winsock2 |
+| FreeBSD  | GTK4  (`aether_ui_gtk4.c`)      | Full — shares the Linux backend; clang build, private-Xvfb spec runs           |
+
+"Full" above means the backend implements the whole widget/canvas/event/
+styling surface plus AetherUIDriver — not that every suite is green on every
+box. `tests/spec_matrix.sh` is the authority; run it on the platform you care
+about. Most recent full runs: Linux 228/0, FreeBSD 223/0 (only `lismusic`,
+which needs the sqlite contrib archive installed on that host).
 
 ## Status
 
