@@ -5152,6 +5152,16 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
     n += snprintf(buf + n, bufsize - n, ",\"window\":%d",
                   aether_ui_widget_window_impl(handle));
 
+    // Interaction state, so a spec can assert hover/pressed without reading
+    // pixels (and on a box with no pointer at all).
+    {
+        GtkStateFlags st = gtk_widget_get_state_flags(w);
+        if (st & GTK_STATE_FLAG_PRELIGHT)
+            n += snprintf(buf + n, bufsize - n, ",\"hovered\":true");
+        if (st & GTK_STATE_FLAG_ACTIVE)
+            n += snprintf(buf + n, bufsize - n, ",\"pressed\":true");
+    }
+
     // Current allocation (0x0 until mapped). Tests use a canvas's real size
     // to compute the viewBox→pixel mapping after a /window/resize.
     n += snprintf(buf + n, bufsize - n, ",\"w\":%d,\"h\":%d",
@@ -5306,6 +5316,20 @@ static gboolean test_action_idle(gpointer data) {
     TestAction* ta = (TestAction*)data;
     GtkWidget* w = aether_ui_get_widget(ta->handle);
 
+    if (ta->action == 14 && ta->handle == 0) {
+        // hover(0) = "the pointer is over NOTHING" — clear every hover.
+        // A real widget id is not required for this one.
+        int n0 = aether_ui_widget_count_impl();
+        for (int i = 1; i <= n0; i++) {
+            GtkWidget* pw0 = aether_ui_get_widget(i);
+            if (pw0) gtk_widget_unset_state_flags(pw0, GTK_STATE_FLAG_PRELIGHT);
+        }
+        ta->retval = 1;
+        ta->result = 0;
+        ta->done = 1;
+        return G_SOURCE_REMOVE;
+    }
+
     if (ta->action == 9) {
         // Window key — not a widget action; fire the combo through the
         // shortcut dispatch (or Tab/Escape special handling).
@@ -5403,6 +5427,39 @@ static gboolean test_action_idle(gpointer data) {
         case 13: // scroll — fire the vlist container's on_scroll(dy)
             ta->retval = aether_ui_fire_scroll(ta->handle, ta->ival);
             break;
+        case 14: {  // hover — set the CSS :hover state as a pointer would
+            // GTK4 drives :hover from widget state flags, so a spec can
+            // assert hover styling with no real pointer (headless CI).
+            // Clear any previous hover first: only one widget is "under
+            // the pointer" at a time, same as reality.
+            int n = aether_ui_widget_count_impl();
+            for (int i = 1; i <= n; i++) {
+                GtkWidget* pw = aether_ui_get_widget(i);
+                if (pw) gtk_widget_unset_state_flags(pw, GTK_STATE_FLAG_PRELIGHT);
+            }
+            GtkWidget* hw = aether_ui_get_widget(ta->handle);
+            if (hw) {
+                gtk_widget_set_state_flags(hw, GTK_STATE_FLAG_PRELIGHT, FALSE);
+                ta->retval = 1;
+            }
+            break;
+        }
+        case 15: {  // press — hold the widget in its ACTIVE visual state
+            GtkWidget* pw2 = aether_ui_get_widget(ta->handle);
+            if (pw2) {
+                gtk_widget_set_state_flags(pw2, GTK_STATE_FLAG_ACTIVE, FALSE);
+                ta->retval = 1;
+            }
+            break;
+        }
+        case 16: {  // release
+            GtkWidget* rw = aether_ui_get_widget(ta->handle);
+            if (rw) {
+                gtk_widget_unset_state_flags(rw, GTK_STATE_FLAG_ACTIVE);
+                ta->retval = 1;
+            }
+            break;
+        }
     }
     ta->result = 0;
     ta->done = 1;
@@ -6180,6 +6237,12 @@ static void handle_test_request(int client_fd) {
                 ta.action = 13;
                 const char* v = extract_query_param(path, "dy");
                 ta.ival = v ? atoi(v) : 0;
+            } else if (strncmp(action_part, "/hover", 6) == 0) {
+                ta.action = 14;
+            } else if (strncmp(action_part, "/press", 6) == 0) {
+                ta.action = 15;
+            } else if (strncmp(action_part, "/unpress", 8) == 0) {
+                ta.action = 16;
             } else if (strncmp(action_part, "/click", 6) == 0) {
                 ta.action = 0;
             } else if (strncmp(action_part, "/set_text", 9) == 0) {

@@ -44,8 +44,20 @@ typedef enum {
     AETHER_DRV_CTX_ACTIVATE = 15,  // handle=widget, ival=item index → retval=1 if fired
     AETHER_DRV_TAB_SELECT   = 16,  // handle=tabs, ival=index → retval=resulting index
     AETHER_DRV_CANVAS_RELEASE = 17,// handle=canvas, dval=x, dval2=y — completes a drag
+    // ── QE additions ────────────────────────────────────────────────
+    // Pointer position over a WIDGET (not a canvas): the piece missing for
+    // testing :hover styling, tooltips and hover-reveal affordances. A
+    // backend enters/leaves the widget as a real pointer would.
+    AETHER_DRV_HOVER        = 18,  // handle=widget (0 = leave everything)
+    // Press-and-hold / release on a widget, so a spec can assert the
+    // ACTIVE (pressed) visual state, and can drive press-drag-release
+    // gestures on ordinary widgets rather than only canvases.
+    AETHER_DRV_PRESS        = 19,  // handle=widget
+    AETHER_DRV_RELEASE      = 20,  // handle=widget
 } AetherDriverActionKind;
 
+/* Interaction-state readback (QE): report whether the pointer is over a
+   widget / it is held pressed, so specs assert hover styling without pixels. */
 typedef struct {
     AetherDriverActionKind action;
     int    handle;
@@ -73,6 +85,10 @@ typedef struct {
     const char* (*widget_type)(int handle);
     void        (*widget_text_into)(int handle, char* buf, int bufsize);
     int         (*widget_visible)(int handle);
+    /* QE: interaction state, so hover/pressed styling is assertable without
+       pixels (and on boxes with no pointer). NULL = backend does not report. */
+    int         (*widget_hovered)(int handle);
+    int         (*widget_pressed)(int handle);
     int         (*widget_parent)(int handle);
     int         (*toggle_active)(int handle);
     double      (*slider_value)(int handle);

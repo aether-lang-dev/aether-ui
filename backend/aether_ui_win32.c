@@ -5811,6 +5811,42 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             ctx->result = 1; ctx->done = 1; return 0;
         }
         switch (ctx->action) {
+            case AETHER_DRV_HOVER: {
+                // Move the pointer onto (or off) a widget the way a user
+                // would: clear the previous hover, set the new one, and let
+                // both repaint. This is what makes :hover styling testable
+                // on a headless box, where no real pointer exists.
+                for (int i = 1; i <= widget_count; i++) {
+                    Widget* pw = widget_at(i);
+                    if (pw && pw->is_hovered) {
+                        pw->is_hovered = 0;
+                        InvalidateRect(pw->hwnd, NULL, TRUE);
+                    }
+                }
+                if (w) {
+                    w->is_hovered = 1;
+                    InvalidateRect(w->hwnd, NULL, TRUE);
+                    UpdateWindow(w->hwnd);
+                }
+                ctx->retval = 1;
+                break;
+            }
+            case AETHER_DRV_PRESS:
+                if (w) {
+                    SendMessageW(w->hwnd, BM_SETSTATE, TRUE, 0);
+                    InvalidateRect(w->hwnd, NULL, TRUE);
+                    UpdateWindow(w->hwnd);
+                    ctx->retval = 1;
+                }
+                break;
+            case AETHER_DRV_RELEASE:
+                if (w) {
+                    SendMessageW(w->hwnd, BM_SETSTATE, FALSE, 0);
+                    InvalidateRect(w->hwnd, NULL, TRUE);
+                    UpdateWindow(w->hwnd);
+                    ctx->retval = 1;
+                }
+                break;
             case AETHER_DRV_CLICK:
                 // Buttons and ANY widget with an on_click handler (listbox
                 // rows are plain containers) — mirrors the GTK4 server's
@@ -5922,6 +5958,16 @@ __declspec(dllimport) int __stdcall GdipGetImageEncodersSize(
 __declspec(dllimport) int __stdcall GdipGetImageEncoders(
     unsigned int num_encoders, unsigned int size, void* encoders);
 
+static int hook_widget_hovered(int handle) {
+    Widget* w = widget_at(handle);
+    return (w && w->is_hovered) ? 1 : 0;
+}
+static int hook_widget_pressed(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w) return 0;
+    return (SendMessageW(w->hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) ? 1 : 0;
+}
+
 static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     if (app_count == 0) return -1;
     HWND hwnd = apps[0].hwnd;
@@ -6029,6 +6075,8 @@ static const AetherDriverHooks win32_driver_hooks = {
     .widget_classes_into  = hook_widget_classes_into,
     .widget_a11y          = hook_widget_a11y,
     .focused_widget       = hook_focused_widget,
+    .widget_hovered       = hook_widget_hovered,
+    .widget_pressed       = hook_widget_pressed,
     .screenshot_png       = hook_screenshot_png,
 };
 

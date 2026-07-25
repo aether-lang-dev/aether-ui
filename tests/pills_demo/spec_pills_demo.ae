@@ -57,6 +57,23 @@ main() {
             aeocha.assert_contains(body, "\"activeBg\":\"#2176fe\"", "sheet active")
         }
 
+        aeocha.it("hover is DRIVABLE — the pointer can be placed by the driver") callback {
+            // Before this route existed, :hover could only be tested by
+            // moving a real pointer (impossible headless, impossible on a
+            // session-0 Windows box). Now a spec can hover a widget and
+            // assert what the user would see.
+            chip = uidriver.widget_id_of("button", "Handwriting")
+            aeocha.assert_gt(chip, 0, "sheet-styled chip")
+            uidriver.hover_widget(chip)
+            // The widget reports its hover STATE, so the assertion does not
+            // depend on reading pixels.
+            hb = uidriver.widget_bool_by_text("Handwriting", "hovered")
+            aeocha.assert_true(hb, "the chip reports itself hovered")
+            uidriver.unhover()
+            hb2 = uidriver.widget_bool_by_text("Handwriting", "hovered")
+            aeocha.assert_false(hb2, "unhover clears it")
+        }
+
         aeocha.it("st_border flows through the AeCS cascade") callback {
             // The bottom row is styled ONLY by the sheet's `chip` class rule.
             body = uidriver.get_body("/widgets")

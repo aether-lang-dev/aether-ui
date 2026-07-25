@@ -304,6 +304,10 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
         int op = aether_ui_styled_opacity_impl(handle);
         if (op >= 0) n += snprintf(buf + n, bufsize - n, ",\"opacity\":%.2f", op / 100.0);
+        if (h->widget_hovered && h->widget_hovered(handle))
+            n += snprintf(buf + n, bufsize - n, ",\"hovered\":true");
+        if (h->widget_pressed && h->widget_pressed(handle))
+            n += snprintf(buf + n, bufsize - n, ",\"pressed\":true");
         int bd = aether_ui_styled_border_impl(handle);
         if (bd >= 0) {
             n += snprintf(buf + n, bufsize - n,
@@ -611,6 +615,29 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         ctx.action = AETHER_DRV_CLICK;
         ctx.handle = extract_id_from_path(path, "/widget/");
         dispatch_and_reply(client_fd, h, &ctx, "clicked");
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/hover")) {
+        // POST /widget/{id}/hover — put the pointer over a widget, so a spec
+        // can assert :hover styling, hover-revealed affordances and
+        // tooltips. POST /widget/0/hover leaves everything.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_HOVER;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        dispatch_and_reply(client_fd, h, &ctx, "hovered");
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/press")) {
+        // POST /widget/{id}/press — hold the button down (no release), so
+        // the ACTIVE/pressed visual state can be asserted.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_PRESS;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        dispatch_and_reply(client_fd, h, &ctx, "pressed");
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/unpress")) {
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_RELEASE;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        dispatch_and_reply(client_fd, h, &ctx, "released");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/set_text")) {
         AetherDriverActionCtx ctx = {0};

@@ -17,6 +17,7 @@ exports (
     url_of, get_body, post_ok, post_status, post_body,
     text_width, font_ascent,
     click, click_widget, toggle_widget, key, move_to, resize_window,
+    hover_widget, unhover, press_widget, release_widget,
     window_key, focus_widget, focused_widget,
     set_state, state_value_int,
     widget_id_by_text, widget_id_of, widget_id_last_of, widget_text_by_id, widget_bool_by_text,
@@ -91,6 +92,17 @@ click(x: float, y: float) {
 
 click_widget(id: int) { post_ok("/widget/${id}/click", "POST widget click") }
 toggle_widget(id: int) { post_ok("/widget/${id}/toggle", "POST widget toggle") }
+
+// Put the pointer over a widget — for asserting :hover styling, tooltips
+// and hover-revealed affordances without a real pointer (so it works on a
+// headless CI box). unhover() moves it off everything.
+hover_widget(id: int) { post_ok("/widget/${id}/hover", "POST widget hover") }
+unhover() { post_ok("/widget/0/hover", "POST unhover") }
+
+// Hold a widget pressed / let it go — for asserting the ACTIVE visual
+// state, and for press-drag-release gestures on ordinary widgets.
+press_widget(id: int) { post_ok("/widget/${id}/press", "POST widget press") }
+release_widget(id: int) { post_ok("/widget/${id}/unpress", "POST widget unpress") }
 key(name: string) { post_ok(string.concat("/canvas/1/key?name=", name), "POST canvas key") }
 
 move_to(x: float, y: float) {

@@ -5190,6 +5190,37 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
     if (aether_ui_test_server_is_sealed(ctx->handle)) { ctx->result = 1; return; }
 
     switch (ctx->action) {
+        case AETHER_DRV_HOVER: {
+            // AppKit has no settable "hovered" flag, so record it on the
+            // view and let the styled paths consult it — the same shape the
+            // hover COLOURS already use (see aether_ui_set_state_style).
+            int n = aether_ui_widget_count_impl();
+            for (int i = 1; i <= n; i++) {
+                NSView* pv = (__bridge NSView*)aether_ui_get_widget(i);
+                if (pv) objc_setAssociatedObject(pv, "aeui-hovered", nil,
+                                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            NSView* hv = (__bridge NSView*)aether_ui_get_widget(ctx->handle);
+            if (hv) {
+                objc_setAssociatedObject(hv, "aeui-hovered", @(1),
+                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [hv setNeedsDisplay:YES];
+                ctx->retval = 1;
+            }
+            break;
+        }
+        case AETHER_DRV_PRESS:
+        case AETHER_DRV_RELEASE: {
+            NSView* pv2 = (__bridge NSView*)aether_ui_get_widget(ctx->handle);
+            if (pv2) {
+                objc_setAssociatedObject(pv2, "aeui-pressed",
+                    ctx->action == AETHER_DRV_PRESS ? @(1) : nil,
+                    OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [pv2 setNeedsDisplay:YES];
+                ctx->retval = 1;
+            }
+            break;
+        }
         case AETHER_DRV_CLICK:
             if ([v isKindOfClass:[NSButton class]]) {
                 [(NSButton*)v performClick:nil];
@@ -5283,6 +5314,17 @@ static int hook_widget_children(int handle, int* out, int max) {
 // Falls back to cacheDisplayInRect: when there's no layer (or nothing has been
 // committed yet — a headless run that never displays), which is the correct
 // answer in exactly the cases where no animation can be in flight anyway.
+static int hook_widget_hovered(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    return objc_getAssociatedObject(v, "aeui-hovered") ? 1 : 0;
+}
+static int hook_widget_pressed(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    return objc_getAssociatedObject(v, "aeui-pressed") ? 1 : 0;
+}
+
 static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     __block NSData* png = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -5346,6 +5388,8 @@ static const AetherDriverHooks macos_driver_hooks = {
     .widget_classes_into  = hook_widget_classes_into,
     .widget_a11y          = hook_widget_a11y,
     .focused_widget       = hook_focused_widget,
+    .widget_hovered       = hook_widget_hovered,
+    .widget_pressed       = hook_widget_pressed,
     .screenshot_png       = hook_screenshot_png,
 };
 
