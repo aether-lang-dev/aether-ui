@@ -26,9 +26,9 @@ exports (
     ICON_CHECK, ICON_SORT, ICON_FILTER, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP
 )
 
-import ui (hstack, text)
+import ui (hstack, text, width)
 import vg.live (vg)
-import vg (view_box, path, fill, stroke)
+import vg (view_box, path, fill, stroke, node_scene, scene_canvas)
 
 // Icon ids. Names, not path strings, so a later themed//asset-backed
 // implementation can swap the drawing without touching call sites.
@@ -81,13 +81,20 @@ _icon_is_filled(id: int) -> int {
     if id == ICON_FILTER { return 1 }
     return 0
 }
+// ICON_HEART_OUTLINE deliberately shares HEART's path but is NOT in the
+// filled set above, so it strokes the same silhouette — a hollow heart,
+// which is exactly the "not favourited" state.
 
 // icon(id, size_px, "#rrggbb") — a square vector icon, drawn inline.
-icon(_ctx: ptr, id: int, size: int, color: string) {
+icon(_ctx: ptr, id: int, size: int, color: string) -> int {
     d = icon_path(id)
     filled = _icon_is_filled(id)
-    vg(view_box(0, 0, 24, 24), size, size) {
+    cid = 0
+    h = vg(view_box(0, 0, 24, 24), size, size) {
         p = path(d)
+        // vg() yields a scene NODE, not the canvas widget — the widget
+        // handle (what width() needs) comes from the scene.
+        cid = scene_canvas(node_scene(p))
         if filled == 1 {
             fill(p, color)
         } else {
@@ -98,6 +105,11 @@ icon(_ctx: ptr, id: int, size: int, color: string) {
             stroke(p, color, 2.0)
         }
     }
+    // An icon is a FIXED-SIZE glyph: canvases are created hexpand=TRUE (a
+    // full-window canvas should fill), which otherwise stretches a 16px icon
+    // across the whole row and pushes its label out of view.
+    if cid != 0 { _w = width(cid, size) }
+    return cid
 }
 
 // icon_button(id, size, colour, label) callback { … } — the icon+label pair

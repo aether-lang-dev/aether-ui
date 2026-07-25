@@ -44,6 +44,10 @@ import vg (
     vg_root, node_scene, scene_set_refreshing
 )
 import ui.disclosure (disclosure)
+import ui.icons (
+    icon, icon_path, ICON_CLOSE, ICON_SEARCH, ICON_HEART, ICON_HEART_OUTLINE,
+    ICON_CHECK, ICON_SORT, ICON_FILTER, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP
+)
 import picker_engine
 import std.string
 import std.list
@@ -59,13 +63,14 @@ extern string_substring(s: string, start: int, end: int) -> string
 const FP_PREVIEW: string = "Handgloves 123"
 
 // One visible row: the family index plus the strings the row renders.
-struct Row { fi: int label: string cat: string fam: string }
-mk_row(fi: int, label: string, cat: string, fam: string) -> ptr {
-    r = malloc(48) as *Row
+struct Row { fi: int label: string cat: string fam: string fav: int }
+mk_row(fi: int, label: string, cat: string, fam: string, fav: int) -> ptr {
+    r = malloc(56) as *Row
     r.fi = fi
     r.label = label
     r.cat = cat
     r.fam = fam
+    r.fav = fav
     return r as ptr
 }
 
@@ -184,6 +189,23 @@ category_for(face: string) -> string {
     return "display"
 }
 
+// A METRIC pill: sets one of the four metric filters to a value, or back
+// to "all" when clicked again. which: 0=thickness 1=width 2=complexity
+// 3=curvature — the same indices the engine uses.
+metric_chip(_ctx: ptr, app: *App, which: int, label: string, value: string) -> int {
+    b = btn(_ctx, label) callback {
+        cur = picker_engine.pl_metric(app.list, which)
+        if string.equals(cur, value) == 1 {
+            picker_engine.pl_set_metric(app.list, which, "all")
+        } else {
+            picker_engine.pl_set_metric(app.list, which, value)
+        }
+        refresh_list(app)
+    }
+    style_chip(b, 0)
+    return b
+}
+
 // A category pill: toggles its category in the engine's SET and restyles
 // itself to show the state. The whole vocabulary this needed — padding,
 // radius, border, hover — landed in the toolkit as the coverage gaps
@@ -233,12 +255,11 @@ refresh_list(app: *App) {
         fi = picker_engine.pl_visible_at(app.list, i)
         fam = picker_engine.pl_at(app.list, fi)
         nm = picker_engine.fam_name(fam)
-        mark = ""
-        if picker_engine.pl_is_fav(app.list, fi) == 1 { mark = "* " }
+        favd = picker_engine.pl_is_fav(app.list, fi)
         // The family NAME doubles as the font to typeset the row in — the
         // defining feature of a font picker: you choose by SEEING the face.
         _ = list.list_add_raw(items,
-            mk_row(fi, "${mark}${nm}", picker_engine.fam_category(fam), nm))
+            mk_row(fi, nm, picker_engine.fam_category(fam), nm, favd))
         i = i + 1
     }
     listbox_update(app.lb, items)
@@ -365,6 +386,18 @@ main() {
 
             }
 
+            // ── Metrics section (upstream's second accordion) ──
+            // The engine has supported these filters all along; this is the
+            // UI that finally exposes them.
+            disclosure("Metrics", 0) callback |mbody: int| {
+                hstack(mbody, 6) {
+                    metric_chip(app, 0, "thin", "0.25")
+                    metric_chip(app, 0, "thick", "0.75")
+                    metric_chip(app, 1, "narrow", "0.25")
+                    metric_chip(app, 1, "wide", "0.75")
+                }
+            }
+
             // ── The font list (rows are real widgets, upstream's fp__fonts) ──
             app.lb = listbox(2) callback |item: ptr, i: int, row: int| {
                 r = item as *Row
@@ -373,6 +406,13 @@ main() {
                 _f = style_font_family(nm, r.fam)
                 _z = style_font_size(nm, 16.0)
                 _c = text(row, r.cat)
+                // A real heart, filled when favourited and outlined when not
+                // — upstream's favourites column, drawn with ui.icons.
+                if r.fav == 1 {
+                    icon(row, ICON_HEART, 16, "#e8455f")
+                } else {
+                    icon(row, ICON_HEART_OUTLINE, 16, "#d0d4da")
+                }
             }
             on_select(app.lb) callback |i: int| {
                 fi = picker_engine.pl_visible_at(app.list, i)
@@ -396,7 +436,7 @@ main() {
             t_sel = text("no selection")
             bind_text(t_sel, seltext)
 
-            // ── Footer actions (upstream: favourite / variant / pick) ──
+            // ── Footer (upstream: Clear filters | Cancel · Clear · Select) ──
             hstack(6) {
                 btn("Favourite (f)") callback {
                     si = picker_engine.pl_selected(app.list)
@@ -419,6 +459,41 @@ main() {
                     s = ui_set_s(seltext, "picked: ${lbl}")
                     if s < 0 { return }
                 }
+            }
+
+            // The dialog's own actions, as upstream's footer has them.
+            hstack(8) {
+                cancel = btn("Cancel") callback {
+                    s = ui_set_s(seltext, "cancelled")
+                    if s < 0 { return }
+                }
+                _cp = edge_insets(cancel, 6.0, 14.0, 6.0, 14.0)
+                _cr = style_corner_radius(cancel, 999.0)
+                _ct = style_text_color(cancel, 0.37, 0.39, 0.41)
+                _chv = style_hover(cancel, 0.94, 0.95, 0.96)
+
+                clr = btn("Clear") callback {
+                    picker_engine.pl_set_selected(app.list, 0 - 1)
+                    s = ui_set_s(seltext, "no selection")
+                    if s < 0 { return }
+                    refresh_list(app)
+                }
+                _lp = edge_insets(clr, 6.0, 14.0, 6.0, 14.0)
+                _lr = style_corner_radius(clr, 999.0)
+                _lt = style_text_color(clr, 0.37, 0.39, 0.41)
+                _lhv = style_hover(clr, 0.94, 0.95, 0.96)
+
+                // The primary action: a filled pill, as in the reference.
+                sel = btn("Select") callback {
+                    lbl = sel_label(app)
+                    s = ui_set_s(seltext, "picked: ${lbl}")
+                    if s < 0 { return }
+                }
+                _sp = edge_insets(sel, 7.0, 20.0, 7.0, 20.0)
+                _sr = style_corner_radius(sel, 999.0)
+                _sb = style_bg_color(sel, 0.10, 0.45, 0.91, 1.0)
+                _st = style_text_color(sel, 1.0, 1.0, 1.0)
+                _shv = style_hover(sel, 0.06, 0.36, 0.80)
             }
 
             text("↑/↓ move · f favourite · Enter pick — ported from jsfontpicker (MIT)")

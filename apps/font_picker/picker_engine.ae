@@ -45,7 +45,7 @@ exports (
     leven,
     pl_new, pl_add, pl_count, pl_at,
     pl_set_query, pl_set_subset, pl_set_category, pl_toggle_category,
-    pl_category_on, pl_set_metric,
+    pl_category_on, pl_set_metric, pl_metric,
     pl_set_sort, pl_set_reverse, pl_reverse, pl_clear_filters,
     pl_toggle_fav, pl_is_fav, pl_fav_count,
     pl_set_selected, pl_selected,
@@ -447,6 +447,15 @@ pl_set_metric(lp: ptr, which: int, v: string) {
     if which == 1 { l.m_width = v; return }
     if which == 2 { l.m_complexity = v; return }
     l.m_curvature = v
+}
+// Read one metric filter back ("all" when unset) — lets the UI show which
+// metric chip is active without shadowing the engine's state.
+pl_metric(lp: ptr, which: int) -> string {
+    l = lp as *PickList
+    if which == 0 { return l.m_thickness }
+    if which == 1 { return l.m_width }
+    if which == 2 { return l.m_complexity }
+    return l.m_curvature
 }
 pl_set_sort(lp: ptr, k: string) { l = lp as *PickList; string_retain(k); l.sort_key = k }
 pl_set_reverse(lp: ptr, r: int) { l = lp as *PickList; l.reverse = r }

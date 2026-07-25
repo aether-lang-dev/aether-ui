@@ -154,8 +154,10 @@ main() {
             aeocha.assert_true(
                 uidriver.wait_body_contains("/widgets", "favourites 1", 20),
                 "favourite counted")
+            // The marker is now a real HEART icon (ui.icons), not a "*",
+            // so the row gains an extra canvas rather than a text prefix.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "* DejaVu", "row marked as favourite")
+            aeocha.assert_contains(body, "\"canvas\"", "rows carry heart icons")
         }
 
         aeocha.it("Pick reports the chosen font [Font.toString]") callback {

@@ -2305,7 +2305,16 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
 
 void aether_ui_set_width(int handle, int width) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (w) gtk_widget_set_size_request(w, width, -1);
+    if (!w) return;
+    gtk_widget_set_size_request(w, width, -1);
+    // A pinned width means "this is exactly my size" — so stop expanding to
+    // fill the parent. Canvases are created hexpand=TRUE (a full-window
+    // canvas should fill), which otherwise stretches a 16px ICON to the
+    // whole row and pushes its label out of view.
+    if (width > 0) {
+        gtk_widget_set_hexpand(w, FALSE);
+        gtk_widget_set_halign(w, GTK_ALIGN_START);
+    }
 }
 
 void aether_ui_set_height(int handle, int height) {
