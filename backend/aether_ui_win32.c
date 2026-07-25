@@ -5797,7 +5797,21 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             return 0;
         }
         Widget* w = widget_at(ctx->handle);
-        if (!w) { ctx->result = 3; ctx->done = 1; return 0; }
+        if (!w) {
+            // hover(0) is legitimate: "the pointer is over NOTHING". Clear
+            // every hover rather than reporting a missing widget.
+            if (ctx->action == AETHER_DRV_HOVER && ctx->handle == 0) {
+                for (int i = 1; i <= widget_count; i++) {
+                    Widget* pw = widget_at(i);
+                    if (pw && pw->is_hovered) {
+                        pw->is_hovered = 0;
+                        InvalidateRect(pw->hwnd, NULL, TRUE);
+                    }
+                }
+                ctx->retval = 1; ctx->result = 0; ctx->done = 1; return 0;
+            }
+            ctx->result = 3; ctx->done = 1; return 0;
+        }
         if (ctx->action == AETHER_DRV_FOCUS) {
             SetFocus(w->hwnd);
             ctx->result = 0;

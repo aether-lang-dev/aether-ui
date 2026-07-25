@@ -5180,7 +5180,19 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
     }
 
     NSView* v = (__bridge NSView*)aether_ui_get_widget(ctx->handle);
-    if (!v) { ctx->result = 3; return; }
+    if (!v) {
+        // hover(0) = "the pointer is over NOTHING": clear every hover.
+        if (ctx->action == AETHER_DRV_HOVER && ctx->handle == 0) {
+            int n0 = aether_ui_widget_count_impl();
+            for (int i = 1; i <= n0; i++) {
+                NSView* pv = (__bridge NSView*)aether_ui_get_widget(i);
+                if (pv) objc_setAssociatedObject(pv, "aeui-hovered", nil,
+                                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            ctx->retval = 1; ctx->result = 0; return;
+        }
+        ctx->result = 3; return;
+    }
     if (ctx->action == AETHER_DRV_FOCUS) {
         aether_ui_focus_impl(ctx->handle);
         ctx->result = 0;
