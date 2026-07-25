@@ -50,7 +50,7 @@ exports (
     enable_undo_shortcuts,
     style_font_weight, style_font_family,
     a11y_role, a11y_label, a11y_description,
-    edge_insets, width, height, distribution, alignment,
+    edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
     alert, clipboard_write, open_url, open_file, save_file, is_dark_mode,
     timer, timer_cancel,
@@ -1969,6 +1969,20 @@ a11y_label(handle: int, name: string) -> int {
 a11y_description(handle: int, desc: string) -> int {
     aether_ui_a11y_set_description_impl(handle, desc)
     return handle
+}
+
+// content_inset(container) — the standard window gutter.
+//
+// A window's content is otherwise flush against the frame: the leftmost
+// pixels of the first label touch the edge. This is NOT applied
+// automatically. A container's reported geometry is a contract — apps map
+// pointer coordinates through it and on_layout publishes it — so silently
+// shrinking every window's content box would change what those report.
+// One line at the top of a window block, and only where a gutter is wanted:
+//
+//     window("Title", 480, 420) { vstack(6) { content_inset(_ctx) ... } }
+content_inset(handle: int) -> int {
+    return edge_insets(handle, 12.0, 12.0, 12.0, 12.0)
 }
 
 edge_insets(handle: int, top: float, right: float, bottom: float, left: float) -> int {

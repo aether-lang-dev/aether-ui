@@ -686,18 +686,8 @@ static SurfaceEntry* surface_add(int container_handle, int kind, int app_handle)
     return s;
 }
 
-// The default window gutter, in px — matches GTK4/win32.
-#define AEUI_WINDOW_INSET 12
-
 int aether_ui_surface_container_new_impl(int kind) {
     int container = aether_ui_vstack_create(0);
-    // A WINDOW gets a default content inset (see the GTK4 twin for why);
-    // bounded surfaces stay exactly their requested size.
-    if (kind == 0) {
-        aether_ui_set_edge_insets(container, AEUI_WINDOW_INSET,
-                                  AEUI_WINDOW_INSET, AEUI_WINDOW_INSET,
-                                  AEUI_WINDOW_INSET);
-    }
     surface_add(container, kind, 0);
     return container;
 }

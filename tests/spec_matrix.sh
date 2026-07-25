@@ -149,8 +149,12 @@ teardown() {
     local pid="$1" bin="$2"
     curl -s -o /dev/null --max-time 2 -X POST "http://127.0.0.1:$PORT/shutdown" || true
     port_free || { kill "$pid" 2>/dev/null; sleep 0.5; kill -9 "$pid" 2>/dev/null; }
-    # Belt-and-suspenders on FreeBSD (games sometimes ignore /shutdown).
-    [ "$FREEBSD" -eq 1 ] && pkill -f "$bin" 2>/dev/null
+    # Belt-and-suspenders EVERYWHERE, not just FreeBSD: killing $pid only
+    # reaps the direct child. A demo that holds a native modal (winmenu) or
+    # re-execs outlives it, keeps $PORT bound, and every LATER suite then
+    # aborts with "port still busy" — silently truncating the run. Match the
+    # basename exactly (-x, not -f) so this never matches our own shell.
+    port_free || pkill -x "$(basename "$bin")" 2>/dev/null
     wait "$pid" 2>/dev/null
 }
 

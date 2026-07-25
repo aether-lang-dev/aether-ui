@@ -33,7 +33,7 @@ import ui (
     listbox, listbox_update, listbox_select, listbox_count, on_select,
     style_font_family, style_font_size,
     picker, picker_add, enable_test_server, shortcut,
-    edge_insets, style_corner_radius, style_border, style_bg_color,
+    edge_insets, content_inset, style_corner_radius, style_border, style_bg_color,
     style_text_color, style_hover,
     ui_state_s, ui_set_s, bind_text
 )
@@ -340,6 +340,9 @@ main() {
 
     window("Font Picker", 620, 720) {
         vstack(6) {
+            // A dialog wants a gutter; content flush to the frame reads as
+            // unfinished. Opt in explicitly — see ui.content_inset.
+            _ci = content_inset(_ctx)
             // The dialog frame: title + close, as in the reference.
             dialog_header("Select a font") callback {
                 stc = ui_set_s(seltext, "cancelled")
