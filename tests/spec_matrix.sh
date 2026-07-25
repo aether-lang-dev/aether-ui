@@ -137,8 +137,15 @@ want_suite() {
 # Wait for the port to stop answering — a lingering app would let the NEXT
 # suite interrogate the PREVIOUS app's widget tree, which produces a whole
 # family of impossible failures.
+# App startup budget: $STARTUP_TRIES * 0.25s. 10s is plenty on Linux, but a
+# macOS app on a VM guest can spend ~5s in CoreText font enumeration BEFORE
+# the driver binds, then needs the first window render — apps were reported
+# "DID NOT START" when they were merely slow. 30s everywhere; the loop still
+# exits early the moment /widgets answers, so this costs nothing when fast.
+STARTUP_TRIES=${STARTUP_TRIES:-120}
+
 port_free() {
-    for _ in $(seq 1 40); do
+    for _ in $(seq 1 $STARTUP_TRIES); do
         curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets" || return 0
         sleep 0.25
     done
@@ -154,8 +161,19 @@ teardown() {
     # re-execs outlives it, keeps $PORT bound, and every LATER suite then
     # aborts with "port still busy" — silently truncating the run. Match the
     # basename exactly (-x, not -f) so this never matches our own shell.
-    port_free || pkill -x "$(basename "$bin")" 2>/dev/null
+    local base; base="$(basename "$bin")"
+    port_free || pkill -x "$base" 2>/dev/null
     wait "$pid" 2>/dev/null
+    # pkill only SENDS the signal. Returning here while the process is still
+    # dying lets the NEXT suite launch a binary with the same name into the
+    # window where a late SIGTERM is still in flight — the new app binds the
+    # port, prints "listening", then dies, and the run reports "APP DID NOT
+    # START". Observed ~4-in-5 on the macOS VM. Wait for the name to actually
+    # clear before handing the port on.
+    for _ in $(seq 1 40); do
+        pgrep -x "$base" >/dev/null 2>&1 || break
+        sleep 0.25
+    done
 }
 
 printf "%-14s %6s %6s   %s\n" SUITE PASS FAIL RESULT
@@ -199,22 +217,35 @@ for row in "${SUITES[@]}"; do
 
     port_free || { echo "port $PORT still busy; aborting"; exit 1; }
 
-    log="$(mktemp)"
-    # shellcheck disable=SC2086
-    aui_launch AETHER_UI_TEST_PORT=$PORT $extra -- "$bin" >"$log" 2>&1 &
-    pid=$!
-
-    ready=0
-    for _ in $(seq 1 40); do
-        if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 0.25
+    # Launch, waiting for the driver to answer. RETRIED, because a launch can
+    # fail for reasons that have nothing to do with the app: macOS rate-limits
+    # rapid relaunches of the same binary (every failing log carries
+    # "NSXPCSharedListener ... Connection interrupted", and the app binds the
+    # port, prints "listening", then dies). Measured on the .160 VM: 2-in-4
+    # BARE launches fail with no test harness involved, and a 60s pause always
+    # clears it. Backing off and retrying turns a spurious red into a real
+    # result; a suite that is genuinely broken still fails all attempts.
+    ready=0; log=""; pid=""
+    for attempt in 1 2 3; do
+        log="$(mktemp)"
+        # shellcheck disable=SC2086
+        aui_launch AETHER_UI_TEST_PORT=$PORT $extra -- "$bin" >"$log" 2>&1 &
+        pid=$!
+        for _ in $(seq 1 $STARTUP_TRIES); do
+            if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.25
+        done
+        [ "$ready" -eq 1 ] && break
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        pkill -x "$(basename "$bin")" 2>/dev/null
+        [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
     done
     if [ "$ready" -ne 1 ]; then
-        printf "%-14s %6s %6s   %s\n" "$name" - - "APP DID NOT START (see $log)"
+        printf "%-14s %6s %6s   %s\n" "$name" - - "APP DID NOT START after 3 tries (see $log)"
         SUITES_RED=$((SUITES_RED + 1))
         kill "$pid" 2>/dev/null
-        [ "$FREEBSD" -eq 1 ] && pkill -f "$bin" 2>/dev/null
+        pkill -x "$(basename "$bin")" 2>/dev/null
         continue
     fi
 
@@ -239,7 +270,7 @@ for row in "${SUITES[@]}"; do
         aui_launch AETHER_UI_TEST_PORT=$PORT $extra -- "$bin" >"$log" 2>&1 &
         pid=$!
         ready=0
-        for _ in $(seq 1 40); do
+        for _ in $(seq 1 $STARTUP_TRIES); do
             if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.25
@@ -328,7 +359,7 @@ for gp in "${GP_SPECS[@]}"; do
         -- "$GP_BIN" >"$log" 2>&1 &
     pid=$!
     ready=0
-    for _ in $(seq 1 40); do
+    for _ in $(seq 1 $STARTUP_TRIES); do
         if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
         kill -0 "$pid" 2>/dev/null || break
         sleep 0.25
@@ -360,7 +391,7 @@ for gp in "${GP_SPECS[@]}"; do
             -- "$GP_BIN" >"$log" 2>&1 &
         pid=$!
         ready=0
-        for _ in $(seq 1 40); do
+        for _ in $(seq 1 $STARTUP_TRIES); do
             if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets"; then ready=1; break; fi
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.25
