@@ -203,6 +203,7 @@ typedef struct {
     int border_width;          // 0 = none
     int border_set;            // 1 = explicitly set (readback)
     COLORREF border_color;
+    int owner_drawn;           // styled painter installed (see styled_btn_proc)
     int hover_set;             // interaction states (0=hover, 1=active)
     COLORREF hover_bg;
     int active_set;
@@ -2828,6 +2829,8 @@ void aether_ui_navstack_pop(int handle) {
 // ---------------------------------------------------------------------------
 // Styling + theming.
 // ---------------------------------------------------------------------------
+static void w32_ensure_owner_draw(Widget* w);   // styled painter (below)
+
 static inline COLORREF rgb_from_doubles(double r, double g, double b) {
     int ri = (int)(r * 255); if (ri < 0) ri = 0; if (ri > 255) ri = 255;
     int gi = (int)(g * 255); if (gi < 0) gi = 0; if (gi > 255) gi = 255;
@@ -2841,6 +2844,7 @@ void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) 
     if (!w) return;
     w->bg.has_value = 1;
     w->bg.color = rgb_from_doubles(r, g, b);
+    w32_ensure_owner_draw(w);
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
@@ -2930,6 +2934,7 @@ void aether_ui_set_corner_radius(int handle, double radius) {
     Widget* w = widget_at(handle);
     if (!w) return;
     w->corner_radius = (int)radius;
+    w32_ensure_owner_draw(w);
     RECT r;
     GetClientRect(w->hwnd, &r);
     HRGN rgn = CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1,
@@ -2937,7 +2942,131 @@ void aether_ui_set_corner_radius(int handle, double radius) {
     SetWindowRgn(w->hwnd, rgn, TRUE);
 }
 
-// Solid border. STORED AND DRIVER-VISIBLE, but not yet PAINTED: win32 buttons
+
+// ── Styled-button painting (border / hover / active) ────────────────────
+//
+// win32 buttons are native BUTTON controls: WM_CTLCOLORBTN can tint a
+// background brush but cannot draw a border, and nothing tracks hover per
+// control. GTK4 gets both from CSS (:hover/:active + border), macOS from
+// CALayer. To match, a widget that has ANY of those styles gets subclassed
+// and owner-drawn: we paint the rounded rect ourselves, pick the colour for
+// the current state, stroke the border, and draw the label centred.
+//
+// Only STYLED widgets are subclassed — an unstyled button keeps the native
+// look and the native theme, so nothing regresses for apps that never call
+// the styling API.
+static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
+                                        LPARAM lp, UINT_PTR id, DWORD_PTR ref);
+
+// Does this widget need our painting? (any of border / hover / active / bg)
+static int w32_needs_owner_draw(Widget* w) {
+    if (!w) return 0;
+    if (w->kind != WK_BUTTON && w->kind != WK_TOGGLE) return 0;
+    return w->border_set || w->hover_set || w->active_set || w->bg.has_value;
+}
+
+// Install (idempotent) the styled painter on a widget that now has styles.
+static void w32_ensure_owner_draw(Widget* w) {
+    if (!w || w->owner_drawn) return;
+    if (!w32_needs_owner_draw(w)) return;
+    if (SetWindowSubclass(w->hwnd, styled_btn_proc, 1, 0)) {
+        w->owner_drawn = 1;
+        InvalidateRect(w->hwnd, NULL, TRUE);
+    }
+}
+
+static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
+                                        LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    (void)ref;
+    int handle = handle_for_hwnd(hwnd);
+    Widget* w = widget_at(handle);
+    switch (msg) {
+        case WM_MOUSEMOVE: {
+            // TrackMouseEvent is what makes WM_MOUSELEAVE arrive; without it
+            // a control never learns the pointer left.
+            if (w && !w->is_hovered) {
+                w->is_hovered = 1;
+                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+                TrackMouseEvent(&tme);
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            if (w && w->is_hovered) {
+                w->is_hovered = 0;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        }
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONUP:
+            if (w) InvalidateRect(hwnd, NULL, TRUE);
+            break;
+        case WM_ERASEBKGND:
+            return 1;                      // painted wholly in WM_PAINT
+        case WM_PAINT: {
+            if (!w) break;
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+
+            // State → background. active beats hover beats the base bg.
+            int pressed = (SendMessageW(hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) != 0;
+            COLORREF bg = w->bg.has_value ? w->bg.color : GetSysColor(COLOR_BTNFACE);
+            if (w->hover_set && w->is_hovered) bg = w->hover_bg;
+            if (w->active_set && pressed) bg = w->active_bg;
+
+            HBRUSH br = CreateSolidBrush(bg);
+            HPEN pen = w->border_set && w->border_width > 0
+                       ? CreatePen(PS_SOLID, w->border_width, w->border_color)
+                       : (HPEN)GetStockObject(NULL_PEN);
+            HBRUSH oldbr = (HBRUSH)SelectObject(hdc, br);
+            HPEN oldpen = (HPEN)SelectObject(hdc, pen);
+
+            int r = w->corner_radius;
+            if (r > 0) {
+                // A capsule: cap the radius at half the SHORT side, matching
+                // GTK4/CSS behaviour for border-radius: 999px.
+                int maxr = ((rc.right - rc.left) < (rc.bottom - rc.top)
+                            ? (rc.right - rc.left) : (rc.bottom - rc.top)) / 2;
+                if (r > maxr) r = maxr;
+                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, r * 2, r * 2);
+            } else {
+                Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+            }
+
+            SelectObject(hdc, oldbr);
+            SelectObject(hdc, oldpen);
+            DeleteObject(br);
+            if (w->border_set && w->border_width > 0) DeleteObject(pen);
+
+            // Label, in the widget's font and foreground colour.
+            wchar_t text[512];
+            int tlen = GetWindowTextW(hwnd, text, 512);
+            if (tlen > 0) {
+                HFONT font = w->custom_font ? w->custom_font
+                             : (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+                HFONT oldf = font ? (HFONT)SelectObject(hdc, font) : NULL;
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, w->fg.has_value ? w->fg.color
+                                                  : GetSysColor(COLOR_BTNTEXT));
+                DrawTextW(hdc, text, tlen, &rc,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                if (oldf) SelectObject(hdc, oldf);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(hwnd, styled_btn_proc, id);
+            break;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+// Solid border, painted by styled_btn_proc (see above). win32 buttons
 // are native controls with no custom-paint hook here, so drawing an outline
 // needs NM_CUSTOMDRAW owner-draw plumbing this backend does not have (GTK4
 // gets it from CSS, macOS from CALayer.borderWidth). The value round-trips
@@ -2949,6 +3078,7 @@ void aether_ui_set_border(int handle, double width, double r, double g, double b
     w->border_width = (int)width;
     w->border_color = rgb_from_doubles(r, g, b);
     w->border_set = 1;
+    w32_ensure_owner_draw(w);
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
@@ -2962,13 +3092,10 @@ int aether_ui_styled_border_impl(int handle) {
     return (w->border_width << 24) | 0x40000000 | rgbv;
 }
 
-// Interaction states. STORED AND DRIVER-VISIBLE, but not yet PAINTED: win32
-// has no CSS pseudo-classes and no per-control subclass proc here, so
-// tracking hover per button needs TrackMouseEvent plumbing this backend
-// does not have (GTK4 gets it from :hover/:active, macOS from its existing
-// NSTrackingArea). Same containment as set_border: the value round-trips
-// through /widgets so specs assert identically everywhere, and the paint
-// side is a contained follow-up. See roadmap.md. state: 0=hover, 1=active.
+// Interaction states, PAINTED by styled_btn_proc: the subclass tracks hover
+// via TrackMouseEvent and reads BM_GETSTATE for pressed, then picks the
+// background accordingly (active beats hover beats base). state: 0=hover,
+// 1=active.
 void aether_ui_set_state_style(int handle, int state,
                                double br, double bg_, double bb,
                                double fr, double fg_, double fb) {
@@ -2983,6 +3110,7 @@ void aether_ui_set_state_style(int handle, int state,
         w->hover_set = 1;
         w->hover_bg = rgb_from_doubles(br, bg_, bb);
     }
+    w32_ensure_owner_draw(w);
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
