@@ -408,10 +408,13 @@ main() {
                 _c = text(row, r.cat)
                 // A real heart, filled when favourited and outlined when not
                 // — upstream's favourites column, drawn with ui.icons.
+                // Bind the handle: a BARE call whose value is discarded
+                // does not codegen inside a builder block (same quirk as
+                // `text(var)` and `_ =` discards).
                 if r.fav == 1 {
-                    icon(row, ICON_HEART, 16, "#e8455f")
+                    _hv = icon(row, ICON_HEART, 16, "#e8455f")
                 } else {
-                    icon(row, ICON_HEART_OUTLINE, 16, "#d0d4da")
+                    _hv = icon(row, ICON_HEART_OUTLINE, 16, "#d0d4da")
                 }
             }
             on_select(app.lb) callback |i: int| {

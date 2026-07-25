@@ -26,7 +26,7 @@ exports (
     ICON_CHECK, ICON_SORT, ICON_FILTER, ICON_CHEVRON_DOWN, ICON_CHEVRON_UP
 )
 
-import ui (hstack, text, width)
+import ui (hstack, text, width, canvas_widget)
 import vg.live (vg)
 import vg (view_box, path, fill, stroke, node_scene, scene_canvas)
 
@@ -90,7 +90,11 @@ icon(_ctx: ptr, id: int, size: int, color: string) -> int {
     d = icon_path(id)
     filled = _icon_is_filled(id)
     cid = 0
-    h = vg(view_box(0, 0, 24, 24), size, size) {
+    // Pass _ctx EXPLICITLY: inside a nested builder callback (a listbox
+    // row's render fn) the auto-injected context is the callback's, not
+    // ours, so an implicit vg() attaches the canvas to the wrong parent —
+    // which is why row icons rendered at the wrong size or not at all.
+    h = vg(_ctx, view_box(0, 0, 24, 24), size, size) {
         p = path(d)
         // vg() yields a scene NODE, not the canvas widget — the widget
         // handle (what width() needs) comes from the scene.
@@ -108,7 +112,14 @@ icon(_ctx: ptr, id: int, size: int, color: string) -> int {
     // An icon is a FIXED-SIZE glyph: canvases are created hexpand=TRUE (a
     // full-window canvas should fill), which otherwise stretches a 16px icon
     // across the whole row and pushes its label out of view.
-    if cid != 0 { _w = width(cid, size) }
+    // width() takes a WIDGET handle; scene_canvas gives a CANVAS ID, and the
+    // two are separate namespaces (canvas 3 is not widget 3). Pinning the
+    // wrong one silently did nothing — which is why row icons kept
+    // stretching even after the hexpand fix.
+    if cid != 0 {
+        wh = canvas_widget(cid)
+        if wh != 0 { _w = width(wh, size) }
+    }
     return cid
 }
 
