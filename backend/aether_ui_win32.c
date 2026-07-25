@@ -3005,10 +3005,17 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             break;
         case WM_ERASEBKGND:
             return 1;                      // painted wholly in WM_PAINT
+        case WM_PRINTCLIENT:
         case WM_PAINT: {
             if (!w) break;
+            // WM_PRINTCLIENT hands us a DC to render into (that is how the
+            // driver screenshots a window that never mapped); WM_PAINT gets
+            // one from BeginPaint. Same drawing either way.
             PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
+            HDC hdc;
+            int printing = (msg == WM_PRINTCLIENT);
+            if (printing) hdc = (HDC)wp;
+            else hdc = BeginPaint(hwnd, &ps);
             RECT rc;
             GetClientRect(hwnd, &rc);
 
@@ -3056,7 +3063,7 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 if (oldf) SelectObject(hdc, oldf);
             }
-            EndPaint(hwnd, &ps);
+            if (!printing) EndPaint(hwnd, &ps);
             return 0;
         }
         case WM_NCDESTROY:
@@ -5928,7 +5935,44 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     HDC mem = CreateCompatibleDC(src);
     HBITMAP bmp = CreateCompatibleBitmap(src, w, h);
     HGDIOBJ old = SelectObject(mem, bmp);
-    BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
+    // PrintWindow ASKS the window (and, with PW_RENDERFULLCONTENT, its
+    // children) to render itself into our DC via WM_PRINT/WM_PRINTCLIENT.
+    // BitBlt alone copies whatever the compositor has on screen, which is
+    // NOTHING when the window never maps — the case on a headless/session-0
+    // box, and exactly where a screenshot is most useful. Fall back to
+    // BitBlt if PrintWindow fails (older shells).
+    #ifndef PW_RENDERFULLCONTENT
+    #define PW_RENDERFULLCONTENT 0x00000002
+    #endif
+    // 1. The window's own background.
+    HBRUSH face = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+    RECT full = { 0, 0, w, h };
+    FillRect(mem, &full, face);
+    DeleteObject(face);
+    if (!PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT)) {
+        BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
+    }
+    // 2. Ask each REGISTERED widget to render itself at its own position.
+    //    PrintWindow on the toplevel misses children that live under the
+    //    off-screen widget_holder (never composited), which is every control
+    //    on a window that has not mapped — i.e. exactly the headless case.
+    for (int wi = 1; wi <= widget_count; wi++) {
+        Widget* cw = widget_at(wi);
+        if (!cw || !cw->hwnd || !IsWindow(cw->hwnd)) continue;
+        if (!IsWindowVisible(cw->hwnd) && !cw->owner_drawn) continue;
+        RECT cr;
+        if (!GetWindowRect(cw->hwnd, &cr)) continue;
+        POINT tl = { cr.left, cr.top };
+        ScreenToClient(hwnd, &tl);
+        int cwid = cr.right - cr.left, chgt = cr.bottom - cr.top;
+        if (cwid <= 0 || chgt <= 0) continue;
+        SaveDC(mem);
+        SetViewportOrgEx(mem, tl.x, tl.y, NULL);
+        IntersectClipRect(mem, 0, 0, cwid, chgt);
+        SendMessageW(cw->hwnd, WM_PRINTCLIENT, (WPARAM)mem,
+                     PRF_CLIENT | PRF_ERASEBKGND | PRF_NONCLIENT);
+        RestoreDC(mem, -1);
+    }
     SelectObject(mem, old);
 
     ensure_gdiplus();
