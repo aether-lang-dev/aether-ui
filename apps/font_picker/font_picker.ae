@@ -339,10 +339,11 @@ main() {
     found = found + scan_dir(app, "/Library/Fonts", "sans-serif", "latin")
 
     window("Font Picker", 620, 720) {
-        vstack(6) {
+        root = vstack(6) {
             // A dialog wants a gutter; content flush to the frame reads as
-            // unfinished. Opt in explicitly — see ui.content_inset.
-            _ci = content_inset(_ctx)
+            // unfinished. Opt in explicitly — see ui.content_inset. Applied
+            // to the NAMED container: bare setters bind to the injected
+            // _ctx, but _ctx is not itself an addressable variable here.
             // The dialog frame: title + close, as in the reference.
             dialog_header("Select a font") callback {
                 stc = ui_set_s(seltext, "cancelled")
@@ -511,6 +512,7 @@ main() {
 
             text("↑/↓ move · f favourite · Enter pick — ported from jsfontpicker (MIT)")
         }
+        _ci = content_inset(root)
 
         // Upstream keyboard map (onKeyPressed): the subset that maps
         // cleanly onto a native window.
