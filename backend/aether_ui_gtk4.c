@@ -2326,11 +2326,21 @@ void aether_ui_set_width(int handle, int width) {
 void aether_ui_set_height(int handle, int height) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return;
-    char prop[128];
-    snprintf(prop, sizeof(prop), "min-height: %dpx; max-height: %dpx;", height, height);
-    aether_ui_apply_css(handle, w, prop);
-    gtk_widget_set_vexpand(w, FALSE);
-    gtk_widget_set_valign(w, GTK_ALIGN_CENTER);
+    // Use the size request, as aether_ui_set_width does — NOT CSS. GTK4 CSS
+    // has min-height but NO max-height, so the old
+    //   "min-height: Npx; max-height: Npx;"
+    // made GTK log a theme-parser error for EVERY height() call, on every
+    // widget, forever ("No property named max-height"). The min-height half
+    // did apply, so the sizing looked right and the noise went unnoticed.
+    gtk_widget_set_size_request(w, -1, height);
+    // A pinned height means "this is exactly my size" — stop expanding.
+    // valign FILL (not CENTER): a height()'d CONTAINER — e.g. a scrollview
+    // holding a list — must fill the box it was just given, or it centres a
+    // shrunken viewport inside the reserved space.
+    if (height > 0) {
+        gtk_widget_set_vexpand(w, FALSE);
+        gtk_widget_set_valign(w, GTK_ALIGN_FILL);
+    }
 }
 
 void aether_ui_set_opacity(int handle, double opacity) {
