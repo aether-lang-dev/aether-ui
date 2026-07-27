@@ -132,6 +132,22 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
     // when nothing is animating (cheap idle), and otherwise advances them to
     // the current monotonic time, re-renders (clear + clip + flush), and
     // redraws. The animations are registered by vg.animate inside the block.
+    // ONLY install the ~60fps timer on a scene that can actually need frames:
+    // one that animates, refreshes (bind_pos/when), or owns live regions.
+    //
+    // A STATIC scene must not get one. ui.icons.icon() builds a whole vg()
+    // block per glyph, so a list with an icon per row creates one timer PER
+    // ROW: font_picker's 24 rows meant 25 timers waking 60x/sec = ~1500
+    // wakeups/sec, all to test two flags that are always 0. Measured on a
+    // Crostini container: font_picker 42% CPU at idle and effectively
+    // uninteractive, vs icons_demo (12 static icons, no refreshing scene)
+    // at 1.6%. The no-op guard inside the callback was never enough — the
+    // cost is the wakeup itself, not the work it skips.
+    needs_timer = 0
+    if vg.scene_is_animating(scene) == 1 { needs_timer = 1 }
+    if vg.scene_is_refreshing(scene) == 1 { needs_timer = 1 }
+    if vg.scene_live_regions(scene) != null { needs_timer = 1 }
+    if needs_timer == 0 { return vg.vg_root(scene) }
     _tid = ui.timer(16) callback {
         live = 0
         if vg.scene_is_animating(scene) == 1 { live = 1 }
