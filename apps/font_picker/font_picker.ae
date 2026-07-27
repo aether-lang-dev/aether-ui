@@ -32,7 +32,7 @@ import ui (
     window, vstack, hstack, text, btn, textfield,
     listbox, listbox_update, listbox_select, listbox_count, on_select,
     style_font_family, style_font_size,
-    picker, picker_add, enable_test_server, shortcut,
+    picker, picker_add, enable_test_server, shortcut, scrollview, height,
     edge_insets, content_inset, style_corner_radius, style_border, style_bg_color,
     style_text_color, style_hover,
     ui_state_s, ui_set_s, bind_text
@@ -296,6 +296,9 @@ refresh_selection(app: *App) {
     lbl = sel_label(app)
     s = ui_set_s(app.st_sel, "selected: ${lbl}")
     if s < 0 { return }
+    // Repaint the preview HERE — on the selection change that actually
+    // alters it — rather than leaving the scene on a continuous timer.
+    // See the vg block for why that mattered.
 }
 
 // ─── Preview: drawn from the real font file (aether-ui's own twist) ──────────
@@ -410,7 +413,17 @@ main() {
             }
 
             // ── The font list (rows are real widgets, upstream's fp__fonts) ──
-            app.lb = listbox(2) callback |item: ptr, i: int, row: int| {
+            // IN A SCROLLVIEW. ui.listbox is each() inside a plain vstack — it
+            // does NOT scroll itself — so on a machine with more faces than fit
+            // the window, the extra rows simply rendered past the bottom edge
+            // with no way to reach them, and they PUSHED the preview panel and
+            // footer off-screen too (measured here: 28 rows spanning y=72..1201
+            // in a 720px window, 12 rows below the fold, 0 scrollview widgets).
+            // That is why the preview's black rect only appeared "sometimes" —
+            // it depended on how many fonts the box happened to have installed.
+            list_scroll = scrollview()
+            _lsh = height(list_scroll, 260)
+            app.lb = listbox(list_scroll, 2) callback |item: ptr, i: int, row: int| {
                 r = item as *Row
                 nm = text(row, r.label)
                 // Each row in ITS OWN typeface (upstream's per-row rendering).
