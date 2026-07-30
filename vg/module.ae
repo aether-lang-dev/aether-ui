@@ -426,7 +426,18 @@ text_paths(txt: string, x: float, y: float, size: float) -> string {
     if fh == null { return "" }
     sc = size / (font.font_upem(fh) * 1.0)
     ow = font.font_text_outlines(fh, txt, 4)
+    // Two-level accumulation. The obvious `d = "${d}${cmd} ${px} ${py}"`
+    // per point is O(n²) — every append re-copies the WHOLE accumulated
+    // string — and outline point counts vary wildly by face: DejaVu's ~500
+    // points cost ~30ms a call, while a dense Liberation face flattens to
+    // thousands and one call ran for SECONDS, wedging the app's main loop
+    // ("click a font and the app goes non responsive"; gdb showed the wedge
+    // live inside this very interpolation). Splicing a small bounded chunk
+    // into `d` every 64 points keeps each inner append cheap and cuts the
+    // copied bytes by ~K² — the same string out, linear-ish cost.
     d = ""
+    chunk = ""
+    npts = 0
     start = 0
     ci = 0
     while ci < font.outl_nctrs(ow) {
@@ -437,13 +448,20 @@ text_paths(txt: string, x: float, y: float, size: float) -> string {
             py = _tp_f1(y - font.outl_py(ow, j) * sc)   // font y-up → screen y-down
             cmd = " L"
             if j == start { cmd = "M" }
-            d = "${d}${cmd} ${px} ${py}"
+            chunk = "${chunk}${cmd} ${px} ${py}"
+            npts = npts + 1
+            if npts >= 64 {
+                d = "${d}${chunk}"
+                chunk = ""
+                npts = 0
+            }
             j = j + 1
         }
-        d = "${d} Z "
+        chunk = "${chunk} Z "
         start = last + 1
         ci = ci + 1
     }
+    if npts > 0 || string.length(chunk) > 0 { d = "${d}${chunk}" }
     font.outl_free(ow)
     return d
 }
