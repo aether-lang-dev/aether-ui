@@ -40,8 +40,8 @@ import ui (
 import vg.font
 import vg.live (vg, canvas_region)
 import vg (
-    view_box, rect, fill, use_font, text_path, typeface, text_paths_width,
-    vg_root, node_scene, scene_set_refreshing
+    view_box, rect, fill, use_font, typeface, text_paths_width, text_paths,
+    path, vg_root, node_scene, scene_refresh
 )
 import ui.disclosure (disclosure)
 import ui.dialog (dialog_header)
@@ -87,15 +87,17 @@ struct App {
     chip_serif: int
     chip_mono: int
     chip_disp: int
+    pv_d: string       // cached preview path data, rebuilt per selection
 }
 mk_app() -> *App {
-    a = malloc(64) as *App
+    a = malloc(80) as *App
     a.list = picker_engine.pl_new()
     a.st_status = 0
     a.st_sel = 0
     a.lb = null
     a.scene = null
     a.variant_idx = 0
+    a.pv_d = ""
     a.chip_sans = 0
     a.chip_serif = 0
     a.chip_mono = 0
@@ -296,26 +298,35 @@ refresh_selection(app: *App) {
     lbl = sel_label(app)
     s = ui_set_s(app.st_sel, "selected: ${lbl}")
     if s < 0 { return }
-    // Repaint the preview HERE — on the selection change that actually
-    // alters it — rather than leaving the scene on a continuous timer.
-    // See the vg block for why that mattered.
+    // Rebuild the preview's path data for the new selection — once, HERE.
+    app.pv_d = build_preview_path(app)
+    if app.scene != 0 { _r = scene_refresh(app.scene) }
 }
 
 // ─── Preview: drawn from the real font file (aether-ui's own twist) ──────────
-draw_preview(app: *App, rn: ptr) {
-    bg = rect(rn, 0.0, 0.0, 460.0, 90.0)
-    fill(bg, "#14141c")
+// Split in two: the EXPENSIVE part (load the TTF, outline the sample, build
+// the path data) runs once per selection into app.pv_d; the draw callback —
+// which canvas_region invokes EVERY 16ms tick — only replays that cached
+// string. Doing the whole thing per tick re-parsed the font file at 60fps.
+build_preview_path(app: *App) -> string {
     si = picker_engine.pl_selected(app.list)
-    if si < 0 { return }
+    if si < 0 { return "" }
     fam = picker_engine.pl_at(app.list, si)
-    path = picker_engine.fam_path(fam)
-    if string.length(path) == 0 { return }
-    if use_font(path) == 0 { return }
+    fp = picker_engine.fam_path(fam)
+    if string.length(fp) == 0 { return "" }
+    if use_font(fp) == 0 { return "" }
     // Scale to fit the panel: shrink until the sample fits 440 units.
     size = 44.0
     w = text_paths_width(FP_PREVIEW, size)
     if w > 440.0 { size = size * 440.0 / w }
-    t = text_path(rn, 16.0, 62.0, size, FP_PREVIEW)
+    return text_paths(FP_PREVIEW, 16.0, 62.0, size)
+}
+
+draw_preview(app: *App, rn: ptr) {
+    bg = rect(rn, 0.0, 0.0, 460.0, 90.0)
+    fill(bg, "#14141c")
+    if string.length(app.pv_d) == 0 { return }
+    t = path(rn, app.pv_d)
     fill(t, "#e8ecf2")
 }
 
@@ -453,7 +464,17 @@ main() {
                 anchor = rect(0, 0, 0, 0)
                 root_node = vg_root(node_scene(anchor))
                 app.scene = node_scene(root_node)
-                scene_set_refreshing(app.scene, 1)
+                // NOT scene_set_refreshing(…, 1): that re-renders the preview
+                // every 16ms tick, and draw_preview re-parses the TTF and
+                // regenerates every glyph outline each time. For faces whose
+                // outlines flatten to many segments (Liberation, italics) one
+                // frame costs ~200ms — the 16ms timer then saturates the main
+                // loop and input/driver STARVE (g_timeout outranks idle work):
+                // "click a font and the app goes non responsive". gdb: the
+                // burn is vsnprintf on an 18KB path string inside
+                // draw_preview, per tick, forever. DejaVu faces flatten to
+                // half that and merely limped, which is why only SOME rows
+                // seemed broken. refresh_selection() repaints ON SELECTION.
                 canvas_region(root_node, 0.0, 0.0, 460.0, 90.0)
                     callback |rn: ptr, t: float| {
                         draw_preview(app, rn)
