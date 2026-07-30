@@ -41,6 +41,7 @@ exports (
     view_box,
     circle, rect, line, path, text, text_sized, text_anchored, g,
     use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
+    text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
@@ -71,7 +72,7 @@ exports (
 )
 
 import std.string
-import std.strbuilder
+import vg.geom.polypath
 import std.map
 import std.list
 import std.floatarr
@@ -409,52 +410,47 @@ typeface() -> string {
     return font.font_name(fh)
 }
 
-// One-decimal float → string for path data.
-_tp_f1(v: float) -> string {
-    n = lrint(v * 10.0) as int
-    whole = n / 10
-    frac = n % 10
-    if frac < 0 { frac = 0 - frac }
-    if n < 0 && whole == 0 { return "-0.${frac}" }
-    return "${whole}.${frac}"
-}
-
 // The word as SVG path data ("M … Z M … Z"), baseline origin (x, y), em
 // height `size`. Counters keep their winding — nonzero fill cuts the holes.
 // "" when no outline font could be loaded (callers degrade gracefully).
 text_paths(txt: string, x: float, y: float, size: float) -> string {
     fh = _tp_font()
     if fh == null { return "" }
+    pp = text_polypath(txt, x, y, size)
+    d = polypath.pp_to_path(pp)
+    polypath.pp_free(pp)
+    return d
+}
+
+// The word as a POLYPATH — the same flattened glyph contours text_paths
+// serialises, but as geometry you can keep: transform it per frame
+// (geom.transform Affine/Projective), simplify it, smooth it, and only
+// serialise when handing it to path(). Per-frame consumers should build
+// this once per (text, size) and map points each frame instead of
+// re-outlining the font. Caller frees with polypath.pp_free.
+text_polypath(txt: string, x: float, y: float, size: float) -> ptr {
+    pp = polypath.pp_new()
+    fh = _tp_font()
+    if fh == null { return pp }
     sc = size / (font.font_upem(fh) * 1.0)
     ow = font.font_text_outlines(fh, txt, 4)
-    // std.strbuilder: amortized-growth append, so cost is linear in output
-    // bytes. The obvious `d = "${d}${cmd} ${px} ${py}"` per point was O(n²)
-    // — every append re-copied the WHOLE accumulated string — and outline
-    // point counts vary wildly by face: DejaVu's ~500 points cost ~30ms a
-    // call, while a dense Liberation face flattens to thousands and one call
-    // ran for SECONDS, wedging the app's main loop ("click a font and the
-    // app goes non responsive"; gdb showed the wedge live inside that very
-    // interpolation). ~16 bytes/point → hint the capacity up front.
-    b = strbuilder.new(font.outl_npts(ow) * 16)
     start = 0
     ci = 0
     while ci < font.outl_nctrs(ow) {
         last = font.outl_ctr_end(ow, ci)
+        polypath.pp_begin(pp, 1)
         j = start
         while j <= last {
-            px = _tp_f1(x + font.outl_px(ow, j) * sc)
-            py = _tp_f1(y - font.outl_py(ow, j) * sc)   // font y-up → screen y-down
-            cmd = " L"
-            if j == start { cmd = "M" }
-            _ = strbuilder.append(b, "${cmd} ${px} ${py}")
+            px = x + font.outl_px(ow, j) * sc
+            py = y - font.outl_py(ow, j) * sc   // font y-up → screen y-down
+            polypath.pp_push(pp, px, py)
             j = j + 1
         }
-        _ = strbuilder.append(b, " Z ")
         start = last + 1
         ci = ci + 1
     }
     font.outl_free(ow)
-    return strbuilder.finish(b)
+    return pp
 }
 
 // Advance width of txt at `size` (viewBox units), kerning included — the
