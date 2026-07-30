@@ -39,7 +39,7 @@ exports (
     pt_x, pt_y,
     affine_a, affine_b, affine_c, affine_d, affine_e, affine_f,
     affine_mul_p, affine_apply_p, affine_is_identity_p,
-    affine_average_scale_p
+    affine_average_scale_p, proj_apply_p
 )
 
 import std.regex
@@ -292,6 +292,10 @@ affine_is_identity_p(m: ptr) -> int {
 
 affine_average_scale_p(m: ptr) -> float {
     return affine_average_scale(m as *Affine)
+}
+
+proj_apply_p(m: ptr, x: float, y: float) -> *Pt {
+    return proj_apply(m as *Projective, x, y)
 }
 
 // ─── parse_transform: SVG transform string → *Affine ─────────────

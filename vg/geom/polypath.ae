@@ -1,0 +1,488 @@
+// aevg/polypath.ae — flattened path geometry as a value: contours of points
+// in flat float storage, with an algebra over them (Tier C).
+//
+// vg's shape verbs speak SVG d-strings, and geom/path_builder.ae authors
+// them fluently — both are CONSTRUCTION surfaces. What was missing is the
+// other half: paths as data you can keep, transform and refine after
+// construction. Today an app that animates geometry (a projected word, a
+// morphing shape) rebuilds its d-string from scratch every frame, and an
+// app that captures freehand input has nowhere to put the raw points.
+//
+// A PolyPath is post-flattening geometry — straight-line contours, each
+// open or closed. Curves belong upstream (path_builder / the normalizer /
+// font outlines all flatten); by the time geometry needs per-frame algebra
+// it is points. Storage is a single interleaved float buffer [x0 y0 x1 y1…]
+// plus per-contour end indices, so transforms are a tight loop and no
+// per-point allocation happens anywhere.
+//
+//   pp = polypath.pp_new()
+//   polypath.pp_begin(pp, 1)              // 1 = closed contour
+//   polypath.pp_push(pp, 0.0, 0.0)  …
+//   polypath.pp_transform(pp, m)          // geom.transform Affine, in place
+//   d = polypath.pp_to_path(pp)           // feed any path() / shape_path
+//
+// API:
+//   pp_new() -> pp                    pp_free(pp)
+//   pp_begin(pp, closed)              — start a new contour
+//   pp_push(pp, x, y)                 — append a point to the open contour
+//   pp_npts(pp)  pp_nctrs(pp)         — totals
+//   pp_ctr_end(pp, ci)                — last point index of contour ci
+//   pp_ctr_closed(pp, ci)             — 1 if contour ci closes with Z
+//   pp_x(pp, i)  pp_y(pp, i)          — point accessors
+//   pp_set(pp, i, x, y)               — write a point (per-frame mapping)
+//   pp_clone(pp) -> pp                — independent copy
+//   pp_transform(pp, m)               — Affine (ptr), every point, in place
+//   pp_transform_proj(pp, m)          — Projective (ptr), in place
+//   pp_bounds(pp, out4)               — min/max into a floatarr[4]; 0 if empty
+//   pp_simplify(pp, tol) -> pp        — tolerance point reduction (RDP)
+//   pp_smooth(pp, iters) -> pp        — corner-cutting refinement (Chaikin)
+//   pp_to_path(pp) -> string          — SVG d ("M … L … Z "), 1-decimal
+//
+// pp_to_path's formatting (one decimal, "M x y L x y … Z ") is exactly
+// text_paths' historical output — vg/module.ae routes text through here,
+// and test_text_path's exact-string asserts hold across the refactor.
+
+exports (
+    pp_new, pp_free, pp_begin, pp_push,
+    pp_npts, pp_nctrs, pp_ctr_end, pp_ctr_closed,
+    pp_x, pp_y, pp_set, pp_clone,
+    pp_transform, pp_transform_proj, pp_bounds,
+    pp_simplify, pp_smooth, pp_to_path
+)
+
+import std.string
+import std.strbuilder
+import std.floatarr
+import std.intarr
+import vg.geom.transform (affine_apply_p, proj_apply_p, pt_x, pt_y)
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern lrint(x: float) -> long
+
+struct PolyPath {
+    pts: ptr        // floatarr, interleaved x,y — 2*cap floats allocated
+    npts: int       // points in use
+    cap: int        // point capacity
+    ends: ptr       // intarr — last point index per contour
+    closed: ptr     // intarr — 1/0 per contour
+    nctrs: int
+    ctr_cap: int
+}
+
+const PP_MIN_CAP: int = 16
+const PP_MIN_CTRS: int = 4
+
+pp_new() -> ptr {
+    p = malloc(64) as *PolyPath
+    p.pts = floatarr_new_raw(PP_MIN_CAP * 2)
+    p.npts = 0
+    p.cap = PP_MIN_CAP
+    p.ends = intarr_new_raw(PP_MIN_CTRS)
+    p.closed = intarr_new_raw(PP_MIN_CTRS)
+    p.nctrs = 0
+    p.ctr_cap = PP_MIN_CTRS
+    return p as ptr
+}
+
+pp_free(pp: ptr) {
+    p = pp as *PolyPath
+    floatarr_free(p.pts)
+    intarr_free(p.ends)
+    intarr_free(p.closed)
+    free(pp)
+}
+
+// Doubling growth so pp_push is amortized O(1) — same discipline as
+// std.strbuilder; a per-frame consumer must never trigger per-point allocs
+// once warmed up.
+_pp_grow_pts(p: *PolyPath) {
+    ncap = p.cap * 2
+    na = floatarr_new_raw(ncap * 2)
+    i = 0
+    while i < p.npts * 2 {
+        floatarr_set_raw(na, i, floatarr_get_raw(p.pts, i))
+        i = i + 1
+    }
+    floatarr_free(p.pts)
+    p.pts = na
+    p.cap = ncap
+}
+
+_pp_grow_ctrs(p: *PolyPath) {
+    ncap = p.ctr_cap * 2
+    ne = intarr_new_raw(ncap)
+    nc = intarr_new_raw(ncap)
+    i = 0
+    while i < p.nctrs {
+        intarr_set_raw(ne, i, intarr_get_raw(p.ends, i))
+        intarr_set_raw(nc, i, intarr_get_raw(p.closed, i))
+        i = i + 1
+    }
+    intarr_free(p.ends)
+    intarr_free(p.closed)
+    p.ends = ne
+    p.closed = nc
+    p.ctr_cap = ncap
+}
+
+pp_begin(pp: ptr, is_closed: int) {
+    p = pp as *PolyPath
+    if p.nctrs >= p.ctr_cap { _pp_grow_ctrs(p) }
+    // The new contour is empty; its end index trails by one until pushes
+    // arrive. An empty trailing contour is simply ignored by consumers.
+    intarr_set_raw(p.ends, p.nctrs, p.npts - 1)
+    intarr_set_raw(p.closed, p.nctrs, is_closed)
+    p.nctrs = p.nctrs + 1
+}
+
+pp_push(pp: ptr, x: float, y: float) {
+    p = pp as *PolyPath
+    if p.npts >= p.cap { _pp_grow_pts(p) }
+    floatarr_set_raw(p.pts, p.npts * 2, x)
+    floatarr_set_raw(p.pts, p.npts * 2 + 1, y)
+    p.npts = p.npts + 1
+    if p.nctrs > 0 { intarr_set_raw(p.ends, p.nctrs - 1, p.npts - 1) }
+}
+
+pp_npts(pp: ptr) -> int  { p = pp as *PolyPath; return p.npts }
+pp_nctrs(pp: ptr) -> int { p = pp as *PolyPath; return p.nctrs }
+pp_ctr_end(pp: ptr, ci: int) -> int {
+    p = pp as *PolyPath
+    return intarr_get_raw(p.ends, ci)
+}
+pp_ctr_closed(pp: ptr, ci: int) -> int {
+    p = pp as *PolyPath
+    return intarr_get_raw(p.closed, ci)
+}
+pp_x(pp: ptr, i: int) -> float {
+    p = pp as *PolyPath
+    return floatarr_get_raw(p.pts, i * 2)
+}
+pp_y(pp: ptr, i: int) -> float {
+    p = pp as *PolyPath
+    return floatarr_get_raw(p.pts, i * 2 + 1)
+}
+pp_set(pp: ptr, i: int, x: float, y: float) {
+    p = pp as *PolyPath
+    floatarr_set_raw(p.pts, i * 2, x)
+    floatarr_set_raw(p.pts, i * 2 + 1, y)
+}
+
+// First point index of contour ci (end of the previous contour + 1).
+_pp_ctr_start(p: *PolyPath, ci: int) -> int {
+    if ci == 0 { return 0 }
+    return intarr_get_raw(p.ends, ci - 1) + 1
+}
+
+pp_clone(pp: ptr) -> ptr {
+    p = pp as *PolyPath
+    q = pp_new()
+    ci = 0
+    while ci < p.nctrs {
+        pp_begin(q, intarr_get_raw(p.closed, ci))
+        j = _pp_ctr_start(p, ci)
+        last = intarr_get_raw(p.ends, ci)
+        while j <= last {
+            pp_push(q, pp_x(pp, j), pp_y(pp, j))
+            j = j + 1
+        }
+        ci = ci + 1
+    }
+    return q
+}
+
+// In-place affine map over every point. m is a *Affine handle from
+// geom.transform (ptr at this boundary — struct types don't cross modules).
+pp_transform(pp: ptr, m: ptr) {
+    p = pp as *PolyPath
+    i = 0
+    while i < p.npts {
+        pt = affine_apply_p(m, pp_x(pp, i), pp_y(pp, i))
+        pp_set(pp, i, pt_x(pt), pt_y(pt))
+        i = i + 1
+    }
+}
+
+// Projective variant — perspective divide included, for 3D-ish mappings
+// (rotate_y/rotate_x from geom.transform).
+pp_transform_proj(pp: ptr, m: ptr) {
+    p = pp as *PolyPath
+    i = 0
+    while i < p.npts {
+        pt = proj_apply_p(m, pp_x(pp, i), pp_y(pp, i))
+        pp_set(pp, i, pt_x(pt), pt_y(pt))
+        i = i + 1
+    }
+}
+
+// Axis-aligned bounds into out4 = floatarr[minx, miny, maxx, maxy].
+// Returns 0 (and leaves out4 alone) on an empty path.
+pp_bounds(pp: ptr, out4: ptr) -> int {
+    p = pp as *PolyPath
+    if p.npts == 0 { return 0 }
+    minx = pp_x(pp, 0)
+    miny = pp_y(pp, 0)
+    maxx = minx
+    maxy = miny
+    i = 1
+    while i < p.npts {
+        x = pp_x(pp, i)
+        y = pp_y(pp, i)
+        if x < minx { minx = x }
+        if y < miny { miny = y }
+        if x > maxx { maxx = x }
+        if y > maxy { maxy = y }
+        i = i + 1
+    }
+    floatarr_set_raw(out4, 0, minx)
+    floatarr_set_raw(out4, 1, miny)
+    floatarr_set_raw(out4, 2, maxx)
+    floatarr_set_raw(out4, 3, maxy)
+    return 1
+}
+
+// ── Simplify: Ramer–Douglas–Peucker point reduction ─────────────────────────
+// Perpendicular distance of point i from the chord a→b.
+_pp_seg_dist(pp: ptr, i: int, a: int, b: int) -> float {
+    ax = pp_x(pp, a)
+    ay = pp_y(pp, a)
+    dx = pp_x(pp, b) - ax
+    dy = pp_y(pp, b) - ay
+    px = pp_x(pp, i) - ax
+    py = pp_y(pp, i) - ay
+    len2 = dx * dx + dy * dy
+    if len2 <= 0.0 {
+        // Degenerate chord: plain distance to a.
+        d2 = px * px + py * py
+        return _pp_sqrt(d2)
+    }
+    // Cross-product magnitude / chord length = perpendicular distance.
+    cross = px * dy - py * dx
+    if cross < 0.0 { cross = 0.0 - cross }
+    return cross / _pp_sqrt(len2)
+}
+
+// Newton sqrt — keeps this module dependency-light (no std.math needed for
+// one function; two iterations from a decent seed are plenty at path scale).
+_pp_sqrt(v: float) -> float {
+    if v <= 0.0 { return 0.0 }
+    g = v
+    if g > 1.0 { g = v * 0.5 }
+    k = 0
+    while k < 24 {
+        g = 0.5 * (g + v / g)
+        k = k + 1
+    }
+    return g
+}
+
+// Recursive RDP over [lo..hi]; marks kept points in `keep` (intarr).
+// Glyph and stroke contours are small (well under a few thousand points),
+// so recursion depth is a non-issue here.
+_pp_rdp(pp: ptr, lo: int, hi: int, tol: float, keep: ptr) {
+    if hi <= lo + 1 { return }
+    worst = 0.0 - 1.0
+    wi = lo
+    i = lo + 1
+    while i < hi {
+        d = _pp_seg_dist(pp, i, lo, hi)
+        if d > worst {
+            worst = d
+            wi = i
+        }
+        i = i + 1
+    }
+    if worst > tol {
+        intarr_set_raw(keep, wi, 1)
+        _pp_rdp(pp, lo, wi, tol, keep)
+        _pp_rdp(pp, wi, hi, tol, keep)
+    }
+}
+
+// The wrapped half of a closed contour: interior points lo+1..last measured
+// against the chord lo → wrap_to (the loop's closing edge back to the
+// anchor). Splits into a contiguous RDP below the worst point and a
+// still-wrapped remainder above it.
+_pp_rdp_wrap(pp: ptr, lo: int, last: int, wrap_to: int, tol: float, keep: ptr) {
+    if last <= lo { return }
+    worst = 0.0 - 1.0
+    wi = lo
+    i = lo + 1
+    while i <= last {
+        d = _pp_seg_dist(pp, i, lo, wrap_to)
+        if d > worst {
+            worst = d
+            wi = i
+        }
+        i = i + 1
+    }
+    if worst > tol {
+        intarr_set_raw(keep, wi, 1)
+        _pp_rdp(pp, lo, wi, tol, keep)
+        _pp_rdp_wrap(pp, wi, last, wrap_to, tol, keep)
+    }
+}
+
+// Tolerance-based point reduction; returns a NEW path, input untouched.
+// Open contours anchor both endpoints. Closed contours anchor the first
+// point and the point farthest from it, then reduce the two halves — the
+// standard way to run RDP on a loop without a privileged "end".
+pp_simplify(pp: ptr, tol: float) -> ptr {
+    p = pp as *PolyPath
+    q = pp_new()
+    keep = intarr_new_raw(p.npts)
+    ci = 0
+    while ci < p.nctrs {
+        start = _pp_ctr_start(p, ci)
+        last = intarr_get_raw(p.ends, ci)
+        n = last - start + 1
+        if n <= 0 {
+            ci = ci + 1
+            continue
+        }
+        j = start
+        while j <= last {
+            intarr_set_raw(keep, j, 0)
+            j = j + 1
+        }
+        intarr_set_raw(keep, start, 1)
+        // On an OPEN contour both endpoints are anchors. On a CLOSED one
+        // `last` is not special — the loop's second anchor is the point
+        // farthest from `start`, and the remainder is measured against the
+        // wrapping chord back to `start`.
+        if intarr_get_raw(p.closed, ci) == 0 { intarr_set_raw(keep, last, 1) }
+        if intarr_get_raw(p.closed, ci) == 1 && n > 2 {
+            // Farthest point from the anchor splits the loop.
+            fx = pp_x(pp, start)
+            fy = pp_y(pp, start)
+            far_i = start
+            far_d = 0.0 - 1.0
+            j = start + 1
+            while j <= last {
+                dx = pp_x(pp, j) - fx
+                dy = pp_y(pp, j) - fy
+                d2 = dx * dx + dy * dy
+                if d2 > far_d {
+                    far_d = d2
+                    far_i = j
+                }
+                j = j + 1
+            }
+            intarr_set_raw(keep, far_i, 1)
+            _pp_rdp(pp, start, far_i, tol, keep)
+            _pp_rdp_wrap(pp, far_i, last, start, tol, keep)
+        } else if n > 2 {
+            _pp_rdp(pp, start, last, tol, keep)
+        }
+        pp_begin(q, intarr_get_raw(p.closed, ci))
+        j = start
+        while j <= last {
+            if intarr_get_raw(keep, j) == 1 {
+                pp_push(q, pp_x(pp, j), pp_y(pp, j))
+            }
+            j = j + 1
+        }
+        ci = ci + 1
+    }
+    intarr_free(keep)
+    return q
+}
+
+// ── Smooth: Chaikin corner cutting ──────────────────────────────────────────
+// Each pass replaces every segment with two points at 1/4 and 3/4 — raw
+// input (a captured mouse stroke, a low-point polygon) relaxes toward a
+// quadratic-spline look after 2–3 passes. Open contours keep their exact
+// endpoints; closed contours cut every corner, wrapping. Returns a NEW path.
+pp_smooth(pp: ptr, iterations: int) -> ptr {
+    cur = pp_clone(pp)
+    it = 0
+    while it < iterations {
+        nxt = _pp_chaikin_once(cur)
+        pp_free(cur)
+        cur = nxt
+        it = it + 1
+    }
+    return cur
+}
+
+_pp_chaikin_once(pp: ptr) -> ptr {
+    p = pp as *PolyPath
+    q = pp_new()
+    ci = 0
+    while ci < p.nctrs {
+        start = _pp_ctr_start(p, ci)
+        last = intarr_get_raw(p.ends, ci)
+        n = last - start + 1
+        is_closed = intarr_get_raw(p.closed, ci)
+        pp_begin(q, is_closed)
+        if n <= 2 {
+            // Nothing to cut; copy through.
+            j = start
+            while j <= last {
+                pp_push(q, pp_x(pp, j), pp_y(pp, j))
+                j = j + 1
+            }
+            ci = ci + 1
+            continue
+        }
+        if is_closed == 0 { pp_push(q, pp_x(pp, start), pp_y(pp, start)) }
+        segs = n - 1
+        if is_closed == 1 { segs = n }
+        s = 0
+        while s < segs {
+            a = start + s
+            b = a + 1
+            if b > last { b = start }   // wrap for the closing segment
+            ax = pp_x(pp, a)
+            ay = pp_y(pp, a)
+            bx = pp_x(pp, b)
+            by = pp_y(pp, b)
+            pp_push(q, ax + (bx - ax) * 0.25, ay + (by - ay) * 0.25)
+            pp_push(q, ax + (bx - ax) * 0.75, ay + (by - ay) * 0.75)
+            s = s + 1
+        }
+        if is_closed == 0 { pp_push(q, pp_x(pp, last), pp_y(pp, last)) }
+        ci = ci + 1
+    }
+    return q
+}
+
+// ── Serialisation ───────────────────────────────────────────────────────────
+// One-decimal float → string, matching text_paths' historical formatting
+// exactly (that byte-identity is asserted by test_text_path and the
+// textpath driver suite — do not "improve" the precision here casually).
+_pp_f1(v: float) -> string {
+    n = lrint(v * 10.0) as int
+    whole = n / 10
+    frac = n % 10
+    if frac < 0 { frac = 0 - frac }
+    if n < 0 && whole == 0 { return "-0.${frac}" }
+    return "${whole}.${frac}"
+}
+
+// SVG path data: "M x y L x y … Z " per closed contour ("Z " omitted for
+// open ones). Built with std.strbuilder — linear in output size.
+pp_to_path(pp: ptr) -> string {
+    p = pp as *PolyPath
+    b = strbuilder.new(p.npts * 16)
+    ci = 0
+    while ci < p.nctrs {
+        start = _pp_ctr_start(p, ci)
+        last = intarr_get_raw(p.ends, ci)
+        j = start
+        while j <= last {
+            px = _pp_f1(pp_x(pp, j))
+            py = _pp_f1(pp_y(pp, j))
+            cmd = " L"
+            if j == start { cmd = "M" }
+            _ = strbuilder.append(b, "${cmd} ${px} ${py}")
+            j = j + 1
+        }
+        if intarr_get_raw(p.closed, ci) == 1 && last >= start {
+            _ = strbuilder.append(b, " Z ")
+        }
+        ci = ci + 1
+    }
+    return strbuilder.finish(b)
+}
