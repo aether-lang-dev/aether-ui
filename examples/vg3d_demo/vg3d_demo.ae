@@ -31,6 +31,8 @@ import vg.geom.polypath (
     pp_new, pp_begin, pp_push, pp_stroke, pp_to_path, pp_free,
     PP_JOIN_MITER, PP_CAP_ROUND
 )
+import vg.geom.mesh (mesh_box)
+import vg.render3d (render_mesh)
 import std.os (os_getenv)
 import std.string
 
@@ -42,8 +44,10 @@ const V3D_H: int = 240
 
 struct App {
     angle: int         // model rotation about the tumble axis, degrees
-    canvas: int        // canvas id for the pixel probe
+    canvas: int        // wireframe canvas id (pixel probe)
     scene: ptr
+    canvas2: int       // shaded canvas id (pixel probe)
+    scene2: ptr
     st_angle: int
     st_v0: int
     st_ink: int
@@ -114,25 +118,47 @@ publish(app: *App) {
     if sv < 0 { return }
 }
 
+// The shaded cube: same tumble, rendered as culled, painter-sorted,
+// Lambert-shaded quads — vg3d's mesh/render tier where the other canvas
+// is its raw math tier.
+draw_solid(app: *App, rn: ptr) {
+    bg = rect(rn, 0.0, 0.0, V3D_W * 1.0, V3D_H * 1.0)
+    fill(bg, "#101018")
+    axis = v3_new(1.0, 1.0, 0.0)
+    model = m4_mul(m4_rotation_axis(axis, app.angle * 1.0), m4_rotation_x(20.0))
+    view = m4_look_at(v3_new(0.0, 0.0, 260.0), v3_new(0.0, 0.0, 0.0),
+                      v3_new(0.0, 1.0, 0.0))
+    prj = m4_perspective(35.0, (V3D_W * 1.0) / (V3D_H * 1.0), 10.0, 2000.0)
+    cube = mesh_box(50.0, 50.0, 50.0, 0.49, 0.83, 0.99)
+    _n = render_mesh(rn, cube, model, view, prj, V3D_W, V3D_H,
+                     v3_new(0.35, 0.55, 1.0), 0.35)
+}
+
 // Count inked grid samples (anything brighter than the near-black bg).
-probe(app: *App) {
+count_ink(cid: int) -> int {
     ink = 0
     y = 2
     while y < V3D_H {
         x = 2
         while x < V3D_W {
-            pv = canvas_read_pixel(app.canvas, x, y, V3D_W, V3D_H)
+            pv = canvas_read_pixel(cid, x, y, V3D_W, V3D_H)
             if ((pv >> 16) & 255) > 60 { ink = ink + 1 }
             x = x + 4
         }
         y = y + 4
     }
-    si = ui_set_s(app.st_ink, "ink: ${ink}")
+    return ink
+}
+
+probe(app: *App) {
+    wire_ink = count_ink(app.canvas)
+    solid_ink = count_ink(app.canvas2)
+    si = ui_set_s(app.st_ink, "ink: ${wire_ink} solid: ${solid_ink}")
     if si < 0 { return }
 }
 
 main() {
-    app = malloc(48) as *App
+    app = malloc(72) as *App
     app.angle = 0
     st_a = ui_state_s("angle: 0")
     st_v = ui_state_s("v0: ?")
@@ -141,28 +167,43 @@ main() {
     app.st_v0 = st_v
     app.st_ink = st_i
 
-    window("vg3d — wireframe cube (render on demand)", 360, 360) {
+    window("vg3d — wireframe + shaded cube (render on demand)", 700, 360) {
         vstack(8) {
             text("mat4 MVP chain → polypath edges → pp_stroke wireframe")
-            vg(view_box(0, 0, 320, 240), V3D_W, V3D_H) {
-                anchor = rect(0.0, 0.0, 0.0, 0.0)
-                root_node = vg_root(node_scene(anchor))
-                app.scene = node_scene(root_node)
-                app.canvas = scene_canvas(node_scene(root_node))
-                reg = canvas_region(root_node, 0.0, 0.0,
-                                    V3D_W * 1.0, V3D_H * 1.0)
-                    callback |rn: ptr, t: float| {
-                        draw_cube(app, rn)
-                    }
-                // Static: the cube repaints when Rotate says so, and the
-                // scene costs nothing in between.
-                region_set_animated(reg, 0)
+            hstack(10) {
+                vg(view_box(0, 0, 320, 240), V3D_W, V3D_H) {
+                    anchor = rect(0.0, 0.0, 0.0, 0.0)
+                    root_node = vg_root(node_scene(anchor))
+                    app.scene = node_scene(root_node)
+                    app.canvas = scene_canvas(node_scene(root_node))
+                    reg = canvas_region(root_node, 0.0, 0.0,
+                                        V3D_W * 1.0, V3D_H * 1.0)
+                        callback |rn: ptr, t: float| {
+                            draw_cube(app, rn)
+                        }
+                    // Static: the cube repaints when Rotate says so, and
+                    // the scene costs nothing in between.
+                    region_set_animated(reg, 0)
+                }
+                vg(view_box(0, 0, 320, 240), V3D_W, V3D_H) {
+                    anchor2 = rect(0.0, 0.0, 0.0, 0.0)
+                    root2 = vg_root(node_scene(anchor2))
+                    app.scene2 = node_scene(root2)
+                    app.canvas2 = scene_canvas(node_scene(root2))
+                    reg2 = canvas_region(root2, 0.0, 0.0,
+                                         V3D_W * 1.0, V3D_H * 1.0)
+                        callback |rn: ptr, t: float| {
+                            draw_solid(app, rn)
+                        }
+                    region_set_animated(reg2, 0)
+                }
             }
             hstack(8) {
                 btn("Rotate 15°") callback {
                     app.angle = app.angle + 15
                     publish(app)
                     _r = scene_refresh(app.scene)
+                    _r2 = scene_refresh(app.scene2)
                 }
                 btn("Probe pixels") callback { probe(app) }
             }
