@@ -3363,41 +3363,6 @@ void aether_ui_canvas_group_begin_impl(int canvas_id) { (void)canvas_id; }
 void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
     (void)canvas_id; (void)alpha;
 }
-int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
-                                     int width, int height) {
-    // Replay the command buffer into a CGBitmapContext and read one pixel
-    // — the same headless route canvas_write_png takes (and the same
-    // contract as GTK4's cairo replay). Was a -1 stub, which made every
-    // pixel probe read as ink and let colour-comparison specs pass
-    // vacuously on this backend.
-    if (px < 0 || py < 0 || px >= width || py >= height) return -1;
-    CanvasState* cs = get_canvas_state(canvas_id);
-    if (!cs) return -1;
-    __block int result = -1;
-    void (^work)(void) = ^{
-        CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
-        unsigned char* buf = calloc((size_t)width * (size_t)height, 4);
-        if (!buf) { CGColorSpaceRelease(cspace); return; }
-        CGContextRef cg = CGBitmapContextCreate(
-            buf, (size_t)width, (size_t)height, 8, (size_t)width * 4, cspace,
-            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-        CGColorSpaceRelease(cspace);
-        if (!cg) { free(buf); return; }
-        // Canvas coords are y-down; the bitmap is y-up (see canvas_write_png).
-        CGContextTranslateCTM(cg, 0, height);
-        CGContextScaleCTM(cg, 1.0, -1.0);
-        canvas_replay(cg, cs);
-        CGContextRelease(cg);
-        // RGBA8 big-endian: byte order in memory is R,G,B,A.
-        unsigned char* p8 = buf + ((size_t)py * (size_t)width + (size_t)px) * 4;
-        result = ((int)p8[3] << 24) | ((int)p8[0] << 16)
-               | ((int)p8[1] << 8) | (int)p8[2];
-        free(buf);
-    };
-    if ([NSThread isMainThread]) work();
-    else dispatch_sync(dispatch_get_main_queue(), work);
-    return result;
-}
 // ---------------------------------------------------------------------------
 // The drawn tooltip — a vg-drawn shape's tooltip, rendered as an overlay
 // rather than a native NSToolTip (which can't be positioned per-shape and
@@ -4234,6 +4199,42 @@ void aether_ui_canvas_redraw_impl(int canvas_id) {
 // loop, so this works under CI exactly as it does live. That is house rule #4
 // (everything renderable must render via canvas_write_png) and it is what lets
 // a spec screenshot a vg scene on a box with no screen.
+int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
+                                     int width, int height) {
+    // Replay the command buffer into a CGBitmapContext and read one pixel
+    // — the same headless route canvas_write_png takes (and the same
+    // contract as GTK4's cairo replay). Was a -1 stub, which made every
+    // pixel probe read as ink and let colour-comparison specs pass
+    // vacuously on this backend.
+    if (px < 0 || py < 0 || px >= width || py >= height) return -1;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return -1;
+    __block int result = -1;
+    void (^work)(void) = ^{
+        CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
+        unsigned char* buf = calloc((size_t)width * (size_t)height, 4);
+        if (!buf) { CGColorSpaceRelease(cspace); return; }
+        CGContextRef cg = CGBitmapContextCreate(
+            buf, (size_t)width, (size_t)height, 8, (size_t)width * 4, cspace,
+            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(cspace);
+        if (!cg) { free(buf); return; }
+        // Canvas coords are y-down; the bitmap is y-up (see canvas_write_png).
+        CGContextTranslateCTM(cg, 0, height);
+        CGContextScaleCTM(cg, 1.0, -1.0);
+        canvas_replay(cg, cs);
+        CGContextRelease(cg);
+        // RGBA8 big-endian: byte order in memory is R,G,B,A.
+        unsigned char* p8 = buf + ((size_t)py * (size_t)width + (size_t)px) * 4;
+        result = ((int)p8[3] << 24) | ((int)p8[0] << 16)
+               | ((int)p8[1] << 8) | (int)p8[2];
+        free(buf);
+    };
+    if ([NSThread isMainThread]) work();
+    else dispatch_sync(dispatch_get_main_queue(), work);
+    return result;
+}
+
 int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
                                      int width, int height) {
     CanvasState* cs = get_canvas_state(canvas_id);
