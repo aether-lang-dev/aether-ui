@@ -1,0 +1,98 @@
+// spec_vg3d_demo.ae — the vg3d math tier end to end, over AetherUIDriver.
+//
+// The demo projects a cube through mat4's model·view·projection chain and
+// publishes driver-readable state: the model angle, a projected corner's
+// screen position, and an in-app pixel probe of the rendered wireframe.
+// The spec asserts the chain is live — the projection MOVES when the
+// model matrix changes — and that pixels really land, before and after,
+// on a scene that only repaints on demand (static region + scene_refresh).
+//
+// Run via tests/spec_matrix.sh vg3d, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vg3d_demo/bin/vg3d_demo &
+//   UI_SPEC=vg3d_demo/spec_vg3d_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "vg3d_demo over AetherUIDriver") {
+        aeocha.it("publishes the initial projection") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "angle: 0", "starts unrotated")
+            aeocha.assert_contains(body, "v0: ", "a projected corner is published")
+            aeocha.assert_false(string.contains(body, "v0: ?"),
+                "projection ran at startup")
+        }
+
+        aeocha.it("the wireframe actually rendered (pixel probe)") callback {
+            uidriver.click_widget(uidriver.widget_id_of("button", "Probe pixels"))
+            ok = uidriver.wait_body_contains("/widgets", "ink: ", 20)
+            aeocha.assert_true(ok, "probe ran")
+            ink0 = ink_count(uidriver.get_body("/widgets"))
+            // A 320x240 canvas sampled every 4px is 4800 samples; a cube
+            // wireframe inks a small but unmistakable fraction of them.
+            aeocha.assert_true(ink0 > 60, "wireframe ink present (${ink0})")
+            aeocha.assert_true(ink0 < 2400, "not a solid flood (${ink0})")
+        }
+
+        aeocha.it("rotating the model moves the projection") callback {
+            before = v0_of(uidriver.get_body("/widgets"))
+            uidriver.click_widget(uidriver.widget_id_of("button", "Rotate 15°"))
+            aeocha.assert_true(
+                uidriver.wait_body_contains("/widgets", "angle: 15", 20),
+                "angle advanced")
+            after = v0_of(uidriver.get_body("/widgets"))
+            aeocha.assert_true(string.length(before) > 0, "had a corner before")
+            aeocha.assert_true(string.length(after) > 0, "have a corner after")
+            aeocha.assert_false(string.equals(before, after) == 1,
+                "the projected corner MOVED (${before} -> ${after})")
+        }
+
+        aeocha.it("the on-demand repaint really repainted") callback {
+            // Probe again after the rotation: the scene is a STATIC region
+            // (no timer), so fresh ink here proves scene_refresh re-rendered
+            // the region with the new matrix.
+            uidriver.click_widget(uidriver.widget_id_of("button", "Probe pixels"))
+            b = uidriver.get_body("/widgets")
+            ink1 = ink_count(b)
+            aeocha.assert_true(ink1 > 60, "still inked after rotate (${ink1})")
+        }
+    }
+    aeocha.run_summary(fw)
+}
+
+// The "v0: x,y" payload, or "" if absent.
+v0_of(body: string) -> string {
+    at = string.string_index_of_from(body, "v0: ", 0)
+    if at < 0 { return "" }
+    en = string.string_index_of_from(body, "\"", at)
+    if en < 0 { return "" }
+    return string_substring(body, at, en)
+}
+
+// The integer after "ink: ", or -1.
+ink_count(body: string) -> int {
+    at = string.string_index_of_from(body, "ink: ", 0)
+    if at < 0 { return 0 - 1 }
+    at = at + 5
+    n = 0
+    seen = 0
+    len = string.length(body)
+    while at < len {
+        c = string_char_at(body, at)
+        if c >= 48 && c <= 57 {
+            n = n * 10 + (c - 48)
+            seen = 1
+        } else {
+            if seen == 1 { return n }
+            return 0 - 1
+        }
+        at = at + 1
+    }
+    return n
+}
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_char_at(s: string, index: int) -> int

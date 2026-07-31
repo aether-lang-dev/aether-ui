@@ -1,0 +1,179 @@
+// vg3d_demo.ae — the vg3d math tier driving pixels: a wireframe cube
+// through a real model·view·projection chain.
+//
+// Every recent vg layer in one pipeline:
+//   mat4/vec3    — model rotation (axis-angle), look_at camera, perspective
+//   polypath     — the 12 projected edges as open contours
+//   pp_stroke    — the wireframe rendered as filled stroke OUTLINES
+//   canvas_region (STATIC) + scene_refresh — render on demand: the scene
+//     repaints when Rotate is clicked and costs nothing between clicks.
+//
+// The driver-facing surface: "angle: N" and "v0: x,y" labels (v0 is a cube
+// corner's projected screen position, rounded), and a "Probe pixels"
+// button that counts inked samples via ui.canvas_read_pixel — so a spec
+// can assert the cube really renders, moves when rotated, and keeps
+// rendering after the move.
+//
+// Run: DISPLAY=:0 ./target/build/examples/vg3d_demo/bin/vg3d_demo
+
+import ui (
+    window, vstack, hstack, text, btn, enable_test_server,
+    canvas_read_pixel, ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg, canvas_region, region_set_animated)
+import vg (view_box, rect, vg_root, node_scene, scene_canvas, scene_refresh, path, fill)
+import vg.geom.vec3 (v3_new, v3_x, v3_y, v3_z)
+import vg.geom.mat4 (
+    m4_mul, m4_perspective, m4_look_at, m4_rotation_axis, m4_rotation_x,
+    m4_transform_point
+)
+import vg.geom.polypath (
+    pp_new, pp_begin, pp_push, pp_stroke, pp_to_path, pp_free,
+    PP_JOIN_MITER, PP_CAP_ROUND
+)
+import std.os (os_getenv)
+import std.string
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+
+const V3D_W: int = 320
+const V3D_H: int = 240
+
+struct App {
+    angle: int         // model rotation about the tumble axis, degrees
+    canvas: int        // canvas id for the pixel probe
+    scene: ptr
+    st_angle: int
+    st_v0: int
+    st_ink: int
+}
+
+// Screen-project world point (x,y,z) under the current angle. Returns a
+// heap V3 whose x/y are SCREEN px (y-down) and z is NDC depth.
+project(app: *App, x: float, y: float, z: float) -> ptr {
+    axis = v3_new(1.0, 1.0, 0.0)
+    model = m4_mul(m4_rotation_axis(axis, app.angle * 1.0), m4_rotation_x(20.0))
+    view = m4_look_at(v3_new(0.0, 0.0, 260.0), v3_new(0.0, 0.0, 0.0),
+                      v3_new(0.0, 1.0, 0.0))
+    prj = m4_perspective(35.0, (V3D_W * 1.0) / (V3D_H * 1.0), 10.0, 2000.0)
+    mvp = m4_mul(prj, m4_mul(view, model))
+    ndc = m4_transform_point(mvp, v3_new(x, y, z))
+    // NDC (-1..1, y-up) → screen px (y-down). The renderer owns this flip;
+    // the math modules stay right-handed y-up throughout.
+    sx = (v3_x(ndc) * 0.5 + 0.5) * (V3D_W * 1.0)
+    sy = (0.5 - v3_y(ndc) * 0.5) * (V3D_H * 1.0)
+    return v3_new(sx, sy, v3_z(ndc)) as ptr
+}
+
+// One cube edge into the polypath as its own open contour.
+add_edge(app: *App, pp: ptr,
+         x0: float, y0: float, z0: float,
+         x1: float, y1: float, z1: float) {
+    a = project(app, x0, y0, z0)
+    b = project(app, x1, y1, z1)
+    pp_begin(pp, 0)
+    pp_push(pp, v3_x(a), v3_y(a))
+    pp_push(pp, v3_x(b), v3_y(b))
+}
+
+// The 12 edges of a cube with half-extent hx, drawn as stroke outlines.
+draw_cube(app: *App, rn: ptr) {
+    bg = rect(rn, 0.0, 0.0, V3D_W * 1.0, V3D_H * 1.0)
+    fill(bg, "#101018")
+    hx = 50.0
+    pp = pp_new()
+    // Bottom square (y = -hx), top square (y = +hx), four verticals.
+    add_edge(app, pp, 0.0-hx, 0.0-hx, 0.0-hx,   hx, 0.0-hx, 0.0-hx)
+    add_edge(app, pp,    hx, 0.0-hx, 0.0-hx,   hx, 0.0-hx,    hx)
+    add_edge(app, pp,    hx, 0.0-hx,    hx, 0.0-hx, 0.0-hx,    hx)
+    add_edge(app, pp, 0.0-hx, 0.0-hx,    hx, 0.0-hx, 0.0-hx, 0.0-hx)
+    add_edge(app, pp, 0.0-hx,    hx, 0.0-hx,   hx,    hx, 0.0-hx)
+    add_edge(app, pp,    hx,    hx, 0.0-hx,   hx,    hx,    hx)
+    add_edge(app, pp,    hx,    hx,    hx, 0.0-hx,    hx,    hx)
+    add_edge(app, pp, 0.0-hx,    hx,    hx, 0.0-hx,    hx, 0.0-hx)
+    add_edge(app, pp, 0.0-hx, 0.0-hx, 0.0-hx, 0.0-hx,    hx, 0.0-hx)
+    add_edge(app, pp,    hx, 0.0-hx, 0.0-hx,   hx,    hx, 0.0-hx)
+    add_edge(app, pp,    hx, 0.0-hx,    hx,   hx,    hx,    hx)
+    add_edge(app, pp, 0.0-hx, 0.0-hx,    hx, 0.0-hx,    hx,    hx)
+    ol = pp_stroke(pp, 3.0, PP_JOIN_MITER, PP_CAP_ROUND, 4.0)
+    wire = path(rn, pp_to_path(ol))
+    fill(wire, "#7dd3fc")
+    pp_free(ol)
+    pp_free(pp)
+}
+
+// Publish the driver-facing readouts for the current angle.
+publish(app: *App) {
+    sa = ui_set_s(app.st_angle, "angle: ${app.angle}")
+    if sa < 0 { return }
+    v0 = project(app, 0.0 - 50.0, 0.0 - 50.0, 0.0 - 50.0)
+    px = lrint(v3_x(v0)) as int
+    py = lrint(v3_y(v0)) as int
+    sv = ui_set_s(app.st_v0, "v0: ${px},${py}")
+    if sv < 0 { return }
+}
+
+// Count inked grid samples (anything brighter than the near-black bg).
+probe(app: *App) {
+    ink = 0
+    y = 2
+    while y < V3D_H {
+        x = 2
+        while x < V3D_W {
+            pv = canvas_read_pixel(app.canvas, x, y, V3D_W, V3D_H)
+            if ((pv >> 16) & 255) > 60 { ink = ink + 1 }
+            x = x + 4
+        }
+        y = y + 4
+    }
+    si = ui_set_s(app.st_ink, "ink: ${ink}")
+    if si < 0 { return }
+}
+
+main() {
+    app = malloc(48) as *App
+    app.angle = 0
+    st_a = ui_state_s("angle: 0")
+    st_v = ui_state_s("v0: ?")
+    st_i = ui_state_s("ink: unprobed")
+    app.st_angle = st_a
+    app.st_v0 = st_v
+    app.st_ink = st_i
+
+    window("vg3d — wireframe cube (render on demand)", 360, 360) {
+        vstack(8) {
+            text("mat4 MVP chain → polypath edges → pp_stroke wireframe")
+            vg(view_box(0, 0, 320, 240), V3D_W, V3D_H) {
+                anchor = rect(0.0, 0.0, 0.0, 0.0)
+                root_node = vg_root(node_scene(anchor))
+                app.scene = node_scene(root_node)
+                app.canvas = scene_canvas(node_scene(root_node))
+                reg = canvas_region(root_node, 0.0, 0.0,
+                                    V3D_W * 1.0, V3D_H * 1.0)
+                    callback |rn: ptr, t: float| {
+                        draw_cube(app, rn)
+                    }
+                // Static: the cube repaints when Rotate says so, and the
+                // scene costs nothing in between.
+                region_set_animated(reg, 0)
+            }
+            hstack(8) {
+                btn("Rotate 15°") callback {
+                    app.angle = app.angle + 15
+                    publish(app)
+                    _r = scene_refresh(app.scene)
+                }
+                btn("Probe pixels") callback { probe(app) }
+            }
+            t_a = text("angle: 0")
+            bind_text(t_a, st_a)
+            t_v = text("v0: ?")
+            bind_text(t_v, st_v)
+            t_i = text("ink: unprobed")
+            bind_text(t_i, st_i)
+            publish(app)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

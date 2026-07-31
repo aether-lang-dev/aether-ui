@@ -114,6 +114,7 @@ SUITES=(
   "icons|examples/icons_demo|icons_demo/spec_icons_demo|"
   "disclosure|examples/disclosure_demo|disclosure_demo/spec_disclosure_demo|"
   "stroker|examples/stroker_demo|stroker_demo/spec_stroker_demo|"
+  "vg3d|examples/vg3d_demo|vg3d_demo/spec_vg3d_demo|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"
   "rubiks_cube|apps/rubiks_cube|rubiks_cube/spec_rubiks_cube|"
