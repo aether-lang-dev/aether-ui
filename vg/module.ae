@@ -44,7 +44,7 @@ exports (
     text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Interaction modifiers (attach a handler to the shape's element).
-    on_click, on_hover, on_double_click, on_right_click, cursor, tooltip,
+    on_click, on_hover, on_double_click, on_right_click, cursor, tooltip, hit_outline,
     shadow, group_begin, group_end, behavior,
     on_click_recolor, visible_when,
     bind_fill, bind_stroke, bind_opacity, bind_text, bind_pos,
@@ -638,6 +638,15 @@ behavior(_ctx: ptr, prop: string, ms: long, easing: string) {
     ease = 0
     if string.equals(easing, "ease_out") == 1 { ease = 1 }
     element.element_set_behavior(el, prop, ms, ease, node_scene(_ctx))
+}
+
+// hit_outline(node, pp) — make the element's hit region its REAL geometry
+// (a vg.geom.polypath) instead of its bounding box. The natural companion
+// to polypath.pp_stroke: the stroke outline both renders and hit-tests.
+// Ownership of pp passes to the element; do not pp_free it afterwards.
+hit_outline(_ctx: ptr, pp: ptr) {
+    el = node_payload(_ctx)
+    if el != null { element.element_set_hit_poly(el, pp) }
 }
 
 stroke(_ctx: ptr, color: string, width: float) {

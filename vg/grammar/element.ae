@@ -88,7 +88,7 @@ exports (
     element_set_bounds, element_has_bounds,
     element_bounds_x, element_bounds_y,
     element_bounds_width, element_bounds_height,
-    element_hit_test,
+    element_hit_test, element_set_hit_poly,
 
     // Cached property state — written by element_set_* (both manual
     // user calls and the reactive-binding refresh pass) and read by
@@ -115,6 +115,7 @@ exports (
 )
 
 import std.string
+import vg.geom.polypath
 
 extern malloc(size: int) -> ptr
 
@@ -183,6 +184,9 @@ struct AevgElement {
     bounds_y: float
     bounds_w: float
     bounds_h: float
+    hit_poly: ptr           // optional PRECISE hit geometry (a polypath);
+                            //   when set, hit_test refines the bbox pass
+                            //   with a nonzero-winding containment test
 
     // ─── Cached property state ──────────────────────────────────
     // Written by `element_set_fill / set_stroke / set_opacity /
@@ -236,6 +240,7 @@ element_new(underlying: ptr) -> ptr {
     // Sum ≈ 320 with padding. malloc(384) keeps a safe margin.
     e = malloc(512) as *AevgElement
     e.underlying = underlying
+    e.hit_poly = null
     e.context = null
     e.name_str = ""
     e.click_handler = null
@@ -569,7 +574,20 @@ element_hit_test(p: ptr, px: float, py: float) -> int {
     if py < e.bounds_y { return 0 }
     if px > e.bounds_x + e.bounds_w { return 0 }
     if py > e.bounds_y + e.bounds_h { return 0 }
+    // Inside the bbox. If precise hit geometry was declared, the bbox was
+    // only the cheap reject — the polypath decides. A diagonal stroke's
+    // bbox is a big rectangle; its OUTLINE is the actual hit region.
+    if e.hit_poly != null {
+        return polypath.pp_contains(e.hit_poly, px, py)
+    }
     return 1
+}
+
+// Declare precise hit geometry (a vg.geom.polypath handle). Ownership
+// passes to the element — do not pp_free after handing it over.
+element_set_hit_poly(p: ptr, pp: ptr) {
+    e = p as *AevgElement
+    e.hit_poly = pp
 }
 
 // ─── Cached property setters/getters ─────────────────────────────
