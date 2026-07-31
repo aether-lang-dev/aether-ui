@@ -4085,41 +4085,6 @@ void aether_ui_canvas_group_begin_impl(int canvas_id) { (void)canvas_id; }
 void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
     (void)canvas_id; (void)alpha;
 }
-int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
-                                     int width, int height) {
-    // Replay the canvas's command buffer into a memory bitmap and read one
-    // pixel — headless-safe (no window needed), the win32 twin of GTK4's
-    // cairo-surface replay. Was a -1 stub, which made every pixel probe
-    // read as "ink" (0xFF in every channel) and let colour-comparison
-    // specs pass VACUOUSLY on this backend — vg3d's not-a-flood upper
-    // bound is what finally caught it.
-    //
-    // GDI has no alpha: the result's A is always 255 and the backdrop is
-    // WHITE (matching canvas_paint). Probes must classify by COLOUR
-    // against a drawn background, never by alpha, to be cross-platform.
-    if (canvas_id < 1 || canvas_id > canvas_count) return -1;
-    if (px < 0 || py < 0 || px >= width || py >= height) return -1;
-    Canvas* cv = &canvases[canvas_id - 1];
-    HDC screen = GetDC(NULL);
-    if (!screen) return -1;
-    HDC mem = CreateCompatibleDC(screen);
-    HBITMAP bmp = CreateCompatibleBitmap(screen, width, height);
-    if (!mem || !bmp) {
-        if (bmp) DeleteObject(bmp);
-        if (mem) DeleteDC(mem);
-        ReleaseDC(NULL, screen);
-        return -1;
-    }
-    HBITMAP old_bmp = (HBITMAP)SelectObject(mem, bmp);
-    canvas_replay_to_dc(cv, mem, width, height);
-    COLORREF c = GetPixel(mem, px, py);
-    SelectObject(mem, old_bmp);
-    DeleteObject(bmp);
-    DeleteDC(mem);
-    ReleaseDC(NULL, screen);
-    if (c == CLR_INVALID) return -1;
-    return (255 << 24) | (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c);
-}
 // Drawn vg tooltip — one overlay per SHOW (a hide flips it dead; the next
 // hover opens a fresh one, matching the macOS/GTK observable contract:
 // specs assert live:1 on hover, live:0 after moving off, live:1 again).
@@ -5162,6 +5127,42 @@ static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
     SelectObject(mem, old_bmp);
     DeleteObject(bmp);
     DeleteDC(mem);
+}
+
+int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
+                                     int width, int height) {
+    // Replay the canvas's command buffer into a memory bitmap and read one
+    // pixel — headless-safe (no window needed), the win32 twin of GTK4's
+    // cairo-surface replay. Was a -1 stub, which made every pixel probe
+    // read as "ink" (0xFF in every channel) and let colour-comparison
+    // specs pass VACUOUSLY on this backend — vg3d's not-a-flood upper
+    // bound is what finally caught it.
+    //
+    // GDI has no alpha: the result's A is always 255 and the backdrop is
+    // WHITE (matching canvas_paint). Probes must classify by COLOUR
+    // against a drawn background, never by alpha, to be cross-platform.
+    if (canvas_id < 1 || canvas_id > canvas_count) return -1;
+    if (px < 0 || py < 0 || px >= width || py >= height) return -1;
+    Canvas* cv = &canvases[canvas_id - 1];
+    HDC screen = GetDC(NULL);
+    if (!screen) return -1;
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, width, height);
+    if (!mem || !bmp) {
+        if (bmp) DeleteObject(bmp);
+        if (mem) DeleteDC(mem);
+        ReleaseDC(NULL, screen);
+        return -1;
+    }
+    HBITMAP old_bmp = (HBITMAP)SelectObject(mem, bmp);
+    canvas_replay_to_dc(cv, mem, width, height);
+    COLORREF c = GetPixel(mem, px, py);
+    SelectObject(mem, old_bmp);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    if (c == CLR_INVALID) return -1;
+    return (255 << 24) | (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c);
 }
 
 // Map a Win32 virtual-key code to the GDK key name the app-side handlers
