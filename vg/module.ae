@@ -64,6 +64,8 @@ exports (
     scene_add_live_region, scene_live_regions, scene_render_live_draws, render_one_draw,
     scene_free_recording,
     scene_set_refreshing, scene_is_refreshing, scene_eval_bindings,
+    scene_set_arm_hook, scene_set_present_hook, scene_set_timer, scene_timer,
+    scene_present,
     // Text metrics: measure a string, get font vertical extents, ellipsize
     // to a pixel width. text_extent returns (width, line-height, ascent) —
     // ascent is the top-to-baseline distance, so drawing at y=top+ascent
@@ -141,6 +143,14 @@ struct VgScene {
                     //   per-frame draw-region sub-scenes (render_one_draw);
                     //   null (untracked) for ordinary long-lived scenes.
     last_now: long  // most recent tick/advance clock (behavior tween start)
+    timer_id: int   // the live loop's ui.timer id; 0 = no timer installed.
+                    //   Owned by the arm/retire cycle below.
+    arm_cb: ptr     // boxed closure installed by the live layer: "this scene
+                    //   now needs frames — install the timer if absent".
+                    //   Invoked (idempotently) by _scene_request_frames.
+    present_cb: ptr // boxed closure: clear + flush + redraw the canvas.
+                    //   Lets scene_refresh PRESENT its result without this
+                    //   module knowing about ui canvases.
 }
 
 // One deferred shape: enough to dispatch it after its style is known.
@@ -233,7 +243,7 @@ scene_canvas(p: ptr) -> int        { s = p as *VgScene; return s.canvas_id }
 // canvas" (headless / recording). vg_root wraps it as the root VgNode the
 // shape verbs accept as _ctx.
 scene_new(ctx: ptr, backend: ptr) -> ptr {
-    s = malloc(112) as *VgScene
+    s = malloc(160) as *VgScene
     s.ctx = ctx
     s.backend = backend
     s.canvas_id = 0
@@ -245,13 +255,61 @@ scene_new(ctx: ptr, backend: ptr) -> ptr {
     s.live_regions = null
     s.refreshing = 0
     s.nodes = null
+    s.timer_id = 0
+    s.arm_cb = null
+    s.present_cb = null
     return s
+}
+
+// ─── Frames on demand ─────────────────────────────────────────────
+//
+// A scene does NOT get a frame timer by default. The primitives that make
+// a scene need frames — scene_set_refreshing(1), a live region arriving,
+// an animation registering — request them here, and the live layer's arm
+// hook installs the ~60fps timer at that moment (idempotently; the timer
+// retires itself when the scene goes quiet again). This is what lets a
+// window full of static vg scenes cost nothing at idle.
+//
+// The hook is registered by vg() BEFORE its builder block runs, and the
+// needs-frames calls happen inside (or after) that block — so the ordering
+// works by construction. (Deciding up front, inside vg(), cannot work: the
+// block body is what declares the need, and it runs after vg() returns.)
+scene_set_arm_hook(p: ptr, cb: fn) {
+    s = p as *VgScene
+    s.arm_cb = cb
+}
+
+scene_set_present_hook(p: ptr, cb: fn) {
+    s = p as *VgScene
+    s.present_cb = cb
+}
+
+scene_set_timer(p: ptr, t: int) { s = p as *VgScene; s.timer_id = t }
+scene_timer(p: ptr) -> int      { s = p as *VgScene; return s.timer_id }
+
+// fn-typed param auto-unboxes a stored handler ptr at the call site —
+// the same idiom grammar/events.invoke_click uses.
+_scene_invoke_hook(cb: fn) { cb() }
+
+_scene_request_frames(s: *VgScene) {
+    if s.arm_cb == null { return }
+    _scene_invoke_hook(s.arm_cb)
+}
+
+scene_present(p: ptr) {
+    s = p as *VgScene
+    if s.present_cb == null { return }
+    _scene_invoke_hook(s.present_cb)
 }
 
 // scene_set_refreshing(scene, 1) — make the live loop re-evaluate bind_pos/when
 // bindings every frame (the live analogue of CVG's poll()). A binding-driven
 // scene (e.g. a clock whose hands use bind_pos) turns this on so it ticks.
-scene_set_refreshing(p: ptr, on: int) { s = p as *VgScene; s.refreshing = on }
+scene_set_refreshing(p: ptr, on: int) {
+    s = p as *VgScene
+    s.refreshing = on
+    if on == 1 { _scene_request_frames(s) }
+}
 scene_is_refreshing(p: ptr) -> int    { s = p as *VgScene; return s.refreshing }
 
 // event_state — the scene's shared hover/drag/click state. vg_live creates one
@@ -975,6 +1033,10 @@ scene_refresh(scene: ptr) -> int {
     vg_flush(scene)
     n = scene_eval_bindings(scene)
     vg_flush(scene)
+    // Present: without this, the re-evaluated buffer sat unshown until the
+    // next damage event — scene_refresh is the state-changed → REPAINT
+    // entry point, so it finishes the job.
+    scene_present(scene)
     return n
 }
 
@@ -1016,6 +1078,10 @@ scene_anim_mgr_of_node(_ctx: ptr) -> ptr {
 scene_animation_manager(scene: ptr) -> ptr {
     s = scene as *VgScene
     if s.anim_mgr == null { s.anim_mgr = animations.manager_new() }
+    // Every caller of this accessor is REGISTERING animation work (the tick
+    // path reads s.anim_mgr directly), so it doubles as the "an animation
+    // is arriving" signal — including re-arming after the timer retired.
+    _scene_request_frames(s)
     return s.anim_mgr
 }
 
@@ -1054,6 +1120,9 @@ scene_add_live_region(scene: ptr, lr: ptr) {
     s = scene as *VgScene
     if s.live_regions == null { s.live_regions = list.new() }
     _ = list.add(s.live_regions, lr)
+    // An (animated-by-default) region makes the scene live; a region later
+    // marked static (region_set_animated 0) lets the timer retire again.
+    _scene_request_frames(s)
 }
 
 scene_live_regions(scene: ptr) -> ptr {

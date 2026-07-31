@@ -83,7 +83,11 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
     es = events.event_state_new()
     vg.scene_set_event_state(scene, es)
     ui.register_deferred_flush() callback {
-        _flush_clipped(scene, canvas_id)
+        // FULL render, live-region content included (same treatment as the
+        // resize hook): a canvas_region scene that never turns refreshing —
+        // a static preview repainted only via scene_refresh — must still
+        // paint its first frame, and there is no timer to do it anymore.
+        _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
         ui.canvas_redraw(canvas_id)
     }
     // Click: hit-test the tracked shapes and fire the topmost handler, then
@@ -128,15 +132,35 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
         ui.canvas_clear(canvas_id)
         _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
     }
-    // Animation loop: a ~60fps timer drives the scene's animations. It no-ops
-    // when nothing is animating (cheap idle), and otherwise advances them to
-    // the current monotonic time, re-renders (clear + clip + flush), and
-    // redraws. The animations are registered by vg.animate inside the block.
-    _tid = ui.timer(16) callback {
-        live = 0
-        if vg.scene_is_animating(scene) == 1 { live = 1 }
-        if vg.scene_is_refreshing(scene) == 1 { live = 1 }
-        if live == 1 {
+    // Frames on demand. No timer is installed here — a static scene must
+    // cost nothing at idle, and MOST scenes are static (every icon is a
+    // whole vg() scene; a list once ran ~25 of these timers at 60Hz to test
+    // flags that were permanently zero). Instead the scene carries an ARM
+    // hook: the primitives that make it need frames (scene_set_refreshing,
+    // a live region arriving, an animation registering) invoke it at that
+    // moment, and it installs the ~60fps loop idempotently. The loop
+    // RETIRES itself on the first tick that finds the scene quiet — a
+    // finished one-shot tween stops costing anything — and the next request
+    // simply arms it again.
+    //
+    // Deciding once, up front, cannot work and is known to break: vg() is a
+    // builder, so the block body — where the needs-frames declarations live
+    // — runs AFTER this function returns; an up-front test always sees an
+    // empty scene and strips the timer from every canvas_region scene.
+    vg.scene_set_arm_hook(scene) callback {
+        if vg.scene_timer(scene) != 0 { return }
+        tid = ui.timer(16) callback {
+            live = 0
+            if vg.scene_is_animating(scene) == 1 { live = 1 }
+            if vg.scene_is_refreshing(scene) == 1 { live = 1 }
+            if live == 0 {
+                held = vg.scene_timer(scene)
+                if held != 0 {
+                    ui.timer_cancel(held)
+                    vg.scene_set_timer(scene, 0)
+                }
+                return
+            }
             now = now_monotonic_ms()
             ran = vg.scene_advance(scene, now)
             // Refreshing scenes (bind_pos/when-driven, e.g. a clock) re-evaluate
@@ -150,6 +174,14 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
             _flush_live(scene, canvas_id, ms_to_secs(now))
             ui.canvas_redraw(canvas_id)
         }
+        vg.scene_set_timer(scene, tid)
+    }
+    // Present hook: what scene_refresh (state changed → repaint NOW) uses to
+    // put its result on screen without a timer's help.
+    vg.scene_set_present_hook(scene) callback {
+        ui.canvas_clear(canvas_id)
+        _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
+        ui.canvas_redraw(canvas_id)
     }
     return vg.vg_root(scene)
 }
