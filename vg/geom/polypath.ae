@@ -47,13 +47,17 @@ exports (
     pp_npts, pp_nctrs, pp_ctr_end, pp_ctr_closed,
     pp_x, pp_y, pp_set, pp_clone,
     pp_transform, pp_transform_proj, pp_bounds,
-    pp_simplify, pp_smooth, pp_to_path
+    pp_simplify, pp_smooth, pp_to_path, pp_contains,
+    pp_stroke,
+    PP_JOIN_MITER, PP_JOIN_BEVEL, PP_JOIN_ROUND,
+    PP_CAP_BUTT, PP_CAP_ROUND, PP_CAP_SQUARE, PP_CAP_ARROW
 )
 
 import std.string
 import std.strbuilder
 import std.floatarr
 import std.intarr
+import std.math (math_sin, math_cos, math_atan2, math_pi)
 import vg.geom.transform (affine_apply_p, proj_apply_p, pt_x, pt_y)
 
 extern malloc(size: int) -> ptr
@@ -485,4 +489,355 @@ pp_to_path(pp: ptr) -> string {
         ci = ci + 1
     }
     return strbuilder.finish(b)
+}
+
+
+// ── Stroke: pen sweep → outline geometry ────────────────────────────────────
+// pp_stroke turns a stroked path into the CLOSED OUTLINE of that stroke —
+// ordinary fillable geometry. Rendered with nonzero winding it looks like
+// the stroke; being a path, it can also be gradient-filled, hit-tested,
+// shadowed, exported, or stroked again. Backends then only ever FILL,
+// which is what cross-platform pixel identity needs.
+//
+// Joins: PP_JOIN_MITER (sharp, falling back to bevel past miter_limit —
+// the SVG semantic), PP_JOIN_BEVEL (flat), PP_JOIN_ROUND (flattened arc).
+// Caps:  PP_CAP_BUTT | PP_CAP_ROUND | PP_CAP_SQUARE, plus PP_CAP_ARROW —
+// a solid arrowhead as a line cap (3x stroke width across, protruding 2x),
+// so diagram edges get arrows with no extra geometry work at the call site.
+//
+// Construction: an OPEN contour yields one closed ring — left offsets
+// forward, end cap, right offsets backward, start cap. A CLOSED contour
+// yields two rings, the return side reversed, and nonzero winding fills
+// the annulus between them. Inner-side folds at joins are deliberate and
+// disappear under nonzero fill (the classic non-boolean stroker).
+// Contours with fewer than 2 distinct points are skipped.
+
+const PP_JOIN_MITER: int = 0
+const PP_JOIN_BEVEL: int = 1
+const PP_JOIN_ROUND: int = 2
+const PP_CAP_BUTT: int = 0
+const PP_CAP_ROUND: int = 1
+const PP_CAP_SQUARE: int = 2
+const PP_CAP_ARROW: int = 3
+
+// Arc flattening step for round joins/caps, radians (~20 deg).
+const PP_ARC_STEP: float = 0.35
+
+// Emit the wedge for one vertex on the current walking side. pA (arrive
+// along the previous segment offset) is pushed, then any outer-join
+// geometry, then pB (leave along the next segment offset). The caller
+// hands PRIMED directions/normals on the reverse walk, so one function
+// serves both sides.
+_pp_emit_join(q: ptr, px: float, py: float,
+              nax: float, nay: float, nbx: float, nby: float,
+              dax: float, day: float, dbx: float, dby: float,
+              h: float, join: int, miter_limit: float) {
+    pp_push(q, px + nax * h, py + nay * h)
+    cross = dax * dby - day * dbx
+    outer = 0
+    if cross < 0.0 - 0.000001 { outer = 1 }
+    if outer == 1 {
+        if join == PP_JOIN_MITER {
+            mx = nax + nbx
+            my = nay + nby
+            ml = _pp_sqrt(mx * mx + my * my)
+            if ml > 0.000001 {
+                mx = mx / ml
+                my = my / ml
+                c = mx * nax + my * nay
+                if c > 0.000001 {
+                    r = 1.0 / c
+                    if r <= miter_limit {
+                        pp_push(q, px + mx * h * r, py + my * h * r)
+                    }
+                }
+            }
+        }
+        if join == PP_JOIN_ROUND {
+            a0 = math_atan2(nay, nax)
+            a1 = math_atan2(nby, nbx)
+            sweep = a1 - a0
+            while sweep > math_pi() { sweep = sweep - 2.0 * math_pi() }
+            while sweep < 0.0 - math_pi() { sweep = sweep + 2.0 * math_pi() }
+            steps = 1
+            asweep = sweep
+            if asweep < 0.0 { asweep = 0.0 - asweep }
+            while (steps as float) * PP_ARC_STEP < asweep { steps = steps + 1 }
+            k = 1
+            while k < steps {
+                a = a0 + sweep * (k as float) / (steps as float)
+                pp_push(q, px + math_cos(a) * h, py + math_sin(a) * h)
+                k = k + 1
+            }
+        }
+    }
+    pp_push(q, px + nbx * h, py + nby * h)
+}
+
+// Cap intermediates between the two side endpoints at an open end.
+// center P, outward direction d, and the normal of the side we ARRIVE on;
+// the side endpoints themselves are pushed by the side walks.
+_pp_emit_cap(q: ptr, px: float, py: float,
+             dx: float, dy: float, nx: float, ny: float,
+             h: float, cap: int) {
+    if cap == PP_CAP_SQUARE {
+        pp_push(q, px + dx * h + nx * h, py + dy * h + ny * h)
+        pp_push(q, px + dx * h - nx * h, py + dy * h - ny * h)
+    }
+    if cap == PP_CAP_ARROW {
+        pp_push(q, px + nx * h * 3.0, py + ny * h * 3.0)
+        pp_push(q, px + dx * h * 4.0, py + dy * h * 4.0)
+        pp_push(q, px - nx * h * 3.0, py - ny * h * 3.0)
+    }
+    if cap == PP_CAP_ROUND {
+        a0 = math_atan2(ny, nx)
+        // Half-turn from +n to -n passing through +d: the sweep sign is
+        // whichever direction has +d at its midpoint.
+        cr = nx * dy - ny * dx
+        sweep = math_pi()
+        if cr < 0.0 { sweep = 0.0 - math_pi() }
+        steps = 1
+        while (steps as float) * PP_ARC_STEP < math_pi() { steps = steps + 1 }
+        k = 1
+        while k < steps {
+            a = a0 + sweep * (k as float) / (steps as float)
+            pp_push(q, px + math_cos(a) * h, py + math_sin(a) * h)
+            k = k + 1
+        }
+    }
+}
+
+// Per-contour scratch: distinct consecutive points + per-segment unit
+// direction and left normal ((-dy, dx) of the unit direction).
+struct PPStrokeCtr {
+    fx: ptr
+    fy: ptr
+    n: int
+    dx: ptr
+    dy: ptr
+    nx: ptr
+    ny: ptr
+    nseg: int
+}
+
+_pp_stroke_prep(pp: ptr, ci: int, is_closed: int) -> *PPStrokeCtr {
+    p = pp as *PolyPath
+    st = malloc(64) as *PPStrokeCtr
+    start = _pp_ctr_start(p, ci)
+    last = intarr_get_raw(p.ends, ci)
+    cap = last - start + 2
+    st.fx = floatarr_new_raw(cap)
+    st.fy = floatarr_new_raw(cap)
+    st.n = 0
+    j = start
+    while j <= last {
+        x = pp_x(pp, j)
+        y = pp_y(pp, j)
+        keep = 1
+        if st.n > 0 {
+            lx = floatarr_get_raw(st.fx, st.n - 1)
+            ly = floatarr_get_raw(st.fy, st.n - 1)
+            ddx = x - lx
+            ddy = y - ly
+            if ddx * ddx + ddy * ddy < 0.0000001 { keep = 0 }
+        }
+        if keep == 1 {
+            floatarr_set_raw(st.fx, st.n, x)
+            floatarr_set_raw(st.fy, st.n, y)
+            st.n = st.n + 1
+        }
+        j = j + 1
+    }
+    // A closed contour whose explicit last point repeats the first: drop it.
+    if is_closed == 1 && st.n > 1 {
+        ddx = floatarr_get_raw(st.fx, st.n - 1) - floatarr_get_raw(st.fx, 0)
+        ddy = floatarr_get_raw(st.fy, st.n - 1) - floatarr_get_raw(st.fy, 0)
+        if ddx * ddx + ddy * ddy < 0.0000001 { st.n = st.n - 1 }
+    }
+    st.nseg = st.n - 1
+    if is_closed == 1 { st.nseg = st.n }
+    if st.nseg < 1 {
+        st.dx = floatarr_new_raw(1)
+        st.dy = floatarr_new_raw(1)
+        st.nx = floatarr_new_raw(1)
+        st.ny = floatarr_new_raw(1)
+        return st
+    }
+    st.dx = floatarr_new_raw(st.nseg)
+    st.dy = floatarr_new_raw(st.nseg)
+    st.nx = floatarr_new_raw(st.nseg)
+    st.ny = floatarr_new_raw(st.nseg)
+    i = 0
+    while i < st.nseg {
+        a = i
+        b = i + 1
+        if b >= st.n { b = 0 }
+        ddx = floatarr_get_raw(st.fx, b) - floatarr_get_raw(st.fx, a)
+        ddy = floatarr_get_raw(st.fy, b) - floatarr_get_raw(st.fy, a)
+        len = _pp_sqrt(ddx * ddx + ddy * ddy)
+        floatarr_set_raw(st.dx, i, ddx / len)
+        floatarr_set_raw(st.dy, i, ddy / len)
+        floatarr_set_raw(st.nx, i, 0.0 - ddy / len)
+        floatarr_set_raw(st.ny, i, ddx / len)
+        i = i + 1
+    }
+    return st
+}
+
+_pp_stroke_free(st: *PPStrokeCtr) {
+    floatarr_free(st.fx)
+    floatarr_free(st.fy)
+    floatarr_free(st.dx)
+    floatarr_free(st.dy)
+    floatarr_free(st.nx)
+    floatarr_free(st.ny)
+    free(st as ptr)
+}
+
+// The stroker. Returns a NEW polypath of closed outline rings; the input
+// is untouched. width is the full stroke width; miter_limit is the SVG
+// ratio (4.0 is the SVG default).
+pp_stroke(pp: ptr, width: float, join: int, cap: int, miter_limit: float) -> ptr {
+    p = pp as *PolyPath
+    q = pp_new()
+    h = width * 0.5
+    ci = 0
+    while ci < p.nctrs {
+        is_closed = intarr_get_raw(p.closed, ci)
+        st = _pp_stroke_prep(pp, ci, is_closed)
+        n = st.n
+        if n < 2 {
+            _pp_stroke_free(st)
+            ci = ci + 1
+            continue
+        }
+        if is_closed == 1 {
+            // Ring 1: left side, forward, a join at every vertex (wrapping).
+            pp_begin(q, 1)
+            v = 0
+            while v < n {
+                pv = v - 1
+                if pv < 0 { pv = n - 1 }
+                _pp_emit_join(q,
+                    floatarr_get_raw(st.fx, v), floatarr_get_raw(st.fy, v),
+                    floatarr_get_raw(st.nx, pv), floatarr_get_raw(st.ny, pv),
+                    floatarr_get_raw(st.nx, v), floatarr_get_raw(st.ny, v),
+                    floatarr_get_raw(st.dx, pv), floatarr_get_raw(st.dy, pv),
+                    floatarr_get_raw(st.dx, v), floatarr_get_raw(st.dy, v),
+                    h, join, miter_limit)
+                v = v + 1
+            }
+            // Ring 2: right side, backward — primed dirs/normals, wrapping.
+            pp_begin(q, 1)
+            v = n - 1
+            while v >= 0 {
+                sa = v
+                sb = v - 1
+                if sb < 0 { sb = n - 1 }
+                _pp_emit_join(q,
+                    floatarr_get_raw(st.fx, v), floatarr_get_raw(st.fy, v),
+                    0.0 - floatarr_get_raw(st.nx, sa), 0.0 - floatarr_get_raw(st.ny, sa),
+                    0.0 - floatarr_get_raw(st.nx, sb), 0.0 - floatarr_get_raw(st.ny, sb),
+                    0.0 - floatarr_get_raw(st.dx, sa), 0.0 - floatarr_get_raw(st.dy, sa),
+                    0.0 - floatarr_get_raw(st.dx, sb), 0.0 - floatarr_get_raw(st.dy, sb),
+                    h, join, miter_limit)
+                v = v - 1
+            }
+        } else {
+            lastseg = st.nseg - 1
+            pp_begin(q, 1)
+            // Left side, forward.
+            pp_push(q,
+                floatarr_get_raw(st.fx, 0) + floatarr_get_raw(st.nx, 0) * h,
+                floatarr_get_raw(st.fy, 0) + floatarr_get_raw(st.ny, 0) * h)
+            v = 1
+            while v < n - 1 {
+                _pp_emit_join(q,
+                    floatarr_get_raw(st.fx, v), floatarr_get_raw(st.fy, v),
+                    floatarr_get_raw(st.nx, v - 1), floatarr_get_raw(st.ny, v - 1),
+                    floatarr_get_raw(st.nx, v), floatarr_get_raw(st.ny, v),
+                    floatarr_get_raw(st.dx, v - 1), floatarr_get_raw(st.dy, v - 1),
+                    floatarr_get_raw(st.dx, v), floatarr_get_raw(st.dy, v),
+                    h, join, miter_limit)
+                v = v + 1
+            }
+            ex = floatarr_get_raw(st.fx, n - 1)
+            ey = floatarr_get_raw(st.fy, n - 1)
+            pp_push(q, ex + floatarr_get_raw(st.nx, lastseg) * h,
+                       ey + floatarr_get_raw(st.ny, lastseg) * h)
+            // End cap.
+            _pp_emit_cap(q, ex, ey,
+                floatarr_get_raw(st.dx, lastseg), floatarr_get_raw(st.dy, lastseg),
+                floatarr_get_raw(st.nx, lastseg), floatarr_get_raw(st.ny, lastseg),
+                h, cap)
+            // Right side, backward.
+            pp_push(q, ex - floatarr_get_raw(st.nx, lastseg) * h,
+                       ey - floatarr_get_raw(st.ny, lastseg) * h)
+            v = n - 2
+            while v >= 1 {
+                _pp_emit_join(q,
+                    floatarr_get_raw(st.fx, v), floatarr_get_raw(st.fy, v),
+                    0.0 - floatarr_get_raw(st.nx, v), 0.0 - floatarr_get_raw(st.ny, v),
+                    0.0 - floatarr_get_raw(st.nx, v - 1), 0.0 - floatarr_get_raw(st.ny, v - 1),
+                    0.0 - floatarr_get_raw(st.dx, v), 0.0 - floatarr_get_raw(st.dy, v),
+                    0.0 - floatarr_get_raw(st.dx, v - 1), 0.0 - floatarr_get_raw(st.dy, v - 1),
+                    h, join, miter_limit)
+                v = v - 1
+            }
+            sx = floatarr_get_raw(st.fx, 0)
+            sy = floatarr_get_raw(st.fy, 0)
+            pp_push(q, sx - floatarr_get_raw(st.nx, 0) * h,
+                       sy - floatarr_get_raw(st.ny, 0) * h)
+            // Start cap, pointing back out along -d0, arriving on the -n side.
+            _pp_emit_cap(q, sx, sy,
+                0.0 - floatarr_get_raw(st.dx, 0), 0.0 - floatarr_get_raw(st.dy, 0),
+                0.0 - floatarr_get_raw(st.nx, 0), 0.0 - floatarr_get_raw(st.ny, 0),
+                h, cap)
+        }
+        _pp_stroke_free(st)
+        ci = ci + 1
+    }
+    return q
+}
+
+// ── Containment: nonzero-winding point test ─────────────────────────────────
+// Is (x, y) inside the filled path under the NONZERO rule — the same rule
+// the renderer fills with? Every contour participates (open ones are
+// treated as implicitly closed, matching how a fill would close them).
+// This is what makes a stroke outline a HIT REGION: a point inside a
+// pp_stroke annulus's hole counts the outer ring +1 and the reversed
+// inner ring -1, netting 0 — outside, exactly as it renders.
+pp_contains(pp: ptr, x: float, y: float) -> int {
+    p = pp as *PolyPath
+    winding = 0
+    ci = 0
+    while ci < p.nctrs {
+        start = _pp_ctr_start(p, ci)
+        last = intarr_get_raw(p.ends, ci)
+        if last > start {
+            j = start
+            while j <= last {
+                k = j + 1
+                if k > last { k = start }
+                y0 = pp_y(pp, j)
+                y1 = pp_y(pp, k)
+                if y0 <= y && y1 > y {
+                    // Upward crossing: +1 if the point is left of the edge.
+                    if (pp_x(pp, k) - pp_x(pp, j)) * (y - y0) - (x - pp_x(pp, j)) * (y1 - y0) > 0.0 {
+                        winding = winding + 1
+                    }
+                }
+                if y0 > y && y1 <= y {
+                    // Downward crossing: -1 if the point is right of the edge.
+                    if (pp_x(pp, k) - pp_x(pp, j)) * (y - y0) - (x - pp_x(pp, j)) * (y1 - y0) < 0.0 {
+                        winding = winding - 1
+                    }
+                }
+                j = j + 1
+            }
+        }
+        ci = ci + 1
+    }
+    if winding != 0 { return 1 }
+    return 0
 }

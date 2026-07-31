@@ -1,6 +1,7 @@
 // vg/test/test_polypath.ae — the flattened-path toolkit: build / accessors /
 // clone / transform (affine + projective) / bounds / simplify / smooth /
-// to_path, plus the text bridge (text_polypath serialises byte-identically
+// to_path / stroke (joins, caps incl. arrow, miter limit, closed annulus),
+// plus the text bridge (text_polypath serialises byte-identically
 // to text_paths).
 //
 // Headless (no backend at all — polypath is pure geometry; the text bridge
@@ -174,6 +175,85 @@ main() {
     assert_eq_str("serialisation prefix matches",
         string_substring(ppd, 0, 40), string_substring(tpd, 0, 40))
     assert_true("FULL d-string byte-identical", string.equals(ppd, tpd))
+
+
+    println("-- stroke: single segment, caps")
+    seg = polypath.pp_new()
+    polypath.pp_begin(seg, 0)
+    polypath.pp_push(seg, 0.0, 0.0)
+    polypath.pp_push(seg, 10.0, 0.0)
+    butt = polypath.pp_stroke(seg, 4.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_BUTT, 4.0)
+    assert_eq_int("butt: one closed ring", polypath.pp_nctrs(butt), 1)
+    assert_eq_int("butt ring is closed", polypath.pp_ctr_closed(butt, 0), 1)
+    assert_eq_int("butt: 4 outline points", polypath.pp_npts(butt), 4)
+    bb = floatarr_new_raw(4)
+    _ = polypath.pp_bounds(butt, bb)
+    assert_near("butt minx flush with end", floatarr_get_raw(bb, 0), 0.0, 0.001)
+    assert_near("butt maxx flush with end", floatarr_get_raw(bb, 2), 10.0, 0.001)
+    assert_near("butt half-width below", floatarr_get_raw(bb, 1), 0.0 - 2.0, 0.001)
+    assert_near("butt half-width above", floatarr_get_raw(bb, 3), 2.0, 0.001)
+    sqc = polypath.pp_stroke(seg, 4.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_SQUARE, 4.0)
+    assert_eq_int("square: +2 points per cap", polypath.pp_npts(sqc), 8)
+    _ = polypath.pp_bounds(sqc, bb)
+    assert_near("square cap extends by h", floatarr_get_raw(bb, 2), 12.0, 0.001)
+    assert_near("square cap extends start too", floatarr_get_raw(bb, 0), 0.0 - 2.0, 0.001)
+    arr = polypath.pp_stroke(seg, 4.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_ARROW, 4.0)
+    assert_eq_int("arrow: +3 points per cap", polypath.pp_npts(arr), 10)
+    _ = polypath.pp_bounds(arr, bb)
+    assert_near("arrow tip protrudes 2x width", floatarr_get_raw(bb, 2), 18.0, 0.001)
+    assert_near("arrow barbs 3x half-width", floatarr_get_raw(bb, 3), 6.0, 0.001)
+    rnd = polypath.pp_stroke(seg, 4.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_ROUND, 4.0)
+    assert_true("round cap adds arc points", polypath.pp_npts(rnd) > 8)
+    _ = polypath.pp_bounds(rnd, bb)
+    assert_true("round cap stays within h of the end", floatarr_get_raw(bb, 2) <= 12.001)
+
+    println("-- stroke: joins on an L")
+    ell = polypath.pp_new()
+    polypath.pp_begin(ell, 0)
+    polypath.pp_push(ell, 0.0, 0.0)
+    polypath.pp_push(ell, 10.0, 0.0)
+    polypath.pp_push(ell, 10.0, 10.0)
+    bev = polypath.pp_stroke(ell, 2.0, polypath.PP_JOIN_BEVEL, polypath.PP_CAP_BUTT, 4.0)
+    mit = polypath.pp_stroke(ell, 2.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_BUTT, 4.0)
+    rj  = polypath.pp_stroke(ell, 2.0, polypath.PP_JOIN_ROUND, polypath.PP_CAP_BUTT, 4.0)
+    assert_eq_int("bevel outline points", polypath.pp_npts(bev), 8)
+    assert_eq_int("miter adds exactly the tip", polypath.pp_npts(mit), 9)
+    assert_true("round join adds arc points", polypath.pp_npts(rj) > polypath.pp_npts(mit))
+    _ = polypath.pp_bounds(mit, bb)
+    assert_near("miter tip reaches the outer corner x", floatarr_get_raw(bb, 2), 11.0, 0.001)
+    assert_near("miter tip reaches the outer corner y", floatarr_get_raw(bb, 1), 0.0 - 1.0, 0.001)
+
+    println("-- stroke: miter limit falls back to bevel")
+    vee = polypath.pp_new()
+    polypath.pp_begin(vee, 0)
+    polypath.pp_push(vee, 0.0, 0.0)
+    polypath.pp_push(vee, 10.0, 1.0)
+    polypath.pp_push(vee, 0.0, 2.0)
+    sharp = polypath.pp_stroke(vee, 2.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_BUTT, 4.0)
+    blunt = polypath.pp_stroke(vee, 2.0, polypath.PP_JOIN_BEVEL, polypath.PP_CAP_BUTT, 4.0)
+    assert_eq_int("near-180 turn: miter clamped to bevel",
+        polypath.pp_npts(sharp), polypath.pp_npts(blunt))
+
+    println("-- stroke: closed contour is an annulus")
+    ring = polypath.pp_stroke(sq, 2.0, polypath.PP_JOIN_MITER, polypath.PP_CAP_BUTT, 4.0)
+    assert_eq_int("two rings", polypath.pp_nctrs(ring), 2)
+    assert_eq_int("outer ring closed", polypath.pp_ctr_closed(ring, 0), 1)
+    assert_eq_int("inner ring closed", polypath.pp_ctr_closed(ring, 1), 1)
+    _ = polypath.pp_bounds(ring, bb)
+    assert_near("outline grows by h (minx)", floatarr_get_raw(bb, 0), 0.0 - 1.0, 0.001)
+    assert_near("outline grows by h (maxx)", floatarr_get_raw(bb, 2), 11.0, 0.001)
+
+
+    println("-- contains (nonzero winding)")
+    assert_eq_int("centre inside square", polypath.pp_contains(sq, 5.0, 5.0), 1)
+    assert_eq_int("outside square", polypath.pp_contains(sq, 15.0, 5.0), 0)
+    assert_eq_int("above square", polypath.pp_contains(sq, 5.0, 0.0 - 3.0), 0)
+    // The stroked square is an annulus: ON the band = inside; in the HOLE
+    // the outer ring counts +1 and the reversed inner ring -1 -> outside.
+    // This doubles as proof the stroker's two rings wind oppositely.
+    assert_eq_int("on the stroke band", polypath.pp_contains(ring, 5.0, 0.0), 1)
+    assert_eq_int("in the annulus hole", polypath.pp_contains(ring, 5.0, 5.0), 0)
+    assert_eq_int("outside the annulus", polypath.pp_contains(ring, 15.0, 15.0), 0)
 
     println("ALL PASS")
 }
