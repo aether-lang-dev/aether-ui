@@ -53,6 +53,12 @@ main() {
             ib = parse_after(body, "inkB=")
             aeocha.assert_true(ia > 100, "native stroke drew real ink (${ia})")
             aeocha.assert_true(ib > 100, "outline fill drew real ink (${ib})")
+            // Anti-flood bounds (the vg3d lesson): a broken readback that
+            // returns bright-everything would sail through the agreement
+            // and floor asserts — 2100 samples all-ink means the probe is
+            // lying, not that the stroker is right.
+            aeocha.assert_true(ia < 1680, "native ink is not a flood (${ia})")
+            aeocha.assert_true(ib < 1680, "outline ink is not a flood (${ib})")
             diff = ia - ib
             if diff < 0 { diff = 0 - diff }
             aeocha.assert_true(diff * 5 <= ia,
