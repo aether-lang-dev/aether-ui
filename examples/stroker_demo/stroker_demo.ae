@@ -72,9 +72,13 @@ zigzag_d() -> string {
 }
 
 // Sample both canvases on a 4px grid and classify each sample as ink or
-// not (alpha of the replayed ARGB pixel). The two renderers may disagree
-// only in the sub-pixel anti-aliasing band along edges, so agreement on a
-// grid is high when the geometry matches and collapses when it doesn't.
+// not. Classification is by COLOUR against the drawn dark background —
+// the GREEN channel separates the #2563eb stroke (g=99) from #101018
+// (g=16) — NOT by alpha: win32's GDI readback has no alpha channel (A is
+// always 255 there), so an alpha test passes vacuously on that backend.
+// The two renderers may disagree only in the sub-pixel anti-aliasing
+// band along edges, so agreement on a grid is high when the geometry
+// matches and collapses when it doesn't.
 compare_pixels(app: *App) {
     total = 0
     agree = 0
@@ -86,12 +90,12 @@ compare_pixels(app: *App) {
         while x < SD_W {
             pa = canvas_read_pixel(app.cv_native, x, y, SD_W, SD_H)
             pb = canvas_read_pixel(app.cv_geom, x, y, SD_W, SD_H)
-            aa = (pa >> 24) & 255
-            ab = (pb >> 24) & 255
+            ga = (pa >> 8) & 255
+            gb = (pb >> 8) & 255
             ia = 0
-            if aa > 127 { ia = 1 }
+            if ga > 60 { ia = 1 }
             ib = 0
-            if ab > 127 { ib = 1 }
+            if gb > 60 { ib = 1 }
             if ia == ib { agree = agree + 1 }
             ink_a = ink_a + ia
             ink_b = ink_b + ib
@@ -121,6 +125,8 @@ main() {
                 vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
                     anchor_n = rect(0.0, 0.0, 0.0, 0.0)
                     app.cv_native = scene_canvas(node_scene(anchor_n))
+                    bg1 = rect(0.0, 0.0, 240.0, 140.0)
+                    fill(bg1, "#101018")
                     p1 = path(zigzag_d())
                     fill(p1, "none")
                     stroke(p1, "#2563eb", SD_STROKE_W)
@@ -130,6 +136,8 @@ main() {
                 vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
                     anchor_g = rect(0.0, 0.0, 0.0, 0.0)
                     app.cv_geom = scene_canvas(node_scene(anchor_g))
+                    bg2 = rect(0.0, 0.0, 240.0, 140.0)
+                    fill(bg2, "#101018")
                     zz = mk_zigzag()
                     ol = pp_stroke(zz, SD_STROKE_W, PP_JOIN_MITER, PP_CAP_BUTT, 4.0)
                     p2 = path(pp_to_path(ol))
