@@ -5,8 +5,14 @@
 //     vg/test/text_metrics_stub.c $(ae cflags) -o /tmp/t && /tmp/t
 
 import std.string
+import vg
 import vg.geom.vec3
 import vg.geom.mat4
+import vg.geom.mesh
+import vg.render3d
+import vg.backend.record
+import vg.grammar.context
+import vg.geom.transform
 
 extern exit(code: int)
 
@@ -148,6 +154,54 @@ main() {
     ndc = mat4.m4_transform_point(mvp, origin)
     assert_near("origin through full chain -> centred x", vec3.v3_x(ndc), 0.0, 0.0001)
     assert_near("origin through full chain -> centred y", vec3.v3_y(ndc), 0.0, 0.0001)
+
+
+    println("-- mesh buffers")
+    box = mesh.mesh_box(50.0, 50.0, 50.0, 1.0, 0.5, 0.0)
+    assert_true("box has 8 vertices", mesh.mesh_nverts(box) == 8)
+    assert_true("box has 6 faces", mesh.mesh_nfaces(box) == 6)
+    assert_true("faces are quads", mesh.mesh_face_size(box, 0) == 4)
+    assert_near("vertex accessor", mesh.mesh_vx(box, 1), 50.0, 0.0001)
+    assert_near("face colour", mesh.mesh_face_g(box, 0), 0.5, 0.0001)
+
+    println("-- cull / depth / shade (cube pushed to z=-200)")
+    mvt = mat4.m4_translation(0.0, 0.0, 0.0 - 200.0)
+    // Face 0 is +z (toward camera), face 1 is -z (away).
+    assert_true("front face visible", render3d.r3d_face_visible(box, 0, mvt) == 1)
+    assert_true("back face culled", render3d.r3d_face_visible(box, 1, mvt) == 0)
+    assert_true("back is farther than front",
+        render3d.r3d_face_depth(box, 1, mvt) < render3d.r3d_face_depth(box, 0, mvt))
+    lightz = vec3.v3_new(0.0, 0.0, 1.0)
+    front_shade = render3d.r3d_face_shade(box, 0, mvt, lightz, 0.5)
+    back_shade = render3d.r3d_face_shade(box, 1, mvt, lightz, 0.5)
+    assert_true("front fully lit", string.equals(front_shade, "#ff8000") == 1)
+    assert_true("back at the ambient floor", string.equals(back_shade, "#804000") == 1)
+
+    println("-- record backend scaffolding")
+    idaff = transform.affine_identity()
+    rmap = context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0,
+                               1.0, 0.0, 0.0, idaff)
+    rctx = context.new_context(rmap)
+    rbk = record.backend_new()
+    rscene = vg.scene_new(rctx, rbk)
+    rnode = vg.vg_root(rscene)
+    assert_true("scene scaffolding stands", rnode != null)
+
+    println("-- full render through the record backend")
+    rview = mat4.m4_look_at(vec3.v3_new(0.0, 0.0, 200.0),
+                            vec3.v3_new(0.0, 0.0, 0.0),
+                            vec3.v3_new(0.0, 1.0, 0.0))
+    rproj = mat4.m4_perspective(45.0, 1.0, 10.0, 1000.0)
+    rlight = vec3.v3_new(0.3, 0.5, 1.0)
+    dcount = render3d.render_mesh(rnode, box, mat4.m4_identity(), rview, rproj,
+                                  100, 100, rlight, 0.35)
+    assert_true("front-on renders exactly 1 face", dcount == 1)
+    assert_true("backend recorded it", record.backend_call_count(rbk) >= 1)
+    record.backend_clear(rbk)
+    rmodel = mat4.m4_mul(mat4.m4_rotation_y(35.0), mat4.m4_rotation_x(25.0))
+    dcount3 = render3d.render_mesh(rnode, box, rmodel, rview, rproj,
+                                   100, 100, rlight, 0.35)
+    assert_true("oblique corner renders exactly 3 faces", dcount3 == 3)
 
     println("ALL PASS")
 }

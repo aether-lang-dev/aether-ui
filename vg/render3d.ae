@@ -1,0 +1,215 @@
+// aevg/render3d.ae — the vg3d painter renderer.
+//
+// Projects a geom/mesh through a mat4 model·view·projection chain and
+// emits the visible faces as ordinary vg path fills:
+//
+//   render3d.render_mesh(rn, m, model, view, proj, vw, vh, light, 0.35)
+//
+// The pipeline, per mesh:
+//   1. eye space   — every vertex through view·model once;
+//   2. cull        — a face survives if its outward normal (right-handed
+//                    cross of its first two edges; faces are wound CCW
+//                    from outside — geom/mesh's contract) faces the
+//                    camera: dot(normal, centroid) < 0 in eye space;
+//   3. shade       — per-face Lambert: ambient + (1-ambient)·max(0, n̂·L̂),
+//                    with the light direction given in EYE space, scaling
+//                    the face's base colour into a "#rrggbb" fill;
+//   4. sort        — painter's algorithm on centroid eye-space depth,
+//                    farthest first (no z-buffer at this tier — meshes
+//                    with interpenetrating faces are out of scope);
+//   5. emit        — each face a closed polypath contour, projected to
+//                    y-down screen px, drawn via path() + fill().
+//
+// The cull/shade/depth steps are exported per-face so the unit tier can
+// assert them exactly without a backend.
+
+exports (
+    render_mesh,
+    r3d_face_visible, r3d_face_depth, r3d_face_shade
+)
+
+import std.string
+import std.strbuilder
+import std.floatarr
+import std.intarr
+import std.math (math_sqrt)
+import vg (path, fill)
+import vg.geom.mesh (
+    mesh_nfaces, mesh_face_size, mesh_face_vertex,
+    mesh_vx, mesh_vy, mesh_vz,
+    mesh_face_r, mesh_face_g, mesh_face_b
+)
+import vg.geom.mat4 (m4_mul, m4_transform_point)
+import vg.geom.vec3 (v3_new, v3_x, v3_y, v3_z)
+import vg.geom.polypath (pp_new, pp_begin, pp_push, pp_to_path, pp_free)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+
+// The face's vertex k, transformed by matrix mv. Returns a heap V3.
+_r3d_eye_vertex(mp: ptr, fi: int, k: int, mv: ptr) -> ptr {
+    vi = mesh_face_vertex(mp, fi, k)
+    return m4_transform_point(mv,
+        v3_new(mesh_vx(mp, vi), mesh_vy(mp, vi), mesh_vz(mp, vi)))
+}
+
+// Outward normal (unnormalised) and centroid of face fi in eye space.
+// Packed into a floatarr [nx,ny,nz,cx,cy,cz] to keep one traversal.
+_r3d_face_frame(mp: ptr, fi: int, mv: ptr) -> ptr {
+    n = mesh_face_size(mp, fi)
+    p0 = _r3d_eye_vertex(mp, fi, 0, mv)
+    p1 = _r3d_eye_vertex(mp, fi, 1, mv)
+    p2 = _r3d_eye_vertex(mp, fi, 2, mv)
+    e1x = v3_x(p1) - v3_x(p0)
+    e1y = v3_y(p1) - v3_y(p0)
+    e1z = v3_z(p1) - v3_z(p0)
+    e2x = v3_x(p2) - v3_x(p0)
+    e2y = v3_y(p2) - v3_y(p0)
+    e2z = v3_z(p2) - v3_z(p0)
+    out = floatarr_new_raw(6)
+    floatarr_set_raw(out, 0, e1y * e2z - e1z * e2y)
+    floatarr_set_raw(out, 1, e1z * e2x - e1x * e2z)
+    floatarr_set_raw(out, 2, e1x * e2y - e1y * e2x)
+    cx = 0.0
+    cy = 0.0
+    cz = 0.0
+    k = 0
+    while k < n {
+        pv = _r3d_eye_vertex(mp, fi, k, mv)
+        cx = cx + v3_x(pv)
+        cy = cy + v3_y(pv)
+        cz = cz + v3_z(pv)
+        k = k + 1
+    }
+    floatarr_set_raw(out, 3, cx / (n * 1.0))
+    floatarr_set_raw(out, 4, cy / (n * 1.0))
+    floatarr_set_raw(out, 5, cz / (n * 1.0))
+    return out
+}
+
+// Does face fi face the camera under modelview mv?
+r3d_face_visible(mp: ptr, fi: int, mv: ptr) -> int {
+    fr = _r3d_face_frame(mp, fi, mv)
+    d = floatarr_get_raw(fr, 0) * floatarr_get_raw(fr, 3)
+    d = d + floatarr_get_raw(fr, 1) * floatarr_get_raw(fr, 4)
+    d = d + floatarr_get_raw(fr, 2) * floatarr_get_raw(fr, 5)
+    floatarr_free(fr)
+    if d < 0.0 { return 1 }
+    return 0
+}
+
+// Painter key: centroid eye-space z (camera looks down -z, so MORE
+// NEGATIVE is FARTHER — draw ascending).
+r3d_face_depth(mp: ptr, fi: int, mv: ptr) -> float {
+    fr = _r3d_face_frame(mp, fi, mv)
+    d = floatarr_get_raw(fr, 5)
+    floatarr_free(fr)
+    return d
+}
+
+_r3d_hex2(b: ptr, v: float) {
+    n = lrint(v * 255.0) as int
+    if n < 0 { n = 0 }
+    if n > 255 { n = 255 }
+    _ = strbuilder.append_hex(b, n as long, 2)
+}
+
+// Lambert shade of face fi: "#rrggbb". light is a direction TOWARD the
+// light in eye space (need not be normalised); ambient is the floor.
+r3d_face_shade(mp: ptr, fi: int, mv: ptr, light: ptr, ambient: float) -> string {
+    fr = _r3d_face_frame(mp, fi, mv)
+    nx = floatarr_get_raw(fr, 0)
+    ny = floatarr_get_raw(fr, 1)
+    nz = floatarr_get_raw(fr, 2)
+    floatarr_free(fr)
+    nl = math_sqrt(nx * nx + ny * ny + nz * nz)
+    lx = v3_x(light)
+    ly = v3_y(light)
+    lz = v3_z(light)
+    ll = math_sqrt(lx * lx + ly * ly + lz * lz)
+    diff = 0.0
+    if nl > 0.000001 && ll > 0.000001 {
+        diff = (nx * lx + ny * ly + nz * lz) / (nl * ll)
+    }
+    if diff < 0.0 { diff = 0.0 }
+    inten = ambient + (1.0 - ambient) * diff
+    b = strbuilder.new(8)
+    _ = strbuilder.append(b, "#")
+    _r3d_hex2(b, mesh_face_r(mp, fi) * inten)
+    _r3d_hex2(b, mesh_face_g(mp, fi) * inten)
+    _r3d_hex2(b, mesh_face_b(mp, fi) * inten)
+    return strbuilder.finish(b)
+}
+
+// Render the mesh into any vg drawing context (a scene node or a
+// canvas_region's rn). Returns the number of faces drawn.
+// NB param names: model_m/view_m/proj_m rather than the obvious
+// model/view/proj — a caller whose OWN scope has locals named model or
+// view trips a compiler cross-scope type-inference bug (silent broken
+// codegen, zero-output main; same class as the `t` collision noted in
+// test_polypath's history). Defensive naming until that is fixed upstream.
+render_mesh(_ctx: ptr, mp: ptr, model_m: ptr, view_m: ptr, proj_m: ptr,
+            vw: int, vh: int, light: ptr, ambient: float) -> int {
+    mv = m4_mul(view_m, model_m)
+    mvp = m4_mul(proj_m, mv)
+    nf = mesh_nfaces(mp)
+    if nf == 0 { return 0 }
+    // Visible faces with their painter keys.
+    order = intarr_new_raw(nf)
+    depth = floatarr_new_raw(nf)
+    nvis = 0
+    fi = 0
+    while fi < nf {
+        if r3d_face_visible(mp, fi, mv) == 1 {
+            intarr_set_raw(order, nvis, fi)
+            floatarr_set_raw(depth, nvis, r3d_face_depth(mp, fi, mv))
+            nvis = nvis + 1
+        }
+        fi = fi + 1
+    }
+    // Insertion sort ascending by depth: most negative (farthest) first.
+    i = 1
+    while i < nvis {
+        kf = intarr_get_raw(order, i)
+        kd = floatarr_get_raw(depth, i)
+        j = i - 1
+        moving = 1
+        while j >= 0 && moving == 1 {
+            if floatarr_get_raw(depth, j) > kd {
+                intarr_set_raw(order, j + 1, intarr_get_raw(order, j))
+                floatarr_set_raw(depth, j + 1, floatarr_get_raw(depth, j))
+                j = j - 1
+            } else {
+                moving = 0
+            }
+        }
+        intarr_set_raw(order, j + 1, kf)
+        floatarr_set_raw(depth, j + 1, kd)
+        i = i + 1
+    }
+    // Project + emit, far to near.
+    i = 0
+    while i < nvis {
+        fi2 = intarr_get_raw(order, i)
+        nfv = mesh_face_size(mp, fi2)
+        pp = pp_new()
+        pp_begin(pp, 1)
+        k = 0
+        while k < nfv {
+            vi = mesh_face_vertex(mp, fi2, k)
+            ndc = m4_transform_point(mvp,
+                v3_new(mesh_vx(mp, vi), mesh_vy(mp, vi), mesh_vz(mp, vi)))
+            sx = (v3_x(ndc) * 0.5 + 0.5) * (vw * 1.0)
+            sy = (0.5 - v3_y(ndc) * 0.5) * (vh * 1.0)
+            pp_push(pp, sx, sy)
+            k = k + 1
+        }
+        el = path(_ctx, pp_to_path(pp))
+        fill(el, r3d_face_shade(mp, fi2, mv, light, ambient))
+        pp_free(pp)
+        i = i + 1
+    }
+    intarr_free(order)
+    floatarr_free(depth)
+    return nvis
+}

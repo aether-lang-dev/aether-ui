@@ -1,0 +1,248 @@
+// aevg/mesh.ae — mesh buffers for the vg3d tier.
+//
+// The 3D sibling of geom/polypath: flat storage, an append-only builder
+// API, accessors for everything, growth by doubling. A mesh is vertices
+// (interleaved x,y,z floats) plus polygon faces (a flat index list with
+// per-face end offsets — polypath's contour scheme) and a per-face base
+// colour for the shading pass.
+//
+//   m = mesh.mesh_new()
+//   a = mesh.mesh_vertex(m, x, y, z)     // -> vertex index
+//   mesh.mesh_face_begin(m, r, g, b)     // base colour, 0..1 floats
+//   mesh.mesh_face_push(m, a)  …         // CCW AS SEEN FROM OUTSIDE
+//
+// Face winding is a CONTRACT: counter-clockwise viewed from outside the
+// solid, so the right-handed cross of the first two edges points outward.
+// The renderer's backface cull and Lambert shading both depend on it.
+
+exports (
+    Mesh,
+    mesh_new, mesh_free,
+    mesh_vertex, mesh_face_begin, mesh_face_push,
+    mesh_nverts, mesh_nfaces,
+    mesh_vx, mesh_vy, mesh_vz,
+    mesh_face_size, mesh_face_vertex,
+    mesh_face_r, mesh_face_g, mesh_face_b,
+    mesh_box
+)
+
+import std.floatarr
+import std.intarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct Mesh {
+    vx: ptr         // floatarr, interleaved x,y,z — 3*vcap floats
+    nverts: int
+    vcap: int
+    fidx: ptr       // intarr — flat vertex-index list, all faces
+    nfi: int
+    ficap: int
+    fends: ptr      // intarr — last fidx slot per face
+    fcol: ptr       // floatarr — interleaved r,g,b per face
+    nfaces: int
+    fcap: int
+}
+
+const MESH_MIN_V: int = 8
+const MESH_MIN_I: int = 24
+const MESH_MIN_F: int = 6
+
+mesh_new() -> ptr {
+    m = malloc(80) as *Mesh
+    m.vx = floatarr_new_raw(MESH_MIN_V * 3)
+    m.nverts = 0
+    m.vcap = MESH_MIN_V
+    m.fidx = intarr_new_raw(MESH_MIN_I)
+    m.nfi = 0
+    m.ficap = MESH_MIN_I
+    m.fends = intarr_new_raw(MESH_MIN_F)
+    m.fcol = floatarr_new_raw(MESH_MIN_F * 3)
+    m.nfaces = 0
+    m.fcap = MESH_MIN_F
+    return m as ptr
+}
+
+mesh_free(mp: ptr) {
+    m = mp as *Mesh
+    floatarr_free(m.vx)
+    intarr_free(m.fidx)
+    intarr_free(m.fends)
+    floatarr_free(m.fcol)
+    free(mp)
+}
+
+_mesh_grow_v(m: *Mesh) {
+    ncap = m.vcap * 2
+    na = floatarr_new_raw(ncap * 3)
+    i = 0
+    while i < m.nverts * 3 {
+        floatarr_set_raw(na, i, floatarr_get_raw(m.vx, i))
+        i = i + 1
+    }
+    floatarr_free(m.vx)
+    m.vx = na
+    m.vcap = ncap
+}
+
+_mesh_grow_i(m: *Mesh) {
+    ncap = m.ficap * 2
+    na = intarr_new_raw(ncap)
+    i = 0
+    while i < m.nfi {
+        intarr_set_raw(na, i, intarr_get_raw(m.fidx, i))
+        i = i + 1
+    }
+    intarr_free(m.fidx)
+    m.fidx = na
+    m.ficap = ncap
+}
+
+_mesh_grow_f(m: *Mesh) {
+    ncap = m.fcap * 2
+    ne = intarr_new_raw(ncap)
+    nc = floatarr_new_raw(ncap * 3)
+    i = 0
+    while i < m.nfaces {
+        intarr_set_raw(ne, i, intarr_get_raw(m.fends, i))
+        i = i + 1
+    }
+    i = 0
+    while i < m.nfaces * 3 {
+        floatarr_set_raw(nc, i, floatarr_get_raw(m.fcol, i))
+        i = i + 1
+    }
+    intarr_free(m.fends)
+    floatarr_free(m.fcol)
+    m.fends = ne
+    m.fcol = nc
+    m.fcap = ncap
+}
+
+mesh_vertex(mp: ptr, x: float, y: float, z: float) -> int {
+    m = mp as *Mesh
+    if m.nverts >= m.vcap { _mesh_grow_v(m) }
+    floatarr_set_raw(m.vx, m.nverts * 3, x)
+    floatarr_set_raw(m.vx, m.nverts * 3 + 1, y)
+    floatarr_set_raw(m.vx, m.nverts * 3 + 2, z)
+    m.nverts = m.nverts + 1
+    return m.nverts - 1
+}
+
+mesh_face_begin(mp: ptr, r: float, g: float, b: float) {
+    m = mp as *Mesh
+    if m.nfaces >= m.fcap { _mesh_grow_f(m) }
+    intarr_set_raw(m.fends, m.nfaces, m.nfi - 1)
+    floatarr_set_raw(m.fcol, m.nfaces * 3, r)
+    floatarr_set_raw(m.fcol, m.nfaces * 3 + 1, g)
+    floatarr_set_raw(m.fcol, m.nfaces * 3 + 2, b)
+    m.nfaces = m.nfaces + 1
+}
+
+mesh_face_push(mp: ptr, vi: int) {
+    m = mp as *Mesh
+    if m.nfi >= m.ficap { _mesh_grow_i(m) }
+    intarr_set_raw(m.fidx, m.nfi, vi)
+    m.nfi = m.nfi + 1
+    if m.nfaces > 0 { intarr_set_raw(m.fends, m.nfaces - 1, m.nfi - 1) }
+}
+
+mesh_nverts(mp: ptr) -> int { m = mp as *Mesh; return m.nverts }
+mesh_nfaces(mp: ptr) -> int { m = mp as *Mesh; return m.nfaces }
+
+mesh_vx(mp: ptr, i: int) -> float {
+    m = mp as *Mesh
+    return floatarr_get_raw(m.vx, i * 3)
+}
+mesh_vy(mp: ptr, i: int) -> float {
+    m = mp as *Mesh
+    return floatarr_get_raw(m.vx, i * 3 + 1)
+}
+mesh_vz(mp: ptr, i: int) -> float {
+    m = mp as *Mesh
+    return floatarr_get_raw(m.vx, i * 3 + 2)
+}
+
+_mesh_face_start(m: *Mesh, fi: int) -> int {
+    if fi == 0 { return 0 }
+    return intarr_get_raw(m.fends, fi - 1) + 1
+}
+
+mesh_face_size(mp: ptr, fi: int) -> int {
+    m = mp as *Mesh
+    return intarr_get_raw(m.fends, fi) - _mesh_face_start(m, fi) + 1
+}
+
+// The k-th vertex index of face fi.
+mesh_face_vertex(mp: ptr, fi: int, k: int) -> int {
+    m = mp as *Mesh
+    return intarr_get_raw(m.fidx, _mesh_face_start(m, fi) + k)
+}
+
+mesh_face_r(mp: ptr, fi: int) -> float {
+    m = mp as *Mesh
+    return floatarr_get_raw(m.fcol, fi * 3)
+}
+mesh_face_g(mp: ptr, fi: int) -> float {
+    m = mp as *Mesh
+    return floatarr_get_raw(m.fcol, fi * 3 + 1)
+}
+mesh_face_b(mp: ptr, fi: int) -> float {
+    m = mp as *Mesh
+    return floatarr_get_raw(m.fcol, fi * 3 + 2)
+}
+
+// An axis-aligned box, centred at the origin, uniform base colour.
+// Six quads, each wound CCW from outside.
+mesh_box(hx: float, hy: float, hz: float, r: float, g: float, b: float) -> ptr {
+    m = mesh_new()
+    nx = 0.0 - hx
+    ny = 0.0 - hy
+    nz = 0.0 - hz
+    v0 = mesh_vertex(m, nx, ny, nz)
+    v1 = mesh_vertex(m, hx, ny, nz)
+    v2 = mesh_vertex(m, hx, hy, nz)
+    v3 = mesh_vertex(m, nx, hy, nz)
+    v4 = mesh_vertex(m, nx, ny, hz)
+    v5 = mesh_vertex(m, hx, ny, hz)
+    v6 = mesh_vertex(m, hx, hy, hz)
+    v7 = mesh_vertex(m, nx, hy, hz)
+    // +z (front): CCW from outside (looking down -z at it).
+    mesh_face_begin(m, r, g, b)
+    mesh_face_push(m, v4)
+    mesh_face_push(m, v5)
+    mesh_face_push(m, v6)
+    mesh_face_push(m, v7)
+    // -z (back).
+    mesh_face_begin(m, r, g, b)
+    mesh_face_push(m, v1)
+    mesh_face_push(m, v0)
+    mesh_face_push(m, v3)
+    mesh_face_push(m, v2)
+    // +x (right).
+    mesh_face_begin(m, r, g, b)
+    mesh_face_push(m, v5)
+    mesh_face_push(m, v1)
+    mesh_face_push(m, v2)
+    mesh_face_push(m, v6)
+    // -x (left).
+    mesh_face_begin(m, r, g, b)
+    mesh_face_push(m, v0)
+    mesh_face_push(m, v4)
+    mesh_face_push(m, v7)
+    mesh_face_push(m, v3)
+    // +y (top).
+    mesh_face_begin(m, r, g, b)
+    mesh_face_push(m, v7)
+    mesh_face_push(m, v6)
+    mesh_face_push(m, v2)
+    mesh_face_push(m, v3)
+    // -y (bottom).
+    mesh_face_begin(m, r, g, b)
+    mesh_face_push(m, v0)
+    mesh_face_push(m, v1)
+    mesh_face_push(m, v5)
+    mesh_face_push(m, v4)
+    return m
+}
