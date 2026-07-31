@@ -1,0 +1,195 @@
+// stroker_demo.ae — the geometric stroker (vg.geom.polypath.pp_stroke),
+// side by side with the backend's native stroking.
+//
+// Four canvases:
+//   NATIVE     — a zigzag polyline stroked by the BACKEND (path + stroke()).
+//   GEOMETRIC  — the same zigzag through pp_stroke: the stroke's OUTLINE as
+//                ordinary geometry, filled. Where both can express the shape
+//                (butt caps, miter joins) they should rasterise the same.
+//   HIT        — a fat diagonal stroke whose OUTLINE is the hit region:
+//                clicking ON the stroke fires, clicking beside it doesn't.
+//                A native stroke can't do this — the outline is the feature.
+//   ARROWS     — PP_CAP_ARROW: arrowheads as line caps, the diagram-edge
+//                staple, again inexpressible as a native stroke attribute.
+//
+// "Compare pixels" samples both stroke canvases on a grid via
+// ui.canvas_read_pixel (which REPLAYS the command buffer into a cairo
+// image surface — headless-safe) and reports agreement to a label the
+// AetherUIDriver spec asserts on. The pixel comparison lives in-process
+// because that is where the pixels are.
+//
+// Run: DISPLAY=:0 ./target/build/examples/stroker_demo/bin/stroker_demo
+
+import ui (
+    window, vstack, hstack, text, btn, enable_test_server,
+    canvas_read_pixel, ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg)
+import vg (
+    view_box, rect, path, fill, stroke, linecap, linejoin, on_click,
+    hit_outline, node_scene, scene_canvas
+)
+import vg.geom.polypath (
+    pp_new, pp_begin, pp_push, pp_stroke, pp_to_path, pp_free,
+    PP_JOIN_MITER, PP_JOIN_ROUND, PP_CAP_BUTT, PP_CAP_ARROW, PP_CAP_ROUND
+)
+import std.os (os_getenv)
+import std.string
+
+extern malloc(size: int) -> ptr
+
+const SD_W: int = 240
+const SD_H: int = 140
+const SD_STROKE_W: float = 10.0
+
+struct App {
+    cv_native: int     // canvas ids for the pixel comparison
+    cv_geom: int
+    st_cmp: int        // "pixels: …" result label state
+    st_hits: int       // hit counter label state
+    hits: int
+}
+
+// The shared test shape: a zigzag whose joins stay under the miter limit.
+mk_zigzag() -> ptr {
+    pp = pp_new()
+    pp_begin(pp, 0)
+    pp_push(pp, 20.0, 110.0)
+    pp_push(pp, 70.0, 30.0)
+    pp_push(pp, 120.0, 110.0)
+    pp_push(pp, 170.0, 30.0)
+    pp_push(pp, 220.0, 110.0)
+    return pp
+}
+
+// The zigzag as bare path data (M/L) for the native side — the SAME
+// polyline the stroker consumes, so the two canvases draw one shape.
+zigzag_d() -> string {
+    pp = mk_zigzag()
+    d = pp_to_path(pp)
+    pp_free(pp)
+    return d
+}
+
+// Sample both canvases on a 4px grid and classify each sample as ink or
+// not (alpha of the replayed ARGB pixel). The two renderers may disagree
+// only in the sub-pixel anti-aliasing band along edges, so agreement on a
+// grid is high when the geometry matches and collapses when it doesn't.
+compare_pixels(app: *App) {
+    total = 0
+    agree = 0
+    ink_a = 0
+    ink_b = 0
+    y = 2
+    while y < SD_H {
+        x = 2
+        while x < SD_W {
+            pa = canvas_read_pixel(app.cv_native, x, y, SD_W, SD_H)
+            pb = canvas_read_pixel(app.cv_geom, x, y, SD_W, SD_H)
+            aa = (pa >> 24) & 255
+            ab = (pb >> 24) & 255
+            ia = 0
+            if aa > 127 { ia = 1 }
+            ib = 0
+            if ab > 127 { ib = 1 }
+            if ia == ib { agree = agree + 1 }
+            ink_a = ink_a + ia
+            ink_b = ink_b + ib
+            total = total + 1
+            x = x + 4
+        }
+        y = y + 4
+    }
+    pct = agree * 100 / total
+    s = ui_set_s(app.st_cmp,
+        "pixels: ${agree}/${total} agree (${pct}%) inkA=${ink_a} inkB=${ink_b}")
+    if s < 0 { return }
+}
+
+main() {
+    app = malloc(40) as *App
+    app.hits = 0
+    cmp = ui_state_s("pixels: not compared yet")
+    hits = ui_state_s("hits: 0")
+    app.st_cmp = cmp
+    app.st_hits = hits
+
+    window("Stroker — geometry vs native", 560, 470) {
+        vstack(8) {
+            text("Same zigzag: backend stroke (left) vs pp_stroke outline, filled (right)")
+            hstack(10) {
+                vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
+                    anchor_n = rect(0.0, 0.0, 0.0, 0.0)
+                    app.cv_native = scene_canvas(node_scene(anchor_n))
+                    p1 = path(zigzag_d())
+                    fill(p1, "none")
+                    stroke(p1, "#2563eb", SD_STROKE_W)
+                    linecap(p1, "butt")
+                    linejoin(p1, "miter")
+                }
+                vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
+                    anchor_g = rect(0.0, 0.0, 0.0, 0.0)
+                    app.cv_geom = scene_canvas(node_scene(anchor_g))
+                    zz = mk_zigzag()
+                    ol = pp_stroke(zz, SD_STROKE_W, PP_JOIN_MITER, PP_CAP_BUTT, 4.0)
+                    p2 = path(pp_to_path(ol))
+                    fill(p2, "#2563eb")
+                    pp_free(ol)
+                    pp_free(zz)
+                }
+            }
+            text("Hit-testable stroke (click ON the fat line) · arrows as caps")
+            hstack(10) {
+                vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
+                    fat = pp_new()
+                    pp_begin(fat, 0)
+                    pp_push(fat, 30.0, 30.0)
+                    pp_push(fat, 210.0, 110.0)
+                    fol = pp_stroke(fat, 24.0, PP_JOIN_MITER, PP_CAP_ROUND, 4.0)
+                    hp = path(pp_to_path(fol))
+                    fill(hp, "#0e9f6e")
+                    // The outline IS the hit region — not the bbox.
+                    hit_outline(hp, fol)
+                    on_click(hp) callback {
+                        app.hits = app.hits + 1
+                        h = ui_set_s(app.st_hits, "hits: ${app.hits}")
+                        if h < 0 { return }
+                    }
+                    // fol now belongs to the element (hit_outline) — only
+                    // the source polyline is ours to free.
+                    pp_free(fat)
+                }
+                vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
+                    edge = pp_new()
+                    pp_begin(edge, 0)
+                    pp_push(edge, 30.0, 40.0)
+                    pp_push(edge, 200.0, 40.0)
+                    ao = pp_stroke(edge, 8.0, PP_JOIN_MITER, PP_CAP_ARROW, 4.0)
+                    a1 = path(pp_to_path(ao))
+                    fill(a1, "#7c3aed")
+                    pp_free(ao)
+                    pp_free(edge)
+                    curve = pp_new()
+                    pp_begin(curve, 0)
+                    pp_push(curve, 30.0, 120.0)
+                    pp_push(curve, 90.0, 80.0)
+                    pp_push(curve, 150.0, 120.0)
+                    pp_push(curve, 200.0, 90.0)
+                    co = pp_stroke(curve, 8.0, PP_JOIN_ROUND, PP_CAP_ARROW, 4.0)
+                    a2 = path(pp_to_path(co))
+                    fill(a2, "#db2777")
+                    pp_free(co)
+                    pp_free(curve)
+                }
+            }
+            hstack(8) {
+                btn("Compare pixels") callback { compare_pixels(app) }
+                t_cmp = text("pixels: not compared yet")
+                bind_text(t_cmp, cmp)
+            }
+            t_hits = text("hits: 0")
+            bind_text(t_hits, hits)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
