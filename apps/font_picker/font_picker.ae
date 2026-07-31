@@ -38,7 +38,7 @@ import ui (
     ui_state_s, ui_set_s, bind_text
 )
 import vg.font
-import vg.live (vg, canvas_region)
+import vg.live (vg, canvas_region, region_set_animated)
 import vg (
     view_box, rect, fill, use_font, typeface, text_paths_width, text_paths,
     path, vg_root, node_scene, scene_refresh
@@ -475,10 +475,15 @@ main() {
                 // draw_preview, per tick, forever. DejaVu faces flatten to
                 // half that and merely limped, which is why only SOME rows
                 // seemed broken. refresh_selection() repaints ON SELECTION.
-                canvas_region(root_node, 0.0, 0.0, 460.0, 90.0)
+                prv = canvas_region(root_node, 0.0, 0.0, 460.0, 90.0)
                     callback |rn: ptr, t: float| {
                         draw_preview(app, rn)
                     }
+                // STATIC region: the preview changes only when the selection
+                // does, and refresh_selection calls scene_refresh for that.
+                // Without this the region's animated-by-default flag would
+                // keep a ~60fps loop redrawing an unchanging preview.
+                region_set_animated(prv, 0)
             }
 
             t_sel = text("no selection")
