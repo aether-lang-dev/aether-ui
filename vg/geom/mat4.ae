@@ -1,0 +1,255 @@
+// aevg/mat4.ae — 4x4 matrices for the vg3d tier.
+//
+// Column-major storage in a flat floatarr(16), e[col*4 + row], with column
+// vectors: transforming by `m4_mul(A, B)` applies B FIRST (A·B·v). This is
+// the standard graphics convention, so compositions read camera-outward:
+//
+//   mvp = m4_mul(projection, m4_mul(view, model))
+//   p   = m4_transform_point(mvp, vertex)     // perspective divide included
+//
+// Angles are DEGREES, matching geom/transform (affine_rotate, proj_rotate_*).
+// Right-handed, y-up; the perspective matrix looks down -z and maps the
+// znear/zfar planes to NDC -1/+1 (the znear/zfar names are deliberate:
+// MinGW #defines `near` and `far`). The RENDERER owns the NDC → y-down
+// screen mapping — the math stays in one convention.
+
+exports (
+    M4,
+    m4_identity, m4_e, m4_set_e, m4_clone,
+    m4_translation, m4_scaling,
+    m4_rotation_x, m4_rotation_y, m4_rotation_z, m4_rotation_axis,
+    m4_perspective, m4_look_at,
+    m4_mul, m4_transpose,
+    m4_transform_point, m4_transform_dir
+)
+
+import std.floatarr
+import std.math (math_sin, math_cos, math_tan, math_deg_to_rad)
+import vg.geom.vec3 (
+    v3_new, v3_x, v3_y, v3_z, v3_sub, v3_cross, v3_normalize, v3_dot
+)
+
+extern malloc(size: int) -> ptr
+
+struct M4 {
+    e: ptr    // floatarr(16), column-major: e[col*4 + row]
+}
+
+_m4_zero() -> *M4 {
+    m = malloc(8) as *M4
+    m.e = floatarr_new_raw(16)
+    i = 0
+    while i < 16 {
+        floatarr_set_raw(m.e, i, 0.0)
+        i = i + 1
+    }
+    return m
+}
+
+m4_identity() -> *M4 {
+    m = _m4_zero()
+    floatarr_set_raw(m.e, 0, 1.0)
+    floatarr_set_raw(m.e, 5, 1.0)
+    floatarr_set_raw(m.e, 10, 1.0)
+    floatarr_set_raw(m.e, 15, 1.0)
+    return m
+}
+
+m4_e(p: ptr, row: int, col: int) -> float {
+    m = p as *M4
+    return floatarr_get_raw(m.e, col * 4 + row)
+}
+
+m4_set_e(p: ptr, row: int, col: int, v: float) {
+    m = p as *M4
+    floatarr_set_raw(m.e, col * 4 + row, v)
+}
+
+m4_clone(p: ptr) -> *M4 {
+    m = p as *M4
+    q = _m4_zero()
+    i = 0
+    while i < 16 {
+        floatarr_set_raw(q.e, i, floatarr_get_raw(m.e, i))
+        i = i + 1
+    }
+    return q
+}
+
+m4_translation(tx: float, ty: float, tz: float) -> *M4 {
+    m = m4_identity()
+    floatarr_set_raw(m.e, 12, tx)
+    floatarr_set_raw(m.e, 13, ty)
+    floatarr_set_raw(m.e, 14, tz)
+    return m
+}
+
+m4_scaling(sx: float, sy: float, sz: float) -> *M4 {
+    m = m4_identity()
+    floatarr_set_raw(m.e, 0, sx)
+    floatarr_set_raw(m.e, 5, sy)
+    floatarr_set_raw(m.e, 10, sz)
+    return m
+}
+
+m4_rotation_x(deg: float) -> *M4 {
+    r = deg * math_deg_to_rad()
+    c = math_cos(r)
+    s = math_sin(r)
+    m = m4_identity()
+    floatarr_set_raw(m.e, 5, c)
+    floatarr_set_raw(m.e, 9, 0.0 - s)
+    floatarr_set_raw(m.e, 6, s)
+    floatarr_set_raw(m.e, 10, c)
+    return m
+}
+
+m4_rotation_y(deg: float) -> *M4 {
+    r = deg * math_deg_to_rad()
+    c = math_cos(r)
+    s = math_sin(r)
+    m = m4_identity()
+    floatarr_set_raw(m.e, 0, c)
+    floatarr_set_raw(m.e, 8, s)
+    floatarr_set_raw(m.e, 2, 0.0 - s)
+    floatarr_set_raw(m.e, 10, c)
+    return m
+}
+
+m4_rotation_z(deg: float) -> *M4 {
+    r = deg * math_deg_to_rad()
+    c = math_cos(r)
+    s = math_sin(r)
+    m = m4_identity()
+    floatarr_set_raw(m.e, 0, c)
+    floatarr_set_raw(m.e, 4, 0.0 - s)
+    floatarr_set_raw(m.e, 1, s)
+    floatarr_set_raw(m.e, 5, c)
+    return m
+}
+
+// Rotation about an arbitrary axis (Rodrigues form). The axis need not be
+// normalized — a zero axis yields identity.
+m4_rotation_axis(axis: ptr, deg: float) -> *M4 {
+    n = v3_normalize(axis)
+    x = v3_x(n)
+    y = v3_y(n)
+    z = v3_z(n)
+    if x * x + y * y + z * z < 0.0000001 { return m4_identity() }
+    r = deg * math_deg_to_rad()
+    c = math_cos(r)
+    s = math_sin(r)
+    ic = 1.0 - c
+    m = m4_identity()
+    m4_set_e(m, 0, 0, c + x * x * ic)
+    m4_set_e(m, 0, 1, x * y * ic - z * s)
+    m4_set_e(m, 0, 2, x * z * ic + y * s)
+    m4_set_e(m, 1, 0, y * x * ic + z * s)
+    m4_set_e(m, 1, 1, c + y * y * ic)
+    m4_set_e(m, 1, 2, y * z * ic - x * s)
+    m4_set_e(m, 2, 0, z * x * ic - y * s)
+    m4_set_e(m, 2, 1, z * y * ic + x * s)
+    m4_set_e(m, 2, 2, c + z * z * ic)
+    return m
+}
+
+// Symmetric perspective frustum: vertical field of view in degrees,
+// width/height aspect, positive znear/zfar distances. Looks down -z;
+// z = -znear maps to NDC -1, z = -zfar to +1.
+m4_perspective(fov_deg: float, aspect: float, znear: float, zfar: float) -> *M4 {
+    f = 1.0 / math_tan(fov_deg * math_deg_to_rad() * 0.5)
+    m = _m4_zero()
+    m4_set_e(m, 0, 0, f / aspect)
+    m4_set_e(m, 1, 1, f)
+    m4_set_e(m, 2, 2, (zfar + znear) / (znear - zfar))
+    m4_set_e(m, 2, 3, 2.0 * zfar * znear / (znear - zfar))
+    m4_set_e(m, 3, 2, 0.0 - 1.0)
+    return m
+}
+
+// View matrix: camera at `eye` looking at `target`, `up` roughly up.
+// Maps world space into eye space (camera at origin, looking down -z).
+m4_look_at(eye: ptr, target: ptr, up: ptr) -> *M4 {
+    f = v3_normalize(v3_sub(target, eye))
+    s = v3_normalize(v3_cross(f, up))
+    u = v3_cross(s, f)
+    m = m4_identity()
+    m4_set_e(m, 0, 0, v3_x(s))
+    m4_set_e(m, 0, 1, v3_y(s))
+    m4_set_e(m, 0, 2, v3_z(s))
+    m4_set_e(m, 1, 0, v3_x(u))
+    m4_set_e(m, 1, 1, v3_y(u))
+    m4_set_e(m, 1, 2, v3_z(u))
+    m4_set_e(m, 2, 0, 0.0 - v3_x(f))
+    m4_set_e(m, 2, 1, 0.0 - v3_y(f))
+    m4_set_e(m, 2, 2, 0.0 - v3_z(f))
+    m4_set_e(m, 0, 3, 0.0 - v3_dot(s, eye))
+    m4_set_e(m, 1, 3, 0.0 - v3_dot(u, eye))
+    m4_set_e(m, 2, 3, v3_dot(f, eye))
+    return m
+}
+
+// A·B: apply B first, then A (column-vector convention).
+m4_mul(pa: ptr, pb: ptr) -> *M4 {
+    a = pa as *M4
+    b = pb as *M4
+    out = _m4_zero()
+    col = 0
+    while col < 4 {
+        row = 0
+        while row < 4 {
+            acc = 0.0
+            k = 0
+            while k < 4 {
+                acc = acc + floatarr_get_raw(a.e, k * 4 + row) * floatarr_get_raw(b.e, col * 4 + k)
+                k = k + 1
+            }
+            floatarr_set_raw(out.e, col * 4 + row, acc)
+            row = row + 1
+        }
+        col = col + 1
+    }
+    return out
+}
+
+m4_transpose(p: ptr) -> *M4 {
+    out = _m4_zero()
+    row = 0
+    while row < 4 {
+        col = 0
+        while col < 4 {
+            m4_set_e(out, col, row, m4_e(p, row, col))
+            col = col + 1
+        }
+        row = row + 1
+    }
+    return out
+}
+
+// Transform a POINT (w = 1), with perspective divide when w ≠ 1 — the
+// full projection path. Returns a new V3 in NDC (or transformed space).
+m4_transform_point(p: ptr, v: ptr) -> ptr {
+    x = v3_x(v)
+    y = v3_y(v)
+    z = v3_z(v)
+    ox = m4_e(p, 0, 0) * x + m4_e(p, 0, 1) * y + m4_e(p, 0, 2) * z + m4_e(p, 0, 3)
+    oy = m4_e(p, 1, 0) * x + m4_e(p, 1, 1) * y + m4_e(p, 1, 2) * z + m4_e(p, 1, 3)
+    oz = m4_e(p, 2, 0) * x + m4_e(p, 2, 1) * y + m4_e(p, 2, 2) * z + m4_e(p, 2, 3)
+    ow = m4_e(p, 3, 0) * x + m4_e(p, 3, 1) * y + m4_e(p, 3, 2) * z + m4_e(p, 3, 3)
+    if ow > 0.000001 || ow < 0.0 - 0.000001 {
+        return v3_new(ox / ow, oy / ow, oz / ow) as ptr
+    }
+    return v3_new(ox, oy, oz) as ptr
+}
+
+// Transform a DIRECTION (w = 0): rotations/scales apply, translation does
+// not, and there is never a divide.
+m4_transform_dir(p: ptr, v: ptr) -> ptr {
+    x = v3_x(v)
+    y = v3_y(v)
+    z = v3_z(v)
+    ox = m4_e(p, 0, 0) * x + m4_e(p, 0, 1) * y + m4_e(p, 0, 2) * z
+    oy = m4_e(p, 1, 0) * x + m4_e(p, 1, 1) * y + m4_e(p, 1, 2) * z
+    oz = m4_e(p, 2, 0) * x + m4_e(p, 2, 1) * y + m4_e(p, 2, 2) * z
+    return v3_new(ox, oy, oz) as ptr
+}

@@ -1,0 +1,153 @@
+// vg/test/test_vg3d.ae — the vg3d math tier: vec3 + mat4.
+//
+// Pure math, no backend. Run from the repo root:
+//   aetherc --lib . vg/test/test_vg3d.ae /tmp/t.c && gcc /tmp/t.c \
+//     vg/test/text_metrics_stub.c $(ae cflags) -o /tmp/t && /tmp/t
+
+import std.string
+import vg.geom.vec3
+import vg.geom.mat4
+
+extern exit(code: int)
+
+assert_true(label: string, got: int) {
+    if got == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label}"); exit(1) }
+}
+assert_near(label: string, got: float, want: float, eps: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < eps { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+assert_v3(label: string, v: ptr, wx: float, wy: float, wz: float, eps: float) {
+    assert_near("${label} .x", vec3.v3_x(v), wx, eps)
+    assert_near("${label} .y", vec3.v3_y(v), wy, eps)
+    assert_near("${label} .z", vec3.v3_z(v), wz, eps)
+}
+
+main() {
+    println("=== test_vg3d ===")
+
+    println("-- vec3 basics")
+    va = vec3.v3_new(1.0, 2.0, 3.0)
+    vb = vec3.v3_new(4.0, 5.0, 6.0)
+    assert_v3("add", vec3.v3_add(va, vb), 5.0, 7.0, 9.0, 0.0001)
+    assert_v3("sub", vec3.v3_sub(vb, va), 3.0, 3.0, 3.0, 0.0001)
+    assert_v3("scale", vec3.v3_scale(va, 2.0), 2.0, 4.0, 6.0, 0.0001)
+    assert_v3("neg", vec3.v3_neg(va), 0.0 - 1.0, 0.0 - 2.0, 0.0 - 3.0, 0.0001)
+    assert_near("dot", vec3.v3_dot(va, vb), 32.0, 0.0001)
+    assert_near("3-4-5 length", vec3.v3_length(vec3.v3_new(3.0, 4.0, 0.0)), 5.0, 0.0001)
+    assert_near("normalize is unit",
+        vec3.v3_length(vec3.v3_normalize(vb)), 1.0, 0.0001)
+    assert_v3("zero normalizes to zero",
+        vec3.v3_normalize(vec3.v3_new(0.0, 0.0, 0.0)), 0.0, 0.0, 0.0, 0.0001)
+    assert_v3("lerp midpoint", vec3.v3_lerp(va, vb, 0.5), 2.5, 3.5, 4.5, 0.0001)
+
+    println("-- handedness")
+    ux = vec3.v3_new(1.0, 0.0, 0.0)
+    uy = vec3.v3_new(0.0, 1.0, 0.0)
+    uz = vec3.v3_new(0.0, 0.0, 1.0)
+    assert_v3("cross(x,y) = z (right-handed)", vec3.v3_cross(ux, uy), 0.0, 0.0, 1.0, 0.0001)
+    assert_v3("cross(y,z) = x", vec3.v3_cross(uy, uz), 1.0, 0.0, 0.0, 0.0001)
+    assert_v3("cross(y,x) = -z", vec3.v3_cross(uy, ux), 0.0, 0.0, 0.0 - 1.0, 0.0001)
+
+    println("-- mat4 building blocks")
+    ident = mat4.m4_identity()
+    assert_v3("identity is a no-op",
+        mat4.m4_transform_point(ident, va), 1.0, 2.0, 3.0, 0.0001)
+    assert_v3("translation moves a point",
+        mat4.m4_transform_point(mat4.m4_translation(10.0, 20.0, 30.0), va),
+        11.0, 22.0, 33.0, 0.0001)
+    assert_v3("translation ignores a direction",
+        mat4.m4_transform_dir(mat4.m4_translation(10.0, 20.0, 30.0), va),
+        1.0, 2.0, 3.0, 0.0001)
+    assert_v3("scaling",
+        mat4.m4_transform_point(mat4.m4_scaling(2.0, 3.0, 4.0), va),
+        2.0, 6.0, 12.0, 0.0001)
+
+    println("-- rotations, 90-degree axis mappings")
+    assert_v3("Rz(90): x -> y",
+        mat4.m4_transform_point(mat4.m4_rotation_z(90.0), ux), 0.0, 1.0, 0.0, 0.0001)
+    assert_v3("Rx(90): y -> z",
+        mat4.m4_transform_point(mat4.m4_rotation_x(90.0), uy), 0.0, 0.0, 1.0, 0.0001)
+    assert_v3("Ry(90): z -> x",
+        mat4.m4_transform_point(mat4.m4_rotation_y(90.0), uz), 1.0, 0.0, 0.0, 0.0001)
+    assert_v3("axis-angle about z == Rz",
+        mat4.m4_transform_point(mat4.m4_rotation_axis(uz, 90.0), ux),
+        0.0, 1.0, 0.0, 0.0001)
+    diag = vec3.v3_normalize(vec3.v3_new(1.0, 1.0, 1.0))
+    assert_v3("360 about any axis is identity",
+        mat4.m4_transform_point(mat4.m4_rotation_axis(diag, 360.0), va),
+        1.0, 2.0, 3.0, 0.0001)
+    assert_v3("rotation preserves points on its axis",
+        mat4.m4_transform_point(mat4.m4_rotation_axis(diag, 77.0), diag),
+        vec3.v3_x(diag), vec3.v3_y(diag), vec3.v3_z(diag), 0.0001)
+
+    println("-- composition (column-vector: A*B applies B first)")
+    tr = mat4.m4_translation(5.0, 0.0, 0.0)
+    rz = mat4.m4_rotation_z(90.0)
+    // T * R: rotate first, then translate — x-axis point ends at (5, 1, 0).
+    assert_v3("T*R rotates then translates",
+        mat4.m4_transform_point(mat4.m4_mul(tr, rz), ux), 5.0, 1.0, 0.0, 0.0001)
+    // R * T: translate first (to 6,0,0), then rotate — ends at (0, 6, 0).
+    assert_v3("R*T translates then rotates",
+        mat4.m4_transform_point(mat4.m4_mul(rz, tr), ux), 0.0, 6.0, 0.0, 0.0001)
+    // Composed equals sequential.
+    seq = mat4.m4_transform_point(tr, mat4.m4_transform_point(rz, ux))
+    com = mat4.m4_transform_point(mat4.m4_mul(tr, rz), ux)
+    assert_near("composed == sequential (x)", vec3.v3_x(com), vec3.v3_x(seq), 0.0001)
+    assert_near("composed == sequential (y)", vec3.v3_y(com), vec3.v3_y(seq), 0.0001)
+
+    println("-- transpose")
+    tt2 = mat4.m4_transpose(mat4.m4_translation(7.0, 8.0, 9.0))
+    assert_near("transpose moved the translation column",
+        mat4.m4_e(tt2, 3, 0), 7.0, 0.0001)
+    assert_near("double transpose restores",
+        mat4.m4_e(mat4.m4_transpose(tt2), 0, 3), 7.0, 0.0001)
+
+    println("-- perspective projection")
+    prj = mat4.m4_perspective(90.0, 1.0, 1.0, 10.0)
+    // Straight ahead projects to NDC centre.
+    assert_v3("centre ray -> (0,0)",
+        mat4.m4_transform_point(prj, vec3.v3_new(0.0, 0.0, 0.0 - 5.0)),
+        0.0, 0.0, 0.7778, 0.001)
+    // At fov 90 / aspect 1, x == -z sits exactly on the frustum edge.
+    edge = mat4.m4_transform_point(prj, vec3.v3_new(1.0, 0.0, 0.0 - 1.0))
+    assert_near("fov-90 frustum edge -> NDC x = 1", vec3.v3_x(edge), 1.0, 0.0001)
+    // The near and far planes land on NDC -1 / +1.
+    assert_near("znear plane -> NDC z = -1",
+        vec3.v3_z(mat4.m4_transform_point(prj, vec3.v3_new(0.0, 0.0, 0.0 - 1.0))),
+        0.0 - 1.0, 0.0001)
+    assert_near("zfar plane -> NDC z = +1",
+        vec3.v3_z(mat4.m4_transform_point(prj, vec3.v3_new(0.0, 0.0, 0.0 - 10.0))),
+        1.0, 0.0001)
+    // Perspective foreshortening: the same lateral offset shrinks with depth.
+    near_pt = mat4.m4_transform_point(prj, vec3.v3_new(1.0, 0.0, 0.0 - 2.0))
+    far_pt = mat4.m4_transform_point(prj, vec3.v3_new(1.0, 0.0, 0.0 - 8.0))
+    assert_true("farther is smaller on screen",
+        vec3.v3_x(far_pt) < vec3.v3_x(near_pt))
+
+    println("-- look_at")
+    eye = vec3.v3_new(0.0, 0.0, 5.0)
+    origin = vec3.v3_new(0.0, 0.0, 0.0)
+    view = mat4.m4_look_at(eye, origin, uy)
+    assert_v3("target lands ahead on -z",
+        mat4.m4_transform_point(view, origin), 0.0, 0.0, 0.0 - 5.0, 0.0001)
+    assert_v3("eye lands at the origin",
+        mat4.m4_transform_point(view, eye), 0.0, 0.0, 0.0, 0.0001)
+    // World +x stays camera-right, world +y stays camera-up for this eye.
+    assert_v3("x is camera-right",
+        mat4.m4_transform_dir(view, ux), 1.0, 0.0, 0.0, 0.0001)
+    assert_v3("y is camera-up",
+        mat4.m4_transform_dir(view, uy), 0.0, 1.0, 0.0, 0.0001)
+
+    println("-- the full MVP chain")
+    model = mat4.m4_rotation_y(0.0)
+    mvp = mat4.m4_mul(prj, mat4.m4_mul(view, model))
+    ndc = mat4.m4_transform_point(mvp, origin)
+    assert_near("origin through full chain -> centred x", vec3.v3_x(ndc), 0.0, 0.0001)
+    assert_near("origin through full chain -> centred y", vec3.v3_y(ndc), 0.0, 0.0001)
+
+    println("ALL PASS")
+}

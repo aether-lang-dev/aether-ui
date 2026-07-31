@@ -1,0 +1,86 @@
+// aevg/vec3.ae — 3D vectors for the vg3d tier.
+//
+// The 3D companion to geom/transform's 2D Pt: a heap struct handed around
+// as a ptr (struct types don't cross module boundaries; accessors do).
+// Every operation returns a NEW vector and leaves its inputs untouched —
+// the same value discipline as geom/polypath. Right-handed, y-up: the
+// renderer, not the math, owns the flip to screen coordinates.
+
+exports (
+    V3,
+    v3_new, v3_x, v3_y, v3_z,
+    v3_add, v3_sub, v3_scale, v3_neg,
+    v3_dot, v3_cross, v3_length, v3_normalize, v3_lerp
+)
+
+import std.math (math_sqrt)
+
+extern malloc(size: int) -> ptr
+
+struct V3 {
+    x: float
+    y: float
+    z: float
+}
+
+v3_new(x: float, y: float, z: float) -> *V3 {
+    v = malloc(24) as *V3
+    v.x = x
+    v.y = y
+    v.z = z
+    return v
+}
+
+v3_x(p: ptr) -> float { v = p as *V3; return v.x }
+v3_y(p: ptr) -> float { v = p as *V3; return v.y }
+v3_z(p: ptr) -> float { v = p as *V3; return v.z }
+
+v3_add(a: ptr, b: ptr) -> *V3 {
+    return v3_new(v3_x(a) + v3_x(b), v3_y(a) + v3_y(b), v3_z(a) + v3_z(b))
+}
+
+v3_sub(a: ptr, b: ptr) -> *V3 {
+    return v3_new(v3_x(a) - v3_x(b), v3_y(a) - v3_y(b), v3_z(a) - v3_z(b))
+}
+
+v3_scale(a: ptr, s: float) -> *V3 {
+    return v3_new(v3_x(a) * s, v3_y(a) * s, v3_z(a) * s)
+}
+
+v3_neg(a: ptr) -> *V3 {
+    return v3_new(0.0 - v3_x(a), 0.0 - v3_y(a), 0.0 - v3_z(a))
+}
+
+v3_dot(a: ptr, b: ptr) -> float {
+    return v3_x(a) * v3_x(b) + v3_y(a) * v3_y(b) + v3_z(a) * v3_z(b)
+}
+
+// Right-handed: cross(+x, +y) = +z.
+v3_cross(a: ptr, b: ptr) -> *V3 {
+    ax = v3_x(a)
+    ay = v3_y(a)
+    az = v3_z(a)
+    bx = v3_x(b)
+    by = v3_y(b)
+    bz = v3_z(b)
+    return v3_new(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+}
+
+v3_length(a: ptr) -> float {
+    return math_sqrt(v3_dot(a, a))
+}
+
+// Zero-length input normalizes to zero rather than dividing by it —
+// callers probing degenerate geometry get a harmless null direction.
+v3_normalize(a: ptr) -> *V3 {
+    len = v3_length(a)
+    if len < 0.000000001 { return v3_new(0.0, 0.0, 0.0) }
+    return v3_scale(a, 1.0 / len)
+}
+
+v3_lerp(a: ptr, b: ptr, tt: float) -> *V3 {
+    return v3_new(
+        v3_x(a) + (v3_x(b) - v3_x(a)) * tt,
+        v3_y(a) + (v3_y(b) - v3_y(a)) * tt,
+        v3_z(a) + (v3_z(b) - v3_z(a)) * tt)
+}
