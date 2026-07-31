@@ -11,8 +11,14 @@
 // deep, which is exactly the shape that wants the heap-struct idiom rather
 // than calculator-style flat captures.
 //
-// 3D is 30 lines of plain math: 8 verts at ±1 rotated around Y then X,
-// perspective-projected (f = SCALE/(DIST-z)). The faces are TRANSLUCENT,
+// The 3D runs on the vg3d math tier (vg.geom.vec3 / mat4 / polypath): the
+// orientation is Rx·Ry from the yaw/pitch state, and the LEGACY framing —
+// screen = MID + r·SCALE/(DIST-z) — is expressed as one folded projective
+// mat4 (screen_proj · model), so the pose is pixel-identical to the
+// hand-rolled original while every point rides m4_transform_point. Face
+// polygons, the writing's outlines and the checkbox quads are all built
+// as polypaths; the projected-checkbox hit test is polypath.pp_contains
+// on the same projected quad the eye sees. The faces are TRANSLUCENT,
 // so instead of culling back faces we painter-sort all six far→near by
 // rotated face-normal depth and draw the lot — the far sides (and the
 // writing, mirrored) read through the glass. The writing is a real
@@ -39,6 +45,14 @@ import vg (
 import vg.font (
     font_load, font_ok, font_text_outlines_norm,
     outl_ok, outl_nctrs, outl_ctr_end, outl_px, outl_py
+)
+import vg.geom.vec3 (v3_new, v3_x, v3_y, v3_z)
+import vg.geom.mat4 (
+    m4_identity, m4_set_e, m4_mul, m4_rotation_x, m4_rotation_y,
+    m4_transform_point, m4_transform_dir
+)
+import vg.geom.polypath (
+    pp_new, pp_begin, pp_push, pp_to_path, pp_contains, pp_free
 )
 import std.math
 import std.string
@@ -134,19 +148,43 @@ mk_spin() -> *Spin {
     return s
 }
 
-// ─── 3D pipeline: rotate around Y then X, perspective-project ────────────────
-rot3(x: float, y: float, z: float, ax: float, ay: float) -> (float, float, float) {
-    x1 = x * math.cos(ay) + z * math.sin(ay)
-    z1 = z * math.cos(ay) - x * math.sin(ay)
-    y1 = y * math.cos(ax) + z1 * math.sin(ax)
-    z2 = z1 * math.cos(ax) - y * math.sin(ax)
-    return x1, y1, z2
+// ─── 3D pipeline: the vg3d math tier ─────────────────────────────────────────
+// Orientation. The legacy pipeline rotated around Y then X with its own
+// trig; that composition is exactly Rx(-ax)·Ry(ay) in mat4's column
+// convention (degrees; the sign on ax preserves drag-down-tilts-down).
+const AEVG_R2D: float = 57.29577951308232
+
+cube_model(ax: float, ay: float) -> ptr {
+    return m4_mul(m4_rotation_x(0.0 - ax * AEVG_R2D),
+                  m4_rotation_y(ay * AEVG_R2D)) as ptr
 }
-proj(x: float, y: float, z: float, ax: float, ay: float) -> (float, float) {
-    rx, ry, rz = rot3(x, y, z, ax, ay)
-    f = AEVG_SCALE / (AEVG_DIST - rz)
-    return AEVG_MIDX + rx * f, AEVG_MIDY + ry * f
+
+// The legacy screen framing — screen = MID + r·SCALE/(DIST-z), +y down —
+// as a single projective matrix: ow = DIST - z carries the divide, and MID
+// folds in through the w column. mat4 is not just frustums; any projective
+// map fits, which is what keeps this port pixel-identical to the original.
+screen_proj() -> ptr {
+    m = m4_identity()
+    m4_set_e(m, 0, 0, AEVG_SCALE)
+    m4_set_e(m, 0, 2, 0.0 - AEVG_MIDX)
+    m4_set_e(m, 0, 3, AEVG_MIDX * AEVG_DIST)
+    m4_set_e(m, 1, 1, AEVG_SCALE)
+    m4_set_e(m, 1, 2, 0.0 - AEVG_MIDY)
+    m4_set_e(m, 1, 3, AEVG_MIDY * AEVG_DIST)
+    m4_set_e(m, 3, 2, 0.0 - 1.0)
+    m4_set_e(m, 3, 3, AEVG_DIST)
+    return m as ptr
 }
+
+cube_mvp(ax: float, ay: float) -> ptr {
+    return m4_mul(screen_proj(), cube_model(ax, ay)) as ptr
+}
+
+// World point through the folded matrix → screen (x, y).
+spt(mvp: ptr, x: float, y: float, z: float) -> ptr {
+    return m4_transform_point(mvp, v3_new(x, y, z))
+}
+
 // Face-local (u right, v down) → 3D, for the faces that carry controls.
 // Face 0 (+z): plane z=+1. Face 2 (+x): plane x=+1, u runs along -z so the
 // face reads unmirrored when it fronts the camera.
@@ -154,51 +192,27 @@ face_pt(f: int, u: float, v: float) -> (float, float, float) {
     if f == 0 { return u, v, 1.0 }
     return 1.0, v, 0.0 - u
 }
-proj_face(f: int, u: float, v: float, ax: float, ay: float) -> (float, float) {
-    x, y, z = face_pt(f, u, v)
-    return proj(x, y, z, ax, ay)
-}
 
-// Just the rotated z of a point — all depth sorting needs.
-rotz(x: float, y: float, z: float, ax: float, ay: float) -> float {
-    z1 = z * math.cos(ay) - x * math.sin(ay)
-    return z1 * math.cos(ax) - y * math.sin(ax)
-}
-// Depth of face f = rotated z of its centre (which IS its unit normal).
-// Larger = nearer the camera (camera sits at +z).
-face_depth(f: int, ax: float, ay: float) -> float {
-    nx = FACE_NX[f]
-    ny = FACE_NY[f]
-    nz = FACE_NZ[f]
-    return rotz(nx, ny, nz, ax, ay)
+// Depth of face f = rotated z of its unit normal (a DIRECTION — no
+// translation, no divide). Larger = nearer the camera (camera at +z).
+face_depth(f: int, mdl: ptr) -> float {
+    nd = m4_transform_dir(mdl, v3_new(FACE_NX[f], FACE_NY[f], FACE_NZ[f]))
+    return v3_z(nd)
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
-num(v: float) -> string {
-    n = lrint(v) as int
-    return "${n}"
-}
-
-face_path(f: int, ax: float, ay: float) -> string {
-    s = "M"
+draw_one_face(rn: ptr, st: *Spin, f: int, mvp: ptr) {
+    pp = pp_new()
+    pp_begin(pp, 1)
     k = 0
     while k < 4 {
         vi = FACE_VERTS[f * 4 + k]
-        x = VERTS[vi * 3]
-        y = VERTS[vi * 3 + 1]
-        z = VERTS[vi * 3 + 2]
-        sx, sy = proj(x, y, z, ax, ay)
-        xs = num(sx)
-        ys = num(sy)
-        if k > 0 { s = "${s} L ${xs} ${ys}" }
-        else     { s = "${s} ${xs} ${ys}" }
+        sp = spt(mvp, VERTS[vi * 3], VERTS[vi * 3 + 1], VERTS[vi * 3 + 2])
+        pp_push(pp, v3_x(sp), v3_y(sp))
         k = k + 1
     }
-    return "${s} Z"
-}
-
-draw_one_face(rn: ptr, st: *Spin, f: int) {
-    p = path(rn, face_path(f, st.ax, st.ay))
+    p = path(rn, pp_to_path(pp))
+    pp_free(pp)
     fill(p, FACE_COLORS[f])
     opacity(p, st.alpha)
     stroke(p, "#0c0c12", 2.0)
@@ -206,19 +220,23 @@ draw_one_face(rn: ptr, st: *Spin, f: int) {
     // so nearer translucent faces glaze over it — correct through-glass
     // look (mirrored when the face is at the back).
     if f == 0 {
-        draw_writing(rn, st.ax, st.ay, st.word)
-        draw_checkbox(rn, 0, st.spin_on, st.lbl_spin, st.ax, st.ay)
+        draw_writing(rn, mvp, st.word)
+        draw_checkbox(rn, 0, st.spin_on, st.lbl_spin, mvp)
     }
     if f == 2 {
         on = 0
         if st.alpha < 0.9 { on = 1 }
-        draw_checkbox(rn, 2, on, st.lbl_glass, st.ax, st.ay)
+        draw_checkbox(rn, 2, on, st.lbl_glass, mvp)
     }
 }
 
 draw_scene(rn: ptr, st: *Spin) {
     bg = rect(rn, 0.0, 0.0, AEVG_CANVAS, AEVG_CANVAS)
     fill(bg, "#14141c")
+    // One model + one folded screen matrix per frame; every point below
+    // rides them.
+    mdl = cube_model(st.ax, st.ay)
+    mvp = m4_mul(screen_proj(), mdl)
     // Painter's algorithm over all 6 translucent faces: repeatedly draw the
     // farthest not-yet-drawn face. `painted` is a 6-bit done-mask.
     painted = 0
@@ -229,13 +247,13 @@ draw_scene(rn: ptr, st: *Spin) {
         f = 0
         while f < 6 {
             if (painted / FACE_BIT[f]) % 2 == 0 {
-                d = face_depth(f, st.ax, st.ay)
+                d = face_depth(f, mdl)
                 if d < bestd { bestd = d; best = f }
             }
             f = f + 1
         }
         painted = painted + FACE_BIT[best]
-        draw_one_face(rn, st, best)
+        draw_one_face(rn, st, best, mvp)
         pass_i = pass_i + 1
     }
 }
@@ -263,57 +281,41 @@ load_word_font() -> ptr {
     return f
 }
 
-// One-decimal float → string ("123.4") for path coords.
-f1(v: float) -> string {
-    n = lrint(v * 10.0) as int
-    whole = n / 10
-    frac = n % 10
-    if frac < 0 { frac = 0 - frac }
-    if n < 0 && whole == 0 { return "-0.${frac}" }
-    return "${whole}.${frac}"
-}
-
-// "<cmd> x y" for face-local (u, v) on face 0, projected.
-wseg(cmd: string, u: float, v: float, ax: float, ay: float) -> string {
-    return wseg2(0, cmd, u, v, ax, ay)
-}
-// Same for an arbitrary control-bearing face.
-wseg2(f: int, cmd: string, u: float, v: float, ax: float, ay: float) -> string {
-    sx, sy = proj_face(f, u, v, ax, ay)
-    xs = f1(sx)
-    ys = f1(sy)
-    return "${cmd} ${xs} ${ys}"
+// Face-local (u, v) on face f → projected screen point (heap V3).
+fpt(mvp: ptr, f: int, u: float, v: float) -> ptr {
+    x, y, z = face_pt(f, u, v)
+    return spt(mvp, x, y, z)
 }
 
 // Draw a normalized outline (word/label) on face f at offset (ox,oy),
-// scaled by k — the generalized form of draw_writing's projection loop.
+// scaled by k. Every point rides the folded matrix into one polypath —
+// closed contours, nonzero fill renders the counters (A/e holes).
 draw_outl(rn: ptr, ow: ptr, f: int, ox: float, oy: float, k: float,
-          color: string, ax: float, ay: float) {
-    s = ""
+          color: string, mvp: ptr) {
+    pp = pp_new()
     start = 0
     ci = 0
     while ci < outl_nctrs(ow) {
         last = outl_ctr_end(ow, ci)
+        pp_begin(pp, 1)
         j = start
         while j <= last {
-            cmd = " L"
-            if j == start { cmd = "M" }
-            seg = wseg2(f, cmd, ox + outl_px(ow, j) * k, oy + outl_py(ow, j) * k, ax, ay)
-            s = "${s}${seg}"
+            sp = fpt(mvp, f, ox + outl_px(ow, j) * k, oy + outl_py(ow, j) * k)
+            pp_push(pp, v3_x(sp), v3_y(sp))
             j = j + 1
         }
-        s = "${s} Z "
         start = last + 1
         ci = ci + 1
     }
-    p = path(rn, s)
+    p = path(rn, pp_to_path(pp))
+    pp_free(pp)
     fill(p, color)
 }
 
-draw_writing(rn: ptr, ax: float, ay: float, ow: ptr) {
+draw_writing(rn: ptr, mvp: ptr, ow: ptr) {
     if ow == null { return }
     if outl_ok(ow) == 0 { return }
-    draw_outl(rn, ow, 0, 0.0, 0.0, 1.0, "#f2f5f8", ax, ay)
+    draw_outl(rn, ow, 0, 0.0, 0.0, 1.0, "#f2f5f8", mvp)
 }
 
 // ─── Face checkboxes: the REAL chrome toggles, mirrored in perspective ───────
@@ -330,50 +332,53 @@ const CB_SIZE: float = 0.30
 cb_u0(f: int) -> float { if f == 0 { return CB_SPIN_U0 } return CB_GLASS_U0 }
 cb_v0(f: int) -> float { if f == 0 { return CB_SPIN_V0 } return CB_GLASS_V0 }
 
-// One projected quad corner of face f's checkbox; k = 0..3 CW.
-cb_corner(f: int, k: int, ax: float, ay: float) -> (float, float) {
-    u = cb_u0(f)
-    v = cb_v0(f)
-    if k == 1 || k == 2 { u = u + CB_SIZE }
-    if k == 2 || k == 3 { v = v + CB_SIZE }
-    return proj_face(f, u, v, ax, ay)
-}
-
-quad_d(f: int, ax: float, ay: float) -> string {
-    s = ""
+// The checkbox's projected quad as a closed polypath — ONE geometry
+// serves both the drawing and (via pp_contains) the tap hit test, so what
+// you see is exactly what you can hit. Caller frees.
+cb_quad(f: int, mvp: ptr) -> ptr {
+    pp = pp_new()
+    pp_begin(pp, 1)
     k = 0
     while k < 4 {
-        cx, cy = cb_corner(f, k, ax, ay)
-        xs = f1(cx)
-        ys = f1(cy)
-        cmd = " L"
-        if k == 0 { cmd = "M" }
-        s = "${s}${cmd} ${xs} ${ys}"
+        u = cb_u0(f)
+        v = cb_v0(f)
+        if k == 1 || k == 2 { u = u + CB_SIZE }
+        if k == 2 || k == 3 { v = v + CB_SIZE }
+        sp = fpt(mvp, f, u, v)
+        pp_push(pp, v3_x(sp), v3_y(sp))
         k = k + 1
     }
-    return "${s} Z"
+    return pp
 }
 
 // Draw face f's checkbox: box, check mark when on, label to the right.
-draw_checkbox(rn: ptr, f: int, on: int, lblo: ptr, ax: float, ay: float) {
-    box = path(rn, quad_d(f, ax, ay))
+draw_checkbox(rn: ptr, f: int, on: int, lblo: ptr, mvp: ptr) {
+    qp = cb_quad(f, mvp)
+    box = path(rn, pp_to_path(qp))
+    pp_free(qp)
     fill(box, "#f2f5f8")
     opacity(box, 0.92)
     stroke(box, "#0c0c12", 2.0)
     if on == 1 {
         u = cb_u0(f)
         v = cb_v0(f)
-        s = CB_SIZE
-        a = wseg2(f, "M", u + s * 0.22, v + s * 0.52, ax, ay)
-        b = wseg2(f, " L", u + s * 0.42, v + s * 0.76, ax, ay)
-        c = wseg2(f, " L", u + s * 0.80, v + s * 0.24, ax, ay)
-        mark = path(rn, "${a}${b}${c}")
+        cs = CB_SIZE
+        mk = pp_new()
+        pp_begin(mk, 0)
+        ma = fpt(mvp, f, u + cs * 0.22, v + cs * 0.52)
+        pp_push(mk, v3_x(ma), v3_y(ma))
+        mb = fpt(mvp, f, u + cs * 0.42, v + cs * 0.76)
+        pp_push(mk, v3_x(mb), v3_y(mb))
+        mc = fpt(mvp, f, u + cs * 0.80, v + cs * 0.24)
+        pp_push(mk, v3_x(mc), v3_y(mc))
+        mark = path(rn, pp_to_path(mk))
+        pp_free(mk)
         stroke(mark, "#1c7a3c", 3.5)
     }
     // Label: real-typeface outlines, centred right of the box.
     if lblo != null {
         if outl_ok(lblo) == 1 {
-            draw_outl(rn, lblo, f, cb_u0(f) + CB_SIZE + 0.42, cb_v0(f) + CB_SIZE / 2.0, 0.7, "#f2f5f8", ax, ay)
+            draw_outl(rn, lblo, f, cb_u0(f) + CB_SIZE + 0.42, cb_v0(f) + CB_SIZE / 2.0, 0.7, "#f2f5f8", mvp)
         }
     }
 }
@@ -409,27 +414,16 @@ on_press(st: *Spin, x: float, y: float) {
     st.vx = 0.0; st.vy = 0.0                // grabbing stops the spin
 }
 
-// Point-in-projected-quad (cross-product signs; convex, consistent winding).
-xsign(ax0: float, ay0: float, bx: float, by: float, px: float, py: float) -> int {
-    cr = (bx - ax0) * (py - ay0) - (by - ay0) * (px - ax0)
-    if cr > 0.0 { return 1 }
-    if cr < 0.0 { return -1 }
-    return 0
-}
-cb_hit(f: int, x: float, y: float, ax: float, ay: float) -> int {
+cb_hit(st: *Spin, f: int, x: float, y: float) -> int {
     // Only a FRONT-facing box is clickable (no clicking through the glass).
-    if face_depth(f, ax, ay) * AEVG_DIST <= 1.0 { return 0 }
-    x0, y0 = cb_corner(f, 0, ax, ay)
-    x1, y1 = cb_corner(f, 1, ax, ay)
-    x2, y2 = cb_corner(f, 2, ax, ay)
-    x3, y3 = cb_corner(f, 3, ax, ay)
-    s1 = xsign(x0, y0, x1, y1, x, y)
-    s2 = xsign(x1, y1, x2, y2, x, y)
-    s3 = xsign(x2, y2, x3, y3, x, y)
-    s4 = xsign(x3, y3, x0, y0, x, y)
-    if s1 >= 0 && s2 >= 0 && s3 >= 0 && s4 >= 0 { return 1 }
-    if s1 <= 0 && s2 <= 0 && s3 <= 0 && s4 <= 0 { return 1 }
-    return 0
+    mdl = cube_model(st.ax, st.ay)
+    if face_depth(f, mdl) * AEVG_DIST <= 1.0 { return 0 }
+    // The SAME projected quad the frame draws, asked whether it contains
+    // the tap — nonzero winding via polypath.
+    qp = cb_quad(f, m4_mul(screen_proj(), mdl))
+    hit = pp_contains(qp, x, y)
+    pp_free(qp)
+    return hit
 }
 
 // Flip helpers — shared by face taps; the chrome callbacks assign instead
@@ -467,8 +461,8 @@ on_release_pt(st: *Spin, x: float, y: float) {
     ddx = x - st.px0
     ddy = y - st.py0
     if ddx * ddx + ddy * ddy < 64.0 {
-        if cb_hit(0, x, y, st.ax, st.ay) == 1 { flip_spin(st); return }
-        if cb_hit(2, x, y, st.ax, st.ay) == 1 { flip_glass(st); return }
+        if cb_hit(st, 0, x, y) == 1 { flip_spin(st); return }
+        if cb_hit(st, 2, x, y) == 1 { flip_glass(st); return }
         return
     }
     // Clamp the throw so a wild swipe stays watchable.
