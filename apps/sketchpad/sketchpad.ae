@@ -1,0 +1,249 @@
+// sketchpad.ae — freehand ink for aether-ui.
+//
+// Named for Ivan Sutherland's Sketchpad (1963), the ancestor of
+// interactive computer graphics — the first program where you drew on the
+// display and pointed AT the things you had drawn to manipulate them:
+//   https://en.wikipedia.org/wiki/Sketchpad
+// This is that gesture in miniature, on the vg toolkit: capture pointer
+// strokes, refine them into ink, and erase by pointing at the INK ITSELF
+// (Sutherland's light-pen pointing, reborn as nonzero-winding containment
+// on the stroke's outline — not a bounding box).
+//
+// The ink pipeline, per stroke, all vg.geom.polypath:
+//   raw points  → pp_simplify   (shed pointer jitter, tolerance 1.5px)
+//               → pp_smooth ×2  (corner-cutting: the hand's polyline
+//                                relaxes toward a drawn-looking curve)
+//               → pp_stroke     (round caps/joins: the CENTERLINE becomes
+//                                a filled OUTLINE with real width)
+// The outline then does double duty: it is what renders (a plain path
+// fill) and what the eraser hit-tests (pp_contains). What you see is
+// exactly what you can point at.
+//
+// Render-on-demand throughout: the board is a STATIC region repainted by
+// scene_refresh on each change — an idle sketchpad costs nothing.
+//
+// Run: DISPLAY=:0 ./target/build/apps/sketchpad/bin/sketchpad
+//   Drag to draw. Erase mode: click a stroke to remove it.
+
+import ui (
+    window, vstack, hstack, text, btn, enable_test_server,
+    canvas_on_click, canvas_on_move, canvas_on_release,
+    canvas_read_pixel, canvas_widget, width, height,
+    ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg, canvas_region, region_set_animated)
+import vg (
+    view_box, rect, path, fill, vg_root, node_scene, scene_canvas,
+    scene_refresh, scene_px_to_vb_x, scene_px_to_vb_y
+)
+import vg.geom.polypath (
+    pp_new, pp_begin, pp_push, pp_npts, pp_x, pp_y,
+    pp_simplify, pp_smooth, pp_stroke, pp_to_path, pp_contains, pp_free,
+    PP_JOIN_ROUND, PP_CAP_ROUND
+)
+import std.list
+import std.string
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+const SK_W: int = 480
+const SK_H: int = 320
+const SK_INK_W: float = 8.0
+const SK_SIMPLIFY_TOL: float = 1.5
+const SK_SMOOTH_PASSES: int = 2
+
+// One finished stroke: the smoothed centerline (kept for future editing)
+// and its stroked outline (what renders and what the eraser hits).
+struct Stroke {
+    line: ptr
+    outline: ptr
+}
+
+struct App {
+    strokes: ptr       // std.list of *Stroke
+    cur: ptr           // polypath being drawn, null when idle
+    mode: int          // 0 = draw, 1 = erase
+    canvas: int
+    scene: ptr
+    st_count: int
+    st_mode: int
+    st_ink: int
+}
+
+publish(app: *App) {
+    n = list.list_size(app.strokes)
+    s1 = ui_set_s(app.st_count, "strokes: ${n}")
+    if s1 < 0 { return }
+    m = "draw"
+    if app.mode == 1 { m = "erase" }
+    s2 = ui_set_s(app.st_mode, "mode: ${m}")
+    if s2 < 0 { return }
+}
+
+// ─── Ink pipeline ───────────────────────────────────────────────────────────
+finish_stroke(app: *App) {
+    if app.cur == null { return }
+    if pp_npts(app.cur) < 2 {
+        pp_free(app.cur)
+        app.cur = null
+        return
+    }
+    simplified = pp_simplify(app.cur, SK_SIMPLIFY_TOL)
+    smoothed = pp_smooth(simplified, SK_SMOOTH_PASSES)
+    outline = pp_stroke(smoothed, SK_INK_W, PP_JOIN_ROUND, PP_CAP_ROUND, 4.0)
+    pp_free(app.cur)
+    pp_free(simplified)
+    app.cur = null
+    st = malloc(16) as *Stroke
+    st.line = smoothed
+    st.outline = outline
+    _ = list.list_add_raw(app.strokes, st as ptr)
+    publish(app)
+}
+
+erase_at(app: *App, x: float, y: float) {
+    n = list.list_size(app.strokes)
+    i = 0
+    while i < n {
+        st = list.list_get_raw(app.strokes, i) as *Stroke
+        if pp_contains(st.outline, x, y) == 1 {
+            pp_free(st.line)
+            pp_free(st.outline)
+            free(st as ptr)
+            list.list_remove(app.strokes, i)
+            publish(app)
+            _r = scene_refresh(app.scene)
+            return
+        }
+        i = i + 1
+    }
+}
+
+clear_all(app: *App) {
+    n = list.list_size(app.strokes)
+    i = 0
+    while i < n {
+        st = list.list_get_raw(app.strokes, i) as *Stroke
+        pp_free(st.line)
+        pp_free(st.outline)
+        free(st as ptr)
+        i = i + 1
+    }
+    list.list_clear(app.strokes)
+    publish(app)
+    _r = scene_refresh(app.scene)
+}
+
+// ─── The board ──────────────────────────────────────────────────────────────
+draw_board(app: *App, rn: ptr) {
+    bg = rect(rn, 0.0, 0.0, SK_W * 1.0, SK_H * 1.0)
+    fill(bg, "#101018")
+    n = list.list_size(app.strokes)
+    i = 0
+    while i < n {
+        st = list.list_get_raw(app.strokes, i) as *Stroke
+        p = path(rn, pp_to_path(st.outline))
+        fill(p, "#f2f5f8")
+        i = i + 1
+    }
+    // Live feedback: the in-progress stroke, thin, before the ink pipeline
+    // has had its say — raw hand, refined on release.
+    if app.cur != null {
+        if pp_npts(app.cur) >= 2 {
+            live = pp_stroke(app.cur, 3.0, PP_JOIN_ROUND, PP_CAP_ROUND, 4.0)
+            lp = path(rn, pp_to_path(live))
+            fill(lp, "#7dd3fc")
+            pp_free(live)
+        }
+    }
+}
+
+// Ink coverage on a 4px grid — the driver-facing pixel probe.
+probe(app: *App) {
+    ink = 0
+    y = 2
+    while y < SK_H {
+        x = 2
+        while x < SK_W {
+            pv = canvas_read_pixel(app.canvas, x, y, SK_W, SK_H)
+            if ((pv >> 8) & 255) > 60 { ink = ink + 1 }
+            x = x + 4
+        }
+        y = y + 4
+    }
+    s = ui_set_s(app.st_ink, "ink: ${ink}")
+    if s < 0 { return }
+}
+
+main() {
+    app = malloc(64) as *App
+    app.strokes = list.list_new()
+    app.cur = null
+    app.mode = 0
+    count = ui_state_s("strokes: 0")
+    mode = ui_state_s("mode: draw")
+    inkl = ui_state_s("ink: unprobed")
+    app.st_count = count
+    app.st_mode = mode
+    app.st_ink = inkl
+
+    window("Sketchpad — freehand ink", 520, 460) {
+        vstack(8) {
+            text("Drag to draw · Erase mode: point at the ink itself")
+            vg(view_box(0, 0, 480, 320), SK_W, SK_H) {
+                anchor = rect(0.0, 0.0, 0.0, 0.0)
+                root_node = vg_root(node_scene(anchor))
+                app.scene = node_scene(root_node)
+                app.canvas = scene_canvas(node_scene(root_node))
+                _w = width(canvas_widget(app.canvas), SK_W)
+                _h = height(canvas_widget(app.canvas), SK_H)
+                reg = canvas_region(root_node, 0.0, 0.0, SK_W * 1.0, SK_H * 1.0)
+                    callback |rn: ptr, t: float| {
+                        draw_board(app, rn)
+                    }
+                region_set_animated(reg, 0)
+
+                cid = scene_canvas(node_scene(root_node))
+                canvas_on_click(cid) callback |px: float, py: float| {
+                    x = scene_px_to_vb_x(app.scene, px)
+                    y = scene_px_to_vb_y(app.scene, py)
+                    if app.mode == 1 {
+                        erase_at(app, x, y)
+                        return
+                    }
+                    app.cur = pp_new()
+                    pp_begin(app.cur, 0)
+                    pp_push(app.cur, x, y)
+                }
+                canvas_on_move(cid) callback |mx: float, my: float| {
+                    if app.cur == null { return }
+                    pp_push(app.cur, scene_px_to_vb_x(app.scene, mx),
+                                     scene_px_to_vb_y(app.scene, my))
+                    _r = scene_refresh(app.scene)
+                }
+                canvas_on_release(cid) callback |rx: float, ry: float| {
+                    if app.cur == null { return }
+                    pp_push(app.cur, scene_px_to_vb_x(app.scene, rx),
+                                     scene_px_to_vb_y(app.scene, ry))
+                    finish_stroke(app)
+                    _r = scene_refresh(app.scene)
+                }
+            }
+            hstack(8) {
+                btn("Draw") callback { app.mode = 0; publish(app) }
+                btn("Erase") callback { app.mode = 1; publish(app) }
+                btn("Clear") callback { clear_all(app) }
+                btn("Probe") callback { probe(app) }
+            }
+            t_c = text("strokes: 0")
+            bind_text(t_c, count)
+            t_m = text("mode: draw")
+            bind_text(t_m, mode)
+            t_i = text("ink: unprobed")
+            bind_text(t_i, inkl)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

@@ -1,0 +1,18 @@
+// sketchpad — aether-ui toolkit example, built as its own cached aeb node.
+import build
+import aether
+import aether (source, output, no_closure_regen, lib)
+import aetherui (ui_backend)
+
+main() {
+    b = build.start()
+    root = build._get(b, "root")
+    aether.program(b) {
+        source("sketchpad.ae")
+        output("sketchpad")
+        lib("${root}")
+        no_closure_regen()
+        ui_backend(root)
+    }
+    return 0
+}
