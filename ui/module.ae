@@ -53,7 +53,7 @@ exports (
     edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
     alert, clipboard_write, open_url, open_file, save_file, is_dark_mode,
-    timer, timer_cancel,
+    timer, timer_cancel, backend_name,
     window_create, window_set_body, window_show, window_close,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
     transition_overlay, overlay_is_exiting,
@@ -293,6 +293,7 @@ extern aether_ui_file_open(title: string) -> string
 extern aether_ui_file_save(title: string, default_name: string) -> string
 extern aether_ui_open_url_impl(url: string)
 extern aether_ui_dark_mode_check() -> int
+extern aether_ui_backend_name_impl() -> string
 extern aether_ui_timer_create_impl(interval_ms: int, boxed_closure: ptr) -> int
 extern aether_ui_timer_cancel_impl(timer_id: int)
 
@@ -2066,6 +2067,11 @@ save_file(title: string, default_name: string) -> string {
 
 is_dark_mode() {
     return aether_ui_dark_mode_check()
+}
+
+// "gtk4" | "win32" | "macos" — which backend this binary linked.
+backend_name() -> string {
+    return aether_ui_backend_name_impl()
 }
 
 timer(interval_ms: int, on_tick: fn) {

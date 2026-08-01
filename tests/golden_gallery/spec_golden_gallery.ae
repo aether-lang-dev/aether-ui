@@ -1,0 +1,56 @@
+// spec_golden_gallery.ae — golden-image regression, driven over the
+// AetherUIDriver.
+//
+// The gallery renders four deterministic vg scenes (primitives, the
+// geometric stroker, type-as-paths, a fixed-pose vg3d cube), reduces each
+// canvas to a per-cell signature through the SAME replay path the
+// platform paints with, and compares against the checked-in golden at
+// tests/goldens/<backend>/. This spec drives the check and asserts the
+// verdict — so every matrix run on every platform re-proves the pixels
+// against a blessed reference, and a rendering regression fails with the
+// canvas name and its failing cell count in the message.
+//
+// Blessing a NEW reference (after an intentional visual change, or on a
+// backend's first run): GOLDEN_UPDATE=1 <the app>, click Check, commit
+// the tests/goldens/<backend>/*.sig diff. The negative case is covered
+// by construction: corrupting a golden turns the verdict to
+// "<name> FAIL(n cells) … DIVERGED" (verified when the gate was built).
+//
+// Run via tests/spec_matrix.sh golden, or by hand:
+//   AETHER_UI_TEST_PORT=9222 \
+//     ./target/build/examples/golden_gallery/bin/golden_gallery &
+//   UI_SPEC=golden_gallery/spec_golden_gallery tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "golden gallery over AetherUIDriver") {
+        aeocha.it("shows the gallery unchecked") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "golden: unchecked", "starts unchecked")
+            aeocha.assert_contains(body, "\"canvas\"", "canvases present")
+        }
+
+        aeocha.it("every canvas matches its blessed golden") callback {
+            b = uidriver.widget_id_of("button", "Check")
+            aeocha.assert_gt(b, 0, "check button")
+            uidriver.click_widget(b)
+            ok = uidriver.wait_body_contains("/widgets", "golden: ", 30)
+            aeocha.assert_true(ok, "check ran")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_false(string.contains(body, "NO-GOLDEN"),
+                "goldens exist for this backend (bless with GOLDEN_UPDATE=1)")
+            aeocha.assert_false(string.contains(body, "MALFORMED"),
+                "goldens parse")
+            aeocha.assert_false(string.contains(body, "FAIL("),
+                "no canvas diverged from its golden")
+            aeocha.assert_contains(body, "ALL-GREEN",
+                "all four canvases match their goldens")
+        }
+    }
+    aeocha.run_summary(fw)
+}

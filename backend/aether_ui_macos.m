@@ -4248,6 +4248,12 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     return result;
 }
 
+
+// Which backend is this binary running? Lets pure-.ae code (the goldens
+// gallery picks its tests/goldens/<backend>/ directory) branch without
+// per-platform builds or environment guesswork.
+const char* aether_ui_backend_name_impl(void) { return "macos"; }
+
 int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
                                      int width, int height) {
     CanvasState* cs = get_canvas_state(canvas_id);

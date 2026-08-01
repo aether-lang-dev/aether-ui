@@ -4697,6 +4697,12 @@ void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
 // The real frame boundary is canvas_clear, which already frees recorded
 // text and resets the buffer (the leak the old comment feared is handled
 // there — the live loop clears every frame).
+
+// Which backend is this binary running? Lets pure-.ae code (the goldens
+// gallery picks its tests/goldens/<backend>/ directory) branch without
+// per-platform builds or environment guesswork.
+const char* aether_ui_backend_name_impl(void) { return "win32"; }
+
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
     CanvasCmd c = {0}; c.k = CV_BEGIN;
     canvas_add_cmd(canvas_id, c);

@@ -1,0 +1,299 @@
+// golden_gallery.ae — the golden-image regression gallery.
+//
+// Four deterministic vg scenes — primitives, the geometric stroker, type
+// as paths, a fixed-pose vg3d cube — each on a size-PINNED canvas (unequal
+// canvas allocations once impersonated a renderer bug; never again).
+// "Check" reduces each canvas to a SIGNATURE — a 24x16 grid of per-cell
+// averaged RGB read through ui.canvas_read_pixel, i.e. through the same
+// replay path the platform paints with — and compares it against the
+// checked-in golden at tests/goldens/<backend>/<name>.sig with a per-cell
+// tolerance. The verdict lands in a label the AetherUIDriver spec asserts.
+//
+// Signatures, not PNGs, are the gate: text, git-diffable, no image
+// decoder needed anywhere. PNGs are still dumped beside the check (into
+// target/golden_out/) purely for human eyes when a golden breaks.
+//
+// Blessing: GOLDEN_UPDATE=1 makes "Check" WRITE the current signatures as
+// the new goldens instead of comparing. Goldens are per-BACKEND (gtk4 is
+// shared by Linux and FreeBSD; win32; macos) because antialiasing is a
+// renderer property, and the tolerance absorbs same-renderer version
+// drift: a cell fails at max-channel delta > 24, a canvas fails with > 2
+// bad cells of 384 — wide enough for AA shimmer, far too narrow for a
+// missing shape, a wrong colour, or a vanished background.
+//
+// Run: DISPLAY=:0 ./target/build/examples/golden_gallery/bin/golden_gallery
+
+import ui (
+    window, vstack, hstack, text, btn, enable_test_server,
+    canvas_read_pixel, canvas_widget, canvas_write_png, width, height,
+    backend_name, ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg, canvas_region, region_set_animated)
+import vg (
+    view_box, rect, circle, path, fill, stroke, linecap, linejoin,
+    vg_root, node_scene, scene_canvas, use_font, text_path
+)
+import vg.geom.polypath (
+    pp_new, pp_begin, pp_push, pp_stroke, pp_to_path, pp_free,
+    PP_JOIN_MITER, PP_JOIN_ROUND, PP_CAP_BUTT, PP_CAP_ARROW
+)
+import vg.geom.vec3 (v3_new)
+import vg.geom.mat4 (m4_mul, m4_perspective, m4_look_at, m4_rotation_y, m4_rotation_x)
+import vg.geom.mesh (mesh_box)
+import vg.render3d (render_mesh)
+import std.io (read_file, write_file)
+import std.strbuilder
+import std.string
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+
+const GG_W: int = 240
+const GG_H: int = 160
+const GG_GRID_X: int = 24
+const GG_GRID_Y: int = 16
+const GG_CELL_TOL: int = 24     // max per-channel delta before a cell fails
+const GG_BAD_CELLS: int = 2     // failing cells tolerated per canvas
+
+struct App {
+    c_prims: int
+    c_stroke: int
+    c_type: int
+    c_cube: int
+    st_verdict: int
+}
+
+// ─── The signature: 24x16 cells, 4 samples each, averaged, hex ──────────────
+cell_hex(v: int) -> string {
+    b = strbuilder.new(4)
+    _ = strbuilder.append_hex(b, v as long, 6)
+    return strbuilder.finish(b)
+}
+
+signature(cid: int) -> string {
+    b = strbuilder.new(GG_GRID_X * GG_GRID_Y * 8)
+    _ = strbuilder.append(b, "aeui-golden v1 ${GG_W}x${GG_H} ${GG_GRID_X}x${GG_GRID_Y}\n")
+    cw = GG_W / GG_GRID_X
+    ch = GG_H / GG_GRID_Y
+    gy = 0
+    while gy < GG_GRID_Y {
+        gx = 0
+        while gx < GG_GRID_X {
+            rs = 0
+            gs = 0
+            bs = 0
+            k = 0
+            while k < 4 {
+                ox = 2
+                oy = 2
+                if k == 1 || k == 3 { ox = cw - 3 }
+                if k == 2 || k == 3 { oy = ch - 3 }
+                pv = canvas_read_pixel(cid, gx * cw + ox, gy * ch + oy, GG_W, GG_H)
+                rs = rs + ((pv >> 16) & 255)
+                gs = gs + ((pv >> 8) & 255)
+                bs = bs + (pv & 255)
+                k = k + 1
+            }
+            packed = ((rs / 4) << 16) + ((gs / 4) << 8) + (bs / 4)
+            _ = strbuilder.append(b, cell_hex(packed))
+            if gx < GG_GRID_X - 1 { _ = strbuilder.append(b, " ") }
+            gx = gx + 1
+        }
+        _ = strbuilder.append(b, "\n")
+        gy = gy + 1
+    }
+    return strbuilder.finish(b)
+}
+
+// Parse one hex cell out of a signature body at cell index i (grid order).
+// Signatures are fixed-format, so cells sit at computable offsets.
+sig_cell(sig: string, header_len: int, i: int) -> int {
+    row = i / GG_GRID_X
+    col = i % GG_GRID_X
+    line_len = GG_GRID_X * 7   // 6 hex + separator (space or newline)
+    at = header_len + row * line_len + col * 7
+    v = 0
+    k = 0
+    while k < 6 {
+        c = string_char_at(sig, at + k)
+        d = 0
+        if c >= 48 && c <= 57 { d = c - 48 }
+        if c >= 97 && c <= 102 { d = c - 87 }
+        v = v * 16 + d
+        k = k + 1
+    }
+    return v
+}
+extern string_char_at(s: string, index: int) -> int
+
+sig_header_len(sig: string) -> int {
+    at = string.string_index_of_from(sig, "\n", 0)
+    return at + 1
+}
+
+// Compare live vs golden: number of cells whose max channel delta exceeds
+// the tolerance; -1 if the golden is unreadable/malformed.
+compare(live: string, golden: string) -> int {
+    if string.length(golden) < 32 { return 0 - 1 }
+    hl_l = sig_header_len(live)
+    hl_g = sig_header_len(golden)
+    // Headers must agree exactly (dimensions/grid/version).
+    if string.equals(string_substring(live, 0, hl_l), string_substring(golden, 0, hl_g)) == 0 {
+        return 0 - 1
+    }
+    bad = 0
+    n = GG_GRID_X * GG_GRID_Y
+    i = 0
+    while i < n {
+        a = sig_cell(live, hl_l, i)
+        g = sig_cell(golden, hl_g, i)
+        dr = ((a >> 16) & 255) - ((g >> 16) & 255)
+        if dr < 0 { dr = 0 - dr }
+        dg = ((a >> 8) & 255) - ((g >> 8) & 255)
+        if dg < 0 { dg = 0 - dg }
+        db = (a & 255) - (g & 255)
+        if db < 0 { db = 0 - db }
+        worst = dr
+        if dg > worst { worst = dg }
+        if db > worst { worst = db }
+        if worst > GG_CELL_TOL { bad = bad + 1 }
+        i = i + 1
+    }
+    return bad
+}
+extern string_substring(s: string, start: int, end: int) -> string
+
+// Check (or bless, under GOLDEN_UPDATE=1) one canvas; returns its verdict.
+check_one(name: string, cid: int) -> string {
+    live = signature(cid)
+    dir = "tests/goldens/${backend_name()}"
+    gpath = "${dir}/${name}.sig"
+    // Human artifact beside the gate, always.
+    _png = canvas_write_png(cid, "target/golden_out/${name}.png", GG_W, GG_H)
+    if os_getenv("GOLDEN_UPDATE") != null {
+        werr = write_file(gpath, live)
+        if string.length(werr) > 0 { return "${name} BLESS-FAILED(${werr})" }
+        return "${name} blessed"
+    }
+    golden, rerr = read_file(gpath)
+    if string.length(rerr) > 0 { return "${name} NO-GOLDEN" }
+    bad = compare(live, golden)
+    if bad < 0 { return "${name} MALFORMED" }
+    if bad > GG_BAD_CELLS { return "${name} FAIL(${bad} cells)" }
+    return "${name} PASS"
+}
+
+run_check(app: *App) {
+    v1 = check_one("prims", app.c_prims)
+    v2 = check_one("stroke", app.c_stroke)
+    v3 = check_one("type", app.c_type)
+    v4 = check_one("cube", app.c_cube)
+    all = "DIVERGED"
+    p1 = string.contains(v1, "PASS")
+    p2 = string.contains(v2, "PASS")
+    p3 = string.contains(v3, "PASS")
+    p4 = string.contains(v4, "PASS")
+    if p1 == 1 && p2 == 1 && p3 == 1 && p4 == 1 { all = "ALL-GREEN" }
+    if os_getenv("GOLDEN_UPDATE") != null { all = "BLESSED" }
+    s = ui_set_s(app.st_verdict, "golden: ${v1} | ${v2} | ${v3} | ${v4} | ${all}")
+    if s < 0 { return }
+}
+
+// ─── The four scenes ────────────────────────────────────────────────────────
+pin(cid: int) {
+    _w = width(canvas_widget(cid), GG_W)
+    _h = height(canvas_widget(cid), GG_H)
+}
+
+main() {
+    app = malloc(40) as *App
+    verdict = ui_state_s("golden: unchecked")
+    app.st_verdict = verdict
+
+    window("Golden gallery", 560, 480) {
+        vstack(8) {
+            text("Deterministic scenes → per-cell signatures vs tests/goldens/<backend>/")
+            hstack(10) {
+                vg(view_box(0, 0, 240, 160), GG_W, GG_H) {
+                    anchor1 = rect(0.0, 0.0, 0.0, 0.0)
+                    app.c_prims = scene_canvas(node_scene(anchor1))
+                    pin(app.c_prims)
+                    bg = rect(0.0, 0.0, 240.0, 160.0)
+                    fill(bg, "#101018")
+                    r1 = rect(14.0, 14.0, 70.0, 46.0)
+                    fill(r1, "#2563eb")
+                    r2 = rect(30.0, 34.0, 70.0, 46.0)
+                    fill(r2, "#0e9f6e")
+                    c1 = circle(170.0, 50.0, 34.0)
+                    fill(c1, "#d9a13c")
+                    stroke(c1, "#f2f5f8", 3.0)
+                    star = path("M 120 92 L 138 148 L 90 113 L 150 113 L 102 148 Z")
+                    fill(star, "#db2777")
+                }
+                vg(view_box(0, 0, 240, 160), GG_W, GG_H) {
+                    anchor2 = rect(0.0, 0.0, 0.0, 0.0)
+                    app.c_stroke = scene_canvas(node_scene(anchor2))
+                    pin(app.c_stroke)
+                    bg2 = rect(0.0, 0.0, 240.0, 160.0)
+                    fill(bg2, "#101018")
+                    zz = pp_new()
+                    pp_begin(zz, 0)
+                    pp_push(zz, 16.0, 120.0)
+                    pp_push(zz, 60.0, 40.0)
+                    pp_push(zz, 104.0, 120.0)
+                    pp_push(zz, 148.0, 40.0)
+                    ol = pp_stroke(zz, 9.0, PP_JOIN_MITER, PP_CAP_BUTT, 4.0)
+                    p1 = path(pp_to_path(ol))
+                    fill(p1, "#7dd3fc")
+                    pp_free(ol)
+                    pp_free(zz)
+                    ar = pp_new()
+                    pp_begin(ar, 0)
+                    pp_push(ar, 165.0, 130.0)
+                    pp_push(ar, 200.0, 90.0)
+                    pp_push(ar, 226.0, 116.0)
+                    ao = pp_stroke(ar, 7.0, PP_JOIN_ROUND, PP_CAP_ARROW, 4.0)
+                    p2 = path(pp_to_path(ao))
+                    fill(p2, "#a78bfa")
+                    pp_free(ao)
+                    pp_free(ar)
+                }
+            }
+            hstack(10) {
+                vg(view_box(0, 0, 240, 160), GG_W, GG_H) {
+                    anchor3 = rect(0.0, 0.0, 0.0, 0.0)
+                    app.c_type = scene_canvas(node_scene(anchor3))
+                    pin(app.c_type)
+                    bg3 = rect(0.0, 0.0, 240.0, 160.0)
+                    fill(bg3, "#101018")
+                    _f = use_font("fonts/DejaVuSans-Bold.ttf")
+                    t1 = text_path(16.0, 100.0, 52.0, "Golden")
+                    fill(t1, "#f2f5f8")
+                }
+                vg(view_box(0, 0, 240, 160), GG_W, GG_H) {
+                    anchor4 = rect(0.0, 0.0, 0.0, 0.0)
+                    app.c_cube = scene_canvas(node_scene(anchor4))
+                    pin(app.c_cube)
+                    reg = canvas_region(vg_root(node_scene(anchor4)), 0.0, 0.0, 240.0, 160.0)
+                        callback |rn: ptr, t: float| {
+                            bgc = rect(rn, 0.0, 0.0, 240.0, 160.0)
+                            fill(bgc, "#101018")
+                            cube = mesh_box(50.0, 50.0, 50.0, 0.49, 0.83, 0.99)
+                            mdl = m4_mul(m4_rotation_y(35.0), m4_rotation_x(25.0))
+                            vw = m4_look_at(v3_new(0.0, 0.0, 260.0), v3_new(0.0, 0.0, 0.0),
+                                            v3_new(0.0, 1.0, 0.0))
+                            prj = m4_perspective(35.0, 1.5, 10.0, 2000.0)
+                            _n = render_mesh(rn, cube, mdl, vw, prj, 240, 160,
+                                             v3_new(0.35, 0.55, 1.0), 0.35)
+                        }
+                    region_set_animated(reg, 0)
+                }
+            }
+            btn("Check") callback { run_check(app) }
+            t_v = text("golden: unchecked")
+            bind_text(t_v, verdict)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

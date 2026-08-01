@@ -2303,6 +2303,12 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
     aether_ui_apply_css(handle, w, prop);
 }
 
+
+// Which backend is this binary running? Lets pure-.ae code (the goldens
+// gallery picks its tests/goldens/<backend>/ directory) branch without
+// per-platform builds or environment guesswork.
+const char* aether_ui_backend_name_impl(void) { return "gtk4"; }
+
 void aether_ui_set_width(int handle, int width) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return;
