@@ -4,7 +4,17 @@ Tracked items not yet built. Backends are at full spec-matrix parity
 (GTK4 188/0, win32 188/0, macOS per its sibling cadence); these are the
 next layers. Fuller context: the toolkit-inspired backlog in roadmap.md.
 
-## Golden-image tests (Flutter-style visual regression)
+## Golden-image tests (Flutter-style visual regression) — DONE 2026-08-01
+
+Shipped as examples/golden_gallery + tests/goldens/<backend>/*.sig (67d3cb6):
+per-cell signature files rather than PNG diffing (text, git-diffable, no
+image decoder needed on any platform), captured through each backend's
+canvas replay via ui.canvas_read_pixel, driven by the AetherUIDriver spec
+`golden` in every matrix run. Blessed and green on all four platforms —
+FreeBSD passes against Linux's shared gtk4 references. PNGs still land in
+target/golden_out/ for human eyes. Original sketch kept below.
+
+### The original sketch
 
 Screenshot-based regression over the existing driver `/screenshot` route:
 per-suite golden PNGs, checked in per platform (`tests/goldens/gtk4/…`,
