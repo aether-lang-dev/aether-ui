@@ -4982,6 +4982,24 @@ static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
                 LOGBRUSH lb = { BS_SOLID, RGB(ri, gi, bi), 0 };
                 cur_pen = ExtCreatePen(style, (DWORD)cmd->p0, &lb, 0, NULL);
                 SelectObject(mem, cur_pen);
+                // The stroke command arrives AFTER its path (cairo strokes
+                // the accumulated path retroactively; the vg dispatch is
+                // built around that). GDI has no retained path here — the
+                // CV_LINE segments already drew with whatever pen was
+                // current, i.e. the WRONG one. Mirror CV_FILL: walk back to
+                // the path's CV_BEGIN and redraw every segment with the pen
+                // this stroke actually specifies. (Without this, a stroked
+                // vg path rendered as hairline default-pen lines — the
+                // stroker suite's first honest win32 run measured native
+                // ink at 60 samples against the outline's 323.)
+                for (int j = i - 1; j >= 0; j--) {
+                    CanvasCmdKind k = cv->cmds[j].k;
+                    if (k == CV_BEGIN) break;
+                    if (k == CV_LINE) {
+                        MoveToEx(mem, (int)cv->cmds[j].p0, (int)cv->cmds[j].p1, NULL);
+                        LineTo(mem, (int)cv->cmds[j].p2, (int)cv->cmds[j].p3);
+                    }
+                }
                 break;
             }
             case CV_FILL_RECT: {
