@@ -145,7 +145,7 @@ draw_board(app: *App, rn: ptr) {
     while i < n {
         st = list.list_get_raw(app.strokes, i) as *Stroke
         p = path(rn, pp_to_path(st.outline))
-        fill(p, "#f2f5f8")
+        fill(p, "#3b82f6")
         i = i + 1
     }
     // Live feedback: the in-progress stroke, thin, before the ink pipeline
@@ -154,13 +154,18 @@ draw_board(app: *App, rn: ptr) {
         if pp_npts(app.cur) >= 2 {
             live = pp_stroke(app.cur, 3.0, PP_JOIN_ROUND, PP_CAP_ROUND, 4.0)
             lp = path(rn, pp_to_path(live))
-            fill(lp, "#7dd3fc")
+            fill(lp, "#93c5fd")
             pp_free(live)
         }
     }
 }
 
-// Ink coverage on a 4px grid — the driver-facing pixel probe.
+// Ink coverage on a 4px grid — the driver-facing pixel probe. Ink is
+// BLUE (high green+blue, LOW red) precisely so the test excludes both
+// backdrops: the board's near-black (#101018, g=16) and — on backends
+// whose height pin is advisory and whose replay bitmap can outsize the
+// mapped area — the replay's white ground (r=255). A near-white ink
+// would be indistinguishable from that leak; blue is immune.
 probe(app: *App) {
     ink = 0
     y = 2
@@ -168,7 +173,7 @@ probe(app: *App) {
         x = 2
         while x < SK_W {
             pv = canvas_read_pixel(app.canvas, x, y, SK_W, SK_H)
-            if ((pv >> 8) & 255) > 60 { ink = ink + 1 }
+            if ((pv >> 8) & 255) > 100 && ((pv >> 16) & 255) < 150 { ink = ink + 1 }
             x = x + 4
         }
         y = y + 4
