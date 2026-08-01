@@ -4687,14 +4687,17 @@ void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
 }
 
 // begin_path starts a fresh command stream — drop any previously-recorded
-// commands so a redraw-per-frame loop doesn't accumulate unboundedly.
-// Previously this was an append-only op, which meant an animated canvas
-// leaked ~16 bytes/cmd * 60Hz forever (hundreds of MB/hr on busy scenes).
+// begin_path starts a new PATH, not a new FRAME — it must append, never
+// reset. It used to zero cmd_count here as a leak guard ("a redraw-per-
+// frame loop doesn't accumulate unboundedly"), which mistook a per-shape
+// primitive for a frame boundary: EVERY new path erased everything drawn
+// before it in the frame. On win32 that meant multi-shape canvases kept
+// only their LAST path — vg backgrounds vanished, pixel probes read
+// white floods, and only rect-only apps (the GP treemap) looked right.
+// The real frame boundary is canvas_clear, which already frees recorded
+// text and resets the buffer (the leak the old comment feared is handled
+// there — the live loop clears every frame).
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
-    if (canvas_id >= 1 && canvas_id <= canvas_count) {
-        canvas_free_text(canvas_id);
-        canvases[canvas_id - 1].cmd_count = 0;
-    }
     CanvasCmd c = {0}; c.k = CV_BEGIN;
     canvas_add_cmd(canvas_id, c);
 }
