@@ -34,7 +34,7 @@ import ui (
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (
     view_box, rect, path, fill, vg_root, node_scene, scene_canvas,
-    scene_refresh, scene_px_to_vb_x, scene_px_to_vb_y
+    scene_refresh, scene_set_refreshing, scene_px_to_vb_x, scene_px_to_vb_y
 )
 import vg.geom.polypath (
     pp_new, pp_begin, pp_push, pp_npts, pp_x, pp_y,
@@ -221,18 +221,31 @@ main() {
                     app.cur = pp_new()
                     pp_begin(app.cur, 0)
                     pp_push(app.cur, x, y)
+                    // A drag IS an animation: while inking, the scene runs
+                    // on the frame-clock live loop (arm-on-demand makes
+                    // this one line), which renders the in-progress stroke
+                    // at 60fps with the loop's proven atomic present. The
+                    // first cut refreshed per MOTION EVENT instead — a real
+                    // mouse delivers hundreds per second, the canvas
+                    // rebuilt at input rate, and frames caught the blank
+                    // mid-state as visible white flicker (driver-synthesized
+                    // gestures send two moves and never showed it).
+                    scene_set_refreshing(app.scene, 1)
                 }
                 canvas_on_move(cid) callback |mx: float, my: float| {
                     if app.cur == null { return }
+                    // Just record; the live loop paints. No per-event present.
                     pp_push(app.cur, scene_px_to_vb_x(app.scene, mx),
                                      scene_px_to_vb_y(app.scene, my))
-                    _r = scene_refresh(app.scene)
                 }
                 canvas_on_release(cid) callback |rx: float, ry: float| {
                     if app.cur == null { return }
                     pp_push(app.cur, scene_px_to_vb_x(app.scene, rx),
                                      scene_px_to_vb_y(app.scene, ry))
                     finish_stroke(app)
+                    // Ink is settled: back to render-on-demand (the live
+                    // loop retires itself on its next quiet tick).
+                    scene_set_refreshing(app.scene, 0)
                     _r = scene_refresh(app.scene)
                 }
             }
