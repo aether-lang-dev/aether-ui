@@ -22,7 +22,8 @@
 
 import ui (
     window, vstack, hstack, text, btn, enable_test_server,
-    canvas_read_pixel, ui_state_s, ui_set_s, bind_text
+    canvas_read_pixel, canvas_widget, width, height,
+    ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg)
 import vg (
@@ -125,6 +126,16 @@ main() {
                 vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
                     anchor_n = rect(0.0, 0.0, 0.0, 0.0)
                     app.cv_native = scene_canvas(node_scene(anchor_n))
+                    // PIN the size: the pixel comparison samples the same
+                    // (x,y) on both canvases, so they must have identical
+                    // allocations. Left unpinned, the hstack stretched THIS
+                    // canvas wider than its sibling on macOS (310 vs 240),
+                    // the viewBox remapped, and the same zigzag rendered
+                    // ~29% larger — 77% agreement and 295-vs-228 ink that
+                    // looked exactly like a renderer divergence. GTK had
+                    // merely been stretching both canvases EQUALLY.
+                    _wn = width(canvas_widget(app.cv_native), SD_W)
+                    _hn = height(canvas_widget(app.cv_native), SD_H)
                     bg1 = rect(0.0, 0.0, 240.0, 140.0)
                     fill(bg1, "#101018")
                     p1 = path(zigzag_d())
@@ -136,6 +147,8 @@ main() {
                 vg(view_box(0, 0, 240, 140), SD_W, SD_H) {
                     anchor_g = rect(0.0, 0.0, 0.0, 0.0)
                     app.cv_geom = scene_canvas(node_scene(anchor_g))
+                    _wg = width(canvas_widget(app.cv_geom), SD_W)
+                    _hg = height(canvas_widget(app.cv_geom), SD_H)
                     bg2 = rect(0.0, 0.0, 240.0, 140.0)
                     fill(bg2, "#101018")
                     zz = mk_zigzag()
