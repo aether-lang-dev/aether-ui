@@ -3707,6 +3707,17 @@ typedef struct {
     // Pointer-release hook — canvas-local (x, y) where the button came up.
     // Pairs with on_click + on_move to form a press→drag→release swipe.
     AeClosure* on_release;
+    // read_pixel replay cache: one rendered surface per (generation,
+    // cmd-count, size). gen bumps on canvas_clear (each frame rebuild);
+    // within a generation the command list only grows, so gen+count
+    // uniquely identify buffer content. Without this a grid probe
+    // re-rasterizes the WHOLE canvas per pixel — a 15k-sample sweep of a
+    // path-heavy page takes minutes and stalls the main loop until the
+    // driver's client times out.
+    cairo_surface_t* replay_cache;
+    unsigned long gen;
+    unsigned long cache_gen;
+    int cache_count, cache_w, cache_h;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -3993,21 +4004,33 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || px < 0 || py < 0 || px >= width || py >= height) return -1;
-    cairo_surface_t* surf = cairo_image_surface_create(
-        CAIRO_FORMAT_ARGB32, width, height);
-    if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
-        cairo_surface_destroy(surf);
-        return -1;
+    if (!(cs->replay_cache && cs->cache_gen == cs->gen &&
+          cs->cache_count == cs->count &&
+          cs->cache_w == width && cs->cache_h == height)) {
+        if (cs->replay_cache) {
+            cairo_surface_destroy(cs->replay_cache);
+            cs->replay_cache = NULL;
+        }
+        cairo_surface_t* surf = cairo_image_surface_create(
+            CAIRO_FORMAT_ARGB32, width, height);
+        if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+            cairo_surface_destroy(surf);
+            return -1;
+        }
+        cairo_t* cr = cairo_create(surf);
+        canvas_replay(cr, cs);
+        cairo_destroy(cr);
+        cairo_surface_flush(surf);
+        cs->replay_cache = surf;
+        cs->cache_gen = cs->gen;
+        cs->cache_count = cs->count;
+        cs->cache_w = width;
+        cs->cache_h = height;
     }
-    cairo_t* cr = cairo_create(surf);
-    canvas_replay(cr, cs);
-    cairo_destroy(cr);
-    cairo_surface_flush(surf);
-    unsigned char* data = cairo_image_surface_get_data(surf);
-    int stride = cairo_image_surface_get_stride(surf);
+    unsigned char* data = cairo_image_surface_get_data(cs->replay_cache);
+    int stride = cairo_image_surface_get_stride(cs->replay_cache);
     // ARGB32 is premultiplied, native-endian 32-bit.
     unsigned int v = *(unsigned int*)(data + py * stride + px * 4);
-    cairo_surface_destroy(surf);
     return (int)v;
 }
 
@@ -4043,6 +4066,12 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->on_key = NULL;
     cs->on_release = NULL;
     cs->on_click = NULL;
+    cs->replay_cache = NULL;
+    cs->gen = 0;
+    cs->cache_gen = 0;
+    cs->cache_count = -1;
+    cs->cache_w = 0;
+    cs->cache_h = 0;
     cs->last_w = width;
     cs->last_h = height;
     canvas_state_count++;
@@ -4492,6 +4521,7 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
             }
         }
         cs->count = 0;
+        cs->gen++;   // invalidates the read_pixel replay cache
         GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
         if (w) gtk_widget_queue_draw(w);
     }
@@ -4871,6 +4901,7 @@ void aether_ui_clear_children_impl(int handle) {
 #include <netinet/in.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 #include <errno.h>
 
 // Sealed widgets — test server refuses to interact with these.
@@ -5729,13 +5760,13 @@ static gboolean widgets_json_idle(gpointer data) {
     WidgetsJsonReq* rq = (WidgetsJsonReq*)data;
     if (rq->mode == 1) {
         if (rq->id >= 1 && rq->id <= widget_count && aether_ui_get_widget(rq->id)) {
-            rq->out = malloc(512);
-            widget_to_json(rq->id, rq->out, 512);
+            rq->out = malloc(4096);
+            widget_to_json(rq->id, rq->out, 4096);
         }
     } else if (rq->mode == 2) {
         GtkWidget* w = aether_ui_get_widget(rq->id);
         if (w) {
-            char* body = malloc((size_t)widget_count * 512 + 64);
+            char* body = malloc((size_t)widget_count * 4096 + 64);
             int pos = 0;
             int first = 1;
             pos += sprintf(body + pos, "[");
@@ -5745,14 +5776,14 @@ static gboolean widgets_json_idle(gpointer data) {
                 if (ch > 0) {
                     if (!first) pos += sprintf(body + pos, ",");
                     first = 0;
-                    pos += widget_to_json(ch, body + pos, 512);
+                    pos += widget_to_json(ch, body + pos, 4096);
                 }
             }
             pos += sprintf(body + pos, "]");
             rq->out = body;
         }
     } else {
-        char* body = malloc((size_t)widget_count * 512 + 64);
+        char* body = malloc((size_t)widget_count * 4096 + 64);
         int pos = 0;
         int first = 1;
         pos += sprintf(body + pos, "[");
@@ -5766,7 +5797,7 @@ static gboolean widgets_json_idle(gpointer data) {
             }
             if (!first) pos += sprintf(body + pos, ",");
             first = 0;
-            pos += widget_to_json(i, body + pos, 512);
+            pos += widget_to_json(i, body + pos, 4096);
         }
         pos += sprintf(body + pos, "]");
         rq->out = body;
@@ -6585,6 +6616,11 @@ static void handle_test_request(int client_fd) {
 
 static void* test_server_thread(void* arg) {
     int port = (int)(intptr_t)arg;
+    // A client that times out and closes its socket mid-response (e.g. a
+    // driver whose deadline expired while the app was busy) must not KILL
+    // the app: without this, write() to the dead socket raises SIGPIPE and
+    // the default action terminates the whole process.
+    signal(SIGPIPE, SIG_IGN);
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) return NULL;
 

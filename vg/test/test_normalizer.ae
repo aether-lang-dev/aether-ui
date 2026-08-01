@@ -119,13 +119,20 @@ fa7(a0: float, a1: float, a2: float, a3: float, a4: float, a5: float, a6: float)
     return a
 }
 
-const M: int = normalizer.M_CHAR
-const L: int = normalizer.L_CHAR
-const C: int = normalizer.C_CHAR
-const Z: int = normalizer.Z_CHAR
+// Literal duplicates of normalizer.M_CHAR etc. — ae 0.465 emits a
+// cross-module const ALIAS before the aliased const's own definition in
+// the generated C (declaration-order bug), so aliasing here fails to
+// link. Values asserted against the normalizer's at runtime below.
+const M: int = 77
+const L: int = 76
+const C: int = 67
+const Z: int = 90
 
 main() {
     println("=== test_normalizer ===")
+    // Guard the literal duplicates against drift.
+    if M != normalizer.M_CHAR || L != normalizer.L_CHAR { println("FAIL: const drift"); exit(1) }
+    if C != normalizer.C_CHAR || Z != normalizer.Z_CHAR { println("FAIL: const drift"); exit(1) }
 
     // ─── parse_path basics ──────────────────────────────────────
 

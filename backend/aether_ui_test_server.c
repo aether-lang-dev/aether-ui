@@ -23,6 +23,9 @@
 #include "aether_ui_system_extras.h"
 
 #include <stdio.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -441,7 +444,7 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
 
         int total = h->widget_count();
         // Per-widget JSON caps at ~512 bytes; allocate a generous buffer.
-        char* body = (char*)malloc((size_t)total * 512 + 64);
+        char* body = (char*)malloc((size_t)total * 4096 + 64);
         int pos = 0, first = 1;
         pos += sprintf(body + pos, "[");
         for (int i = 1; i <= total; i++) {
@@ -455,7 +458,7 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
             }
             if (!first) pos += sprintf(body + pos, ",");
             first = 0;
-            pos += widget_to_json(h, i, body + pos, 512);
+            pos += widget_to_json(h, i, body + pos, 4096);
         }
         pos += sprintf(body + pos, "]");
         send_http(client_fd, 200, "OK", "application/json", body);
@@ -473,12 +476,12 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
                 send_http(client_fd, 404, "Not Found", "text/plain",
                           "widget not found");
             } else {
-                char* body = (char*)malloc((size_t)n * 512 + 64);
+                char* body = (char*)malloc((size_t)n * 4096 + 64);
                 int pos = 0;
                 pos += sprintf(body + pos, "[");
                 for (int i = 0; i < n; i++) {
                     if (i > 0) pos += sprintf(body + pos, ",");
-                    pos += widget_to_json(h, kids[i], body + pos, 512);
+                    pos += widget_to_json(h, kids[i], body + pos, 4096);
                 }
                 pos += sprintf(body + pos, "]");
                 send_http(client_fd, 200, "OK", "application/json", body);
@@ -544,7 +547,7 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
     } else if (method == 0 && strncmp(path, "/widget/", 8) == 0) {
         int id = extract_id_from_path(path, "/widget/");
         if (id > 0) {
-            char body[2048];
+            char body[4096];
             widget_to_json(h, id, body, sizeof(body));
             send_http(client_fd, 200, "OK", "application/json", body);
         } else {
@@ -1020,7 +1023,7 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
     // POST /tray/{id}/set_tooltip?v=Text     → update tooltip
     } else if (method == 0 && strcmp(path, "/tray") == 0) {
         int n = aether_ui_tray_count();
-        char* body = (char*)malloc((size_t)n * 512 + 64);
+        char* body = (char*)malloc((size_t)n * 4096 + 64);
         int pos = sprintf(body, "[");
         for (int i = 1; i <= n; i++) {
             if (i > 1) pos += sprintf(body + pos, ",");
@@ -1152,6 +1155,11 @@ static void* server_thread(void* arg) {
     ServerArgs* args = (ServerArgs*)arg;
     int port = args->port;
     const AetherDriverHooks* hooks = args->hooks;
+#ifndef _WIN32
+    // A timed-out client closing its socket mid-response must not SIGPIPE
+    // the app to death (no SIGPIPE on Windows; sends there just fail).
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
 #ifdef _WIN32
     WSADATA wsa;
