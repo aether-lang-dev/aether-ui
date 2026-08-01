@@ -1,0 +1,394 @@
+// wordflow.ae — words as first-class visual objects: layout, paint, hit.
+//
+// The scribe thesis, executed: every word in the document gets its own
+// measured BOX (position, extent, block/word identity), and those boxes
+// are simultaneously
+//   - the layout        (greedy line-breaking over exact advance widths),
+//   - the render list   (each box paints its word as glyph GEOMETRY), and
+//   - the hit regions   (pointing at a word addresses the word).
+// One structure, three duties — the same trick sketchpad plays with
+// stroke outlines, promoted from ink to language.
+//
+// Type is geometry throughout, built on the text-as-paths surface:
+//   plain   text_polypath        glyph contours at exact advance widths
+//   bold    + pp_stroke          the geometric stroker THICKENS the same
+//                                contours (outline-fill over the fill)
+//   italic  + affine_skew_x      the path toolkit SHEARS them (12° about
+//                                the baseline)
+//   code    tinted plate behind the glyphs
+// Measurement (text_paths_width) and painting share one set of font
+// tables, so layout and pixels can't disagree — and both are pure
+// Aether, byte-identical on every backend.
+//
+// The live word being typed enters the layout as a VIRTUAL box (wi = -2)
+// at the caret gap, so in-progress typing reflows the document exactly
+// as the committed word will.
+
+import mdown
+import vg (text_polypath, text_paths_width, rect, path, fill)
+import vg.geom.polypath (
+    pp_free, pp_to_path, pp_stroke, pp_transform,
+    PP_JOIN_ROUND, PP_CAP_ROUND
+)
+import vg.geom.transform (affine_new)
+import std.list
+import std.string
+
+exports(
+    wf_layout, wf_free, wf_total_h,
+    wf_nboxes, wf_box_bi, wf_box_wi, wf_box_x, wf_box_y, wf_box_w, wf_box_h,
+    wf_hit_word, wf_hit_gap, wf_gap_block, wf_gap_index,
+    wf_render, wf_caret_x, wf_caret_y
+)
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+// Page geometry (viewBox units).
+const WF_PAD_L: float = 14.0
+const WF_PAD_R: float = 14.0
+const WF_PAD_T: float = 12.0
+const WF_BULLET_IND: float = 22.0
+const WF_BLOCK_GAP: float = 11.0
+
+// Word-size per block kind; everything else scales off it.
+wf_size(kind: int) -> float {
+    if kind == mdown.MD_H1 { return 27.0 }
+    if kind == mdown.MD_H2 { return 21.0 }
+    if kind == mdown.MD_H3 { return 17.0 }
+    if kind == mdown.MD_CODE { return 13.0 }
+    return 14.0
+}
+
+wf_line_h(kind: int) -> float  { return wf_size(kind) * 1.5 }
+wf_space_w(kind: int) -> float { return wf_size(kind) * 0.34 }
+
+// One word's box. wi >= 0 indexes the block's words; wi == -2 is the
+// VIRTUAL box of the word currently being typed at the caret.
+struct WfBox {
+    x: float
+    y: float        // line top
+    w: float
+    h: float        // line height
+    bi: int
+    wi: int
+}
+
+struct WfLayout {
+    boxes: ptr      // std.list of *WfBox
+    total_h: float
+    caret_x: float
+    caret_y: float  // line top of the caret's line
+    caret_h: float
+    view_w: float
+}
+
+box_new(x: float, y: float, w: float, h: float, bi: int, wi: int) -> ptr {
+    b = malloc(48) as *WfBox
+    b.x = x
+    b.y = y
+    b.w = w
+    b.h = h
+    b.bi = bi
+    b.wi = wi
+    return b as ptr
+}
+
+// Lay the document out at view_w. The caret (block cb, gap cg) and the
+// live typing buffer `buf` ("" = none) participate: the buffer becomes a
+// virtual box at the gap, and the caret lands after it. The layout owns
+// the caret position so render and editor never re-derive it.
+wf_layout(doc: ptr, view_w: float, cb: int, cg: int, buf: string) -> ptr {
+    lo = malloc(64) as *WfLayout
+    lo.boxes = list.list_new()
+    lo.view_w = view_w
+    lo.caret_x = WF_PAD_L
+    lo.caret_y = WF_PAD_T
+    lo.caret_h = wf_line_h(mdown.MD_PARA)
+    y = WF_PAD_T
+    nb = mdown.md_doc_blocks(doc)
+    bi = 0
+    while bi < nb {
+        bp = mdown.md_doc_block(doc, bi)
+        kind = mdown.md_block_kind(bp)
+        size = wf_size(kind)
+        lh = wf_line_h(kind)
+        sp = wf_space_w(kind)
+        x0 = WF_PAD_L
+        if kind == mdown.MD_BULLET { x0 = WF_PAD_L + WF_BULLET_IND }
+        x = x0
+        // Caret in an empty block (or gap 0) starts at the margin.
+        if bi == cb && cg == 0 {
+            lo.caret_x = x0
+            lo.caret_y = y
+            lo.caret_h = lh
+        }
+        nw = mdown.md_block_words(bp)
+        wi = 0
+        while wi < nw {
+            // The virtual buffer word slots in AT its gap, before word cg.
+            if bi == cb && wi == cg && string.length(buf) > 0 {
+                x = place_word(lo, buf, size, lh, sp, x, x0, bi, 0 - 2, y)
+                y = adjusted_y(lo)
+                lo.caret_x = last_box_end(lo)
+                lo.caret_y = line_top(lo)
+                lo.caret_h = lh
+            }
+            w = mdown.md_block_word(bp, wi)
+            x = place_word(lo, mdown.md_word_text(w), size, lh, sp, x, x0,
+                           bi, wi, y)
+            y = adjusted_y(lo)
+            if bi == cb && wi + 1 == cg {
+                lo.caret_x = last_box_end(lo)
+                lo.caret_y = line_top(lo)
+                lo.caret_h = lh
+            }
+            wi = wi + 1
+        }
+        // Buffer at end-of-block (gap == word count).
+        if bi == cb && cg >= nw && string.length(buf) > 0 {
+            x = place_word(lo, buf, size, lh, sp, x, x0, bi, 0 - 2, y)
+            y = adjusted_y(lo)
+            lo.caret_x = last_box_end(lo)
+            lo.caret_y = line_top(lo)
+            lo.caret_h = lh
+        }
+        y = y + lh + WF_BLOCK_GAP
+        bi = bi + 1
+    }
+    lo.total_h = y + 6.0
+    return lo as ptr
+}
+
+// Append one word box, wrapping first if it would overflow the right
+// margin (a word longer than the whole line stays put and overhangs —
+// no mid-word breaking in v1). Returns the new pen x. The running line
+// top is threaded through the layout's caret_y-independent scratch:
+// boxes carry their own y, and adjusted_y/line_top read the LAST box.
+place_word(lop: ptr, txt: string, size: float, lh: float, sp: float,
+           x: float, x0: float, bi: int, wi: int, y: float) -> float {
+    lo = lop as *WfLayout
+    ww = text_paths_width(txt, size)
+    yy = y
+    xx = x
+    if xx + ww > lo.view_w - WF_PAD_R && xx > x0 {
+        xx = x0
+        yy = y + lh
+    }
+    _ = list.list_add_raw(lo.boxes, box_new(xx, yy, ww, lh, bi, wi))
+    return xx + ww + sp
+}
+
+// After place_word the line may have advanced: the authoritative line top
+// is the LAST box's y.
+adjusted_y(lop: ptr) -> float {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    if n == 0 { return WF_PAD_T }
+    b = list.list_get_raw(lo.boxes, n - 1) as *WfBox
+    return b.y
+}
+
+line_top(lop: ptr) -> float { return adjusted_y(lop) }
+
+last_box_end(lop: ptr) -> float {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    if n == 0 { return WF_PAD_L }
+    b = list.list_get_raw(lo.boxes, n - 1) as *WfBox
+    return b.x + b.w + 2.0
+}
+
+wf_free(lop: ptr) {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    i = 0
+    while i < n {
+        free(list.list_get_raw(lo.boxes, i))
+        i = i + 1
+    }
+    list.list_free(lo.boxes)
+    free(lop)
+}
+
+wf_total_h(lop: ptr) -> float { lo = lop as *WfLayout; return lo.total_h }
+wf_caret_x(lop: ptr) -> float { lo = lop as *WfLayout; return lo.caret_x }
+wf_caret_y(lop: ptr) -> float { lo = lop as *WfLayout; return lo.caret_y }
+
+wf_nboxes(lop: ptr) -> int {
+    lo = lop as *WfLayout
+    return list.list_size(lo.boxes)
+}
+wf_box_bi(lop: ptr, i: int) -> int {
+    lo = lop as *WfLayout
+    b = list.list_get_raw(lo.boxes, i) as *WfBox
+    return b.bi
+}
+wf_box_wi(lop: ptr, i: int) -> int {
+    lo = lop as *WfLayout
+    b = list.list_get_raw(lo.boxes, i) as *WfBox
+    return b.wi
+}
+wf_box_x(lop: ptr, i: int) -> float {
+    lo = lop as *WfLayout
+    b = list.list_get_raw(lo.boxes, i) as *WfBox
+    return b.x
+}
+wf_box_y(lop: ptr, i: int) -> float {
+    lo = lop as *WfLayout
+    b = list.list_get_raw(lo.boxes, i) as *WfBox
+    return b.y
+}
+wf_box_w(lop: ptr, i: int) -> float {
+    lo = lop as *WfLayout
+    b = list.list_get_raw(lo.boxes, i) as *WfBox
+    return b.w
+}
+wf_box_h(lop: ptr, i: int) -> float {
+    lo = lop as *WfLayout
+    b = list.list_get_raw(lo.boxes, i) as *WfBox
+    return b.h
+}
+
+// The box index of the real word under (x, y), or -1. A word's hit region
+// is its box padded by half the word gap — pointing between letters and
+// pointing at the word are the same act.
+wf_hit_word(lop: ptr, x: float, y: float) -> int {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    i = 0
+    while i < n {
+        b = list.list_get_raw(lo.boxes, i) as *WfBox
+        if b.wi >= 0 {
+            if x >= b.x - 2.0 && x <= b.x + b.w + 2.0 {
+                if y >= b.y && y <= b.y + b.h { return i }
+            }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// The caret gap nearest to (x, y), encoded block*100000 + gap (decode
+// with wf_gap_block / wf_gap_index). Chooses the block whose vertical
+// band contains y (clamping to the nearest), then walks that block's
+// boxes: click left of a word's midpoint → the gap before it; otherwise
+// after it. An empty block yields gap 0.
+wf_hit_gap(lop: ptr, doc: ptr, x: float, y: float) -> int {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    // Resolve the block band by y from box extents; default to the last
+    // block for clicks below all text, first block for clicks above.
+    nb = mdown.md_doc_blocks(doc)
+    best_b = nb - 1
+    i = 0
+    while i < n {
+        b = list.list_get_raw(lo.boxes, i) as *WfBox
+        if y >= b.y && y <= b.y + b.h {
+            best_b = b.bi
+        }
+        i = i + 1
+    }
+    if best_b < 0 { best_b = 0 }
+    // Walk the chosen block's real boxes on the clicked line.
+    gap = 0
+    i = 0
+    while i < n {
+        b = list.list_get_raw(lo.boxes, i) as *WfBox
+        if b.bi == best_b && b.wi >= 0 {
+            on_line = 0
+            if y >= b.y && y <= b.y + b.h { on_line = 1 }
+            below = 0
+            if y > b.y + b.h { below = 1 }
+            if on_line == 1 && x > b.x + b.w / 2.0 { gap = b.wi + 1 }
+            if below == 1 { gap = b.wi + 1 }
+        }
+        i = i + 1
+    }
+    return best_b * 100000 + gap
+}
+
+wf_gap_block(code: int) -> int { return code / 100000 }
+wf_gap_index(code: int) -> int { return code % 100000 }
+
+// ---- painting --------------------------------------------------------------
+
+// Word ink colours per block kind.
+wf_color(kind: int, wfl: int) -> string {
+    if (wfl / mdown.MD_CODEW) % 2 == 1 { return "#f0c674" }
+    if kind == mdown.MD_H1 { return "#f2f2f7" }
+    if kind == mdown.MD_H2 { return "#e8e8ef" }
+    if kind == mdown.MD_H3 { return "#dedee8" }
+    if kind == mdown.MD_CODE { return "#b8d7a3" }
+    return "#c9c9d4"
+}
+
+// Paint one word's glyph geometry at (x, baseline). Italic shears the
+// contours 12° about the baseline (x' = x − 0.2126·(y − base)); bold
+// paints the stroker's outline annulus over the fill, thickening every
+// edge by ~5% of the size in both directions.
+paint_word(rn: ptr, txt: string, x: float, base: float, size: float,
+           wfl: int, color: string) {
+    pp = text_polypath(txt, x, base, size)
+    if (wfl / mdown.MD_ITALIC) % 2 == 1 {
+        // rows [a c e; b d f]: x' = a·x + c·y + e with y measured from
+        // the baseline — compose translate(0,-base) · skew · translate
+        // back, flattened by hand into one affine.
+        sk = affine_new(1.0, 0.0, 0.0 - 0.2126, 1.0, 0.2126 * base, 0.0)
+        pp_transform(pp, sk as ptr)
+    }
+    p = path(rn, pp_to_path(pp))
+    fill(p, color)
+    if (wfl / mdown.MD_BOLD) % 2 == 1 {
+        fat = pp_stroke(pp, size * 0.055, PP_JOIN_ROUND, PP_CAP_ROUND, 4.0)
+        fp = path(rn, pp_to_path(fat))
+        fill(fp, color)
+        pp_free(fat)
+    }
+    pp_free(pp)
+}
+
+// Paint the whole document: plates and selection first, then glyphs,
+// then the caret. sel is a BOX index (or -1); the caret comes from the
+// layout. `buf` is the live word at the caret gap (accent-coloured).
+wf_render(rn: ptr, doc: ptr, lop: ptr, sel: int, buf: string) {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    // Selection highlight plate.
+    if sel >= 0 && sel < n {
+        b = list.list_get_raw(lo.boxes, sel) as *WfBox
+        hl = rect(rn, b.x - 3.0, b.y + 1.0, b.w + 6.0, b.h - 2.0)
+        fill(hl, "#2d4a75")
+    }
+    i = 0
+    while i < n {
+        b = list.list_get_raw(lo.boxes, i) as *WfBox
+        bp = mdown.md_doc_block(doc, b.bi)
+        kind = mdown.md_block_kind(bp)
+        size = wf_size(kind)
+        base = b.y + size * 1.08
+        if b.wi == 0 - 2 {
+            // The word being typed: accent ink, no committed styling yet.
+            paint_word(rn, buf, b.x, base, size, 0, "#7fb2ff")
+        } else {
+            w = mdown.md_block_word(bp, b.wi)
+            wfl = mdown.md_word_flags(w)
+            if (wfl / mdown.MD_CODEW) % 2 == 1 || kind == mdown.MD_CODE {
+                plate = rect(rn, b.x - 2.0, b.y + 2.0, b.w + 4.0, b.h - 4.0)
+                fill(plate, "#23232e")
+            }
+            paint_word(rn, mdown.md_word_text(w), b.x, base, size, wfl,
+                       wf_color(kind, wfl))
+            // Bullet dot once per bullet block, beside its first word.
+            if kind == mdown.MD_BULLET && b.wi == 0 {
+                dot = rect(rn, WF_PAD_L + 6.0, b.y + b.h * 0.42, 5.0, 5.0)
+                fill(dot, "#8888a0")
+            }
+        }
+        i = i + 1
+    }
+    // Empty bullet block still shows its dot (the caret needs company).
+    // The caret: a 2px bar on the layout's authoritative position.
+    caret = rect(rn, lo.caret_x, lo.caret_y + 2.0, 2.0, lo.caret_h - 4.0)
+    fill(caret, "#7fb2ff")
+}

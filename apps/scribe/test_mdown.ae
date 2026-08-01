@@ -1,0 +1,129 @@
+// test_mdown.ae — unit tests for scribe's document model and markdown
+// round-trip. Headless, pure Aether (ci.sh Phase 0 ENGINE_TESTS):
+//   aetherc --lib apps/scribe apps/scribe/test_mdown.ae /tmp/t.c \
+//     && gcc /tmp/t.c $(ae cflags) -o /tmp/t && /tmp/t
+//
+// The serializer's contract is run-merged markers, so round-trip equality
+// is asserted on the SERIALIZED form: parse(s) → serialize → s for any s
+// already in canonical form, and parse(serialize(parse(s))) stable for
+// any s at all.
+
+import mdown
+import std.string
+
+extern exit(code: int)
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label}:\n    got  '${got}'\n    want '${want}'"); exit(1) }
+}
+
+// parse → serialize must reproduce canonical source byte-for-byte.
+round_trip(label: string, src: string) {
+    d = mdown.md_parse(src)
+    out = mdown.md_serialize(d)
+    assert_eq_str(label, out, src)
+    mdown.md_doc_free(d)
+}
+
+main() {
+    println("=== test_mdown ===")
+
+    println("-- block kinds")
+    d = mdown.md_parse("# Title\n\nBody text here.\n\n- one\n- two\n\n### Sub")
+    assert_eq_int("block count", mdown.md_doc_blocks(d), 5)
+    assert_eq_int("h1", mdown.md_block_kind(mdown.md_doc_block(d, 0)), mdown.MD_H1)
+    assert_eq_int("para", mdown.md_block_kind(mdown.md_doc_block(d, 1)), mdown.MD_PARA)
+    assert_eq_int("bullet", mdown.md_block_kind(mdown.md_doc_block(d, 2)), mdown.MD_BULLET)
+    assert_eq_int("bullet2", mdown.md_block_kind(mdown.md_doc_block(d, 3)), mdown.MD_BULLET)
+    assert_eq_int("h3", mdown.md_block_kind(mdown.md_doc_block(d, 4)), mdown.MD_H3)
+    assert_eq_int("title words", mdown.md_block_words(mdown.md_doc_block(d, 0)), 1)
+    assert_eq_int("body words", mdown.md_block_words(mdown.md_doc_block(d, 1)), 3)
+    assert_eq_str("block text", mdown.md_block_text(mdown.md_doc_block(d, 1)),
+                  "Body text here.")
+    mdown.md_doc_free(d)
+
+    println("-- star bullets normalise to dashes")
+    d2 = mdown.md_parse("* starred")
+    assert_eq_int("star bullet kind",
+                  mdown.md_block_kind(mdown.md_doc_block(d2, 0)), mdown.MD_BULLET)
+    assert_eq_str("star → dash", mdown.md_serialize(d2), "- starred")
+    mdown.md_doc_free(d2)
+
+    println("-- inline spans set word flags")
+    d3 = mdown.md_parse("plain **bold pair** *ital* `mono` tail")
+    b = mdown.md_doc_block(d3, 0)
+    assert_eq_int("word count", mdown.md_block_words(b), 6)
+    assert_eq_int("plain flags", mdown.md_word_flags(mdown.md_block_word(b, 0)), 0)
+    assert_eq_int("bold 1", mdown.md_word_flags(mdown.md_block_word(b, 1)), mdown.MD_BOLD)
+    assert_eq_int("bold 2 (span crosses space)",
+                  mdown.md_word_flags(mdown.md_block_word(b, 2)), mdown.MD_BOLD)
+    assert_eq_int("italic", mdown.md_word_flags(mdown.md_block_word(b, 3)), mdown.MD_ITALIC)
+    assert_eq_int("code", mdown.md_word_flags(mdown.md_block_word(b, 4)), mdown.MD_CODEW)
+    assert_eq_int("tail plain", mdown.md_word_flags(mdown.md_block_word(b, 5)), 0)
+    assert_eq_str("markers stripped from text",
+                  mdown.md_word_text(mdown.md_block_word(b, 1)), "bold")
+    mdown.md_doc_free(d3)
+
+    println("-- bold+italic combine")
+    d4 = mdown.md_parse("***both*** endsit")
+    b4 = mdown.md_doc_block(d4, 0)
+    assert_eq_int("both flags", mdown.md_word_flags(mdown.md_block_word(b4, 0)),
+                  mdown.MD_BOLD + mdown.MD_ITALIC)
+    assert_eq_int("neighbour unaffected",
+                  mdown.md_word_flags(mdown.md_block_word(b4, 1)), 0)
+    mdown.md_doc_free(d4)
+
+    println("-- round trips (canonical form reproduced byte-for-byte)")
+    round_trip("heading", "# Title words here")
+    round_trip("paragraph", "One two three.")
+    round_trip("bold run merges", "a **b c d** e")
+    round_trip("italic + code", "start *i j* then `k` end")
+    round_trip("bold italic nest", "***x y*** z")
+    round_trip("bullets stack tight", "- alpha\n- beta gamma\n- delta")
+    round_trip("mixed doc",
+        "# Head\n\npara **strong** text\n\n- item one\n- item `two`\n\n## Next")
+    round_trip("fence exact",
+        "```\nfn main() {   spaced   }\n    indented line\n```")
+    round_trip("fence between paras",
+        "before\n\n```\ncode line\n```\n\nafter")
+
+    println("-- parse is idempotent on non-canonical input")
+    d5 = mdown.md_parse("hello   **there**\n\n\n\nworld")
+    once = mdown.md_serialize(d5)
+    d6 = mdown.md_parse(once)
+    twice = mdown.md_serialize(d6)
+    assert_eq_str("stable after one pass", twice, once)
+    assert_eq_str("canonicalised", once, "hello **there**\n\nworld")
+    mdown.md_doc_free(d5)
+    mdown.md_doc_free(d6)
+
+    println("-- editing operations")
+    d7 = mdown.md_doc_new()
+    assert_eq_int("new doc has one para", mdown.md_doc_blocks(d7), 1)
+    b7 = mdown.md_doc_block(d7, 0)
+    mdown.md_insert_word(b7, 0, "world", 0)
+    mdown.md_insert_word(b7, 0, "hello", 0)
+    mdown.md_insert_word(b7, 1, "brave", mdown.MD_ITALIC)
+    assert_eq_str("insert order", mdown.md_block_text(b7), "hello brave world")
+    assert_eq_str("insert serialize", mdown.md_serialize(d7), "hello *brave* world")
+    mdown.md_remove_word(b7, 1)
+    assert_eq_str("remove middle", mdown.md_block_text(b7), "hello world")
+    nb = mdown.md_insert_block(d7, 1, mdown.MD_BULLET)
+    mdown.md_insert_word(nb, 0, "item", 0)
+    assert_eq_str("insert block", mdown.md_serialize(d7), "hello world\n\n- item")
+    mdown.md_block_set_kind(nb, mdown.MD_H2)
+    assert_eq_str("retype block", mdown.md_serialize(d7), "hello world\n\n## item")
+    mdown.md_remove_block(d7, 0)
+    mdown.md_remove_block(d7, 0)
+    assert_eq_int("never zero blocks", mdown.md_doc_blocks(d7), 1)
+    assert_eq_int("survivor is empty para",
+                  mdown.md_block_words(mdown.md_doc_block(d7, 0)), 0)
+    mdown.md_doc_free(d7)
+
+    println("=== test_mdown passed ===")
+}

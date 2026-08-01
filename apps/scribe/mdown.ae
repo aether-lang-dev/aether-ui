@@ -1,0 +1,494 @@
+// mdown.ae — the scribe document model, and markdown in/out.
+//
+// The model is deliberately word-grained: a document is blocks, a block is
+// words, and a word carries its own style flags. That shape is not an
+// implementation convenience — it IS the editor's thesis. Every word is a
+// first-class thing you can point at, select, restyle, and re-flow, so the
+// unit of editing equals the unit of layout equals the unit of hit-testing.
+//
+// Markdown is the interchange, not the model: md_parse lifts source into
+// the word grid, md_serialize lowers it back with run-merged markers
+// (**a b c**, not **a** **b** **c**). Round-tripping is the contract the
+// unit tests pin down.
+//
+// Scope (v1, "markdown's basic functions"):
+//   # ## ###   headings          - / *      bullet items
+//   **bold**   *italic*  `code`  ``` fenced code blocks ```
+// One non-blank line = one block. Inside a fence each LINE becomes one
+// CODE block holding a single word (the whole line, spacing intact), so
+// fenced text round-trips byte-exact and never re-wraps.
+
+import std.list
+import std.string
+import std.strbuilder
+
+exports(
+    MD_PARA, MD_H1, MD_H2, MD_H3, MD_BULLET, MD_CODE,
+    MD_BOLD, MD_ITALIC, MD_CODEW,
+    md_doc_new, md_doc_free, md_doc_blocks, md_doc_block,
+    md_block_new, md_block_kind, md_block_set_kind,
+    md_block_words, md_block_word, md_block_text,
+    md_word_text, md_word_flags, md_word_set_flags, md_word_set_text,
+    md_insert_word, md_remove_word, md_insert_block, md_remove_block,
+    md_parse, md_serialize
+)
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_char_at(s: string, index: int) -> int
+extern string_retain(s: string)
+
+// Block kinds.
+const MD_PARA: int = 0
+const MD_H1: int = 1
+const MD_H2: int = 2
+const MD_H3: int = 3
+const MD_BULLET: int = 4
+const MD_CODE: int = 5
+
+// Word flag bits.
+const MD_BOLD: int = 1
+const MD_ITALIC: int = 2
+const MD_CODEW: int = 4
+
+struct MdWord {
+    txt: string
+    wf: int
+}
+
+struct MdBlock {
+    kind: int
+    words: ptr      // std.list of *MdWord
+}
+
+struct MdDoc {
+    blocks: ptr     // std.list of *MdBlock
+}
+
+// ---- construction / destruction -------------------------------------------
+
+md_word_new(txt: string, wf: int) -> ptr {
+    w = malloc(24) as *MdWord
+    string_retain(txt)
+    w.txt = txt
+    w.wf = wf
+    return w as ptr
+}
+
+md_block_new(kind: int) -> ptr {
+    b = malloc(24) as *MdBlock
+    b.kind = kind
+    b.words = list.list_new()
+    return b as ptr
+}
+
+// A new document is never empty: it holds one empty paragraph, the block
+// the caret lives in before anything is typed.
+md_doc_new() -> ptr {
+    d = malloc(16) as *MdDoc
+    d.blocks = list.list_new()
+    _ = list.list_add_raw(d.blocks, md_block_new(MD_PARA))
+    return d as ptr
+}
+
+md_block_free(bp: ptr) {
+    b = bp as *MdBlock
+    n = list.list_size(b.words)
+    i = 0
+    while i < n {
+        free(list.list_get_raw(b.words, i))
+        i = i + 1
+    }
+    list.list_free(b.words)
+    free(bp)
+}
+
+md_doc_free(dp: ptr) {
+    d = dp as *MdDoc
+    n = list.list_size(d.blocks)
+    i = 0
+    while i < n {
+        md_block_free(list.list_get_raw(d.blocks, i))
+        i = i + 1
+    }
+    list.list_free(d.blocks)
+    free(dp)
+}
+
+// ---- accessors -------------------------------------------------------------
+
+md_doc_blocks(dp: ptr) -> int {
+    d = dp as *MdDoc
+    return list.list_size(d.blocks)
+}
+
+md_doc_block(dp: ptr, i: int) -> ptr {
+    d = dp as *MdDoc
+    return list.list_get_raw(d.blocks, i)
+}
+
+md_block_kind(bp: ptr) -> int {
+    b = bp as *MdBlock
+    return b.kind
+}
+
+md_block_set_kind(bp: ptr, kind: int) {
+    b = bp as *MdBlock
+    b.kind = kind
+}
+
+md_block_words(bp: ptr) -> int {
+    b = bp as *MdBlock
+    return list.list_size(b.words)
+}
+
+md_block_word(bp: ptr, i: int) -> ptr {
+    b = bp as *MdBlock
+    return list.list_get_raw(b.words, i)
+}
+
+md_word_text(wp: ptr) -> string {
+    w = wp as *MdWord
+    return w.txt
+}
+
+md_word_flags(wp: ptr) -> int {
+    w = wp as *MdWord
+    return w.wf
+}
+
+md_word_set_flags(wp: ptr, wf: int) {
+    w = wp as *MdWord
+    w.wf = wf
+}
+
+md_word_set_text(wp: ptr, txt: string) {
+    w = wp as *MdWord
+    string_retain(txt)
+    w.txt = txt
+}
+
+// Plain text of a block, words joined by single spaces (labels, tests).
+md_block_text(bp: ptr) -> string {
+    b = bp as *MdBlock
+    out = strbuilder.new(256)
+    n = list.list_size(b.words)
+    i = 0
+    while i < n {
+        if i > 0 { strbuilder.append(out, " ") }
+        w = list.list_get_raw(b.words, i) as *MdWord
+        strbuilder.append(out, w.txt)
+        i = i + 1
+    }
+    return strbuilder.finish(out)
+}
+
+// ---- editing operations ----------------------------------------------------
+
+// std.list has no insert-at-index: append then shift the tail right.
+list_insert_at(l: ptr, at: int, item: ptr) {
+    n = list.list_size(l)
+    _ = list.list_add_raw(l, item)
+    i = n
+    while i > at {
+        list.list_set(l, i, list.list_get_raw(l, i - 1))
+        i = i - 1
+    }
+    list.list_set(l, at, item)
+}
+
+md_insert_word(bp: ptr, at: int, txt: string, wf: int) {
+    b = bp as *MdBlock
+    n = list.list_size(b.words)
+    if at < 0 { at = 0 }
+    if at > n { at = n }
+    list_insert_at(b.words, at, md_word_new(txt, wf))
+}
+
+md_remove_word(bp: ptr, at: int) {
+    b = bp as *MdBlock
+    n = list.list_size(b.words)
+    if at < 0 || at >= n { return }
+    free(list.list_get_raw(b.words, at))
+    list.list_remove(b.words, at)
+}
+
+md_insert_block(dp: ptr, at: int, kind: int) -> ptr {
+    d = dp as *MdDoc
+    n = list.list_size(d.blocks)
+    if at < 0 { at = 0 }
+    if at > n { at = n }
+    b = md_block_new(kind)
+    list_insert_at(d.blocks, at, b)
+    return b
+}
+
+// A document never drops to zero blocks: removing the last one leaves a
+// fresh empty paragraph (the caret must always have a home).
+md_remove_block(dp: ptr, at: int) {
+    d = dp as *MdDoc
+    n = list.list_size(d.blocks)
+    if at < 0 || at >= n { return }
+    md_block_free(list.list_get_raw(d.blocks, at))
+    list.list_remove(d.blocks, at)
+    if list.list_size(d.blocks) == 0 {
+        _ = list.list_add_raw(d.blocks, md_block_new(MD_PARA))
+    }
+}
+
+// ---- markdown → model ------------------------------------------------------
+
+// Inline scanner state for one block; markers toggle across word
+// boundaries, so "**a b** c" makes a and b bold, c plain. Kept as a struct
+// so the per-token helper can both read and update it.
+struct MdScan {
+    bold: int
+    ital: int
+    code: int
+}
+
+// Strip leading markers (toggling ON), then trailing markers (noting OFF),
+// then emit the word with the current flags. "**" is checked before "*" so
+// ***x*** reads as bold+italic. A token that is nothing but markers still
+// applies its toggles — it just emits no word.
+scan_token(sc: *MdScan, bp: ptr, tok: string) {
+    t = tok
+    going = 1
+    while going == 1 {
+        going = 0
+        if string.starts_with(t, "**") == 1 {
+            sc.bold = 1
+            t = string_substring(t, 2, string.length(t))
+            going = 1
+        } else {
+            if string.starts_with(t, "*") == 1 {
+                sc.ital = 1
+                t = string_substring(t, 1, string.length(t))
+                going = 1
+            }
+            if string.starts_with(t, "`") == 1 {
+                sc.code = 1
+                t = string_substring(t, 1, string.length(t))
+                going = 1
+            }
+        }
+    }
+    bold_off = 0
+    ital_off = 0
+    code_off = 0
+    going = 1
+    while going == 1 {
+        going = 0
+        if string.ends_with(t, "**") == 1 {
+            bold_off = 1
+            t = string_substring(t, 0, string.length(t) - 2)
+            going = 1
+        } else {
+            if string.ends_with(t, "*") == 1 {
+                ital_off = 1
+                t = string_substring(t, 0, string.length(t) - 1)
+                going = 1
+            }
+            if string.ends_with(t, "`") == 1 {
+                code_off = 1
+                t = string_substring(t, 0, string.length(t) - 1)
+                going = 1
+            }
+        }
+    }
+    if string.length(t) > 0 {
+        wf = 0
+        if sc.bold == 1 { wf = wf + MD_BOLD }
+        if sc.ital == 1 { wf = wf + MD_ITALIC }
+        if sc.code == 1 { wf = wf + MD_CODEW }
+        b = bp as *MdBlock
+        string_retain(t)
+        _ = list.list_add_raw(b.words, md_word_new(t, wf))
+    }
+    if bold_off == 1 { sc.bold = 0 }
+    if ital_off == 1 { sc.ital = 0 }
+    if code_off == 1 { sc.code = 0 }
+}
+
+// Split `line` on spaces and feed each non-empty token through the inline
+// scanner into a fresh block of the given kind.
+parse_inline(dp: ptr, kind: int, line: string) {
+    d = dp as *MdDoc
+    bp = md_block_new(kind)
+    sc = malloc(12) as *MdScan
+    sc.bold = 0
+    sc.ital = 0
+    sc.code = 0
+    parts = string.string_split(line, " ")
+    n = string.string_array_size(parts)
+    i = 0
+    while i < n {
+        tok = string.string_array_get(parts, i)
+        // COPY out of the array: string_array_free releases its elements
+        // regardless of retains (retain is an escape MARK for this
+        // frame's defer-free, not protection from the array's own
+        // release). The copy is ours; the retain stops our defer-free.
+        cp = string.copy(tok)
+        string_retain(cp)
+        if string.length(cp) > 0 { scan_token(sc, bp, cp) }
+        i = i + 1
+    }
+    string.string_array_free(parts)
+    free(sc as ptr)
+    _ = list.list_add_raw(d.blocks, bp)
+}
+
+md_parse(src: string) -> ptr {
+    d = malloc(16) as *MdDoc
+    d.blocks = list.list_new()
+    fence = 0
+    lines = string.string_split(src, "\n")
+    n = string.string_array_size(lines)
+    i = 0
+    while i < n {
+        raw = string.string_array_get(lines, i)
+        line = raw
+        if string.ends_with(line, "\r") == 1 {
+            line = string_substring(line, 0, string.length(line) - 1)
+        }
+        trimmed = string.string_trim(line)
+        if string.equals(trimmed, "```") == 1 {
+            fence = 1 - fence
+            i = i + 1
+            continue
+        }
+        if fence == 1 {
+            // Whole line, spacing intact, as one un-splittable word.
+            bp = md_block_new(MD_CODE)
+            b = bp as *MdBlock
+            lcp = string.copy(line)
+            string_retain(lcp)
+            _ = list.list_add_raw(b.words, md_word_new(lcp, 0))
+            _ = list.list_add_raw(d.blocks, bp)
+            i = i + 1
+            continue
+        }
+        if string.length(trimmed) == 0 {
+            i = i + 1
+            continue
+        }
+        if string.starts_with(trimmed, "### ") == 1 {
+            parse_inline(d as ptr, MD_H3,
+                         string_substring(trimmed, 4, string.length(trimmed)))
+        } else { if string.starts_with(trimmed, "## ") == 1 {
+            parse_inline(d as ptr, MD_H2,
+                         string_substring(trimmed, 3, string.length(trimmed)))
+        } else { if string.starts_with(trimmed, "# ") == 1 {
+            parse_inline(d as ptr, MD_H1,
+                         string_substring(trimmed, 2, string.length(trimmed)))
+        } else { if string.starts_with(trimmed, "- ") == 1 {
+            parse_inline(d as ptr, MD_BULLET,
+                         string_substring(trimmed, 2, string.length(trimmed)))
+        } else { if string.starts_with(trimmed, "* ") == 1 {
+            parse_inline(d as ptr, MD_BULLET,
+                         string_substring(trimmed, 2, string.length(trimmed)))
+        } else {
+            parse_inline(d as ptr, MD_PARA, trimmed)
+        } } } } }
+        i = i + 1
+    }
+    string.string_array_free(lines)
+    if list.list_size(d.blocks) == 0 {
+        _ = list.list_add_raw(d.blocks, md_block_new(MD_PARA))
+    }
+    return d as ptr
+}
+
+// ---- model → markdown ------------------------------------------------------
+
+// Does word i of block b carry flag bit `bit`? Out-of-range reads 0, which
+// is exactly what run-merging wants at both ends of a block.
+wflag(bp: ptr, i: int, bit: int) -> int {
+    b = bp as *MdBlock
+    if i < 0 || i >= list.list_size(b.words) { return 0 }
+    w = list.list_get_raw(b.words, i) as *MdWord
+    if (w.wf / bit) % 2 == 1 { return 1 }
+    return 0
+}
+
+// Serialize one block's words with run-merged markers: a marker opens on
+// the first word of a styled run and closes on the last. Opens go
+// ** then * then ` (so combined flags nest as **`*x*`** inverted on
+// close), closes in reverse.
+serialize_words(out: ptr, bp: ptr) {
+    b = bp as *MdBlock
+    n = list.list_size(b.words)
+    i = 0
+    while i < n {
+        if i > 0 { strbuilder.append(out, " ") }
+        w = list.list_get_raw(b.words, i) as *MdWord
+        if wflag(bp, i, MD_BOLD) == 1 && wflag(bp, i - 1, MD_BOLD) == 0 {
+            strbuilder.append(out, "**")
+        }
+        if wflag(bp, i, MD_ITALIC) == 1 && wflag(bp, i - 1, MD_ITALIC) == 0 {
+            strbuilder.append(out, "*")
+        }
+        if wflag(bp, i, MD_CODEW) == 1 && wflag(bp, i - 1, MD_CODEW) == 0 {
+            strbuilder.append(out, "`")
+        }
+        strbuilder.append(out, w.txt)
+        if wflag(bp, i, MD_CODEW) == 1 && wflag(bp, i + 1, MD_CODEW) == 0 {
+            strbuilder.append(out, "`")
+        }
+        if wflag(bp, i, MD_ITALIC) == 1 && wflag(bp, i + 1, MD_ITALIC) == 0 {
+            strbuilder.append(out, "*")
+        }
+        if wflag(bp, i, MD_BOLD) == 1 && wflag(bp, i + 1, MD_BOLD) == 0 {
+            strbuilder.append(out, "**")
+        }
+        i = i + 1
+    }
+}
+
+md_serialize(dp: ptr) -> string {
+    d = dp as *MdDoc
+    out = strbuilder.new(256)
+    n = list.list_size(d.blocks)
+    i = 0
+    while i < n {
+        bp = list.list_get_raw(d.blocks, i)
+        b = bp as *MdBlock
+        prev_kind = 0 - 1
+        if i > 0 {
+            pb = list.list_get_raw(d.blocks, i - 1) as *MdBlock
+            prev_kind = pb.kind
+        }
+        // Separator before this block: bullets and code lines stack on
+        // single newlines; everything else gets a blank line. A code run
+        // also opens its fence here.
+        if i > 0 {
+            if b.kind == MD_BULLET && prev_kind == MD_BULLET {
+                strbuilder.append(out, "\n")
+            } else { if b.kind == MD_CODE && prev_kind == MD_CODE {
+                strbuilder.append(out, "\n")
+            } else {
+                strbuilder.append(out, "\n\n")
+            } }
+        }
+        if b.kind == MD_CODE && prev_kind != MD_CODE {
+            strbuilder.append(out, "```\n")
+        }
+        if b.kind == MD_H1 { strbuilder.append(out, "# ") }
+        if b.kind == MD_H2 { strbuilder.append(out, "## ") }
+        if b.kind == MD_H3 { strbuilder.append(out, "### ") }
+        if b.kind == MD_BULLET { strbuilder.append(out, "- ") }
+        serialize_words(out, bp)
+        // Close the fence when the code run ends.
+        next_kind = 0 - 1
+        if i + 1 < n {
+            nb = list.list_get_raw(d.blocks, i + 1) as *MdBlock
+            next_kind = nb.kind
+        }
+        if b.kind == MD_CODE && next_kind != MD_CODE {
+            strbuilder.append(out, "\n```")
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(out)
+}
