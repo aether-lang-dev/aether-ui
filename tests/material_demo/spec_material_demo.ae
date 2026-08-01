@@ -7,10 +7,13 @@
 //     "material" field on /overlays), so the degrade is visible and asserted,
 //     nobody over-claims a frost that isn't there.
 //
-// This spec runs against the DRIVABLE backends (GTK4 + win32), where a blur
-// request must degrade to "tint". macOS asserts "blur" in its own run; the
-// shared contract is "requesting blur never silently no-ops — the reported
-// material is the real one".
+// The shared cross-backend contract: "requesting blur never silently
+// no-ops — the reported material is the real one". On macOS that means a
+// REAL frost (NSVisualEffectView) and the effective material is "blur";
+// on GTK4/win32 there is no in-window backdrop blur and it degrades to
+// "tint". The spec asserts the CONTRACT, not a platform: the effective
+// material must be blur-or-tint (never the plain dim default, never
+// absent), and the app's label must agree with what /overlays reports.
 //
 // Run via ci.sh / spec_matrix, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/material_demo/bin/material_demo &
@@ -29,26 +32,40 @@ main() {
             aeocha.assert_contains(r, "\"count\":0", "no overlays at startup")
         }
 
-        aeocha.it("requesting blur degrades to tint on this backend") callback {
+        aeocha.it("blur is honoured or honestly degraded — never no-oped") callback {
             o = uidriver.widget_id_by_text("Open frosted")
             aeocha.assert_gt(o, 0, "open button found")
             uidriver.post_ok("/widget/${o}/click", "open frosted modal")
 
-            // The overlay is live and its EFFECTIVE material is reported.
-            ok = uidriver.wait_body_contains("/overlays", "\"material\":\"tint\"", 20)
-            aeocha.assert_true(ok, "blur degraded to tint (no in-window blur here)")
+            // The overlay is live and its EFFECTIVE material is reported —
+            // "blur" where the backend really frosts (macOS), "tint" where
+            // in-window blur does not exist (GTK4/win32).
+            ok = uidriver.wait_body_contains("/overlays", "\"material\":\"", 20)
+            aeocha.assert_true(ok, "an effective material is reported")
             r = uidriver.get_body("/overlays")
             aeocha.assert_contains(r, "\"live\":1", "the modal is live")
+            has_blur = string.contains(r, "\"material\":\"blur\"")
+            has_tint = string.contains(r, "\"material\":\"tint\"")
+            aeocha.assert_true(has_blur == 1 || has_tint == 1,
+                "effective material is blur (real frost) or tint (honest degrade)")
             // Never a silent no-op: it must NOT report the plain dim default.
             dim = string.contains(r, "\"material\":\"dim\"")
             aeocha.assert_eq(dim, 0, "material is not the plain dim default")
         }
 
-        aeocha.it("the effective material surfaces in the app too") callback {
-            // The demo writes overlay_material_effective into a label.
+        aeocha.it("the app label AGREES with the reported material") callback {
+            // The demo writes overlay_material_effective into a label; it
+            // must say the SAME thing /overlays says — the readback and the
+            // app-visible truth cannot diverge.
+            r = uidriver.get_body("/overlays")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "material: tint",
-                "the app label reflects the effective material")
+            if string.contains(r, "\"material\":\"blur\"") == 1 {
+                aeocha.assert_contains(b, "material: blur",
+                    "label matches the real frost")
+            } else {
+                aeocha.assert_contains(b, "material: tint",
+                    "label matches the honest degrade")
+            }
         }
     }
     aeocha.run_summary(fw)

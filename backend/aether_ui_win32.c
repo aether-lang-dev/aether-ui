@@ -4539,6 +4539,7 @@ typedef struct {
     float p0, p1, p2, p3;
     float a0, a1;          // ARC start/end angle (radians)
     float cr, cg, cb, calpha;
+    int cap, join;         // STROKE: 0=butt/miter 1=round 2=square/bevel
     char* text;            // FILL_TEXT string (owned)
     unsigned char* pixels; // DRAW_IMAGE RGBA8888 buffer (owned)
     int iw, ih;            // DRAW_IMAGE pixel dims
@@ -4718,9 +4719,9 @@ void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
 
 void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b,
                                    double a, double line_width, int cap, int join) {
-    (void)cap; (void)join; // stroke cap/join not yet honored on GDI+ (round default)
     CanvasCmd c = {0};
     c.k = CV_STROKE; c.cr = r; c.cg = g; c.cb = b; c.calpha = a; c.p0 = line_width;
+    c.cap = cap; c.join = join;
     canvas_add_cmd(canvas_id, c);
 }
 
@@ -4958,7 +4959,19 @@ static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
                 if (cur_pen) DeleteObject(cur_pen);
                 int ri = (int)(cmd->cr * 255), gi = (int)(cmd->cg * 255),
                     bi = (int)(cmd->cb * 255);
-                cur_pen = CreatePen(PS_SOLID, (int)cmd->p0, RGB(ri, gi, bi));
+                // Geometric pen so the recorded cap/join are honoured —
+                // a cosmetic CreatePen ignores both (the same class of
+                // silent divergence the mac replay had with its hardcoded
+                // round cap, caught by the stroker suite's pixel gate).
+                DWORD style = PS_GEOMETRIC | PS_SOLID;
+                if (cmd->cap == 0) style |= PS_ENDCAP_FLAT;
+                else if (cmd->cap == 2) style |= PS_ENDCAP_SQUARE;
+                else style |= PS_ENDCAP_ROUND;
+                if (cmd->join == 0) style |= PS_JOIN_MITER;
+                else if (cmd->join == 2) style |= PS_JOIN_BEVEL;
+                else style |= PS_JOIN_ROUND;
+                LOGBRUSH lb = { BS_SOLID, RGB(ri, gi, bi), 0 };
+                cur_pen = ExtCreatePen(style, (DWORD)cmd->p0, &lb, 0, NULL);
                 SelectObject(mem, cur_pen);
                 break;
             }

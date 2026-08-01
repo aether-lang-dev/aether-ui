@@ -3659,13 +3659,26 @@ static void canvas_replay(CGContextRef cg, CanvasState* cs) {
             case CANVAS_LINE_TO:
                 CGContextAddLineToPoint(cg, c->x, c->y);
                 break;
-            case CANVAS_STROKE:
+            case CANVAS_STROKE: {
                 CGContextSetRGBStrokeColor(cg, c->r, c->g, c->b, c->a);
                 CGContextSetLineWidth(cg, c->x);  // line_width stored in x
-                CGContextSetLineCap(cg, kCGLineCapRound);
-                CGContextSetLineJoin(cg, kCGLineJoinRound);
+                // cap/join ride in iw/ih (0=butt/miter 1=round 2=square/
+                // bevel — ui.canvas_stroke_cj's contract). These were
+                // HARDCODED round, which the stroker suite's cross-renderer
+                // pixel gate caught the first time macOS pixels were real:
+                // a round-capped native stroke vs a butt/miter geometric
+                // outline agreed on only 77% of samples.
+                CGLineCap lc = kCGLineCapButt;
+                if (c->iw == 1) lc = kCGLineCapRound;
+                if (c->iw == 2) lc = kCGLineCapSquare;
+                CGLineJoin lj = kCGLineJoinMiter;
+                if (c->ih == 1) lj = kCGLineJoinRound;
+                if (c->ih == 2) lj = kCGLineJoinBevel;
+                CGContextSetLineCap(cg, lc);
+                CGContextSetLineJoin(cg, lj);
                 CGContextStrokePath(cg);
                 break;
+            }
             case CANVAS_CLIP_RECT:
                 // Intersects the current clip and persists for the rest of the
                 // frame (SVG viewport overflow:hidden). The context is fresh

@@ -113,11 +113,30 @@ execute_trash(s: *AppState) {
         tstatus = wstatus
         terr = werr
     } else {
-        _ = list.add(av, "trash")
-        _ = list.add(av, e.path)
-        _gout, gstatus, gerr = run_capture("gio", av, null)
-        tstatus = gstatus
-        terr = gerr
+        // Which unix? `gio trash` is GLib's tool — Linux/BSD desktops have
+        // it; macOS does NOT (the old comment claimed otherwise, and every
+        // Delete on a real-session Mac reported "Trash FAILED"). On Darwin
+        // the prompt-free native equivalent is a move into ~/.Trash —
+        // Finder-visible, reversible by hand, no automation-permission
+        // dialog (osascript's Finder route triggers one on modern macOS).
+        _uout, _ustatus, _uerr = run_capture("uname", av, null)
+        if string.contains(_uout, "Darwin") == 1 {
+            tav = list.new()
+            _ = list.add(tav, e.path)
+            _ = list.add(tav, string.concat(os_getenv("HOME"), "/.Trash/"))
+            _mout, mstatus, merr = run_capture("mv", tav, null)
+            list.free(tav)
+            tstatus = mstatus
+            terr = merr
+        } else {
+            gav = list.new()
+            _ = list.add(gav, "trash")
+            _ = list.add(gav, e.path)
+            _gout, gstatus, gerr = run_capture("gio", gav, null)
+            list.free(gav)
+            tstatus = gstatus
+            terr = gerr
+        }
     }
     list.free(av)
     disarm_delete(s)
