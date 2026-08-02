@@ -1,12 +1,21 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: Stages 0–2 built; Stages 3–5 specified, not built.** This records the
-> high bar for aether-ui rendering, what we already have that seeds it, the
-> gap, and a staged path to it. The rendering path is still immediate-mode
-> (see "Where we are today") — Stage 2 now clips frame-driven live paints, but
-> the general retained scene compositor and occlusion subtraction are not built yet. The staged path
-> below is written to be built from: each stage names its deliverable, its API
-> surface, and the test that proves it. **Next up: Stage 3, opaque subtraction.**
+> **Status: Stages 0–2 built; 2.5 is the next build step; 3–5 specified.**
+> Stage 0 (the internal-frame harness) and Stage 1 (the region type) are done
+> and green. Stage 2 built the damage bookkeeping and the backend clip ABI,
+> but its clipped repaint is **disabled by default and unsafe to enable** —
+> see Stage 2.5 for why, and `stage2-clip-flicker-fix.md` for the four rounds
+> of evidence. The rendering path is therefore still immediate-mode in
+> practice: every paint covers the whole canvas.
+>
+> **Next up: Stage 2.5 — make the painter own damage.** Stage 3 is blocked on
+> it; its acceptance test presumes a working clipped repaint that does not yet
+> exist.
+>
+> A standing rule earned during Stage 2, and now part of every stage's
+> acceptance: **a test must be demonstrated failing against the unfixed code
+> before the fix is accepted.** Three separate Stage 2 regression tests were
+> green against the very bug they were written to catch.
 
 ## Licensing boundary (read first)
 
@@ -304,7 +313,55 @@ frame still moves and resizes correctly, while the default drag repaint reports
 the full canvas area through `GET /canvas/{id}/debug`. That is the correctness
 guard until clipped repaint is owned by the painter/compositor.
 
+### Stage 2.5 — the painter must own damage *(prerequisite, NOT yet built)*
+
+**Stage 3 cannot start until this exists.** Round 3 of the Stage 2 work
+(see `stage2-clip-flicker-fix.md`) established the missing invariant the
+hard way, on screen:
+
+> A clip is valid only if the painter redraws everything visible **inside**
+> it AND everything **outside** it is already correct on the surface.
+
+Today the second half never holds. `canvas_clear` discards the whole command
+buffer and the subsequent replay is clipped, so anything outside the clip was
+cleared and never redrawn — dragging one frame blanked the other, all but a
+~10px border. That is why gesture-side clipping is opt-in and off.
+
+So the next build step is not occlusion; it is making a clipped paint
+*safe*. Two candidate shapes:
+
+1. **Clip the clear as well as the replay.** Smallest change that keeps the
+   current architecture: untouched pixels genuinely survive between paints,
+   at which point Stage 2's existing clip becomes sound and
+   `AETHER_UI_FRAMES_DIRTY_CLIP=1` can become the default. The wrinkle is
+   that `canvas_clear` today is a *model* operation (it frees the command
+   buffer) while the clip is a *surface* operation; those two roles have to
+   be separated before this works.
+
+2. **Retained per-frame content.** Each frame owns a drawable it can
+   re-render independently; the composite blits them in z-order. Larger, but
+   it is the shape Stages 3 and 4 actually need — occlusion subtraction is
+   only meaningful when the thing behind can be redrawn *without* redrawing
+   everything.
+
+*Acceptance:* re-enable `AETHER_UI_FRAMES_DIRTY_CLIP=1`, drag a frame over
+another with animation on, and assert BOTH that the repaint area is well
+below the canvas area AND that the far frame's interior still renders (a
+real pixel check, by a means that can actually observe the surface — note
+`canvas_read_pixel` replays the command buffer into a fresh surface and is
+structurally blind to backing-store staleness; see
+`stage2-clip-flicker-fix.md` Round 2). The spec's current
+`assert_eq(area, w * h)` guard flips to the clipped expectation here.
+
+**Falsify before landing.** Every test added for this must be demonstrated
+failing against the unfixed code first. Four rounds of Stage 2 were declared
+green by tests that could not fail; that is what this stage exists to
+correct.
+
 ### Stage 3 — opaque subtraction + z-order *(the miracle)*
+
+**Blocked on Stage 2.5.** The acceptance test below reads back "the area B
+actually repainted", which presumes clipped repaint works. It does not yet.
 
 Each frame declares an opaque region (its chrome and any opaque content).
 The composite gains the two passes that matter: propagate dirty up, then
@@ -366,6 +423,21 @@ final design, so it is not throwaway.
 - **Scope discipline.** Stages 0–2 are worth doing on their own merits.
   Stage 3 is the expensive one. Do not start it without the stage-0 harness
   in place to prove it works.
+- **Tests that cannot fail.** The single biggest time sink in this track so
+  far. Stage 2 shipped green three times over a bug that was plainly visible
+  on screen: an area assertion that only checked a number had dropped while
+  the image was wrong; a "clip disabled while refreshing" guard tested on a
+  path that was never refreshing; and a pixel probe that called
+  `scene_refresh` before sampling, repairing the damage it was meant to
+  detect — and which used `canvas_read_pixel`, a model replay that is
+  structurally blind to backing-store staleness anyway. **Falsify every new
+  test against the unfixed code before accepting the fix.** If it does not go
+  red, it is not a test.
+- **Xvfb is not a desktop.** Every flicker in this track was invisible to the
+  spec matrix and obvious within seconds of a human dragging a window. The
+  matrix also exports `AETHER_UI_NO_ANIMATION=1` globally
+  (`tests/spec_matrix.sh:35`), so any suite meaning to exercise the live
+  painter must opt out of it explicitly.
 
 ## Relationship to the immediate-roadmap work
 
