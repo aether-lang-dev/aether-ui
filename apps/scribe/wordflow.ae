@@ -16,6 +16,13 @@
 //   italic  + affine_skew_x      the path toolkit SHEARS them (12° about
 //                                the baseline)
 //   code    tinted plate behind the glyphs
+//   sup/sub scaled glyphs on a raised/lowered baseline (free: glyphs
+//           are paths, size is a parameter)
+//   ++under++  a drawn bar; ==mark== a bright plate with dark ink;
+//   ||spoiler|| ink painted IN the plate colour — invisible until the
+//           word is SELECTED, the word-as-widget reading of
+//           click-to-reveal (syntax per the Extended Markdown Syntax
+//           Obsidian plugin, MIT, Kotaindah55)
 // Measurement (text_paths_width) and painting share one set of font
 // tables, so layout and pixels can't disagree — and both are pure
 // Aether, byte-identical on every backend.
@@ -42,6 +49,7 @@ exports(
 )
 
 extern malloc(size: int) -> ptr
+extern string_substring(s: string, start: int, end: int) -> string
 extern free(p: ptr)
 
 // Page geometry (viewBox units).
@@ -61,6 +69,13 @@ wf_size(kind: int) -> float {
 }
 
 wf_line_h(kind: int) -> float  { return wf_size(kind) * 1.5 }
+
+// Effective glyph size for a word: super/subscript shrink to 62%.
+wf_glyph_size(size: float, wfl: int) -> float {
+    if (wfl / mdown.MD_SUP) % 2 == 1 { return size * 0.62 }
+    if (wfl / mdown.MD_SUB) % 2 == 1 { return size * 0.62 }
+    return size
+}
 wf_space_w(kind: int) -> float { return wf_size(kind) * 0.34 }
 
 // One word's box. wi >= 0 indexes the block's words; wi == -2 is the
@@ -96,9 +111,10 @@ box_new(x: float, y: float, w: float, h: float, bi: int, wi: int) -> ptr {
 
 // Lay the document out at view_w. The caret (block cb, gap cg) and the
 // live typing buffer `buf` ("" = none) participate: the buffer becomes a
-// virtual box at the gap, and the caret lands after it. The layout owns
-// the caret position so render and editor never re-derive it.
-wf_layout(doc: ptr, view_w: float, cb: int, cg: int, buf: string) -> ptr {
+// virtual box at the gap, and the caret lands INSIDE it at the width of
+// buf[0..bpos] (character-wise editing). The layout owns the caret
+// position so render and editor never re-derive it.
+wf_layout(doc: ptr, view_w: float, cb: int, cg: int, buf: string, bpos: int) -> ptr {
     lo = malloc(64) as *WfLayout
     lo.boxes = list.list_new()
     lo.view_w = view_w
@@ -130,13 +146,14 @@ wf_layout(doc: ptr, view_w: float, cb: int, cg: int, buf: string) -> ptr {
             if bi == cb && wi == cg && string.length(buf) > 0 {
                 x = place_word(lo, buf, size, lh, sp, x, x0, bi, 0 - 2, y)
                 y = adjusted_y(lo)
-                lo.caret_x = last_box_end(lo)
+                lo.caret_x = buffer_caret_x(lo, buf, bpos, size)
                 lo.caret_y = line_top(lo)
                 lo.caret_h = lh
             }
             w = mdown.md_block_word(bp, wi)
-            x = place_word(lo, mdown.md_word_text(w), size, lh, sp, x, x0,
-                           bi, wi, y)
+            x = place_word(lo, mdown.md_word_text(w),
+                           wf_glyph_size(size, mdown.md_word_flags(w)),
+                           lh, sp, x, x0, bi, wi, y)
             y = adjusted_y(lo)
             if bi == cb && wi + 1 == cg {
                 lo.caret_x = last_box_end(lo)
@@ -149,7 +166,7 @@ wf_layout(doc: ptr, view_w: float, cb: int, cg: int, buf: string) -> ptr {
         if bi == cb && cg >= nw && string.length(buf) > 0 {
             x = place_word(lo, buf, size, lh, sp, x, x0, bi, 0 - 2, y)
             y = adjusted_y(lo)
-            lo.caret_x = last_box_end(lo)
+            lo.caret_x = buffer_caret_x(lo, buf, bpos, size)
             lo.caret_y = line_top(lo)
             lo.caret_h = lh
         }
@@ -190,6 +207,20 @@ adjusted_y(lop: ptr) -> float {
 }
 
 line_top(lop: ptr) -> float { return adjusted_y(lop) }
+
+// Caret x INSIDE the just-placed buffer box: its left edge plus the
+// advance width of the first bpos characters.
+buffer_caret_x(lop: ptr, buf: string, bpos: int, size: float) -> float {
+    lo = lop as *WfLayout
+    n = list.list_size(lo.boxes)
+    if n == 0 { return WF_PAD_L }
+    b = list.list_get_raw(lo.boxes, n - 1) as *WfBox
+    blen = string.length(buf)
+    if bpos < 0 { bpos = 0 }
+    if bpos > blen { bpos = blen }
+    if bpos == blen { return b.x + b.w + 2.0 }
+    return b.x + text_paths_width(string_substring(buf, 0, bpos), size)
+}
 
 last_box_end(lop: ptr) -> float {
     lo = lop as *WfLayout
@@ -377,8 +408,29 @@ wf_render(rn: ptr, doc: ptr, lop: ptr, sel: int, buf: string) {
                 plate = rect(rn, b.x - 2.0, b.y + 2.0, b.w + 4.0, b.h - 4.0)
                 fill(plate, "#23232e")
             }
-            paint_word(rn, mdown.md_word_text(w), b.x, base, size, wfl,
-                       wf_color(kind, wfl))
+            if (wfl / mdown.MD_MARK) % 2 == 1 {
+                mp = rect(rn, b.x - 2.0, b.y + 2.0, b.w + 4.0, b.h - 4.0)
+                fill(mp, "#e7c95c")
+            }
+            if (wfl / mdown.MD_SPOIL) % 2 == 1 {
+                spp = rect(rn, b.x - 2.0, b.y + 2.0, b.w + 4.0, b.h - 4.0)
+                fill(spp, "#2e2e2e")
+            }
+            // Ink: marks read dark on their bright plate; an UNSELECTED
+            // spoiler paints its ink in the plate colour — present but
+            // invisible. Selecting the word reveals it.
+            ink = wf_color(kind, wfl)
+            if (wfl / mdown.MD_MARK) % 2 == 1 { ink = "#221c08" }
+            if (wfl / mdown.MD_SPOIL) % 2 == 1 && i != sel { ink = "#2e2e2e" }
+            gsize = wf_glyph_size(size, wfl)
+            gbase = base
+            if (wfl / mdown.MD_SUP) % 2 == 1 { gbase = base - size * 0.38 }
+            if (wfl / mdown.MD_SUB) % 2 == 1 { gbase = base + size * 0.14 }
+            paint_word(rn, mdown.md_word_text(w), b.x, gbase, gsize, wfl, ink)
+            if (wfl / mdown.MD_UNDER) % 2 == 1 {
+                bar = rect(rn, b.x, base + size * 0.14, b.w, size * 0.07)
+                fill(bar, ink)
+            }
             // Bullet dot once per bullet block, beside its first word.
             if kind == mdown.MD_BULLET && b.wi == 0 {
                 dot = rect(rn, WF_PAD_L + 6.0, b.y + b.h * 0.42, 5.0, 5.0)

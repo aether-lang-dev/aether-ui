@@ -78,6 +78,21 @@ main() {
                   mdown.md_word_flags(mdown.md_block_word(b4, 1)), 0)
     mdown.md_doc_free(d4)
 
+    println("-- extended inline set (++ || == ^ ~)")
+    dx = mdown.md_parse("plain ++under a b++ ||hush|| ==note== ^up^ ~down~")
+    bx = mdown.md_doc_block(dx, 0)
+    assert_eq_int("ext word count", mdown.md_block_words(bx), 8)
+    assert_eq_int("under 1", mdown.md_word_flags(mdown.md_block_word(bx, 1)), mdown.MD_UNDER)
+    assert_eq_int("under span crosses space",
+                  mdown.md_word_flags(mdown.md_block_word(bx, 3)), mdown.MD_UNDER)
+    assert_eq_int("spoiler", mdown.md_word_flags(mdown.md_block_word(bx, 4)), mdown.MD_SPOIL)
+    assert_eq_int("mark", mdown.md_word_flags(mdown.md_block_word(bx, 5)), mdown.MD_MARK)
+    assert_eq_int("sup", mdown.md_word_flags(mdown.md_block_word(bx, 6)), mdown.MD_SUP)
+    assert_eq_int("sub", mdown.md_word_flags(mdown.md_block_word(bx, 7)), mdown.MD_SUB)
+    assert_eq_str("ext text stripped",
+                  mdown.md_word_text(mdown.md_block_word(bx, 4)), "hush")
+    mdown.md_doc_free(dx)
+
     println("-- round trips (canonical form reproduced byte-for-byte)")
     round_trip("heading", "# Title words here")
     round_trip("paragraph", "One two three.")
@@ -87,6 +102,10 @@ main() {
     round_trip("bullets stack tight", "- alpha\n- beta gamma\n- delta")
     round_trip("mixed doc",
         "# Head\n\npara **strong** text\n\n- item one\n- item `two`\n\n## Next")
+    round_trip("underline run merges", "a ++b c++ d")
+    round_trip("spoiler and mark", "tell ||no one|| but ==this==")
+    round_trip("sup sub", "x ^2^ and H ~2~ O")
+    round_trip("bold underline nest", "**++x y++** z")
     round_trip("fence exact",
         "```\nfn main() {   spaced   }\n    indented line\n```")
     round_trip("fence between paras",

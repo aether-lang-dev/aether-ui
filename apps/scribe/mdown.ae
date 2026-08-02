@@ -14,6 +14,11 @@
 // Scope (v1, "markdown's basic functions"):
 //   # ## ###   headings          - / *      bullet items
 //   **bold**   *italic*  `code`  ``` fenced code blocks ```
+// Plus the extended inline set, syntax borrowed with thanks from the
+// Extended Markdown Syntax Obsidian plugin (MIT, (c) 2025 Kotaindah55 /
+// Sheva Ihza — delimiters only, none of its code):
+//   ++insert/underline++   ||spoiler||   ==highlight==
+//   ^superscript^          ~subscript~
 // One non-blank line = one block. Inside a fence each LINE becomes one
 // CODE block holding a single word (the whole line, spacing intact), so
 // fenced text round-trips byte-exact and never re-wraps.
@@ -25,6 +30,7 @@ import std.strbuilder
 exports(
     MD_PARA, MD_H1, MD_H2, MD_H3, MD_BULLET, MD_CODE,
     MD_BOLD, MD_ITALIC, MD_CODEW,
+    MD_UNDER, MD_SPOIL, MD_MARK, MD_SUP, MD_SUB,
     md_doc_new, md_doc_free, md_doc_blocks, md_doc_block,
     md_block_new, md_block_kind, md_block_set_kind,
     md_block_words, md_block_word, md_block_text,
@@ -51,6 +57,11 @@ const MD_CODE: int = 5
 const MD_BOLD: int = 1
 const MD_ITALIC: int = 2
 const MD_CODEW: int = 4
+const MD_UNDER: int = 8
+const MD_SPOIL: int = 16
+const MD_MARK: int = 32
+const MD_SUP: int = 64
+const MD_SUB: int = 128
 
 struct MdWord {
     txt: string
@@ -246,6 +257,11 @@ struct MdScan {
     bold: int
     ital: int
     code: int
+    under: int
+    spoil: int
+    mark: int
+    sup: int
+    sub: int
 }
 
 // Strip leading markers (toggling ON), then trailing markers (noting OFF),
@@ -257,8 +273,22 @@ scan_token(sc: *MdScan, bp: ptr, tok: string) {
     going = 1
     while going == 1 {
         going = 0
+        // Two-character markers first (so ** beats * and ++/||/== are
+        // never read as stray punctuation), then the single-character set.
         if string.starts_with(t, "**") == 1 {
             sc.bold = 1
+            t = string_substring(t, 2, string.length(t))
+            going = 1
+        } else { if string.starts_with(t, "++") == 1 {
+            sc.under = 1
+            t = string_substring(t, 2, string.length(t))
+            going = 1
+        } else { if string.starts_with(t, "||") == 1 {
+            sc.spoil = 1
+            t = string_substring(t, 2, string.length(t))
+            going = 1
+        } else { if string.starts_with(t, "==") == 1 {
+            sc.mark = 1
             t = string_substring(t, 2, string.length(t))
             going = 1
         } else {
@@ -272,16 +302,43 @@ scan_token(sc: *MdScan, bp: ptr, tok: string) {
                 t = string_substring(t, 1, string.length(t))
                 going = 1
             }
-        }
+            if string.starts_with(t, "^") == 1 {
+                sc.sup = 1
+                t = string_substring(t, 1, string.length(t))
+                going = 1
+            }
+            if string.starts_with(t, "~") == 1 {
+                sc.sub = 1
+                t = string_substring(t, 1, string.length(t))
+                going = 1
+            }
+        } } } }
     }
     bold_off = 0
     ital_off = 0
     code_off = 0
+    under_off = 0
+    spoil_off = 0
+    mark_off = 0
+    sup_off = 0
+    sub_off = 0
     going = 1
     while going == 1 {
         going = 0
         if string.ends_with(t, "**") == 1 {
             bold_off = 1
+            t = string_substring(t, 0, string.length(t) - 2)
+            going = 1
+        } else { if string.ends_with(t, "++") == 1 {
+            under_off = 1
+            t = string_substring(t, 0, string.length(t) - 2)
+            going = 1
+        } else { if string.ends_with(t, "||") == 1 {
+            spoil_off = 1
+            t = string_substring(t, 0, string.length(t) - 2)
+            going = 1
+        } else { if string.ends_with(t, "==") == 1 {
+            mark_off = 1
             t = string_substring(t, 0, string.length(t) - 2)
             going = 1
         } else {
@@ -295,13 +352,28 @@ scan_token(sc: *MdScan, bp: ptr, tok: string) {
                 t = string_substring(t, 0, string.length(t) - 1)
                 going = 1
             }
-        }
+            if string.ends_with(t, "^") == 1 {
+                sup_off = 1
+                t = string_substring(t, 0, string.length(t) - 1)
+                going = 1
+            }
+            if string.ends_with(t, "~") == 1 {
+                sub_off = 1
+                t = string_substring(t, 0, string.length(t) - 1)
+                going = 1
+            }
+        } } } }
     }
     if string.length(t) > 0 {
         wf = 0
         if sc.bold == 1 { wf = wf + MD_BOLD }
         if sc.ital == 1 { wf = wf + MD_ITALIC }
         if sc.code == 1 { wf = wf + MD_CODEW }
+        if sc.under == 1 { wf = wf + MD_UNDER }
+        if sc.spoil == 1 { wf = wf + MD_SPOIL }
+        if sc.mark == 1 { wf = wf + MD_MARK }
+        if sc.sup == 1 { wf = wf + MD_SUP }
+        if sc.sub == 1 { wf = wf + MD_SUB }
         b = bp as *MdBlock
         string_retain(t)
         _ = list.list_add_raw(b.words, md_word_new(t, wf))
@@ -309,6 +381,11 @@ scan_token(sc: *MdScan, bp: ptr, tok: string) {
     if bold_off == 1 { sc.bold = 0 }
     if ital_off == 1 { sc.ital = 0 }
     if code_off == 1 { sc.code = 0 }
+    if under_off == 1 { sc.under = 0 }
+    if spoil_off == 1 { sc.spoil = 0 }
+    if mark_off == 1 { sc.mark = 0 }
+    if sup_off == 1 { sc.sup = 0 }
+    if sub_off == 1 { sc.sub = 0 }
 }
 
 // Split `line` on spaces and feed each non-empty token through the inline
@@ -316,10 +393,15 @@ scan_token(sc: *MdScan, bp: ptr, tok: string) {
 parse_inline(dp: ptr, kind: int, line: string) {
     d = dp as *MdDoc
     bp = md_block_new(kind)
-    sc = malloc(12) as *MdScan
+    sc = malloc(32) as *MdScan
     sc.bold = 0
     sc.ital = 0
     sc.code = 0
+    sc.under = 0
+    sc.spoil = 0
+    sc.mark = 0
+    sc.sup = 0
+    sc.sub = 0
     parts = string.string_split(line, " ")
     n = string.string_array_size(parts)
     i = 0
@@ -412,10 +494,23 @@ wflag(bp: ptr, i: int, bit: int) -> int {
     return 0
 }
 
-// Serialize one block's words with run-merged markers: a marker opens on
-// the first word of a styled run and closes on the last. Opens go
-// ** then * then ` (so combined flags nest as **`*x*`** inverted on
-// close), closes in reverse.
+// One marker's open/close around word i, comparing against the
+// neighbour: a marker opens on the first word of a styled run and closes
+// on the last.
+mark_open(out: ptr, bp: ptr, i: int, bit: int, m: string) {
+    if wflag(bp, i, bit) == 1 && wflag(bp, i - 1, bit) == 0 {
+        strbuilder.append(out, m)
+    }
+}
+mark_close(out: ptr, bp: ptr, i: int, bit: int, m: string) {
+    if wflag(bp, i, bit) == 1 && wflag(bp, i + 1, bit) == 0 {
+        strbuilder.append(out, m)
+    }
+}
+
+// Serialize one block's words with run-merged markers. Fixed nesting,
+// outermost→innermost: ** ++ || == * ^ ~ ` (closes in reverse), so
+// combined flags always nest consistently and round-trip.
 serialize_words(out: ptr, bp: ptr) {
     b = bp as *MdBlock
     n = list.list_size(b.words)
@@ -423,25 +518,23 @@ serialize_words(out: ptr, bp: ptr) {
     while i < n {
         if i > 0 { strbuilder.append(out, " ") }
         w = list.list_get_raw(b.words, i) as *MdWord
-        if wflag(bp, i, MD_BOLD) == 1 && wflag(bp, i - 1, MD_BOLD) == 0 {
-            strbuilder.append(out, "**")
-        }
-        if wflag(bp, i, MD_ITALIC) == 1 && wflag(bp, i - 1, MD_ITALIC) == 0 {
-            strbuilder.append(out, "*")
-        }
-        if wflag(bp, i, MD_CODEW) == 1 && wflag(bp, i - 1, MD_CODEW) == 0 {
-            strbuilder.append(out, "`")
-        }
+        mark_open(out, bp, i, MD_BOLD, "**")
+        mark_open(out, bp, i, MD_UNDER, "++")
+        mark_open(out, bp, i, MD_SPOIL, "||")
+        mark_open(out, bp, i, MD_MARK, "==")
+        mark_open(out, bp, i, MD_ITALIC, "*")
+        mark_open(out, bp, i, MD_SUP, "^")
+        mark_open(out, bp, i, MD_SUB, "~")
+        mark_open(out, bp, i, MD_CODEW, "`")
         strbuilder.append(out, w.txt)
-        if wflag(bp, i, MD_CODEW) == 1 && wflag(bp, i + 1, MD_CODEW) == 0 {
-            strbuilder.append(out, "`")
-        }
-        if wflag(bp, i, MD_ITALIC) == 1 && wflag(bp, i + 1, MD_ITALIC) == 0 {
-            strbuilder.append(out, "*")
-        }
-        if wflag(bp, i, MD_BOLD) == 1 && wflag(bp, i + 1, MD_BOLD) == 0 {
-            strbuilder.append(out, "**")
-        }
+        mark_close(out, bp, i, MD_CODEW, "`")
+        mark_close(out, bp, i, MD_SUB, "~")
+        mark_close(out, bp, i, MD_SUP, "^")
+        mark_close(out, bp, i, MD_ITALIC, "*")
+        mark_close(out, bp, i, MD_MARK, "==")
+        mark_close(out, bp, i, MD_SPOIL, "||")
+        mark_close(out, bp, i, MD_UNDER, "++")
+        mark_close(out, bp, i, MD_BOLD, "**")
         i = i + 1
     }
 }

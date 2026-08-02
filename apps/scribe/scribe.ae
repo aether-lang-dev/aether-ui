@@ -58,6 +58,7 @@ struct Ed {
     sb: int          // selected word's block, -1 = none
     sw: int          // selected word's index
     buf: string      // the word being typed ("" = none)
+    bpos: int        // caret position WITHIN buf (0..len)
     pend: int        // style flags for words typed next
     canvas: int
     scene: ptr
@@ -80,14 +81,14 @@ publish(ed: *Ed) {
     selpart = "none"
     if ed.sb >= 0 { selpart = "${ed.sb}/${ed.sw}" }
     _b = ui_set_s(ed.st_caret,
-        "caret: ${ed.cb}/${ed.cg} sel: ${selpart} pend: ${ed.pend} buf: [${ed.buf}]")
+        "caret: ${ed.cb}/${ed.cg} sel: ${selpart} pend: ${ed.pend} buf: [${ed.buf}] cpos: ${ed.bpos}")
 }
 
 // Rebuild the layout from the model and repaint. The single funnel every
 // edit goes through.
 relayout(ed: *Ed) {
     if ed.lo != null { wordflow.wf_free(ed.lo) }
-    ed.lo = wordflow.wf_layout(ed.doc, SC_W * 1.0, ed.cb, ed.cg, ed.buf)
+    ed.lo = wordflow.wf_layout(ed.doc, SC_W * 1.0, ed.cb, ed.cg, ed.buf, ed.bpos)
     publish(ed)
     _r = scene_refresh(ed.scene)
 }
@@ -108,6 +109,7 @@ commit_word(ed: *Ed) {
     mdown.md_insert_word(bp, ed.cg, cp, ed.pend)
     ed.cg = ed.cg + 1
     set_buf(ed, "")
+    ed.bpos = 0
 }
 
 // Enter: split the caret block at the gap. Words after the caret move to
@@ -142,7 +144,13 @@ split_block(ed: *Ed) {
 backspace(ed: *Ed) {
     n = string.length(ed.buf)
     if n > 0 {
-        set_buf(ed, string_substring(ed.buf, 0, n - 1))
+        if ed.bpos <= 0 { return }
+        head = string_substring(ed.buf, 0, ed.bpos - 1)
+        tail = string_substring(ed.buf, ed.bpos, n)
+        joined = "${head}${tail}"
+        string_retain(joined)
+        ed.buf = joined
+        ed.bpos = ed.bpos - 1
         return
     }
     if ed.sb >= 0 {
@@ -162,6 +170,7 @@ backspace(ed: *Ed) {
         mdown.md_remove_word(bp, ed.cg - 1)
         ed.cg = ed.cg - 1
         set_buf(ed, cp)
+        ed.bpos = string.length(cp)
         return
     }
     if ed.cb > 0 {
@@ -193,6 +202,28 @@ toggle_flag(ed: *Ed, bit: int) {
     } else {
         if (ed.pend / bit) % 2 == 1 { ed.pend = ed.pend - bit }
         else { ed.pend = ed.pend + bit }
+    }
+    relayout(ed)
+}
+
+// Toggle `bit` but clear `other` when setting — super/subscript are
+// mutually exclusive.
+toggle_excl(ed: *Ed, bit: int, other: int) {
+    if ed.sb >= 0 {
+        wp = mdown.md_block_word(mdown.md_doc_block(ed.doc, ed.sb), ed.sw)
+        fl = mdown.md_word_flags(wp)
+        if (fl / bit) % 2 == 1 { fl = fl - bit }
+        else {
+            fl = fl + bit
+            if (fl / other) % 2 == 1 { fl = fl - other }
+        }
+        mdown.md_word_set_flags(wp, fl)
+    } else {
+        if (ed.pend / bit) % 2 == 1 { ed.pend = ed.pend - bit }
+        else {
+            ed.pend = ed.pend + bit
+            if (ed.pend / other) % 2 == 1 { ed.pend = ed.pend - other }
+        }
     }
     relayout(ed)
 }
@@ -264,34 +295,92 @@ on_key(ed: *Ed, k: string) {
         relayout(ed)
         return
     }
+    // Left/Right are CHARACTER-wise. Inside the live buffer the cursor
+    // just moves; at a buffer edge the word commits and the caret crosses
+    // the gap; and moving INTO a committed word lifts it back into the
+    // buffer with the cursor at the entered end — per-character traversal
+    // over a word-grained model.
     if string.equals(k, "Left") == 1 {
-        commit_word(ed)
         ed.sb = 0 - 1
-        if ed.cg > 0 { ed.cg = ed.cg - 1 }
-        else { if ed.cb > 0 {
+        if string.length(ed.buf) > 0 {
+            if ed.bpos > 0 {
+                ed.bpos = ed.bpos - 1
+                relayout(ed)
+                return
+            }
+            // At the word's left edge: commit and sit BEFORE it.
+            commit_word(ed)
+            ed.cg = ed.cg - 1
+            relayout(ed)
+            return
+        }
+        if ed.cg > 0 {
+            // Enter the previous word from its right end.
+            bp = mdown.md_doc_block(ed.doc, ed.cb)
+            wp = mdown.md_block_word(bp, ed.cg - 1)
+            cp = string.copy(mdown.md_word_text(wp))
+            string_retain(cp)
+            ed.pend = mdown.md_word_flags(wp)
+            mdown.md_remove_word(bp, ed.cg - 1)
+            ed.cg = ed.cg - 1
+            set_buf(ed, cp)
+            ed.bpos = string.length(cp) - 1
+            if ed.bpos < 0 { ed.bpos = 0 }
+            relayout(ed)
+            return
+        }
+        if ed.cb > 0 {
             ed.cb = ed.cb - 1
             ed.cg = mdown.md_block_words(mdown.md_doc_block(ed.doc, ed.cb))
-        } }
+        }
         relayout(ed)
         return
     }
     if string.equals(k, "Right") == 1 {
-        commit_word(ed)
         ed.sb = 0 - 1
+        if string.length(ed.buf) > 0 {
+            if ed.bpos < string.length(ed.buf) {
+                ed.bpos = ed.bpos + 1
+                relayout(ed)
+                return
+            }
+            // At the word's right edge: commit; caret lands after it.
+            commit_word(ed)
+            relayout(ed)
+            return
+        }
         nw = mdown.md_block_words(mdown.md_doc_block(ed.doc, ed.cb))
-        if ed.cg < nw { ed.cg = ed.cg + 1 }
-        else { if ed.cb + 1 < mdown.md_doc_blocks(ed.doc) {
+        if ed.cg < nw {
+            // Enter the next word from its left end.
+            bp = mdown.md_doc_block(ed.doc, ed.cb)
+            wp = mdown.md_block_word(bp, ed.cg)
+            cp = string.copy(mdown.md_word_text(wp))
+            string_retain(cp)
+            ed.pend = mdown.md_word_flags(wp)
+            mdown.md_remove_word(bp, ed.cg)
+            set_buf(ed, cp)
+            ed.bpos = 1
+            if ed.bpos > string.length(cp) { ed.bpos = string.length(cp) }
+            relayout(ed)
+            return
+        }
+        if ed.cb + 1 < mdown.md_doc_blocks(ed.doc) {
             ed.cb = ed.cb + 1
             ed.cg = 0
-        } }
+        }
         relayout(ed)
         return
     }
     ch = key_char(k)
     if string.length(ch) == 0 { return }
-    grown = "${ed.buf}${ch}"
+    blen = string.length(ed.buf)
+    if ed.bpos > blen { ed.bpos = blen }
+    head = string_substring(ed.buf, 0, ed.bpos)
+    tail = string_substring(ed.buf, ed.bpos, blen)
+    grown = "${head}${ch}${tail}"
     string_retain(grown)
     ed.buf = grown
+    ed.bpos = ed.bpos + 1
     ed.sb = 0 - 1
     relayout(ed)
 }
@@ -370,6 +459,7 @@ main() {
     ed.sb = 0 - 1
     ed.sw = 0
     ed.buf = ""
+    ed.bpos = 0
     ed.pend = 0
     stat = ui_state_s("blocks: 1 words: 0")
     car = ui_state_s("caret: 0/0 sel: none pend: 0 buf: []")
@@ -384,7 +474,18 @@ main() {
             hstack(6) {
                 btn("B") callback { toggle_flag(ed, mdown.MD_BOLD) }
                 btn("I") callback { toggle_flag(ed, mdown.MD_ITALIC) }
+                btn("U") callback { toggle_flag(ed, mdown.MD_UNDER) }
                 btn("Code") callback { toggle_flag(ed, mdown.MD_CODEW) }
+                btn("Mark") callback { toggle_flag(ed, mdown.MD_MARK) }
+                btn("Spoil") callback { toggle_flag(ed, mdown.MD_SPOIL) }
+                btn("Sup") callback {
+                    toggle_excl(ed, mdown.MD_SUP, mdown.MD_SUB)
+                }
+                btn("Sub") callback {
+                    toggle_excl(ed, mdown.MD_SUB, mdown.MD_SUP)
+                }
+            }
+            hstack(6) {
                 btn("H1") callback { set_kind(ed, mdown.MD_H1) }
                 btn("H2") callback { set_kind(ed, mdown.MD_H2) }
                 btn("H3") callback { set_kind(ed, mdown.MD_H3) }
@@ -392,7 +493,7 @@ main() {
                 btn("List") callback { set_kind(ed, mdown.MD_BULLET) }
                 btn("Sample") callback {
                     mdown.md_doc_free(ed.doc)
-                    ed.doc = mdown.md_parse("# Scribe\n\nEvery word here is an object with a box. Click one to select it, then restyle it.\n\n- point at words\n- type new ones\n- **bold** is the stroker at work\n\nItalic is a *shear* on the glyph outlines.")
+                    ed.doc = mdown.md_parse("# Scribe\n\nEvery word here is an object with a box. Click one to select it, then restyle it.\n\n- point at words\n- type new ones\n- **bold** is the stroker at work\n\nItalic is a *shear* on the glyph outlines. Also: ++insertion++ ==highlight== ^raised^ ~lowered~ and a ||spoiler|| (click it).")
                     ed.cb = 0
                     ed.cg = 1
                     ed.sb = 0 - 1
@@ -418,7 +519,7 @@ main() {
                         draw_page(ed, rn)
                     }
                 region_set_animated(reg, 0)
-                ed.lo = wordflow.wf_layout(ed.doc, SC_W * 1.0, 0, 0, "")
+                ed.lo = wordflow.wf_layout(ed.doc, SC_W * 1.0, 0, 0, "", 0)
 
                 cid = scene_canvas(node_scene(root_node))
                 canvas_on_click(cid) callback |px: float, py: float| {
@@ -433,6 +534,9 @@ main() {
                 }
                 widget_shortcut(canvas_widget(cid), "Ctrl+I") callback {
                     toggle_flag(ed, mdown.MD_ITALIC)
+                }
+                widget_shortcut(canvas_widget(cid), "Ctrl+U") callback {
+                    toggle_flag(ed, mdown.MD_UNDER)
                 }
             }
             t_s = text("blocks: 1 words: 0")
