@@ -1,4 +1,4 @@
-// spec_scribe.ae — the word-as-widget markdown editor, driven end-to-end
+// spec_maerkdown.ae — the word-as-widget markdown editor, driven end-to-end
 // over AetherUIDriver.
 //
 // Claims, in rising order of strength:
@@ -16,9 +16,9 @@
 //      ground: the stroker's thickened outlines are real pixels, not
 //      flags (floor + anti-flood bounds per the vg3d lesson).
 //
-// Run via tests/spec_matrix.sh scribe, or by hand:
-//   AETHER_UI_TEST_PORT=9222 ./target/build/apps/scribe/bin/scribe &
-//   UI_SPEC=scribe/spec_scribe tests/run_spec.sh
+// Run via tests/spec_matrix.sh maerkdown, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/apps/maerkdown/bin/maerkdown &
+//   UI_SPEC=maerkdown/spec_maerkdown tests/run_spec.sh
 import aeocha
 import uidriver
 import std.string
@@ -29,7 +29,7 @@ main() {
     fw = aeocha.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "scribe over AetherUIDriver") {
+    aeocha.describe(fw, "maerkdown over AetherUIDriver") {
         aeocha.it("opens on an empty document with the caret at home") callback {
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "blocks: 1 words: 0",
@@ -110,11 +110,11 @@ main() {
             uidriver.click_widget(b)
             ok = uidriver.wait_body_contains("/widgets", "blocks: 6", 20)
             aeocha.assert_true(ok, "sample document loaded")
-            // (30, 30) is inside the H1 word "Scribe" (first word, first
+            // (30, 30) is inside the H1 word "Maerkdown" (first word, first
             // line) at every backend — the layout is pure Aether and
             // byte-identical, so the coordinate is a contract.
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "click on the title")
-            ok1 = uidriver.wait_body_contains("/widgets", "buf: [Scribe]", 20)
+            ok1 = uidriver.wait_body_contains("/widgets", "buf: [Maerkdown]", 20)
             aeocha.assert_true(ok1, "plain word expands to bare text")
             bb = uidriver.widget_id_of("button", "B")
             uidriver.click_widget(bb)
@@ -123,12 +123,12 @@ main() {
             uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
-            ok2 = uidriver.wait_body_contains("/widgets", "# **Scribe**", 20)
+            ok2 = uidriver.wait_body_contains("/widgets", "# **Maerkdown**", 20)
             aeocha.assert_true(ok2, "markdown records the bold word")
             // THE momentary-source claim: the styled word expands with
             // its markers inline, char-addressable.
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "click the bold title")
-            ok3 = uidriver.wait_body_contains("/widgets", "buf: [**Scribe**]", 20)
+            ok3 = uidriver.wait_body_contains("/widgets", "buf: [**Maerkdown**]", 20)
             aeocha.assert_true(ok3, "bold word expands to **source**")
             uidriver.key("Escape")
             ok4 = uidriver.wait_body_contains("/widgets", "buf: [] cpos: 0", 20)
@@ -162,8 +162,8 @@ main() {
             uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
-            // "# Scribe" (no **) only appears once the un-bold committed.
-            okp2 = uidriver.wait_body_contains("/widgets", "# Scribe", 20)
+            // "# Maerkdown" (no **) only appears once the un-bold committed.
+            okp2 = uidriver.wait_body_contains("/widgets", "# Maerkdown", 20)
             aeocha.assert_true(okp2, "title back to plain in the markdown")
             uidriver.click_widget(pb)
             // Poll until the dark count MOVES off the bold reading.
@@ -189,7 +189,7 @@ main() {
             uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
-            ok = uidriver.wait_body_contains("/widgets", "### Scribe", 20)
+            ok = uidriver.wait_body_contains("/widgets", "### Maerkdown", 20)
             aeocha.assert_true(ok, "H1 became H3 in the markdown")
         }
 
@@ -209,10 +209,10 @@ main() {
             uidriver.click_widget(ub)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
-            ok1 = uidriver.wait_body_contains("/widgets", "### ++Scribe++", 20)
+            ok1 = uidriver.wait_body_contains("/widgets", "### ++Maerkdown++", 20)
             aeocha.assert_true(ok1, "underline serializes as ++ ++")
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand again")
-            okx = uidriver.wait_body_contains("/widgets", "buf: [++Scribe++]", 20)
+            okx = uidriver.wait_body_contains("/widgets", "buf: [++Maerkdown++]", 20)
             aeocha.assert_true(okx, "underlined word expands WITH its markers")
             uidriver.click_widget(ub)
             uidriver.key("Escape")
@@ -220,7 +220,7 @@ main() {
             uidriver.click_widget(mb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
-            ok2 = uidriver.wait_body_contains("/widgets", "### ==Scribe==", 20)
+            ok2 = uidriver.wait_body_contains("/widgets", "### ==Maerkdown==", 20)
             aeocha.assert_true(ok2, "highlight serializes as == ==")
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(mb)
@@ -229,19 +229,19 @@ main() {
             uidriver.click_widget(supb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
-            ok3 = uidriver.wait_body_contains("/widgets", "### ^Scribe^", 20)
+            ok3 = uidriver.wait_body_contains("/widgets", "### ^Maerkdown^", 20)
             aeocha.assert_true(ok3, "superscript serializes as ^ ^")
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(subb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
-            ok4 = uidriver.wait_body_contains("/widgets", "### ~Scribe~", 20)
+            ok4 = uidriver.wait_body_contains("/widgets", "### ~Maerkdown~", 20)
             aeocha.assert_true(ok4, "sub replaces sup (mutually exclusive)")
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(subb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
-            ok5 = uidriver.wait_body_contains("/widgets", "### Scribe", 20)
+            ok5 = uidriver.wait_body_contains("/widgets", "### Maerkdown", 20)
             aeocha.assert_true(ok5, "toggles all the way back to plain")
         }
 

@@ -1,4 +1,4 @@
-// scribe — aether-ui toolkit example, built as its own cached aeb node.
+// maerkdown — aether-ui toolkit example, built as its own cached aeb node.
 import build
 import aether
 import aether (source, output, no_closure_regen, lib)
@@ -8,8 +8,8 @@ main() {
     b = build.start()
     root = build._get(b, "root")
     aether.program(b) {
-        source("scribe.ae")
-        output("scribe")
+        source("maerkdown.ae")
+        output("maerkdown")
         lib("${root}")
         lib(".")
         no_closure_regen()

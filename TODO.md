@@ -44,10 +44,3 @@ app: dogfood). Connect to any running app's port and:
 - bonus: /window/pick under a crosshair mode ("what widget is here?").
 No new backend surface required for v1; anything missing (e.g. a
 subscribe/poll diff) becomes a driver follow-up.
-
-## Rename scribe → maerkdown
-
-The word-as-widget markdown editor (apps/scribe) should be renamed
-Maerkdown: apps/scribe/ → apps/maerkdown/, binary + window title +
-spec suite name + ci ENGINE_TESTS entry + spec_matrix row, keeping the
-Sutherland-free identity (mdown.ae/wordflow.ae module names can stay).

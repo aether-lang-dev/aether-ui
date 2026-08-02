@@ -1,4 +1,4 @@
-// scribe.ae — a word-as-widget document editor speaking basic markdown.
+// maerkdown.ae — a word-as-widget document editor speaking basic markdown.
 //
 // Every word on the page is a first-class object: it has a measured box,
 // paints itself as glyph geometry, and answers to pointing (wordflow.ae).
@@ -27,10 +27,10 @@
 // path toolkit shearing them — the same vg surface every backend renders
 // identically.
 //
-// Render-on-demand: a static scene, one refresh per edit. An idle scribe
+// Render-on-demand: a static scene, one refresh per edit. An idle editor
 // costs nothing.
 //
-// Run: DISPLAY=:0 ./target/build/apps/scribe/bin/scribe
+// Run: DISPLAY=:0 ./target/build/apps/maerkdown/bin/maerkdown
 
 import ui (
     window, vstack, hstack, text, text_wrapped, btn, enable_test_server,
@@ -456,7 +456,7 @@ draw_page(ed: *Ed, rn: ptr) {
 // page background (#14141c) and its dark plates — NOT the glyphs —
 // because dark is the one signal no backend can fake: on backends whose
 // height pin is advisory the replay bitmap can outsize the mapped area
-// and leak a WHITE ground (the sketchpad lesson), and scribe's ink is
+// and leak a WHITE ground (the sketchpad lesson), and this app's ink is
 // near-white by design. White leak can never read as dark. The lever
 // inverts accordingly: bolding a word THICKENS its glyphs and so
 // REMOVES dark samples — bold_dark < plain_dark, on every backend.
@@ -492,7 +492,7 @@ main() {
     ed.st_caret = car
     ed.st_src = src
 
-    window("Scribe — words as widgets", 600, 660) {
+    window("Maerkdown — words as widgets", 600, 660) {
         vstack(6) {
             hstack(6) {
                 btn("B") callback { toggle_flag(ed, mdown.MD_BOLD) }
@@ -516,7 +516,7 @@ main() {
                 btn("List") callback { set_kind(ed, mdown.MD_BULLET) }
                 btn("Sample") callback {
                     mdown.md_doc_free(ed.doc)
-                    ed.doc = mdown.md_parse("# Scribe\n\nEvery word here is an object with a box. Click one to select it, then restyle it.\n\n- point at words\n- type new ones\n- **bold** is the stroker at work\n\nItalic is a *shear* on the glyph outlines. Also: ++insertion++ ==highlight== ^raised^ ~lowered~ and a ||spoiler|| (click it).")
+                    ed.doc = mdown.md_parse("# Maerkdown\n\nEvery word here is an object with a box. Click one to select it, then restyle it.\n\n- point at words\n- type new ones\n- **bold** is the stroker at work\n\nItalic is a *shear* on the glyph outlines. Also: ++insertion++ ==highlight== ^raised^ ~lowered~ and a ||spoiler|| (click it).")
                     ed.cb = 0
                     ed.cg = 1
                     set_buf(ed, "")

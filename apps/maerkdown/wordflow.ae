@@ -1,6 +1,6 @@
 // wordflow.ae — words as first-class visual objects: layout, paint, hit.
 //
-// The scribe thesis, executed: every word in the document gets its own
+// The maerkdown thesis, executed: every word in the document gets its own
 // measured BOX (position, extent, block/word identity), and those boxes
 // are simultaneously
 //   - the layout        (greedy line-breaking over exact advance widths),

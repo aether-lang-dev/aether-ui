@@ -1,4 +1,4 @@
-// mdown.ae — the scribe document model, and markdown in/out.
+// mdown.ae — the maerkdown document model, and markdown in/out.
 //
 // The model is deliberately word-grained: a document is blocks, a block is
 // words, and a word carries its own style flags. That shape is not an

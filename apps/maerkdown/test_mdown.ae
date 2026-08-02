@@ -1,6 +1,6 @@
-// test_mdown.ae — unit tests for scribe's document model and markdown
+// test_mdown.ae — unit tests for maerkdown's document model and markdown
 // round-trip. Headless, pure Aether (ci.sh Phase 0 ENGINE_TESTS):
-//   aetherc --lib apps/scribe apps/scribe/test_mdown.ae /tmp/t.c \
+//   aetherc --lib apps/maerkdown apps/maerkdown/test_mdown.ae /tmp/t.c \
 //     && gcc /tmp/t.c $(ae cflags) -o /tmp/t && /tmp/t
 //
 // The serializer's contract is run-merged markers, so round-trip equality

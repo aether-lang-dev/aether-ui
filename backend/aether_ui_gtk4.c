@@ -3947,6 +3947,16 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
     (void)area;
     int canvas_id = (int)(intptr_t)data;
     CanvasState* cs = get_canvas_state(canvas_id);
+    // AEUI_CANVAS_DEBUG=1 traces the canvas frame lifecycle to stderr:
+    // draw / clear / redraw with the command-buffer count at each. This
+    // is what identified vg.live's half-painting click hook (refreshes
+    // alternating 8414 commands / 2 commands on ONE physical click) —
+    // keep it: paint bugs that only appear under a real pointer cannot
+    // be seen any other way, and the gate costs nothing when unset.
+    if (getenv("AEUI_CANVAS_DEBUG") && cs)
+        fprintf(stderr, "[draw] id=%d count=%d w=%d h=%d last=%dx%d resize_hook=%d\n",
+                canvas_id, cs->count, width, height, cs->last_w, cs->last_h,
+                cs->on_resize && (width != cs->last_w || height != cs->last_h) ? 1 : 0);
     // Resize: GTK re-invokes the draw func with the new allocation. If a
     // scene registered a resize hook and the size changed, fire it so it can
     // re-map + re-flush its shapes at the new scale BEFORE we replay. The hook
@@ -4522,6 +4532,8 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
         }
         cs->count = 0;
         cs->gen++;   // invalidates the read_pixel replay cache
+        if (getenv("AEUI_CANVAS_DEBUG"))
+            fprintf(stderr, "[clear] id=%d gen=%lu\n", canvas_id, cs->gen);
         GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
         if (w) gtk_widget_queue_draw(w);
     }
@@ -4530,6 +4542,8 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
 void aether_ui_canvas_redraw_impl(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (cs) {
+        if (getenv("AEUI_CANVAS_DEBUG"))
+            fprintf(stderr, "[redraw] id=%d count=%d\n", canvas_id, cs->count);
         GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
         if (w) gtk_widget_queue_draw(w);
     }

@@ -255,7 +255,7 @@ fi
 # collision, rotation, line-clear, ghost, scoring, game-over). Compiled with
 # the app's own dir on the lib path so `import <engine>` resolves; links
 # libaether only (no backend, no text-metrics stub — nothing imports vg).
-ENGINE_TESTS=("svg_tetris:test_tetris_engine" "falling_blocks:test_fb_engine" "rubiks_cube:test_cube_engine" "font_picker:test_picker_engine" "scribe:test_mdown")
+ENGINE_TESTS=("svg_tetris:test_tetris_engine" "falling_blocks:test_fb_engine" "rubiks_cube:test_cube_engine" "font_picker:test_picker_engine" "maerkdown:test_mdown")
 for spec in "${ENGINE_TESTS[@]}"; do
     app="${spec%%:*}"; t="${spec##*:}"
     src="apps/${app}/${t}.ae"; cfile="build/eng_${t}.c"; bin="build/eng_${t}"
