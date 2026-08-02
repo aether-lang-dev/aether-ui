@@ -492,7 +492,7 @@ main() {
     ed.st_caret = car
     ed.st_src = src
 
-    window("Maerkdown — words as widgets", 600, 660) {
+    window("Maerkdown", 600, 660) {
         vstack(6) {
             hstack(6) {
                 btn("B") callback { toggle_flag(ed, mdown.MD_BOLD) }
