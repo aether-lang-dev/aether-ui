@@ -50,7 +50,7 @@ import wordflow
 import std.list
 import std.string
 import std.fs
-import std.os (os_getenv)
+import std.os (os_getenv, args_count, args_get)
 
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
@@ -256,7 +256,8 @@ set_kind(ed: *Ed, kind: int) {
 // ---- files -----------------------------------------------------------------
 
 // Frees the old model: anything still holding into it dangles after this.
-load_path(ed: *Ed, path: string) -> string {
+// No relayout, so this is callable before the scene exists (startup path).
+load_doc(ed: *Ed, path: string) -> string {
     src, err = fs.read(path)
     if err != "" { return err }
     mdown.md_doc_free(ed.doc)
@@ -268,6 +269,12 @@ load_path(ed: *Ed, path: string) -> string {
     ed.pend = 0
     string_retain(path)
     ed.cur_path = path
+    return ""
+}
+
+load_path(ed: *Ed, path: string) -> string {
+    err = load_doc(ed, path)
+    if err != "" { return err }
     relayout(ed)
     return ""
 }
@@ -536,6 +543,18 @@ main() {
     ed.bpos = 0
     ed.pend = 0
     ed.cur_path = ""
+
+    if args_count() > 1 {
+        arg_path = args_get(1)
+        if string.length(arg_path) > 0 {
+            aerr = load_doc(ed, arg_path)
+            if aerr != "" {
+                println("maerkdown: cannot open ${arg_path}: ${aerr}")
+                exit(1)
+            }
+        }
+    }
+
     stat = ui_state_s("blocks: 1 words: 0")
     car = ui_state_s("caret: 0/0 pend: 0 buf: [] cpos: 0")
     src = ui_state_s("source: (press Source)")
