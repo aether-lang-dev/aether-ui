@@ -1,12 +1,11 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: specified, not built.** This records the high bar for aether-ui
-> rendering, what we already have that seeds it, the gap, and a staged path to
-> it. Nothing here is implemented yet; the current backend is immediate-mode
-> (see "Where we are today"). The staged path below is written to be built
-> from — each stage names its deliverable, its API surface, and the test that
-> proves it. Stage 0 (the internal-frame widget) is a useful app in its own
-> right and is the harness the later stages are measured against.
+> **Status: Stage 0 built; Stages 1–5 specified, not built.** This records the
+> high bar for aether-ui rendering, what we already have that seeds it, the
+> gap, and a staged path to it. The rendering path is still immediate-mode
+> (see "Where we are today") — no dirty regions exist yet. The staged path
+> below is written to be built from: each stage names its deliverable, its API
+> surface, and the test that proves it. **Next up: Stage 1, the region type.**
 
 ## Licensing boundary (read first)
 
@@ -165,7 +164,7 @@ Stage 3 assertion (B repaints ~(1-f) of its area when A covers fraction
 f) is only falsifiable after that change — asserting on it before then
 would pass vacuously against a constant.
 
-**Build this first.** It is useful on its own, it is pure vg over today's
+**Why it came first.** It is useful on its own, it is pure vg over today's
 immediate-mode canvas, and it is the consumer that makes every later stage
 *measurable* rather than speculative. A JInternalFrame-alike: draggable,
 resizable, z-ordered sub-windows living inside ONE canvas we own end to
@@ -178,33 +177,47 @@ Module `ui/frames.ae`, app-agnostic and reusable:
 ```
 frames_new(scene, x, y, w, h)      -> ptr   // a frame host over one scene
 frame_add(host, title, x, y, w, h) -> ptr   // returns a frame handle
-frame_set_content(frame, cb)                // cb(rn, t) draws frame-local
+frame_set_content(frame, cb)                // cb(rn, t, x, y, w, h)
 frame_move / frame_resize / frame_raise / frame_close
 frame_bounds(frame) -> (x, y, w, h)         // in host coords
 frame_z(frame) -> int                       // 0 = back
 frames_hit(host, x, y) -> ptr               // topmost frame at a point, or null
+frame_count(host) -> int
 frames_draw(host, rn, t)                    // paint all frames, back → front
 frames_on_click/move/release(host, ...)     // gesture routing
 ```
 
+(As built. The content callback receives the frame's current content rect
+rather than a translated origin — the payload scales itself into `(x, y, w,
+h)`, which is what lets a resizable frame hold a cube without the cube
+knowing anything about frames.)
+
 Behaviour: title bar drag moves; bottom-right gripper resizes (min 80×60);
 clicking anywhere in a frame raises it to front; a close box removes it.
-Content callbacks receive a translated origin so a frame's content draws in
-frame-local coordinates and never needs to know where it sits. Chrome is
-drawn with vg (`rect`/`path`/`fill`) and `ui.icons` — no native widgets, so
-it renders identically on all four backends.
+Chrome is drawn with vg primitives (`rect`/`path`/`text_sized`/`fill`/
+`stroke`) — no native widgets and, as built, no `ui.icons` dependency, so it
+renders identically on all four backends.
 
 *Acceptance:* a driver spec that adds two frames, asserts z-order after a
 raise, drags one and asserts its new bounds, resizes and asserts the new
 size, and confirms `frames_hit` returns the topmost frame in an overlap.
 
-*Demo app* `apps/frames_demo`: **two tumbling cubes in one window**, each
-in its own internal frame. `apps/tumbling_cube` is the ideal payload — it
-is continuously animating (`scene_set_refreshing`), genuinely expensive per
-frame (six painter-sorted translucent faces plus every glyph outline point
-re-projected), and interactive while animating. Overlap the two frames and
-today, on immediate mode, both repaint in full forever. That is the
-baseline the compositor has to beat, and this app is how we see it.
+*Demo app* `apps/frames_demo`: **two tumbling cubes in one window**, each in
+its own internal frame — continuously animating, six painter-sorted
+translucent faces apiece, scaled into whatever content rect its frame
+currently has. Overlap the two frames and today, on immediate mode, both
+repaint in full forever. That is the baseline the compositor has to beat,
+and this app is how we see it.
+
+The cube geometry is a local copy, deliberately: `apps/tumbling_cube` folds
+its screen framing into one projective mat4 to stay pixel-identical to its
+pre-vg3d original (its goldens depend on that), whereas a framed cube needs
+a per-call frame-local projection. Extracting a shared `cube.ae` — the
+vertex/face/normal tables, `cube_model`, `face_depth`, the spin integrator,
+~80 lines — is worthwhile once there is a third consumer, but it must leave
+each caller's projection alone. Note `const` lowers to `#define`, so a
+shared module needs deliberate prefixing to avoid colliding with MinGW
+headers on Windows.
 
 ### Stage 1 — the region type *(the one new data structure)*
 
@@ -277,9 +290,15 @@ regardless of *f*; after this stage it must track the exposed fraction.
 That single assertion is the whole design's proof, and it is exactly the
 kind of pixel-level claim this repo already gates on.
 
-Instrumentation exists: the `AEUI_CANVAS_DEBUG` taps in the gtk4 backend
-already report per-paint command counts, and were what exposed vg.live's
-half-painting click hook. Extend them with repainted-area totals.
+Instrumentation is already wired: `GET /canvas/{id}/debug` returns
+`{area, commands, w, h}` (gtk4 real, 501 elsewhere) and `uidriver` exposes
+`canvas_debug_area/commands/w/h`. The `AEUI_CANVAS_DEBUG` stderr taps report
+the same per paint — they are what exposed vg.live's half-painting click
+hook. What is missing is only the *meaning* of `area`: see Stage 0's note.
+Stage 2 must make it the summed clip-rect area, at which point the
+frames_demo spec's current `assert_eq(area, w * h)` will start failing —
+that failure is the signal Stage 2 worked, and the assertion should then
+flip to the occlusion form above.
 
 ### Stage 4 — per-element regions inside a scene
 
