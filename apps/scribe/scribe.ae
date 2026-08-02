@@ -26,9 +26,9 @@
 // Run: DISPLAY=:0 ./target/build/apps/scribe/bin/scribe
 
 import ui (
-    window, vstack, hstack, text, btn, enable_test_server,
+    window, vstack, hstack, text, text_wrapped, btn, enable_test_server,
     canvas_on_click, canvas_on_key,
-    canvas_read_pixel, canvas_widget, width, height, widget_shortcut,
+    canvas_read_pixel, canvas_widget, width, height, widget_shortcut, scrollview,
     ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg, canvas_region, region_set_animated)
@@ -543,8 +543,16 @@ main() {
             bind_text(t_s, stat)
             t_c = text("caret: 0/0 sel: none pend: 0 buf: []")
             bind_text(t_c, car)
-            t_src = text("source: (press Source)")
-            bind_text(t_src, src)
+            // Wrapping + scrolling, not clipping: serialized markdown
+            // lines are long, and a plain label CLIPS each line at the
+            // window edge — the tail of a line (and every marker in it)
+            // silently vanished. Wrapped lines in turn overflow the
+            // window bottom, so the source lives in its own scrollview.
+            src_scroll = scrollview() {
+                t_src = text_wrapped("source: (press Source)", 560)
+                bind_text(t_src, src)
+            }
+            _sh = height(src_scroll, 120)
             t_i = text("dark: unprobed")
             bind_text(t_i, inkl)
         }
