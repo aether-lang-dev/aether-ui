@@ -10,7 +10,7 @@
 //   Portions Copyright (c) 2024-2025 Zygomatic
 //   Portions Copyright (c) 2026 Aether developers
 //
-// See LICENSE-jsfontpicker (upstream's notice, verbatim) and NOTICE.
+// See LICENSE (upstream's notice, verbatim) and NOTICE in this folder.
 //
 // The dialog mirrors upstream's layout (templates/dialogContent.html):
 //   search + subset + category filters | sort key + direction |

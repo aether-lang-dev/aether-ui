@@ -15,8 +15,12 @@
 //   # ## ###   headings          - / *      bullet items
 //   **bold**   *italic*  `code`  ``` fenced code blocks ```
 // Plus the extended inline set, syntax borrowed with thanks from the
-// Extended Markdown Syntax Obsidian plugin (MIT, (c) 2025 Kotaindah55 /
-// Sheva Ihza — delimiters only, none of its code):
+// Extended Markdown Syntax plugin for Obsidian
+// (https://github.com/kotaindah55/extended-markdown-syntax), MIT,
+// Copyright (c) 2025 Kotaindah55 (Sheva Ihza). The delimiters and their
+// meanings come from that project's documented rules; no code was
+// copied. See NOTICE and LICENSE-extended-markdown-syntax in this
+// folder.
 //   ++insert/underline++   ||spoiler||   ==highlight==
 //   ^superscript^          ~subscript~
 // One non-blank line = one block. Inside a fence each LINE becomes one

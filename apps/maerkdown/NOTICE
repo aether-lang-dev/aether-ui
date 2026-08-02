@@ -1,0 +1,26 @@
+Maerkdown (apps/maerkdown)
+=========================
+
+The word-as-widget markdown editor. Its document model, layout,
+renderer and editing logic are original to this repository.
+
+Its EXTENDED INLINE SYNTAX — the delimiters, and the reading of what
+each one means — is taken from the Extended Markdown Syntax plugin for
+Obsidian:
+
+    https://github.com/kotaindah55/extended-markdown-syntax
+
+    ++insertion++   underline
+    ||spoiler||     hidden until revealed
+    ==highlight==   marked text
+    ^superscript^   raised
+    ~subscript~     lowered
+
+That project is MIT licensed; its notice is reproduced verbatim in
+LICENSE-extended-markdown-syntax in this folder.
+
+    Copyright (c) 2025 Kotaindah55 (Sheva ihza)
+
+No code was copied. The syntax rules were read from that project's
+README and docs/rule.md and reimplemented from scratch in Aether
+(mdown.ae), against this editor's own word-grained document model.

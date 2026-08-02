@@ -20,9 +20,8 @@
 //           are paths, size is a parameter)
 //   ++under++  a drawn bar; ==mark== a bright plate with dark ink;
 //   ||spoiler|| ink painted IN the plate colour — invisible until the
-//           word is SELECTED, the word-as-widget reading of
-//           click-to-reveal (syntax per the Extended Markdown Syntax
-//           Obsidian plugin, MIT, Kotaindah55)
+//           caret enters the word (syntax per the Extended Markdown
+//           Syntax plugin for Obsidian, MIT, Kotaindah55 — see NOTICE)
 // Measurement (text_paths_width) and painting share one set of font
 // tables, so layout and pixels can't disagree — and both are pure
 // Aether, byte-identical on every backend.

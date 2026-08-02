@@ -19,6 +19,29 @@ of the `main` branch.
 
 Portions Copyright (c) 2026 Perry Contributors collectively, and portions Copyright (c) 2026 Aether Contributors collectively. MIT License.
 
+### Apps built on other people's ideas
+
+Some apps under `apps/` port or borrow from existing projects. Each
+carries its own `NOTICE` (and the upstream licence verbatim) beside its
+source; the summary:
+
+- **Maerkdown** (`apps/maerkdown`) — the word-as-widget markdown editor.
+  Its extended inline syntax (`++insertion++`, `||spoiler||`,
+  `==highlight==`, `^superscript^`, `~subscript~`) is taken from the
+  [Extended Markdown Syntax](https://github.com/kotaindah55/extended-markdown-syntax)
+  plugin for Obsidian by Kotaindah55 (Sheva Ihza),
+  [MIT](https://github.com/kotaindah55/extended-markdown-syntax/blob/main/LICENSE).
+  The delimiters and their meanings come from that project's documented
+  rules; no code was copied, and the parser is an independent
+  implementation over this editor's own document model.
+- **Font Picker** (`apps/font_picker`) — a rule-for-rule port of
+  [Javascript Font Picker](https://www.jsfontpicker.com/), MIT, portions
+  Copyright (c) 2024-2025 Zygomatic.
+- **Falling Blocks** (`apps/falling_blocks`) — derived from
+  [fallingblocks](https://github.com/SanderKlootwijk/fallingblocks) and
+  therefore **GPL-3.0**, unlike the rest of this repository. See the
+  header in that app's source before distributing binaries built from it.
+
 ## Quick start
 
 ### Linux (GTK4)
