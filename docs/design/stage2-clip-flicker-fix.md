@@ -129,6 +129,53 @@ interleaving is not a timing accident.
   pointer fires every attached controller. Same lesson, same place.
 - **The golden gallery must stay byte-identical**, per the doc's standing rule.
 
+## Round 2 (`1a86edf`) — the guard is right, the test is not
+
+`1a86edf` took option 2: skip gesture clips while `scene_is_refreshing`.
+**That part is correct and verified here:**
+
+- animating scene, synthesized drag → 238 paints, ALL `area=294000`. No
+  interleaving; the race is gone.
+- static scene (`AETHER_UI_NO_ANIMATION=1`) → `36800 / 44200 / 40000`.
+  Stage 2's benefit is preserved where it is safe.
+
+**But the new pixel assertion does not test anything.** Falsification: revert
+the guard to a condition that never fires (`== 2`), rebuild, run the suite —
+**7 passing, still green.** The spec cannot detect the bug it was written for.
+Two independent reasons, both must be fixed:
+
+1. **`probe_background` repairs the damage before sampling it.** Its first
+   line is `scene_refresh(app.scene)` — a full, unclipped repaint of the whole
+   canvas. Whatever was stale is corrected, *then* the pixel is read. It can
+   only ever report `bg=1 white=0`. Drop that refresh; the probe must sample
+   whatever is on screen at the moment it is asked.
+
+2. **`canvas_read_pixel` cannot see the flicker at all.** It creates a fresh
+   cairo surface and calls `canvas_replay` into it — it reads the *command
+   buffer model*, never the widget's backing store. The stale pixels live in
+   the backing store. A model-replay probe is structurally incapable of
+   observing a backing-store artifact, on any backend.
+
+   So the pixel probe needs a different instrument: sample the rendered
+   widget (GTK: `gtk_widget_snapshot`/`gdk_texture_download` of the drawing
+   area, or the existing `/screenshot` path where it works), or verify the
+   damage invariant a level up — e.g. assert that a clipped paint is never
+   issued while the scene is refreshing, by reading back the count of
+   clipped-vs-full paints from `/canvas/{id}/debug`. The latter is cheaper
+   and tests the actual invariant the guard enforces.
+
+3. **`AETHER_UI_NO_ANIMATION=1` is exported globally** at
+   `tests/spec_matrix.sh:35`, for every suite. Clicking an "Animate" button
+   sets `scene_set_refreshing(scene, 1)` but the 60fps timer never installs,
+   so the "animation ON" case does not animate under the matrix. Any spec
+   meant to exercise the live painter has to opt out of that export for its
+   own run.
+
+Note that running the spec by hand with animation genuinely on also made
+`title-bar drag moves the raised frame` fail — real animation introduces
+nondeterminism the existing cases were not written for. That is worth knowing
+before wiring an animated suite into the matrix.
+
 ## Repro recipe
 
 ```sh
