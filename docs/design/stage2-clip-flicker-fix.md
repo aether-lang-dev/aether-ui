@@ -7,12 +7,12 @@ an animated canvas and reproducibly flickers. This note says exactly why, with
 evidence, and what the fix has to look like. Stage 1 (`da0f626`, the region
 type) is independent and fine — keep it.
 
-**Resolution landed after this note:** Stage 2 now takes the interim-safe
-option below: clipped paints are used only while the frame scene is static.
-When `scene_is_refreshing(scene)` is true, `frames_demo` skips
-`canvas_set_clip_rects` and lets the live painter repaint the whole canvas.
-The frames spec keeps the static area assertion and adds an animation-on
-background probe so this flicker class has a correctness tripwire.
+**Superseded resolution:** `1a86edf` took the interim-safe live-scene guard,
+but Round 2 and Round 3 below showed that was still not enough. The current
+resolution is stricter: `frames_demo` keeps dirty-region bookkeeping but does
+not submit gesture-side clips by default. Set `AETHER_UI_FRAMES_DIRTY_CLIP=1`
+only for local measurement until Stage 3 moves clip ownership into the
+painter/compositor.
 
 ## The symptom
 
@@ -231,6 +231,20 @@ with clips disabled unless an explicit opt-in flag is set for measurement.
 Recommend reverting the clip application in `frames_demo` (keep `ui/frames.ae`
 damage tracking and the Stage 1 region type — both are wanted) and folding the
 clip into the painter as part of Stage 3.
+
+## Round 4 — current repo state
+
+`frames_demo` now implements the Round 3 recommendation:
+
+- `FrameHost` still tracks dirty regions and exposes
+  `frames_dirty_nrects/rect/area/clear`.
+- `frames_demo` consumes and clears those dirty regions on gestures, but only
+  calls `canvas_set_clip_rects` when `AETHER_UI_FRAMES_DIRTY_CLIP=1`.
+- Even with that opt-in, clips are skipped while `scene_is_refreshing(scene)`
+  is true.
+- The driver spec no longer uses the invalid app-side pixel probe. It asserts
+  that default drags repaint the full canvas, preserving correctness until
+  Stage 3 owns the clip in the painter/compositor.
 
 ## Repro recipe
 

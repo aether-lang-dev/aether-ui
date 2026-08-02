@@ -263,17 +263,17 @@ add/subtract sequences; degenerate and zero-size inputs.
 
 ### Stage 2 — dirty invalidation, single buffer
 
-**Status: built for the `ui.frames` harness.** `FrameHost` now owns a
+**Status: damage bookkeeping built; gesture-side clipping disabled by default.**
+`FrameHost` now owns a
 `vg.geom.region` dirty region. `frame_add`, `frame_move`, `frame_resize`,
 `frame_raise`, `frame_close`, and active drag/resize gestures dirty the old
 and/or new frame bounds, and `frames_dirty_nrects/rect/area/clear` expose that
-region to callers. `apps/frames_demo` submits those rects before event-driven
-`scene_refresh` calls only while the scene is static; if
-`scene_is_refreshing(scene)` is true it skips the clip and takes the full-canvas
-paint. That preserves correctness for animated canvases until Stage 3 moves
-clip ownership into the painter/compositor itself. The demo also honors
-`AETHER_UI_NO_ANIMATION=1` so the driver spec can measure the static clipped
-event paint deterministically.
+region to callers. `apps/frames_demo` does **not** submit those rects by
+default, because the current painter clears and replays the full command buffer
+and a gesture-owned clip can leave pixels outside the clip stale or blank.
+Set `AETHER_UI_FRAMES_DIRTY_CLIP=1` only for local measurement while Stage 3
+moves clip ownership into the painter/compositor itself. The demo also honors
+`AETHER_UI_NO_ANIMATION=1` so the driver spec can make deterministic assertions.
 
 The canvas ABI has the one-shot paint clip surface on all three backends:
 `canvas_set_clip_rects(canvas_id, rects, n)` and `canvas_reset_clip(canvas_id)`.
@@ -295,13 +295,14 @@ canvas_reset_clip(canvas_id)                 // CGContextClipToRects, GDI
 ```
 
 This still replays the whole buffer, but the backend rasterizes only inside
-the clip. In this Stage 2 shape, clipping is used for static event-driven
-scene refreshes; refreshing/live scenes repaint the full canvas until the
-compositor owns the clip.
+the clip. That is not safe when the painter has cleared and rebuilt the full
+command buffer, so `frames_demo` keeps this path opt-in until Stage 3 can
+apply the clip inside the painter/compositor.
 
 *Acceptance:* `tests/frames_demo/spec_frames_demo.ae` asserts that moving one
-frame reports a dirty paint area close to `(old bounds ∪ new bounds)` and much
-smaller than the whole canvas, through `GET /canvas/{id}/debug`.
+frame still moves and resizes correctly, while the default drag repaint reports
+the full canvas area through `GET /canvas/{id}/debug`. That is the correctness
+guard until clipped repaint is owned by the painter/compositor.
 
 ### Stage 3 — opaque subtraction + z-order *(the miracle)*
 
@@ -322,9 +323,9 @@ Instrumentation is already wired: `GET /canvas/{id}/debug` returns
 `{area, commands, w, h}` (gtk4 real, 501 elsewhere) and `uidriver` exposes
 `canvas_debug_area/commands/w/h`. The `AEUI_CANVAS_DEBUG` stderr taps report
 the same per paint — they are what exposed vg.live's half-painting click
-hook. After Stage 2, GTK's `area` is meaningful for submitted dirty clips;
-Stage 3 must make the clipped region occlusion-aware rather than merely
-old/new frame bounds.
+hook. GTK's `area` is meaningful for submitted dirty clips when the opt-in
+measurement flag is used; Stage 3 must make the clipped region painter-owned
+and occlusion-aware rather than merely old/new frame bounds.
 
 ### Stage 4 — per-element regions inside a scene
 
