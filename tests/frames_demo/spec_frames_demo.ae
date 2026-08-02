@@ -1,0 +1,53 @@
+import aeocha
+import uidriver
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "ui.frames retained harness") {
+        aeocha.it("starts with two overlapping frames and topmost hit") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
+            aeocha.assert_contains(body, "bounds: alpha=60,60,230,160 beta=180,110,250,180",
+                "initial frame bounds")
+            aeocha.assert_contains(body, "z: alpha=0 beta=1", "beta starts above alpha")
+            aeocha.assert_contains(body, "hit: Beta at 200,130", "overlap hit is topmost")
+        }
+
+        aeocha.it("clicking alpha raises it above beta") callback {
+            uidriver.click(80.0, 70.0)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "z: alpha=1 beta=0", "alpha raised")
+            aeocha.assert_contains(body, "hit: Alpha at 80,70", "click hit alpha")
+        }
+
+        aeocha.it("title-bar drag moves the raised frame") callback {
+            uidriver.click(80.0, 70.0)
+            uidriver.move_to(140.0, 100.0)
+            uidriver.post_ok("/canvas/1/release?x=140&y=100", "canvas release")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "bounds: alpha=120,90,230,160",
+                "alpha moved by drag delta")
+        }
+
+        aeocha.it("bottom-right gripper resizes with minimums enforced") callback {
+            uidriver.click(345.0, 245.0)
+            uidriver.move_to(395.0, 285.0)
+            uidriver.post_ok("/canvas/1/release?x=395&y=285", "canvas release")
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "bounds: alpha=120,90,280,200",
+                "alpha resized by gripper delta")
+        }
+
+        aeocha.it("close box removes a frame from hit testing") callback {
+            uidriver.click(386.0, 100.0)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "z: alpha=-1 beta=0", "alpha closed")
+            uidriver.click(200.0, 130.0)
+            body2 = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body2, "hit: Beta at 200,130", "closed alpha no longer hits")
+        }
+    }
+    aeocha.run_summary(fw)
+}

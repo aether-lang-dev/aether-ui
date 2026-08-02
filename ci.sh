@@ -612,11 +612,14 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
                     "$SCRIPT_DIR/tests/run_spec.sh" disclosure_demo || FAIL=$((FAIL + 1))
 fi
 
-echo "=== Phase 5l: AetherUIDriver game/demo specs (falling_blocks / svg_tetris / rubiks_cube / tumbling_cube) ==="
+echo "=== Phase 5l: AetherUIDriver app/demo specs (frames / falling_blocks / svg_tetris / rubiks_cube / tumbling_cube) ==="
 # The AeVG games + interactive demos (apps/, not examples/): each drives its
 # buttons and canvas through the driver end-to-end, complementing the pure
 # engine unit tests in Phase 0. AEVG_BIN resolves target/build/apps/<name>/bin/<name>.
 if [ "$AEOCHA_OK" -eq 1 ]; then
+    UI_SPEC=frames_demo/spec_frames_demo \
+    run_server_test "$(AEVG_BIN frames_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" frames_demo || FAIL=$((FAIL + 1))
     UI_SPEC=falling_blocks/spec_falling_blocks \
     run_server_test "$(AEVG_BIN falling_blocks)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" falling_blocks || FAIL=$((FAIL + 1))

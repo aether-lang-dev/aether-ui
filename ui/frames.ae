@@ -1,0 +1,346 @@
+// ui.frames — draggable/resizable internal frames drawn inside one AeVG scene.
+//
+// This is the Stage-0 harness for the retained compositor track: a retained
+// z-ordered model that lives inside one canvas and can later become the first
+// compositor workload. It intentionally uses only VG drawing and canvas pointer
+// events; no native child windows are involved.
+
+exports (
+    frames_new, frame_add, frame_set_content,
+    frame_move, frame_resize, frame_raise, frame_close,
+    frame_bounds, frame_z, frame_count, frames_hit,
+    frames_draw, frames_on_click, frames_on_move, frames_on_release
+)
+
+import std.list
+import std.string
+import vg (rect, path, text_sized, fill, stroke)
+
+extern malloc(size: int) -> ptr
+extern string_retain(s: string)
+
+struct FrameHost {
+    scene: ptr
+    frames: ptr
+    next_z: int
+    active: ptr
+    gesture: int       // 0 none, 1 drag, 2 resize
+    gesture_frame: ptr
+    down_x: float
+    down_y: float
+    start_x: float
+    start_y: float
+    start_w: float
+    start_h: float
+}
+
+struct Frame {
+    host: ptr
+    title: string
+    x: float
+    y: float
+    w: float
+    h: float
+    z: int
+    closed: int
+    content: ptr       // boxed |rn, t, x, y, w, h|
+}
+
+frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
+    _ = x; _ = y; _ = w; _ = h
+    hst = malloc(160) as *FrameHost
+    hst.scene = scene
+    hst.frames = list.new()
+    hst.next_z = 0
+    hst.active = null
+    hst.gesture = 0
+    hst.gesture_frame = null
+    hst.down_x = 0.0
+    hst.down_y = 0.0
+    hst.start_x = 0.0
+    hst.start_y = 0.0
+    hst.start_w = 0.0
+    hst.start_h = 0.0
+    return hst as ptr
+}
+
+frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> ptr {
+    hst = host as *FrameHost
+    f = malloc(128) as *Frame
+    f.host = host
+    f.title = title
+    string_retain(f.title)
+    f.x = x
+    f.y = y
+    f.w = _maxf(w, _min_w())
+    f.h = _maxf(h, _min_h())
+    f.z = hst.next_z
+    hst.next_z = hst.next_z + 1
+    f.closed = 0
+    f.content = null
+    _ = list.add(hst.frames, f as ptr)
+    hst.active = f as ptr
+    return f as ptr
+}
+
+frame_set_content(frame: ptr, cb: fn) {
+    f = frame as *Frame
+    f.content = box_closure(cb)
+}
+
+frame_move(frame: ptr, x: float, y: float) {
+    f = frame as *Frame
+    f.x = x
+    f.y = y
+}
+
+frame_resize(frame: ptr, w: float, h: float) {
+    f = frame as *Frame
+    f.w = _maxf(w, _min_w())
+    f.h = _maxf(h, _min_h())
+}
+
+frame_raise(frame: ptr) {
+    if frame == null { return }
+    f = frame as *Frame
+    hst = f.host as *FrameHost
+    f.z = hst.next_z
+    hst.next_z = hst.next_z + 1
+    hst.active = frame
+}
+
+frame_close(frame: ptr) {
+    if frame == null { return }
+    f = frame as *Frame
+    f.closed = 1
+    hst = f.host as *FrameHost
+    if hst.active == frame { hst.active = null }
+}
+
+frame_bounds(frame: ptr) -> (float, float, float, float) {
+    f = frame as *Frame
+    return f.x, f.y, f.w, f.h
+}
+
+frame_z(frame: ptr) -> int {
+    f = frame as *Frame
+    if f.closed == 1 { return 0 - 1 }
+    hst = f.host as *FrameHost
+    rank = 0
+    n = list.size(hst.frames)
+    i = 0
+    while i < n {
+        item, _e = list.get(hst.frames, i)
+        other = item as *Frame
+        if other.closed == 0 {
+            if other.z < f.z { rank = rank + 1 }
+        }
+        i = i + 1
+    }
+    return rank
+}
+
+frame_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    n = list.size(hst.frames)
+    count = 0
+    i = 0
+    while i < n {
+        item, _e = list.get(hst.frames, i)
+        f = item as *Frame
+        if f.closed == 0 { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+frames_hit(host: ptr, x: float, y: float) -> ptr {
+    hst = host as *FrameHost
+    best = null
+    best_z = 0 - 2147483647
+    n = list.size(hst.frames)
+    i = 0
+    while i < n {
+        item, _e = list.get(hst.frames, i)
+        f = item as *Frame
+        if f.closed == 0 {
+            if _inside(f, x, y) == 1 {
+                if f.z > best_z {
+                    best_z = f.z
+                    best = f as ptr
+                }
+            }
+        }
+        i = i + 1
+    }
+    return best
+}
+
+frames_draw(host: ptr, rn: ptr, t: float) {
+    hst = host as *FrameHost
+    n = list.size(hst.frames)
+    drawn = 0
+    last_z = 0 - 2147483647
+    while drawn < n {
+        best = null
+        best_z = 2147483647
+        i = 0
+        while i < n {
+            item, _e = list.get(hst.frames, i)
+            f = item as *Frame
+            if f.closed == 0 {
+                if f.z > last_z {
+                    if f.z < best_z {
+                        best_z = f.z
+                        best = f as ptr
+                    }
+                }
+            }
+            i = i + 1
+        }
+        if best == null { return }
+        _draw_frame(best as *Frame, rn, t)
+        last_z = best_z
+        drawn = drawn + 1
+    }
+}
+
+frames_on_click(host: ptr, x: float, y: float) {
+    hst = host as *FrameHost
+    fptr = frames_hit(host, x, y)
+    hst.gesture = 0
+    hst.gesture_frame = null
+    if fptr == null { return }
+    frame_raise(fptr)
+    f = fptr as *Frame
+    if _in_close(f, x, y) == 1 {
+        frame_close(fptr)
+        return
+    }
+    hst.gesture_frame = fptr
+    hst.down_x = x
+    hst.down_y = y
+    hst.start_x = f.x
+    hst.start_y = f.y
+    hst.start_w = f.w
+    hst.start_h = f.h
+    if _in_grip(f, x, y) == 1 {
+        hst.gesture = 2
+        return
+    }
+    if y <= f.y + _title_h() {
+        hst.gesture = 1
+    }
+}
+
+frames_on_move(host: ptr, x: float, y: float) {
+    hst = host as *FrameHost
+    if hst.gesture == 0 { return }
+    if hst.gesture_frame == null { return }
+    f = hst.gesture_frame as *Frame
+    dx = x - hst.down_x
+    dy = y - hst.down_y
+    if hst.gesture == 1 {
+        f.x = hst.start_x + dx
+        f.y = hst.start_y + dy
+    }
+    if hst.gesture == 2 {
+        f.w = _maxf(hst.start_w + dx, _min_w())
+        f.h = _maxf(hst.start_h + dy, _min_h())
+    }
+}
+
+frames_on_release(host: ptr, x: float, y: float) {
+    _ = x; _ = y
+    hst = host as *FrameHost
+    hst.gesture = 0
+    hst.gesture_frame = null
+}
+
+_draw_content(cb: fn, rn: ptr, t: float, x: float, y: float, w: float, h: float) {
+    cb(rn, t, x, y, w, h)
+}
+
+_draw_frame(f: *Frame, rn: ptr, t: float) {
+    active = 0
+    hst = f.host as *FrameHost
+    if hst.active == f as ptr { active = 1 }
+
+    shadow = rect(rn, f.x + 4.0, f.y + 5.0, f.w, f.h)
+    fill(shadow, "#000000")
+    // Keep shadows subtle without relying on a group opacity primitive.
+    body = rect(rn, f.x, f.y, f.w, f.h)
+    fill(body, "#f7f8fb")
+    stroke(body, "#27313d", 1.0)
+
+    title_col = "#526070"
+    if active == 1 { title_col = "#2864b4" }
+    bar = rect(rn, f.x, f.y, f.w, _title_h())
+    fill(bar, title_col)
+    stroke(bar, "#27313d", 1.0)
+    lbl = text_sized(rn, f.x + 10.0, f.y + 18.0, 13.0, f.title)
+    fill(lbl, "#ffffff")
+
+    cbg = rect(rn, f.x + f.w - 22.0, f.y + 6.0, 14.0, 14.0)
+    fill(cbg, "#eef2f7")
+    stroke(cbg, "#1f2937", 1.0)
+    // The close glyph and gripper are simple stroked paths.
+    p1 = path(rn, _line_path(f.x + f.w - 18.5, f.y + 9.5, f.x + f.w - 11.5, f.y + 16.5))
+    stroke(p1, "#1f2937", 1.4)
+    p2 = path(rn, _line_path(f.x + f.w - 11.5, f.y + 9.5, f.x + f.w - 18.5, f.y + 16.5))
+    stroke(p2, "#1f2937", 1.4)
+    g1 = path(rn, _line_path(f.x + f.w - 15.0, f.y + f.h - 5.0, f.x + f.w - 5.0, f.y + f.h - 15.0))
+    stroke(g1, "#8a94a3", 1.0)
+    g2 = path(rn, _line_path(f.x + f.w - 10.0, f.y + f.h - 5.0, f.x + f.w - 5.0, f.y + f.h - 10.0))
+    stroke(g2, "#8a94a3", 1.0)
+
+    if f.content != null {
+        cb = unbox_closure(f.content)
+        _draw_content(cb, rn, t, f.x + 8.0, f.y + _title_h() + 8.0,
+                      f.w - 16.0, f.h - _title_h() - 16.0)
+    }
+}
+
+_inside(f: *Frame, x: float, y: float) -> int {
+    if x < f.x { return 0 }
+    if y < f.y { return 0 }
+    if x > f.x + f.w { return 0 }
+    if y > f.y + f.h { return 0 }
+    return 1
+}
+
+_in_close(f: *Frame, x: float, y: float) -> int {
+    if x < f.x + f.w - 24.0 { return 0 }
+    if x > f.x + f.w - 5.0 { return 0 }
+    if y < f.y + 4.0 { return 0 }
+    if y > f.y + 23.0 { return 0 }
+    return 1
+}
+
+_in_grip(f: *Frame, x: float, y: float) -> int {
+    if x < f.x + f.w - _grip() { return 0 }
+    if y < f.y + f.h - _grip() { return 0 }
+    return _inside(f, x, y)
+}
+
+_maxf(a: float, b: float) -> float {
+    if a > b { return a }
+    return b
+}
+
+_title_h() -> float { return 26.0 }
+_grip() -> float { return 16.0 }
+_min_w() -> float { return 80.0 }
+_min_h() -> float { return 60.0 }
+
+_line_path(x0: float, y0: float, x1: float, y1: float) -> string {
+    s = "M "
+    s = string.concat(s, string.from_float(x0))
+    s = string.concat(s, " ")
+    s = string.concat(s, string.from_float(y0))
+    s = string.concat(s, " L ")
+    s = string.concat(s, string.from_float(x1))
+    s = string.concat(s, " ")
+    s = string.concat(s, string.from_float(y1))
+    return s
+}

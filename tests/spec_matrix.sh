@@ -116,6 +116,7 @@ SUITES=(
   "stroker|examples/stroker_demo|stroker_demo/spec_stroker_demo|"
   "vg3d|examples/vg3d_demo|vg3d_demo/spec_vg3d_demo|"
   "golden|examples/golden_gallery|golden_gallery/spec_golden_gallery|"
+  "frames|apps/frames_demo|frames_demo/spec_frames_demo|"
   "sketchpad|apps/sketchpad|sketchpad/spec_sketchpad|"
   "maerkdown|apps/maerkdown|maerkdown/spec_maerkdown|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"

@@ -143,6 +143,14 @@ deliverable, its acceptance test, and how it is proven.
 
 ### Stage 0 — `ui.frames`: the internal-frame widget *(the harness)*
 
+**Status: initial harness built.** `ui/frames.ae` now provides the retained
+frame host/model, z-order, hit testing, drag, resize, close, and VG chrome.
+`apps/frames_demo` exercises two overlapping frames inside one canvas, and
+`tests/frames_demo/spec_frames_demo.ae` gates the retained behaviours through
+AetherUIDriver. The demo payload is intentionally simple for this first cut;
+swapping in two tumbling-cube content callbacks remains the next Stage-0
+polish item before using it as a compositor cost benchmark.
+
 **Build this first.** It is useful on its own, it is pure vg over today's
 immediate-mode canvas, and it is the consumer that makes every later stage
 *measurable* rather than speculative. A JInternalFrame-alike: draggable,

@@ -1,0 +1,143 @@
+// frames_demo — Stage-0 retained-compositor harness.
+//
+// Two draggable/resizable internal frames live inside one AeVG canvas. The
+// labels below the canvas expose the retained model to AetherUIDriver specs.
+
+import ui (
+    window, vstack, hstack, text, enable_test_server,
+    canvas_on_click, canvas_on_move, canvas_on_release,
+    ui_state_s, ui_set_s, bind_text
+)
+import vg.live (vg, canvas_region, region_set_animated)
+import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
+           scene_canvas, scene_refresh)
+import ui.frames (
+    frames_new, frame_add, frame_set_content,
+    frame_bounds, frame_z, frames_hit, frames_draw,
+    frames_on_click, frames_on_move, frames_on_release
+)
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern lrint(x: float) -> long
+
+const FW: int = 640
+const FH: int = 420
+
+struct App {
+    host: ptr
+    scene: ptr
+    canvas: int
+    alpha: ptr
+    beta: ptr
+    st_bounds: int
+    st_z: int
+    st_hit: int
+}
+
+publish(app: *App, hx: float, hy: float) {
+    ax, ay, aw, ah = frame_bounds(app.alpha)
+    bx, by, bw, bh = frame_bounds(app.beta)
+    sai = lrint(ax) as int
+    say = lrint(ay) as int
+    saw = lrint(aw) as int
+    sah = lrint(ah) as int
+    sbi = lrint(bx) as int
+    sby = lrint(by) as int
+    sbw = lrint(bw) as int
+    sbh = lrint(bh) as int
+    _b = ui_set_s(app.st_bounds,
+        "bounds: alpha=${sai},${say},${saw},${sah} beta=${sbi},${sby},${sbw},${sbh}")
+    az = frame_z(app.alpha)
+    bz = frame_z(app.beta)
+    _z = ui_set_s(app.st_z, "z: alpha=${az} beta=${bz}")
+    hit = frames_hit(app.host, hx, hy)
+    name = "none"
+    if hit == app.alpha { name = "Alpha" }
+    if hit == app.beta { name = "Beta" }
+    hxi = lrint(hx) as int
+    hyi = lrint(hy) as int
+    _h = ui_set_s(app.st_hit, "hit: ${name} at ${hxi},${hyi}")
+}
+
+draw_alpha(rn: ptr, t: float, x: float, y: float, w: float, h: float) {
+    _ = t
+    bg = rect(rn, x, y, w, h)
+    fill(bg, "#e8f2ff")
+    stroke(bg, "#6b8fbd", 1.0)
+    label = text_sized(rn, x + 14.0, y + 34.0, 18.0, "Alpha payload")
+    fill(label, "#1f3654")
+    chip = rect(rn, x + 16.0, y + h - 42.0, w - 32.0, 22.0)
+    fill(chip, "#2864b4")
+}
+
+draw_beta(rn: ptr, t: float, x: float, y: float, w: float, h: float) {
+    _ = t
+    bg = rect(rn, x, y, w, h)
+    fill(bg, "#fff4df")
+    stroke(bg, "#b78a2b", 1.0)
+    label = text_sized(rn, x + 14.0, y + 34.0, 18.0, "Beta payload")
+    fill(label, "#4d3714")
+    chip = rect(rn, x + 16.0, y + h - 42.0, w - 32.0, 22.0)
+    fill(chip, "#d79b2b")
+}
+
+main() {
+    app = malloc(128) as *App
+    app.st_bounds = ui_state_s("bounds: pending")
+    app.st_z = ui_state_s("z: pending")
+    app.st_hit = ui_state_s("hit: none")
+
+    window("ui.frames retained harness", 700, 520) {
+        vstack(8) {
+            vg(view_box(0, 0, 640, 420), FW, FH) {
+                anchor = rect(0.0, 0.0, 0.0, 0.0)
+                root = vg_root(node_scene(anchor))
+                app.scene = node_scene(root)
+                app.canvas = scene_canvas(app.scene)
+                app.host = frames_new(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0)
+                app.alpha = frame_add(app.host, "Alpha", 60.0, 60.0, 230.0, 160.0)
+                app.beta = frame_add(app.host, "Beta", 180.0, 110.0, 250.0, 180.0)
+                frame_set_content(app.alpha) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                    draw_alpha(rn, t, x, y, w, h)
+                }
+                frame_set_content(app.beta) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                    draw_beta(rn, t, x, y, w, h)
+                }
+                reg = canvas_region(root, 0.0, 0.0, FW * 1.0, FH * 1.0)
+                    callback |rn: ptr, t: float| {
+                        back = rect(rn, 0.0, 0.0, FW * 1.0, FH * 1.0)
+                        fill(back, "#dfe5ec")
+                        frames_draw(app.host, rn, t)
+                    }
+                region_set_animated(reg, 0)
+            }
+            row = hstack(14) {
+                tb = text("bounds: pending")
+                bind_text(tb, app.st_bounds)
+            }
+            _ = row
+            tz = text("z: pending")
+            bind_text(tz, app.st_z)
+            th = text("hit: none")
+            bind_text(th, app.st_hit)
+            canvas_on_click(app.canvas) callback |x: float, y: float| {
+                frames_on_click(app.host, x, y)
+                publish(app, x, y)
+                _r = scene_refresh(app.scene)
+            }
+            canvas_on_move(app.canvas) callback |x: float, y: float| {
+                frames_on_move(app.host, x, y)
+                publish(app, x, y)
+                _r = scene_refresh(app.scene)
+            }
+            canvas_on_release(app.canvas) callback |x: float, y: float| {
+                frames_on_release(app.host, x, y)
+                publish(app, x, y)
+                _r = scene_refresh(app.scene)
+            }
+            publish(app, 200.0, 130.0)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
