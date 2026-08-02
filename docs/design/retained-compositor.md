@@ -1,9 +1,12 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: aspirational / design note.** Not built. This records the high bar
-> for aether-ui rendering, what we already have that seeds it, the gap, and a
-> staged, independent path to it. Nothing here is implemented yet; the current
-> backend is immediate-mode (see "Where we are today").
+> **Status: specified, not built.** This records the high bar for aether-ui
+> rendering, what we already have that seeds it, the gap, and a staged path to
+> it. Nothing here is implemented yet; the current backend is immediate-mode
+> (see "Where we are today"). The staged path below is written to be built
+> from — each stage names its deliverable, its API surface, and the test that
+> proves it. Stage 0 (the internal-frame widget) is a useful app in its own
+> right and is the harness the later stages are measured against.
 
 ## Licensing boundary (read first)
 
@@ -135,41 +138,199 @@ So the missing pieces are specific and bounded:
 ## Staged path
 
 Each stage is independently shippable and leaves the static path working.
+Stages 0–5 below are written to be built in order; each names its
+deliverable, its acceptance test, and how it is proven.
 
-1. **Region type.** Author (or adopt pixman via cairo) a non-overlapping-rect
-   region with paste/remove/clip/translate/bounds. Pure data structure; unit-
-   testable headless. *(The one new primitive.)*
-2. **Dirty invalidation, single buffer.** Give each element a dirty region
-   (seeded from its bounds). On a reactive change, mark only that element's
-   bounds dirty; composite = union of dirty rects, set cairo clip to them,
-   replay the command buffer *clipped*. Still whole-buffer replay, but only the
-   dirty pixels are touched → already fixes "animate one shape cheaply" for
-   non-overlapping cases.
-3. **Opaque subtraction + z-order.** Add opaque regions and the occlusion
-   subtraction passes. This is the step that delivers the overlapping-windows /
-   dragged-sub-region miracle and lets a live rect coexist with static chrome
-   at zero static cost.
-4. **Live/foreign content as a composited node.** A `video`/`game`/GL element
-   is an opaque node with its own draw clock; the compositor region-clips
-   around it and never redraws it from the vector pipeline. Until stage 3
-   lands, this is the *escape hatch* (a native `GtkVideo`/`GtkGLArea`
-   positioned by the vg layout, composited by the host) — and notably the
-   escape hatch is the *same architectural shape* as the final design, so it is
-   not throwaway.
+### Stage 0 — `ui.frames`: the internal-frame widget *(the harness)*
+
+**Build this first.** It is useful on its own, it is pure vg over today's
+immediate-mode canvas, and it is the consumer that makes every later stage
+*measurable* rather than speculative. A JInternalFrame-alike: draggable,
+resizable, z-ordered sub-windows living inside ONE canvas we own end to
+end. It must be internal frames, not OS windows — two real windows would
+prove nothing, because the host compositor (Mutter, DWM, Quartz) would be
+doing the work rather than us.
+
+Module `ui/frames.ae`, app-agnostic and reusable:
+
+```
+frames_new(scene, x, y, w, h)      -> ptr   // a frame host over one scene
+frame_add(host, title, x, y, w, h) -> ptr   // returns a frame handle
+frame_set_content(frame, cb)                // cb(rn, t) draws frame-local
+frame_move / frame_resize / frame_raise / frame_close
+frame_bounds(frame) -> (x, y, w, h)         // in host coords
+frame_z(frame) -> int                       // 0 = back
+frames_hit(host, x, y) -> ptr               // topmost frame at a point, or null
+frames_draw(host, rn, t)                    // paint all frames, back → front
+frames_on_click/move/release(host, ...)     // gesture routing
+```
+
+Behaviour: title bar drag moves; bottom-right gripper resizes (min 80×60);
+clicking anywhere in a frame raises it to front; a close box removes it.
+Content callbacks receive a translated origin so a frame's content draws in
+frame-local coordinates and never needs to know where it sits. Chrome is
+drawn with vg (`rect`/`path`/`fill`) and `ui.icons` — no native widgets, so
+it renders identically on all four backends.
+
+*Acceptance:* a driver spec that adds two frames, asserts z-order after a
+raise, drags one and asserts its new bounds, resizes and asserts the new
+size, and confirms `frames_hit` returns the topmost frame in an overlap.
+
+*Demo app* `apps/frames_demo`: **two tumbling cubes in one window**, each
+in its own internal frame. `apps/tumbling_cube` is the ideal payload — it
+is continuously animating (`scene_set_refreshing`), genuinely expensive per
+frame (six painter-sorted translucent faces plus every glyph outline point
+re-projected), and interactive while animating. Overlap the two frames and
+today, on immediate mode, both repaint in full forever. That is the
+baseline the compositor has to beat, and this app is how we see it.
+
+### Stage 1 — the region type *(the one new data structure)*
+
+`vg/geom/region.ae` — a set of **non-overlapping** rectangles. (Note: the
+name `vg/region.ae` is taken by the live-region abstraction; this is
+`geom/region` to avoid the collision.)
+
+```
+rgn_new() / rgn_free / rgn_clone
+rgn_add_rect(r, x, y, w, h)        // union, splitting to keep disjoint
+rgn_sub_rect(r, x, y, w, h)        // subtract, splitting survivors
+rgn_sub_region(r, other)           // the occlusion primitive
+rgn_intersect_rect(r, x, y, w, h)  // clip
+rgn_translate(r, dx, dy)
+rgn_is_empty(r) -> int
+rgn_bounds(r, out4) -> int
+rgn_nrects(r) -> int ; rgn_rect(r, i, out4)
+rgn_area(r) -> float               // for the cost assertions below
+```
+
+Implementation: band-based (rows of y-spans, each holding sorted disjoint
+x-spans) — the classic approach, independently authored from the public
+description of the technique, never transcribed from a GPL implementation
+(see the licensing boundary above). A simple rect-list with split-on-insert
+is an acceptable v1 given our rect counts are tiny; the band structure can
+follow if profiling asks for it.
+
+*Acceptance:* headless unit tests in `vg/test/test_region.ae`, wired into
+ci.sh Phase 0. Cover: add overlapping rects → disjoint set with correct
+total area; subtract a middle rect → four survivors; subtract a covering
+rect → empty; translate then intersect; area conservation under
+add/subtract sequences; degenerate and zero-size inputs.
+
+### Stage 2 — dirty invalidation, single buffer
+
+Give each frame (and later each element) a dirty region seeded from its
+bounds. A change marks only that object's bounds dirty. The composite
+becomes: union the dirty regions, set the backend clip to those rects,
+replay the command buffer clipped, flush.
+
+New backend surface, one call per backend:
+
+```
+canvas_set_clip_rects(canvas_id, rects, n)   // cairo_rectangle+cairo_clip,
+canvas_reset_clip(canvas_id)                 // CGContextClipToRects, GDI
+```
+
+This still replays the whole buffer, but the backend rasterizes only inside
+the clip — so an animating frame over a static background already costs its
+own area rather than the whole canvas.
+
+*Acceptance:* `frames_demo` gains a "dirty area" readback (sum of
+`rgn_area` per frame). A spec asserts that moving one frame dirties an area
+close to (old bounds ∪ new bounds) and NOT the whole canvas. Plus the
+existing golden gallery must stay byte-identical: clipped redraw may not
+change static output.
+
+### Stage 3 — opaque subtraction + z-order *(the miracle)*
+
+Each frame declares an opaque region (its chrome and any opaque content).
+The composite gains the two passes that matter: propagate dirty up, then
+**subtract each opaque frame's region from the dirty regions of everything
+behind it**, then distribute what survives down, clipped per frame.
+
+*Acceptance — the falsifiable claim.* In `frames_demo`, put frame A over
+frame B covering a measured fraction *f* of B. Drive an animation frame and
+read back the area B actually repainted. Assert it is ≈ (1 − *f*) of B's
+area, within tolerance. On today's immediate mode that number is 1.0
+regardless of *f*; after this stage it must track the exposed fraction.
+That single assertion is the whole design's proof, and it is exactly the
+kind of pixel-level claim this repo already gates on.
+
+Instrumentation exists: the `AEUI_CANVAS_DEBUG` taps in the gtk4 backend
+already report per-paint command counts, and were what exposed vg.live's
+half-painting click hook. Extend them with repainted-area totals.
+
+### Stage 4 — per-element regions inside a scene
+
+Push what stage 3 does for frames down to `AevgElement`: element bounds
+(already stored) become per-element dirty/opaque regions, so a single
+changed shape in a large static scene repaints only itself. This is what
+turns `scene_refresh` from "rebuild everything" into true damage-driven
+redraw — and would retire the whole-canvas rebuild that Maerkdown performs
+per keystroke.
+
+*Acceptance:* a spec that changes one shape's fill in a 500-shape scene and
+asserts the repainted area is that shape's bounds, not the canvas.
+
+### Stage 5 — live/foreign content as a composited node
+
+A `video`/`game`/GL element is an opaque node with its own draw clock; the
+compositor region-clips around it and never redraws it from the vector
+pipeline. Until stage 3 lands, this is the *escape hatch* (a native
+`GtkVideo`/`GtkGLArea` positioned by the vg layout, composited by the host)
+— and notably the escape hatch is the *same architectural shape* as the
+final design, so it is not throwaway.
+
+## Risks and honest costs
+
+- **Backend clip parity.** Three backends must agree on clipped output or
+  the goldens diverge. cairo and CoreGraphics clip natively; GDI needs
+  `SelectClipRgn` and has historically been the fussy one (see the win32
+  `begin_path` and `CV_STROKE` scars). Budget win32 debugging.
+- **Correctness beats speed.** Every stage must leave the golden gallery
+  byte-identical. A compositor that is fast and wrong is worse than the
+  immediate mode we have.
+- **Opaque is a promise.** Declaring a region opaque when it is not
+  produces stale pixels — the classic compositor bug. Translucent content
+  (tumbling_cube's faces are 0.55 alpha!) must NOT be marked opaque; only
+  frame chrome and explicitly opaque backgrounds qualify. Note the demo's
+  own cubes are glass: the frames' *chrome* is what occludes, which is a
+  useful honesty check on the implementation.
+- **Scope discipline.** Stages 0–2 are worth doing on their own merits.
+  Stage 3 is the expensive one. Do not start it without the stage-0 harness
+  in place to prove it works.
 
 ## Relationship to the immediate-roadmap work
 
-Everything on the near-term roadmap — the `vg {}` drawing DSL, the SVG→AeVG
-transpiler, `render_to(png)`, the librsvg parity gate over the 208-sample
-corpus — is **static**: rendered once, to a window or a PNG. None of it
-animates. Deferred-flush immediate-mode is correct and sufficient for all of
-it, and building the compositor first would delay all of it to serve content
-(video/game/animation) that is not yet a target.
+*Original argument (still on record):* everything on the near-term roadmap —
+the `vg {}` drawing DSL, the SVG→AeVG transpiler, `render_to(png)`, the
+librsvg parity gate over the 208-sample corpus — is **static**: rendered
+once, to a window or a PNG. None of it animates. Deferred-flush
+immediate-mode is correct and sufficient for all of it, and building the
+compositor first would delay all of it to serve content
+(video/game/animation) that is not yet a target. So: ship the static path on
+immediate mode; treat the retained compositor as a named future track.
 
-So: **ship the static path on immediate mode; treat the retained compositor as
-this named, specified future track.** When live/animated content becomes a
-goal, this is the design — built clean-room from the prior art and the
-foundation we already have, never from GPL source.
+*Update — the demand signal has since arrived.* That argument was written
+when the toolkit rendered only static content. It no longer does:
+
+- **Live regions and animated scenes** shipped (`canvas_region`,
+  `scene_set_refreshing`, the self-retiring 60fps loop).
+- **Three continuously-animating 3D apps** exist (tumbling cube, Rubik's
+  cube, Trajan's column), each repainting an entire canvas per frame.
+- **Sketchpad** drives a 60fps loop for the duration of every pointer drag.
+- **Maerkdown** rebuilds its whole page layout and command buffer on every
+  keystroke — an O(document) cost for an O(one word) change, which is
+  exactly the ceiling named in "Where we are today."
+- The **read_pixel replay cache** (a per-canvas rendered-surface cache keyed
+  on clear-generation) was added because a grid probe re-rasterized the whole
+  buffer per pixel. That cache is a point fix for the same underlying
+  problem this document solves generally.
+
+None of these are broken — they are correct, and fast enough on a desktop.
+But they are all paying O(entire scene) for O(one rect) changes, and the
+list is growing rather than shrinking. The compositor is no longer
+speculative infrastructure looking for a consumer; it has several, and
+Stage 0 gives it a measurable one.
 
 ## The lineage (acknowledgement, not a dependency)
 
