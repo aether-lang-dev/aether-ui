@@ -16,17 +16,8 @@ main() {
         }
 
         aeocha.it("reports last repaint area and replay command count") callback {
-            // The readback plumbing, pinned end to end. NOTE what this can
-            // and cannot show today: `area` is the canvas allocation
-            // (width*height), a CONSTANT under immediate mode — which
-            // repaints everything every frame, so repainted-area and
-            // canvas-area are the same number. Asserting the Stage 3
-            // occlusion claim here would pass vacuously; it becomes
-            // falsifiable only once Stage 2 makes area the summed clip
-            // rects. So: assert the metric is EXACTLY the canvas area
-            // (a real equality, and the thing that must CHANGE when
-            // dirty regions land), and that the animated cube payload
-            // keeps a live command stream.
+            // Before a retained dirty region is submitted, area is still the
+            // live canvas allocation.
             sleep(120)
             area = uidriver.canvas_debug_area()
             cmds = uidriver.canvas_debug_commands()
@@ -52,6 +43,10 @@ main() {
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "bounds: alpha=120,90,230,160",
                 "alpha moved by drag delta")
+            sleep(120)
+            area = uidriver.canvas_debug_area()
+            aeocha.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
+            aeocha.assert_true(area < 53000, "dirty clip is much smaller than the canvas")
         }
 
         aeocha.it("bottom-right gripper resizes with minimums enforced") callback {

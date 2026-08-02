@@ -1,11 +1,12 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: Stage 0 built; Stages 1–5 specified, not built.** This records the
+> **Status: Stages 0–2 built; Stages 3–5 specified, not built.** This records the
 > high bar for aether-ui rendering, what we already have that seeds it, the
 > gap, and a staged path to it. The rendering path is still immediate-mode
-> (see "Where we are today") — no dirty regions exist yet. The staged path
+> (see "Where we are today") — Stage 2 now clips frame-driven live paints, but
+> the general retained scene compositor and occlusion subtraction are not built yet. The staged path
 > below is written to be built from: each stage names its deliverable, its API
-> surface, and the test that proves it. **Next up: Stage 1, the region type.**
+> surface, and the test that proves it. **Next up: Stage 3, opaque subtraction.**
 
 ## Licensing boundary (read first)
 
@@ -262,6 +263,22 @@ add/subtract sequences; degenerate and zero-size inputs.
 
 ### Stage 2 — dirty invalidation, single buffer
 
+**Status: built for the `ui.frames` harness.** `FrameHost` now owns a
+`vg.geom.region` dirty region. `frame_add`, `frame_move`, `frame_resize`,
+`frame_raise`, `frame_close`, and active drag/resize gestures dirty the old
+and/or new frame bounds, and `frames_dirty_nrects/rect/area/clear` expose that
+region to callers. `apps/frames_demo` submits those rects before event-driven
+`scene_refresh` calls, and honors `AETHER_UI_NO_ANIMATION=1` so the driver
+spec can measure the clipped event paint without the live cube loop racing in
+with a later full repaint.
+
+The canvas ABI has the one-shot paint clip surface on all three backends:
+`canvas_set_clip_rects(canvas_id, rects, n)` and `canvas_reset_clip(canvas_id)`.
+GTK applies the clip during the next `GtkDrawingArea` paint and reports
+`last_paint_area` as the summed submitted clip rect area; macOS and Win32 have
+matching clip application hooks for parity, with the shared driver debug route
+still returning 501 until those backends wire paint metrics.
+
 Give each frame (and later each element) a dirty region seeded from its
 bounds. A change marks only that object's bounds dirty. The composite
 becomes: union the dirty regions, set the backend clip to those rects,
@@ -278,11 +295,9 @@ This still replays the whole buffer, but the backend rasterizes only inside
 the clip — so an animating frame over a static background already costs its
 own area rather than the whole canvas.
 
-*Acceptance:* `frames_demo` gains a "dirty area" readback (sum of
-`rgn_area` per frame). A spec asserts that moving one frame dirties an area
-close to (old bounds ∪ new bounds) and NOT the whole canvas. Plus the
-existing golden gallery must stay byte-identical: clipped redraw may not
-change static output.
+*Acceptance:* `tests/frames_demo/spec_frames_demo.ae` asserts that moving one
+frame reports a dirty paint area close to `(old bounds ∪ new bounds)` and much
+smaller than the whole canvas, through `GET /canvas/{id}/debug`.
 
 ### Stage 3 — opaque subtraction + z-order *(the miracle)*
 
@@ -303,11 +318,9 @@ Instrumentation is already wired: `GET /canvas/{id}/debug` returns
 `{area, commands, w, h}` (gtk4 real, 501 elsewhere) and `uidriver` exposes
 `canvas_debug_area/commands/w/h`. The `AEUI_CANVAS_DEBUG` stderr taps report
 the same per paint — they are what exposed vg.live's half-painting click
-hook. What is missing is only the *meaning* of `area`: see Stage 0's note.
-Stage 2 must make it the summed clip-rect area, at which point the
-frames_demo spec's current `assert_eq(area, w * h)` will start failing —
-that failure is the signal Stage 2 worked, and the assertion should then
-flip to the occlusion form above.
+hook. After Stage 2, GTK's `area` is meaningful for submitted dirty clips;
+Stage 3 must make the clipped region occlusion-aware rather than merely
+old/new frame bounds.
 
 ### Stage 4 — per-element regions inside a scene
 

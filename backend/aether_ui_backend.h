@@ -355,6 +355,12 @@ void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
 // overflow:hidden. Persists for the rest of the frame. No-op where unsupported.
 void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
                                 double w, double h);
+// One-shot paint clip for retained-compositor dirty regions. `rects` is an
+// Aether floatarr-style x,y,w,h buffer with `n` rectangles. The next live paint
+// is clipped to their union and the debug paint-area metric reports their
+// summed area.
+void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n);
+void aether_ui_canvas_reset_clip_impl(int canvas_id);
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
                                 double start_angle, double end_angle);
 void aether_ui_canvas_close_path_impl(int canvas_id);

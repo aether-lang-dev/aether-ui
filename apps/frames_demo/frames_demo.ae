@@ -6,6 +6,7 @@
 import ui (
     window, vstack, hstack, text, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_release,
+    canvas_set_clip_rects, canvas_redraw,
     ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg, canvas_region, region_set_animated)
@@ -14,9 +15,11 @@ import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
 import ui.frames (
     frames_new, frame_add, frame_set_content,
     frame_bounds, frame_z, frames_hit, frames_draw,
+    frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_on_click, frames_on_move, frames_on_release
 )
 import std.os (os_getenv)
+import std.floatarr
 import vg.geom.vec3 (v3_new, v3_x, v3_y, v3_z)
 import vg.geom.mat4 (
     m4_mul, m4_rotation_x, m4_rotation_y, m4_transform_point, m4_transform_dir
@@ -85,6 +88,26 @@ publish(app: *App, hx: float, hy: float) {
     hxi = lrint(hx) as int
     hyi = lrint(hy) as int
     _h = ui_set_s(app.st_hit, "hit: ${name} at ${hxi},${hyi}")
+}
+
+apply_dirty_clip(app: *App) {
+    n = frames_dirty_nrects(app.host)
+    if n <= 0 { return }
+    rects = floatarr_new_raw(n * 4)
+    tmp = floatarr_new_raw(4)
+    i = 0
+    while i < n {
+        _ok = frames_dirty_rect(app.host, i, tmp)
+        floatarr_set_raw(rects, i * 4, floatarr_get_raw(tmp, 0))
+        floatarr_set_raw(rects, i * 4 + 1, floatarr_get_raw(tmp, 1))
+        floatarr_set_raw(rects, i * 4 + 2, floatarr_get_raw(tmp, 2))
+        floatarr_set_raw(rects, i * 4 + 3, floatarr_get_raw(tmp, 3))
+        i = i + 1
+    }
+    canvas_set_clip_rects(app.canvas, rects, n)
+    frames_clear_dirty(app.host)
+    floatarr_free(tmp)
+    floatarr_free(rects)
 }
 
 draw_alpha(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr) {
@@ -208,7 +231,9 @@ main() {
                 anchor = rect(0.0, 0.0, 0.0, 0.0)
                 root = vg_root(node_scene(anchor))
                 app.scene = node_scene(root)
-                scene_set_refreshing(app.scene, 1)
+                if os_getenv("AETHER_UI_NO_ANIMATION") == null {
+                    scene_set_refreshing(app.scene, 1)
+                }
                 app.canvas = scene_canvas(app.scene)
                 app.host = frames_new(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0)
                 app.alpha = frame_add(app.host, "Alpha", 60.0, 60.0, 230.0, 160.0)
@@ -239,19 +264,24 @@ main() {
             canvas_on_click(app.canvas) callback |x: float, y: float| {
                 frames_on_click(app.host, x, y)
                 publish(app, x, y)
+                apply_dirty_clip(app)
                 _r = scene_refresh(app.scene)
+                canvas_redraw(app.canvas)
             }
             canvas_on_move(app.canvas) callback |x: float, y: float| {
                 frames_on_move(app.host, x, y)
                 publish(app, x, y)
+                apply_dirty_clip(app)
                 _r = scene_refresh(app.scene)
+                canvas_redraw(app.canvas)
             }
             canvas_on_release(app.canvas) callback |x: float, y: float| {
                 frames_on_release(app.host, x, y)
                 publish(app, x, y)
-                _r = scene_refresh(app.scene)
+                apply_dirty_clip(app)
             }
             publish(app, 200.0, 130.0)
+            frames_clear_dirty(app.host)
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

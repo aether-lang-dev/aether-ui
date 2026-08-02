@@ -76,7 +76,9 @@ exports (
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size,
     canvas_widget, canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
-    canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect, canvas_clear, canvas_redraw, canvas_write_png,
+    canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
+    canvas_set_clip_rects, canvas_reset_clip,
+    canvas_clear, canvas_redraw, canvas_write_png,
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
@@ -397,6 +399,8 @@ extern aether_ui_canvas_fill_rect_impl(canvas_id: int, x: float, y: float,
                                   r: float, g: float, b: float, a: float)
 extern aether_ui_canvas_clip_rect_impl(canvas_id: int, x: float, y: float,
                                   w: float, h: float)
+extern aether_ui_canvas_set_clip_rects_impl(canvas_id: int, rects: ptr, n: int)
+extern aether_ui_canvas_reset_clip_impl(canvas_id: int)
 extern aether_ui_canvas_clear_impl(canvas_id: int)
 extern aether_ui_canvas_redraw_impl(canvas_id: int)
 extern aether_ui_canvas_write_png_impl(canvas_id: int, path: string, width: int, height: int) -> int
@@ -3067,6 +3071,17 @@ canvas_fill_rect(cid: int, x: float, y: float, w: float, h: float,
 // for the rest of the frame's replay.
 canvas_clip_rect(cid: int, x: float, y: float, w: float, h: float) {
     aether_ui_canvas_clip_rect_impl(cid, x, y, w, h)
+}
+
+// One-shot paint clip for retained-compositor dirty regions. `rects` is a
+// Aether floatarr-style buffer holding x,y,w,h quads; the backend copies it
+// immediately and applies it to the next live paint only.
+canvas_set_clip_rects(cid: int, rects: ptr, n: int) {
+    aether_ui_canvas_set_clip_rects_impl(cid, rects, n)
+}
+
+canvas_reset_clip(cid: int) {
+    aether_ui_canvas_reset_clip_impl(cid)
 }
 
 // Append a circle/arc to the current path. For a full circle pass

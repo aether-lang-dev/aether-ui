@@ -3580,11 +3580,16 @@ typedef struct {
     AeClosure* on_key;     // key-down (key name: "Left", "a", "space", …)
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
     int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
+    double* paint_clip_rects;
+    int paint_clip_count;
+    int paint_clip_capacity;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
 static int canvas_state_count = 0;
 static int canvas_state_capacity = 0;
+
+extern double floatarr_get_raw(void* arr, int i);
 
 static CanvasState* get_canvas_state(int canvas_id) {
     if (canvas_id < 1 || canvas_id > canvas_state_count) return NULL;
@@ -3599,6 +3604,18 @@ static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
         cs->cmds = realloc(cs->cmds, sizeof(CanvasCmd) * cs->capacity);
     }
     cs->cmds[cs->count++] = cmd;
+}
+
+static void canvas_apply_paint_clip(CGContextRef cg, CanvasState* cs) {
+    if (!cg || !cs || cs->paint_clip_count <= 0) return;
+    CGContextBeginPath(cg);
+    for (int i = 0; i < cs->paint_clip_count; i++) {
+        double* r = &cs->paint_clip_rects[i * 4];
+        if (r[2] > 0.0 && r[3] > 0.0) {
+            CGContextAddRect(cg, CGRectMake(r[0], r[1], r[2], r[3]));
+        }
+    }
+    CGContextClip(cg);
 }
 
 // Map an NSEvent key-down to the key NAME the DSL speaks. These are GDK's
@@ -3809,7 +3826,16 @@ static void canvas_replay(CGContextRef cg, CanvasState* cs) {
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     CGContextRef cg = [[NSGraphicsContext currentContext] CGContext];
-    canvas_replay(cg, get_canvas_state(self.canvasId));
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (cs && cs->paint_clip_count > 0) {
+        CGContextSaveGState(cg);
+        canvas_apply_paint_clip(cg, cs);
+        canvas_replay(cg, cs);
+        CGContextRestoreGState(cg);
+        cs->paint_clip_count = 0;
+    } else {
+        canvas_replay(cg, cs);
+    }
 }
 
 // Pointer-move hover: a tracking area over the whole view delivers mouseMoved:;
@@ -4024,6 +4050,32 @@ void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
                                      double w, double h) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_CLIP_RECT, .x = x, .y = y, .w = w, .h = h });
+}
+
+void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !rects || n <= 0) {
+        if (cs) cs->paint_clip_count = 0;
+        return;
+    }
+    if (n > cs->paint_clip_capacity) {
+        cs->paint_clip_capacity = n;
+        cs->paint_clip_rects = realloc(cs->paint_clip_rects, sizeof(double) * n * 4);
+    }
+    if (!cs->paint_clip_rects) {
+        cs->paint_clip_count = 0;
+        cs->paint_clip_capacity = 0;
+        return;
+    }
+    for (int i = 0; i < n * 4; i++) {
+        cs->paint_clip_rects[i] = floatarr_get_raw(rects, i);
+    }
+    cs->paint_clip_count = n;
+}
+
+void aether_ui_canvas_reset_clip_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs) cs->paint_clip_count = 0;
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,

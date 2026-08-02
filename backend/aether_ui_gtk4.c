@@ -3722,11 +3722,16 @@ typedef struct {
     int last_paint_h;
     int last_paint_area;
     int last_paint_count;
+    double* paint_clip_rects;
+    int paint_clip_count;
+    int paint_clip_capacity;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
 static int canvas_state_count = 0;
 static int canvas_state_capacity = 0;
+
+extern double floatarr_get_raw(void* arr, int i);
 
 static CanvasState* get_canvas_state(int canvas_id) {
     if (canvas_id < 1 || canvas_id > canvas_state_count) return NULL;
@@ -3741,6 +3746,26 @@ static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
         cs->cmds = realloc(cs->cmds, sizeof(CanvasCmd) * cs->capacity);
     }
     cs->cmds[cs->count++] = cmd;
+}
+
+static int canvas_clip_area_sum(const double* rects, int n) {
+    double area = 0.0;
+    for (int i = 0; rects && i < n; i++) {
+        double w = rects[i*4+2], h = rects[i*4+3];
+        if (w > 0.0 && h > 0.0) area += w * h;
+    }
+    return (int)(area + 0.5);
+}
+
+static void canvas_apply_paint_clip(cairo_t* cr, CanvasState* cs) {
+    if (!cr || !cs || cs->paint_clip_count <= 0) return;
+    cairo_new_path(cr);
+    for (int i = 0; i < cs->paint_clip_count; i++) {
+        double* r = &cs->paint_clip_rects[i * 4];
+        if (r[2] > 0.0 && r[3] > 0.0) cairo_rectangle(cr, r[0], r[1], r[2], r[3]);
+    }
+    cairo_clip(cr);
+    cairo_new_path(cr);
 }
 
 // Replay a canvas command buffer onto any cairo context. Shared by the live
@@ -3960,7 +3985,9 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
     if (cs) {
         cs->last_paint_w = width;
         cs->last_paint_h = height;
-        cs->last_paint_area = width * height;
+        cs->last_paint_area = cs->paint_clip_count > 0
+            ? canvas_clip_area_sum(cs->paint_clip_rects, cs->paint_clip_count)
+            : width * height;
         cs->last_paint_count = cs->count;
     }
     if (getenv("AEUI_CANVAS_DEBUG") && cs)
@@ -3979,7 +4006,15 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
         ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
             cs->on_resize->env, (intptr_t)width, (intptr_t)height);
     }
-    canvas_replay(cr, cs);
+    if (cs && cs->paint_clip_count > 0) {
+        cairo_save(cr);
+        canvas_apply_paint_clip(cr, cs);
+        canvas_replay(cr, cs);
+        cairo_restore(cr);
+        cs->paint_clip_count = 0;
+    } else {
+        canvas_replay(cr, cs);
+    }
 }
 
 // Render the canvas command buffer to a PNG file off-screen — works HEADLESS
@@ -4114,6 +4149,13 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->cache_h = 0;
     cs->last_w = width;
     cs->last_h = height;
+    cs->last_paint_w = 0;
+    cs->last_paint_h = 0;
+    cs->last_paint_area = 0;
+    cs->last_paint_count = 0;
+    cs->paint_clip_rects = NULL;
+    cs->paint_clip_count = 0;
+    cs->paint_clip_capacity = 0;
     canvas_state_count++;
     int canvas_id = canvas_state_count; // 1-based
 
@@ -4384,6 +4426,32 @@ void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_CLIP_RECT, .x = x, .y = y, .w = w, .h = h
     });
+}
+
+void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !rects || n <= 0) {
+        if (cs) cs->paint_clip_count = 0;
+        return;
+    }
+    if (n > cs->paint_clip_capacity) {
+        cs->paint_clip_capacity = n;
+        cs->paint_clip_rects = realloc(cs->paint_clip_rects, sizeof(double) * n * 4);
+    }
+    if (!cs->paint_clip_rects) {
+        cs->paint_clip_count = 0;
+        cs->paint_clip_capacity = 0;
+        return;
+    }
+    for (int i = 0; i < n * 4; i++) {
+        cs->paint_clip_rects[i] = floatarr_get_raw(rects, i);
+    }
+    cs->paint_clip_count = n;
+}
+
+void aether_ui_canvas_reset_clip_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs) cs->paint_clip_count = 0;
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,

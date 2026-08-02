@@ -9,11 +9,15 @@ exports (
     frames_new, frame_add, frame_set_content,
     frame_move, frame_resize, frame_raise, frame_close,
     frame_bounds, frame_z, frame_count, frames_hit,
+    frames_dirty_area, frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_draw, frames_on_click, frames_on_move, frames_on_release
 )
 
 import std.list
 import std.string
+import vg.geom.region (
+    rgn_new, rgn_add_rect, rgn_sub_rect, rgn_nrects, rgn_rect, rgn_area
+)
 import vg (rect, path, text_sized, fill, stroke)
 
 extern malloc(size: int) -> ptr
@@ -26,6 +30,11 @@ struct FrameHost {
     active: ptr
     gesture: int       // 0 none, 1 drag, 2 resize
     gesture_frame: ptr
+    dirty: ptr
+    x: float
+    y: float
+    w: float
+    h: float
     down_x: float
     down_y: float
     start_x: float
@@ -47,7 +56,6 @@ struct Frame {
 }
 
 frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
-    _ = x; _ = y; _ = w; _ = h
     hst = malloc(160) as *FrameHost
     hst.scene = scene
     hst.frames = list.new()
@@ -55,6 +63,11 @@ frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
     hst.active = null
     hst.gesture = 0
     hst.gesture_frame = null
+    hst.dirty = rgn_new()
+    hst.x = x
+    hst.y = y
+    hst.w = w
+    hst.h = h
     hst.down_x = 0.0
     hst.down_y = 0.0
     hst.start_x = 0.0
@@ -80,6 +93,7 @@ frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> p
     f.content = null
     _ = list.add(hst.frames, f as ptr)
     hst.active = f as ptr
+    _mark_frame_dirty(f)
     return f as ptr
 }
 
@@ -90,28 +104,35 @@ frame_set_content(frame: ptr, cb: fn) {
 
 frame_move(frame: ptr, x: float, y: float) {
     f = frame as *Frame
+    _mark_frame_dirty(f)
     f.x = x
     f.y = y
+    _mark_frame_dirty(f)
 }
 
 frame_resize(frame: ptr, w: float, h: float) {
     f = frame as *Frame
+    _mark_frame_dirty(f)
     f.w = _maxf(w, _min_w())
     f.h = _maxf(h, _min_h())
+    _mark_frame_dirty(f)
 }
 
 frame_raise(frame: ptr) {
     if frame == null { return }
     f = frame as *Frame
     hst = f.host as *FrameHost
+    _mark_frame_dirty(f)
     f.z = hst.next_z
     hst.next_z = hst.next_z + 1
     hst.active = frame
+    _mark_frame_dirty(f)
 }
 
 frame_close(frame: ptr) {
     if frame == null { return }
     f = frame as *Frame
+    _mark_frame_dirty(f)
     f.closed = 1
     hst = f.host as *FrameHost
     if hst.active == frame { hst.active = null }
@@ -174,6 +195,26 @@ frames_hit(host: ptr, x: float, y: float) -> ptr {
         i = i + 1
     }
     return best
+}
+
+frames_dirty_area(host: ptr) -> float {
+    hst = host as *FrameHost
+    return rgn_area(hst.dirty)
+}
+
+frames_dirty_nrects(host: ptr) -> int {
+    hst = host as *FrameHost
+    return rgn_nrects(hst.dirty)
+}
+
+frames_dirty_rect(host: ptr, i: int, out4: ptr) -> int {
+    hst = host as *FrameHost
+    return rgn_rect(hst.dirty, i, out4)
+}
+
+frames_clear_dirty(host: ptr) {
+    hst = host as *FrameHost
+    rgn_sub_rect(hst.dirty, hst.x, hst.y, hst.w, hst.h)
 }
 
 frames_draw(host: ptr, rn: ptr, t: float) {
@@ -241,12 +282,16 @@ frames_on_move(host: ptr, x: float, y: float) {
     dx = x - hst.down_x
     dy = y - hst.down_y
     if hst.gesture == 1 {
+        _mark_frame_dirty(f)
         f.x = hst.start_x + dx
         f.y = hst.start_y + dy
+        _mark_frame_dirty(f)
     }
     if hst.gesture == 2 {
+        _mark_frame_dirty(f)
         f.w = _maxf(hst.start_w + dx, _min_w())
         f.h = _maxf(hst.start_h + dy, _min_h())
+        _mark_frame_dirty(f)
     }
 }
 
@@ -332,6 +377,12 @@ _title_h() -> float { return 26.0 }
 _grip() -> float { return 16.0 }
 _min_w() -> float { return 80.0 }
 _min_h() -> float { return 60.0 }
+
+_mark_frame_dirty(f: *Frame) {
+    if f == null { return }
+    hst = f.host as *FrameHost
+    rgn_add_rect(hst.dirty, f.x, f.y, f.w, f.h)
+}
 
 _line_path(x0: float, y0: float, x1: float, y1: float) -> string {
     s = "M "

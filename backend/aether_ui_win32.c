@@ -4563,11 +4563,16 @@ typedef struct {
     AeClosure* on_release; // pointer-release hook (canvas-local x,y)
     AeClosure* on_key;     // key-press hook (GDK key name string)
     AeClosure* on_resize;  // |w, h| — fired from WM_SIZE (canvas rescale)
+    double* paint_clip_rects;
+    int paint_clip_count;
+    int paint_clip_cap;
 } Canvas;
 
 static Canvas* canvases = NULL;
 static int canvas_count = 0;
 static int canvas_cap = 0;
+
+extern double floatarr_get_raw(void* arr, int i);
 
 // The most recently key-registered canvas, focused after the window shows
 // (registration-time focus can't stick — the canvas is still on the hidden
@@ -4626,6 +4631,10 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cv->on_click = NULL;
     cv->on_release = NULL;
     cv->on_key = NULL;
+    cv->on_resize = NULL;
+    cv->paint_clip_rects = NULL;
+    cv->paint_clip_count = 0;
+    cv->paint_clip_cap = 0;
     int widget_handle = register_widget_typed(h, WK_CANVAS);
     Widget* ww = widget_at(widget_handle);
     if (ww) {
@@ -4747,6 +4756,33 @@ void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
 void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
                                       double w, double h) {
     (void)canvas_id; (void)x; (void)y; (void)w; (void)h;
+}
+
+void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
+    if (canvas_id < 1 || canvas_id > canvas_count) return;
+    Canvas* cv = &canvases[canvas_id - 1];
+    if (!rects || n <= 0) {
+        cv->paint_clip_count = 0;
+        return;
+    }
+    if (n > cv->paint_clip_cap) {
+        cv->paint_clip_cap = n;
+        cv->paint_clip_rects = (double*)realloc(cv->paint_clip_rects, sizeof(double) * n * 4);
+    }
+    if (!cv->paint_clip_rects) {
+        cv->paint_clip_count = 0;
+        cv->paint_clip_cap = 0;
+        return;
+    }
+    for (int i = 0; i < n * 4; i++) {
+        cv->paint_clip_rects[i] = floatarr_get_raw(rects, i);
+    }
+    cv->paint_clip_count = n;
+}
+
+void aether_ui_canvas_reset_clip_impl(int canvas_id) {
+    if (canvas_id < 1 || canvas_id > canvas_count) return;
+    canvases[canvas_id - 1].paint_clip_count = 0;
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
@@ -5162,8 +5198,29 @@ static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
     HDC mem = CreateCompatibleDC(hdc);
     HBITMAP bmp = CreateCompatibleBitmap(hdc, width, height);
     HBITMAP old_bmp = (HBITMAP)SelectObject(mem, bmp);
+    HRGN clip = NULL;
+    if (cv->paint_clip_count > 0) {
+        clip = CreateRectRgn(0, 0, 0, 0);
+        for (int i = 0; clip && i < cv->paint_clip_count; i++) {
+            double* r = &cv->paint_clip_rects[i * 4];
+            if (r[2] > 0.0 && r[3] > 0.0) {
+                HRGN rr = CreateRectRgn((int)r[0], (int)r[1],
+                    (int)(r[0] + r[2] + 0.5), (int)(r[1] + r[3] + 0.5));
+                CombineRgn(clip, clip, rr, RGN_OR);
+                DeleteObject(rr);
+            }
+        }
+        SelectClipRgn(mem, clip);
+        SelectClipRgn(hdc, clip);
+    }
     canvas_replay_to_dc(cv, mem, width, height);
     BitBlt(hdc, 0, 0, width, height, mem, 0, 0, SRCCOPY);
+    if (clip) {
+        SelectClipRgn(mem, NULL);
+        SelectClipRgn(hdc, NULL);
+        DeleteObject(clip);
+        cv->paint_clip_count = 0;
+    }
     SelectObject(mem, old_bmp);
     DeleteObject(bmp);
     DeleteDC(mem);
