@@ -36,7 +36,9 @@ import ui (
     window, vstack, hstack, text, text_wrapped, btn, enable_test_server,
     canvas_on_click, canvas_on_key,
     canvas_read_pixel, canvas_widget, width, height, widget_shortcut, scrollview,
-    ui_state_s, ui_set_s, bind_text
+    ui_state_s, ui_set_s, bind_text,
+    menu_bar, menu, menu_item, menu_item_accel, menu_separator, menu_bar_add,
+    attach_menu_bar_to_window, open_file, save_file
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (
@@ -47,6 +49,7 @@ import mdown
 import wordflow
 import std.list
 import std.string
+import std.fs
 import std.os (os_getenv)
 
 extern malloc(size: int) -> ptr
@@ -70,6 +73,7 @@ struct Ed {
     st_stat: int
     st_caret: int
     st_src: int
+    cur_path: string   // last opened/saved path ("" = untitled)
 }
 
 // ---- publishing ------------------------------------------------------------
@@ -247,6 +251,53 @@ set_kind(ed: *Ed, kind: int) {
         mdown.md_block_set_kind(bp, kind)
     }
     relayout(ed)
+}
+
+// ---- files -----------------------------------------------------------------
+
+// Frees the old model: anything still holding into it dangles after this.
+load_path(ed: *Ed, path: string) -> string {
+    src, err = fs.read(path)
+    if err != "" { return err }
+    mdown.md_doc_free(ed.doc)
+    ed.doc = mdown.md_parse(src)
+    ed.cb = 0
+    ed.cg = 0
+    set_buf(ed, "")
+    ed.bpos = 0
+    ed.pend = 0
+    string_retain(path)
+    ed.cur_path = path
+    relayout(ed)
+    return ""
+}
+
+// Commits the in-flight word first, or the word being typed is missing from
+// what lands on disk.
+save_path(ed: *Ed, path: string) -> string {
+    if string.length(ed.buf) > 0 {
+        commit_word(ed)
+        relayout(ed)
+    }
+    err = fs.write(path, mdown.md_serialize(ed.doc))
+    if err != "" { return err }
+    string_retain(path)
+    ed.cur_path = path
+    return ""
+}
+
+save_or_prompt(ed: *Ed) {
+    path = ed.cur_path
+    if string.length(path) == 0 {
+        path = save_file("Save markdown", "untitled.md")
+        if string.length(path) == 0 { return }
+    }
+    err = save_path(ed, path)
+    if err != "" {
+        _e = ui_set_s(ed.st_src, "save failed: ${err}")
+    } else {
+        _s = ui_set_s(ed.st_src, "saved: ${path}")
+    }
 }
 
 // ---- keyboard --------------------------------------------------------------
@@ -476,7 +527,7 @@ probe(ed: *Ed) -> int {
 }
 
 main() {
-    ed = malloc(96) as *Ed
+    ed = malloc(104) as *Ed
     ed.doc = mdown.md_doc_new()
     ed.lo = null
     ed.cb = 0
@@ -484,6 +535,7 @@ main() {
     ed.buf = ""
     ed.bpos = 0
     ed.pend = 0
+    ed.cur_path = ""
     stat = ui_state_s("blocks: 1 words: 0")
     car = ui_state_s("caret: 0/0 pend: 0 buf: [] cpos: 0")
     src = ui_state_s("source: (press Source)")
@@ -580,6 +632,39 @@ main() {
             t_i = text("dark: unprobed")
             bind_text(t_i, inkl)
         }
+        // Window handle 1 is the primary window this builder owns.
+        bar = menu_bar()
+        fmenu = menu("File")
+        menu_item(fmenu, "Open...") callback {
+            path = open_file("Open markdown")
+            if string.length(path) > 0 {
+                err = load_path(ed, path)
+                if err != "" {
+                    _f = ui_set_s(ed.st_src, "open failed: ${err}")
+                } else {
+                    _o = ui_set_s(ed.st_src, "opened: ${path}")
+                }
+            }
+        }
+        menu_item_accel(fmenu, "Save", "Ctrl+S") callback {
+            save_or_prompt(ed)
+        }
+        menu_item(fmenu, "Save As...") callback {
+            path = save_file("Save markdown as", "untitled.md")
+            if string.length(path) > 0 {
+                err = save_path(ed, path)
+                if err != "" {
+                    _e = ui_set_s(ed.st_src, "save failed: ${err}")
+                } else {
+                    _s = ui_set_s(ed.st_src, "saved: ${path}")
+                }
+            }
+        }
+        menu_separator(fmenu)
+        menu_item(fmenu, "Quit") callback { exit(0) }
+        menu_bar_add(bar, fmenu)
+        attach_menu_bar_to_window(1, bar)
+
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }
