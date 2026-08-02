@@ -36,7 +36,7 @@ exports(
     md_block_words, md_block_word, md_block_text,
     md_word_text, md_word_flags, md_word_set_flags, md_word_set_text,
     md_insert_word, md_remove_word, md_insert_block, md_remove_block,
-    md_parse, md_serialize
+    md_parse, md_serialize, md_word_source, md_parse_word
 )
 
 extern malloc(size: int) -> ptr
@@ -480,6 +480,67 @@ md_parse(src: string) -> ptr {
         _ = list.list_add_raw(d.blocks, md_block_new(MD_PARA))
     }
     return d as ptr
+}
+
+// ---- single-word source form (the editor's expanded view) ------------------
+
+// The word's full ascii markdown source: its text wrapped in the markers
+// its flags dictate, fixed nesting (** ++ || == * ^ ~ `). This is what
+// the editor shows when the caret ENTERS the word — the momentary
+// non-WYSIWYG source form, char-addressable and editable.
+md_word_source(wp: ptr) -> string {
+    w = wp as *MdWord
+    out = strbuilder.new(64)
+    if (w.wf / MD_BOLD) % 2 == 1 { strbuilder.append(out, "**") }
+    if (w.wf / MD_UNDER) % 2 == 1 { strbuilder.append(out, "++") }
+    if (w.wf / MD_SPOIL) % 2 == 1 { strbuilder.append(out, "||") }
+    if (w.wf / MD_MARK) % 2 == 1 { strbuilder.append(out, "==") }
+    if (w.wf / MD_ITALIC) % 2 == 1 { strbuilder.append(out, "*") }
+    if (w.wf / MD_SUP) % 2 == 1 { strbuilder.append(out, "^") }
+    if (w.wf / MD_SUB) % 2 == 1 { strbuilder.append(out, "~") }
+    if (w.wf / MD_CODEW) % 2 == 1 { strbuilder.append(out, "`") }
+    strbuilder.append(out, w.txt)
+    if (w.wf / MD_CODEW) % 2 == 1 { strbuilder.append(out, "`") }
+    if (w.wf / MD_SUB) % 2 == 1 { strbuilder.append(out, "~") }
+    if (w.wf / MD_SUP) % 2 == 1 { strbuilder.append(out, "^") }
+    if (w.wf / MD_ITALIC) % 2 == 1 { strbuilder.append(out, "*") }
+    if (w.wf / MD_MARK) % 2 == 1 { strbuilder.append(out, "==") }
+    if (w.wf / MD_SPOIL) % 2 == 1 { strbuilder.append(out, "||") }
+    if (w.wf / MD_UNDER) % 2 == 1 { strbuilder.append(out, "++") }
+    if (w.wf / MD_BOLD) % 2 == 1 { strbuilder.append(out, "**") }
+    return strbuilder.finish(out)
+}
+
+// Parse ONE token back into a word: markers → flags, stripped text.
+// The inverse of md_word_source, and the editor's commit path — editing
+// the delimiters in the source form IS restyling. A marker-only token
+// yields an empty-text word (the editor drops it). Reuses the block
+// scanner via a throwaway block so the two can never drift.
+md_parse_word(tok: string) -> ptr {
+    bp = md_block_new(MD_PARA)
+    sc = malloc(32) as *MdScan
+    sc.bold = 0
+    sc.ital = 0
+    sc.code = 0
+    sc.under = 0
+    sc.spoil = 0
+    sc.mark = 0
+    sc.sup = 0
+    sc.sub = 0
+    scan_token(sc, bp, tok)
+    free(sc as ptr)
+    b = bp as *MdBlock
+    out = md_word_new("", 0)
+    if list.list_size(b.words) > 0 {
+        w0 = list.list_get_raw(b.words, 0) as *MdWord
+        cp = string.copy(w0.txt)
+        string_retain(cp)
+        o = out as *MdWord
+        o.txt = cp
+        o.wf = w0.wf
+    }
+    md_block_free(bp)
+    return out
 }
 
 // ---- model → markdown ------------------------------------------------------

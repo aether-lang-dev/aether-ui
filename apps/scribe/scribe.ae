@@ -5,14 +5,21 @@
 // The editor leans into that — the unit of editing IS the word:
 //   type letters   build the word at the caret (it reflows live, accent
 //                  ink, committed by space / Enter / a click elsewhere)
-//   click a word   select it; Bold/Italic/Code then restyle THAT word
+//   click a word   EXPAND it: the word's full markdown source (markers
+//                  and all — ==highlight==, **bold**) replaces it in the
+//                  editing line, char-addressable and editable. The
+//                  momentary non-WYSIWYG view; commit re-parses, so
+//                  editing the delimiters IS restyling.
+//   arrows         caret moves by CHARACTER; walking into a word expands
+//                  it the same way, Up/Down move by layout LINE
 //   click a gap    move the caret there
-//   BackSpace      trims the word being typed; with none, LIFTS the word
-//                  before the caret back into the editor for re-typing —
-//                  words come apart the same way they went together
+//   BackSpace      deletes at the cursor; at a gap, expands the previous
+//                  word — words come apart the way they went together
 //   Enter          split the block at the caret (headings hand off to a
 //                  fresh paragraph, lists continue as lists)
-// Block commands (H1/H2/H3/¶/•/code) retype the caret's block in place.
+// Toolbar/shortcut toggles queue on `pend` and XOR into the word at
+// commit — press B on an expanded **word** and it un-bolds. Block
+// commands (H1/H2/H3/¶/•/code) retype the caret's block in place.
 //
 // The document model and its markdown round-trip live in mdown.ae; Source
 // publishes md_serialize of the live model. Styling is geometric all the
@@ -55,9 +62,7 @@ struct Ed {
     lo: ptr          // current wordflow layout
     cb: int          // caret block
     cg: int          // caret gap (0..word_count)
-    sb: int          // selected word's block, -1 = none
-    sw: int          // selected word's index
-    buf: string      // the word being typed ("" = none)
+    buf: string      // the word being typed / edited ("" = none)
     bpos: int        // caret position WITHIN buf (0..len)
     pend: int        // style flags for words typed next
     canvas: int
@@ -78,10 +83,8 @@ publish(ed: *Ed) {
         i = i + 1
     }
     _a = ui_set_s(ed.st_stat, "blocks: ${nb} words: ${nw}")
-    selpart = "none"
-    if ed.sb >= 0 { selpart = "${ed.sb}/${ed.sw}" }
     _b = ui_set_s(ed.st_caret,
-        "caret: ${ed.cb}/${ed.cg} sel: ${selpart} pend: ${ed.pend} buf: [${ed.buf}] cpos: ${ed.bpos}")
+        "caret: ${ed.cb}/${ed.cg} pend: ${ed.pend} buf: [${ed.buf}] cpos: ${ed.bpos}")
 }
 
 // Rebuild the layout from the model and repaint. The single funnel every
@@ -100,16 +103,56 @@ set_buf(ed: *Ed, s: string) {
     ed.buf = s
 }
 
-// Commit the word being typed into the model at the caret gap.
+// XOR two flag words bit-by-bit (no ^ operator in the language).
+flags_xor(a: int, b: int) -> int {
+    r = 0
+    bit = 1
+    while bit <= 128 {
+        if (a / bit) % 2 + (b / bit) % 2 == 1 { r = r + bit }
+        bit = bit * 2
+    }
+    return r
+}
+
+// Commit the buffer into the model at the caret gap. The buffer is the
+// word's SOURCE form: parse it (markers → flags, stripped text), then
+// XOR the pending toolbar toggles in — so B on an expanded **word**
+// un-bolds it, and B before typing a fresh word bolds it. A marker-only
+// or empty buffer commits nothing. Sup/sub can both survive an XOR
+// (word had one, pend the other): the pending one wins.
 commit_word(ed: *Ed) {
-    if string.length(ed.buf) == 0 { return }
-    bp = mdown.md_doc_block(ed.doc, ed.cb)
-    cp = string.copy(ed.buf)
-    string_retain(cp)
-    mdown.md_insert_word(bp, ed.cg, cp, ed.pend)
-    ed.cg = ed.cg + 1
+    if string.length(ed.buf) == 0 { ed.pend = 0; return }
+    pw = mdown.md_parse_word(ed.buf)
+    txt = mdown.md_word_text(pw)
+    fl = flags_xor(mdown.md_word_flags(pw), ed.pend)
+    if (fl / mdown.MD_SUP) % 2 == 1 && (fl / mdown.MD_SUB) % 2 == 1 {
+        if (ed.pend / mdown.MD_SUP) % 2 == 1 { fl = fl - mdown.MD_SUB }
+        else { fl = fl - mdown.MD_SUP }
+    }
+    if string.length(txt) > 0 {
+        bp = mdown.md_doc_block(ed.doc, ed.cb)
+        cp = string.copy(txt)
+        string_retain(cp)
+        mdown.md_insert_word(bp, ed.cg, cp, fl)
+        ed.cg = ed.cg + 1
+    }
+    free(pw)
     set_buf(ed, "")
     ed.bpos = 0
+    ed.pend = 0
+}
+
+// Lift word `wi` of the caret block into the buffer in its SOURCE form
+// (the expand half of expand/edit/commit). Cursor placement is the
+// caller's business.
+lift_word(ed: *Ed, wi: int) {
+    bp = mdown.md_doc_block(ed.doc, ed.cb)
+    wp = mdown.md_block_word(bp, wi)
+    src = mdown.md_word_source(wp)
+    string_retain(src)
+    mdown.md_remove_word(bp, wi)
+    ed.pend = 0
+    set_buf(ed, src)
 }
 
 // Enter: split the caret block at the gap. Words after the caret move to
@@ -134,7 +177,6 @@ split_block(ed: *Ed) {
     }
     ed.cb = ed.cb + 1
     ed.cg = 0
-    ed.sb = 0 - 1
 }
 
 // BackSpace, in falling order of specificity: trim the live word; delete
@@ -153,24 +195,10 @@ backspace(ed: *Ed) {
         ed.bpos = ed.bpos - 1
         return
     }
-    if ed.sb >= 0 {
-        bp = mdown.md_doc_block(ed.doc, ed.sb)
-        mdown.md_remove_word(bp, ed.sw)
-        ed.cb = ed.sb
-        ed.cg = ed.sw
-        ed.sb = 0 - 1
-        return
-    }
     if ed.cg > 0 {
-        bp = mdown.md_doc_block(ed.doc, ed.cb)
-        wp = mdown.md_block_word(bp, ed.cg - 1)
-        cp = string.copy(mdown.md_word_text(wp))
-        string_retain(cp)
-        ed.pend = mdown.md_word_flags(wp)
-        mdown.md_remove_word(bp, ed.cg - 1)
+        lift_word(ed, ed.cg - 1)
         ed.cg = ed.cg - 1
-        set_buf(ed, cp)
-        ed.bpos = string.length(cp)
+        ed.bpos = string.length(ed.buf)
         return
     }
     if ed.cb > 0 {
@@ -191,39 +219,20 @@ backspace(ed: *Ed) {
     }
 }
 
-// Toggle a style bit: on the selected word if there is one, else on the
-// pending style for words yet to be typed.
+// Queue a style toggle: XORed into the buffer's word at commit. On an
+// expanded word this means toggle; on a fresh word, apply.
 toggle_flag(ed: *Ed, bit: int) {
-    if ed.sb >= 0 {
-        wp = mdown.md_block_word(mdown.md_doc_block(ed.doc, ed.sb), ed.sw)
-        fl = mdown.md_word_flags(wp)
-        if (fl / bit) % 2 == 1 { fl = fl - bit } else { fl = fl + bit }
-        mdown.md_word_set_flags(wp, fl)
-    } else {
-        if (ed.pend / bit) % 2 == 1 { ed.pend = ed.pend - bit }
-        else { ed.pend = ed.pend + bit }
-    }
+    ed.pend = flags_xor(ed.pend, bit)
     relayout(ed)
 }
 
 // Toggle `bit` but clear `other` when setting — super/subscript are
 // mutually exclusive.
 toggle_excl(ed: *Ed, bit: int, other: int) {
-    if ed.sb >= 0 {
-        wp = mdown.md_block_word(mdown.md_doc_block(ed.doc, ed.sb), ed.sw)
-        fl = mdown.md_word_flags(wp)
-        if (fl / bit) % 2 == 1 { fl = fl - bit }
-        else {
-            fl = fl + bit
-            if (fl / other) % 2 == 1 { fl = fl - other }
-        }
-        mdown.md_word_set_flags(wp, fl)
-    } else {
-        if (ed.pend / bit) % 2 == 1 { ed.pend = ed.pend - bit }
-        else {
-            ed.pend = ed.pend + bit
-            if (ed.pend / other) % 2 == 1 { ed.pend = ed.pend - other }
-        }
+    if (ed.pend / bit) % 2 == 1 { ed.pend = ed.pend - bit }
+    else {
+        ed.pend = ed.pend + bit
+        if (ed.pend / other) % 2 == 1 { ed.pend = ed.pend - other }
     }
     relayout(ed)
 }
@@ -231,9 +240,7 @@ toggle_excl(ed: *Ed, bit: int, other: int) {
 // Retype the caret's block (or the selection's). Bullet toggles back to
 // paragraph when applied twice.
 set_kind(ed: *Ed, kind: int) {
-    bi = ed.cb
-    if ed.sb >= 0 { bi = ed.sb }
-    bp = mdown.md_doc_block(ed.doc, bi)
+    bp = mdown.md_doc_block(ed.doc, ed.cb)
     if kind == mdown.MD_BULLET && mdown.md_block_kind(bp) == mdown.MD_BULLET {
         mdown.md_block_set_kind(bp, mdown.MD_PARA)
     } else {
@@ -270,6 +277,14 @@ key_char(k: string) -> string {
     if string.equals(k, "parenright") == 1 { return ")" }
     if string.equals(k, "percent") == 1 { return "%" }
     if string.equals(k, "dollar") == 1 { return "$" }
+    if string.equals(k, "bar") == 1 { return "|" }
+    if string.equals(k, "asciicircum") == 1 { return "^" }
+    if string.equals(k, "asciitilde") == 1 { return "~" }
+    if string.equals(k, "grave") == 1 { return "`" }
+    if string.equals(k, "less") == 1 { return "<" }
+    if string.equals(k, "greater") == 1 { return ">" }
+    if string.equals(k, "bracketleft") == 1 { return "[" }
+    if string.equals(k, "bracketright") == 1 { return "]" }
     return ""
 }
 
@@ -291,7 +306,26 @@ on_key(ed: *Ed, k: string) {
     }
     if string.equals(k, "Escape") == 1 {
         commit_word(ed)
-        ed.sb = 0 - 1
+        relayout(ed)
+        return
+    }
+    if string.equals(k, "Up") == 1 || string.equals(k, "Down") == 1 {
+        // Vertical movement is a LAYOUT question: take the caret's pixel
+        // position, aim one line up/down, and ask the layout which gap
+        // is nearest. (Blocks with no words have no lines, so Up/Down
+        // steps over empty blocks; Left/Right still reaches them.)
+        cx = wordflow.wf_caret_x(ed.lo)
+        cy = wordflow.wf_caret_y(ed.lo)
+        chh = wordflow.wf_caret_h(ed.lo)
+        if string.length(ed.buf) > 0 {
+            commit_word(ed)
+            relayout(ed)
+        }
+        ty = cy - 6.0
+        if string.equals(k, "Down") == 1 { ty = cy + chh + 6.0 }
+        code = wordflow.wf_hit_gap(ed.lo, ed.doc, cx, ty)
+        ed.cb = wordflow.wf_gap_block(code)
+        ed.cg = wordflow.wf_gap_index(code)
         relayout(ed)
         return
     }
@@ -301,7 +335,6 @@ on_key(ed: *Ed, k: string) {
     // buffer with the cursor at the entered end — per-character traversal
     // over a word-grained model.
     if string.equals(k, "Left") == 1 {
-        ed.sb = 0 - 1
         if string.length(ed.buf) > 0 {
             if ed.bpos > 0 {
                 ed.bpos = ed.bpos - 1
@@ -315,16 +348,12 @@ on_key(ed: *Ed, k: string) {
             return
         }
         if ed.cg > 0 {
-            // Enter the previous word from its right end.
-            bp = mdown.md_doc_block(ed.doc, ed.cb)
-            wp = mdown.md_block_word(bp, ed.cg - 1)
-            cp = string.copy(mdown.md_word_text(wp))
-            string_retain(cp)
-            ed.pend = mdown.md_word_flags(wp)
-            mdown.md_remove_word(bp, ed.cg - 1)
+            // Enter the previous word from its right end — it expands to
+            // its SOURCE form, cursor one step inside the trailing
+            // markers.
+            lift_word(ed, ed.cg - 1)
             ed.cg = ed.cg - 1
-            set_buf(ed, cp)
-            ed.bpos = string.length(cp) - 1
+            ed.bpos = string.length(ed.buf) - 1
             if ed.bpos < 0 { ed.bpos = 0 }
             relayout(ed)
             return
@@ -337,7 +366,6 @@ on_key(ed: *Ed, k: string) {
         return
     }
     if string.equals(k, "Right") == 1 {
-        ed.sb = 0 - 1
         if string.length(ed.buf) > 0 {
             if ed.bpos < string.length(ed.buf) {
                 ed.bpos = ed.bpos + 1
@@ -351,16 +379,11 @@ on_key(ed: *Ed, k: string) {
         }
         nw = mdown.md_block_words(mdown.md_doc_block(ed.doc, ed.cb))
         if ed.cg < nw {
-            // Enter the next word from its left end.
-            bp = mdown.md_doc_block(ed.doc, ed.cb)
-            wp = mdown.md_block_word(bp, ed.cg)
-            cp = string.copy(mdown.md_word_text(wp))
-            string_retain(cp)
-            ed.pend = mdown.md_word_flags(wp)
-            mdown.md_remove_word(bp, ed.cg)
-            set_buf(ed, cp)
+            // Enter the next word from its left end — source form, cursor
+            // one step past the leading marker (or first char).
+            lift_word(ed, ed.cg)
             ed.bpos = 1
-            if ed.bpos > string.length(cp) { ed.bpos = string.length(cp) }
+            if ed.bpos > string.length(ed.buf) { ed.bpos = string.length(ed.buf) }
             relayout(ed)
             return
         }
@@ -381,49 +404,51 @@ on_key(ed: *Ed, k: string) {
     string_retain(grown)
     ed.buf = grown
     ed.bpos = ed.bpos + 1
-    ed.sb = 0 - 1
     relayout(ed)
 }
 
 // ---- pointing --------------------------------------------------------------
 
 on_click(ed: *Ed, x: float, y: float) {
-    commit_word(ed)
+    // Commit any in-flight edit and RELAYOUT before hit-testing: the
+    // committed word's box replaces the buffer's virtual box, and the
+    // click must resolve against what is actually on screen now.
+    if string.length(ed.buf) > 0 {
+        commit_word(ed)
+        relayout(ed)
+    }
     hi = wordflow.wf_hit_word(ed.lo, x, y)
     if hi >= 0 {
-        ed.sb = wordflow.wf_box_bi(ed.lo, hi)
-        ed.sw = wordflow.wf_box_wi(ed.lo, hi)
-        ed.cb = ed.sb
-        ed.cg = ed.sw + 1
+        // EXPAND the clicked word into its source form, cursor placed
+        // proportionally to where in the word the click landed (left
+        // edge → before the leading marker).
+        bx = wordflow.wf_box_x(ed.lo, hi)
+        bw = wordflow.wf_box_w(ed.lo, hi)
+        ed.cb = wordflow.wf_box_bi(ed.lo, hi)
+        ed.cg = wordflow.wf_box_wi(ed.lo, hi)
+        lift_word(ed, ed.cg)
+        blen = string.length(ed.buf)
+        rel = 0.0
+        if bw > 0.0 { rel = (x - bx) / bw }
+        if rel < 0.0 { rel = 0.0 }
+        if rel > 1.0 { rel = 1.0 }
+        pos = rel * (blen * 1.0) + 0.5
+        ed.bpos = pos as int
+        if ed.bpos > blen { ed.bpos = blen }
+        if ed.bpos < 0 { ed.bpos = 0 }
     } else {
         code = wordflow.wf_hit_gap(ed.lo, ed.doc, x, y)
         ed.cb = wordflow.wf_gap_block(code)
         ed.cg = wordflow.wf_gap_index(code)
-        ed.sb = 0 - 1
     }
     relayout(ed)
-}
-
-// Box index of the current selection in the current layout (or -1) —
-// resolved fresh each paint because box indices change with every reflow.
-sel_box(ed: *Ed) -> int {
-    if ed.sb < 0 { return 0 - 1 }
-    n = wordflow.wf_nboxes(ed.lo)
-    i = 0
-    while i < n {
-        if wordflow.wf_box_bi(ed.lo, i) == ed.sb {
-            if wordflow.wf_box_wi(ed.lo, i) == ed.sw { return i }
-        }
-        i = i + 1
-    }
-    return 0 - 1
 }
 
 draw_page(ed: *Ed, rn: ptr) {
     bg = rect(rn, 0.0, 0.0, SC_W * 1.0, SC_H * 1.0)
     fill(bg, "#14141c")
     if ed.lo != null {
-        wordflow.wf_render(rn, ed.doc, ed.lo, sel_box(ed), ed.buf)
+        wordflow.wf_render(rn, ed.doc, ed.lo, 0 - 1, ed.buf)
     }
 }
 
@@ -456,13 +481,11 @@ main() {
     ed.lo = null
     ed.cb = 0
     ed.cg = 0
-    ed.sb = 0 - 1
-    ed.sw = 0
     ed.buf = ""
     ed.bpos = 0
     ed.pend = 0
     stat = ui_state_s("blocks: 1 words: 0")
-    car = ui_state_s("caret: 0/0 sel: none pend: 0 buf: []")
+    car = ui_state_s("caret: 0/0 pend: 0 buf: [] cpos: 0")
     src = ui_state_s("source: (press Source)")
     inkl = ui_state_s("dark: unprobed")
     ed.st_stat = stat
@@ -496,8 +519,9 @@ main() {
                     ed.doc = mdown.md_parse("# Scribe\n\nEvery word here is an object with a box. Click one to select it, then restyle it.\n\n- point at words\n- type new ones\n- **bold** is the stroker at work\n\nItalic is a *shear* on the glyph outlines. Also: ++insertion++ ==highlight== ^raised^ ~lowered~ and a ||spoiler|| (click it).")
                     ed.cb = 0
                     ed.cg = 1
-                    ed.sb = 0 - 1
                     set_buf(ed, "")
+                    ed.bpos = 0
+                    ed.pend = 0
                     relayout(ed)
                 }
                 btn("Source") callback {
@@ -541,7 +565,7 @@ main() {
             }
             t_s = text("blocks: 1 words: 0")
             bind_text(t_s, stat)
-            t_c = text("caret: 0/0 sel: none pend: 0 buf: []")
+            t_c = text("caret: 0/0 pend: 0 buf: [] cpos: 0")
             bind_text(t_c, car)
             // Wrapping + scrolling, not clipping: serialized markdown
             // lines are long, and a plain label CLIPS each line at the

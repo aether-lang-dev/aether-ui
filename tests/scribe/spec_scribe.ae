@@ -104,7 +104,7 @@ main() {
             aeocha.assert_contains(body5, "buf: [] cpos: 0", "buffer empty again")
         }
 
-        aeocha.it("clicking a word selects it; Bold restyles that word") callback {
+        aeocha.it("clicking a word EXPANDS it; B at commit restyles it") callback {
             b = uidriver.widget_id_of("button", "Sample")
             aeocha.assert_gt(b, 0, "sample button")
             uidriver.click_widget(b)
@@ -114,14 +114,25 @@ main() {
             // line) at every backend — the layout is pure Aether and
             // byte-identical, so the coordinate is a contract.
             uidriver.post_ok("/canvas/1/click?x=30&y=30", "click on the title")
-            body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "sel: 0/0", "title word selected")
+            ok1 = uidriver.wait_body_contains("/widgets", "buf: [Scribe]", 20)
+            aeocha.assert_true(ok1, "plain word expands to bare text")
             bb = uidriver.widget_id_of("button", "B")
             uidriver.click_widget(bb)
+            okp = uidriver.wait_body_contains("/widgets", "pend: 1", 20)
+            aeocha.assert_true(okp, "toolbar queues the toggle")
+            uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
             ok2 = uidriver.wait_body_contains("/widgets", "# **Scribe**", 20)
             aeocha.assert_true(ok2, "markdown records the bold word")
+            // THE momentary-source claim: the styled word expands with
+            // its markers inline, char-addressable.
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "click the bold title")
+            ok3 = uidriver.wait_body_contains("/widgets", "buf: [**Scribe**]", 20)
+            aeocha.assert_true(ok3, "bold word expands to **source**")
+            uidriver.key("Escape")
+            ok4 = uidriver.wait_body_contains("/widgets", "buf: [] cpos: 0", 20)
+            aeocha.assert_true(ok4, "commit collapses back, style intact")
         }
 
         aeocha.it("bold is real ink: it eats the dark page") callback {
@@ -132,17 +143,10 @@ main() {
             // Driver actions are queued to the main loop (g_idle_add): the
             // POST returns before the click RUNS, so every read below
             // waits for an observable state change instead of trusting
-            // immediacy. And the probe must compare LIKE WITH LIKE: the
-            // selection highlight plate is itself non-dark and swallows
-            // ~200 samples — the first cut probed bold-selected against
-            // plain-selected and measured the PLATE, not the bold.
-            // Escape deselects before each probe so the lever is bold
-            // alone.
+            // immediacy. Both probes run with an empty buffer and no
+            // overlays — like for like, the lever is bold alone.
             pb = uidriver.widget_id_of("button", "Probe")
             aeocha.assert_gt(pb, 0, "probe button")
-            uidriver.key("Escape")
-            ok0 = uidriver.wait_body_contains("/widgets", "sel: none", 20)
-            aeocha.assert_true(ok0, "deselected before the bold probe")
             uidriver.click_widget(pb)
             okp1 = uidriver.wait_body_contains("/widgets", "dark: 1", 20)
             aeocha.assert_true(okp1, "first probe published")
@@ -152,17 +156,15 @@ main() {
                 "the page reads as mostly dark ground (${bold_dark})")
             aeocha.assert_true(bold_dark < 14900,
                 "but not ALL dark — words exist (${bold_dark} of ~15k)")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "reselect the title")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand the title")
             bb = uidriver.widget_id_of("button", "B")
             uidriver.click_widget(bb)
+            uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
-            // "# Scribe" (no **) only appears once the un-bold has RUN.
+            // "# Scribe" (no **) only appears once the un-bold committed.
             okp2 = uidriver.wait_body_contains("/widgets", "# Scribe", 20)
             aeocha.assert_true(okp2, "title back to plain in the markdown")
-            uidriver.key("Escape")
-            ok1 = uidriver.wait_body_contains("/widgets", "sel: none", 20)
-            aeocha.assert_true(ok1, "deselected before the plain probe")
             uidriver.click_widget(pb)
             // Poll until the dark count MOVES off the bold reading.
             plain_dark = bold_dark
@@ -178,10 +180,13 @@ main() {
         }
 
         aeocha.it("block commands retype the caret's block") callback {
-            // Selection still on the title; H3 retypes block 0.
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "reselect the title")
+            // Clicking the title expands it (that's the editing model);
+            // H3 retypes the block around the edit, Escape commits the
+            // word back before we look at the source.
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand the title")
             h3 = uidriver.widget_id_of("button", "H3")
             uidriver.click_widget(h3)
+            uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
             ok = uidriver.wait_body_contains("/widgets", "### Scribe", 20)
@@ -193,34 +198,66 @@ main() {
             // extended set through the toolbar, asserting each syntax in
             // the serialized markdown (delimiters per the Extended
             // Markdown Syntax plugin: ++ == || ^ ~).
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "select the title")
+            // Each cycle: expand the word, queue the toggle, Escape to
+            // commit (XOR applies it), Source to observe.
             ub = uidriver.widget_id_of("button", "U")
-            uidriver.click_widget(ub)
+            mb = uidriver.widget_id_of("button", "Mark")
+            supb = uidriver.widget_id_of("button", "Sup")
+            subb = uidriver.widget_id_of("button", "Sub")
             srcb = uidriver.widget_id_of("button", "Source")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand the title")
+            uidriver.click_widget(ub)
+            uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok1 = uidriver.wait_body_contains("/widgets", "### ++Scribe++", 20)
             aeocha.assert_true(ok1, "underline serializes as ++ ++")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand again")
+            okx = uidriver.wait_body_contains("/widgets", "buf: [++Scribe++]", 20)
+            aeocha.assert_true(okx, "underlined word expands WITH its markers")
             uidriver.click_widget(ub)
-            mb = uidriver.widget_id_of("button", "Mark")
+            uidriver.key("Escape")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(mb)
+            uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok2 = uidriver.wait_body_contains("/widgets", "### ==Scribe==", 20)
             aeocha.assert_true(ok2, "highlight serializes as == ==")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(mb)
-            supb = uidriver.widget_id_of("button", "Sup")
+            uidriver.key("Escape")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(supb)
+            uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok3 = uidriver.wait_body_contains("/widgets", "### ^Scribe^", 20)
             aeocha.assert_true(ok3, "superscript serializes as ^ ^")
-            subb = uidriver.widget_id_of("button", "Sub")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(subb)
+            uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok4 = uidriver.wait_body_contains("/widgets", "### ~Scribe~", 20)
             aeocha.assert_true(ok4, "sub replaces sup (mutually exclusive)")
+            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
             uidriver.click_widget(subb)
+            uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok5 = uidriver.wait_body_contains("/widgets", "### Scribe", 20)
             aeocha.assert_true(ok5, "toggles all the way back to plain")
+        }
+
+        aeocha.it("Up and Down move the caret by layout line") callback {
+            // Park the caret in the title line's trailing gap (x well past
+            // the word, y in the H3 title band), then walk down into the
+            // paragraph block and back up.
+            uidriver.post_ok("/canvas/1/click?x=400&y=20", "caret to title gap")
+            ok0 = uidriver.wait_body_contains("/widgets", "caret: 0/1", 20)
+            aeocha.assert_true(ok0, "caret after the title")
+            uidriver.key("Down")
+            ok1 = uidriver.wait_body_contains("/widgets", "caret: 1/", 20)
+            aeocha.assert_true(ok1, "Down lands in the paragraph block")
+            uidriver.key("Up")
+            ok2 = uidriver.wait_body_contains("/widgets", "caret: 0/1", 20)
+            aeocha.assert_true(ok2, "Up returns to the title line")
         }
     }
     aeocha.run_summary(fw)

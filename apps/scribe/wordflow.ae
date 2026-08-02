@@ -45,7 +45,7 @@ exports(
     wf_layout, wf_free, wf_total_h,
     wf_nboxes, wf_box_bi, wf_box_wi, wf_box_x, wf_box_y, wf_box_w, wf_box_h,
     wf_hit_word, wf_hit_gap, wf_gap_block, wf_gap_index,
-    wf_render, wf_caret_x, wf_caret_y
+    wf_render, wf_caret_x, wf_caret_y, wf_caret_h
 )
 
 extern malloc(size: int) -> ptr
@@ -245,6 +245,7 @@ wf_free(lop: ptr) {
 wf_total_h(lop: ptr) -> float { lo = lop as *WfLayout; return lo.total_h }
 wf_caret_x(lop: ptr) -> float { lo = lop as *WfLayout; return lo.caret_x }
 wf_caret_y(lop: ptr) -> float { lo = lop as *WfLayout; return lo.caret_y }
+wf_caret_h(lop: ptr) -> float { lo = lop as *WfLayout; return lo.caret_h }
 
 wf_nboxes(lop: ptr) -> int {
     lo = lop as *WfLayout
@@ -301,38 +302,44 @@ wf_hit_word(lop: ptr, x: float, y: float) -> int {
 }
 
 // The caret gap nearest to (x, y), encoded block*100000 + gap (decode
-// with wf_gap_block / wf_gap_index). Chooses the block whose vertical
-// band contains y (clamping to the nearest), then walks that block's
-// boxes: click left of a word's midpoint → the gap before it; otherwise
-// after it. An empty block yields gap 0.
+// with wf_gap_block / wf_gap_index). Finds the LINE whose vertical band
+// is nearest to y (exact containment wins; otherwise smallest distance —
+// which is what makes Up/Down "aim a few px above/below the caret's
+// line" resolve to the adjacent line), then walks that block's boxes:
+// left of a word's midpoint → the gap before it, otherwise after.
+// Blocks with no words have no lines and are skipped; Left/Right still
+// reaches them.
 wf_hit_gap(lop: ptr, doc: ptr, x: float, y: float) -> int {
     lo = lop as *WfLayout
     n = list.list_size(lo.boxes)
-    // Resolve the block band by y from box extents; default to the last
-    // block for clicks below all text, first block for clicks above.
-    nb = mdown.md_doc_blocks(doc)
-    best_b = nb - 1
+    best_d = 1000000.0
+    best_b = 0 - 1
+    best_ly = 0.0
     i = 0
     while i < n {
         b = list.list_get_raw(lo.boxes, i) as *WfBox
-        if y >= b.y && y <= b.y + b.h {
-            best_b = b.bi
+        if b.wi >= 0 {
+            d = 0.0
+            if y < b.y { d = b.y - y }
+            if y > b.y + b.h { d = y - (b.y + b.h) }
+            if d < best_d {
+                best_d = d
+                best_b = b.bi
+                best_ly = b.y
+            }
         }
         i = i + 1
     }
-    if best_b < 0 { best_b = 0 }
-    // Walk the chosen block's real boxes on the clicked line.
+    if best_b < 0 { return 0 }   // wordless document → caret home
     gap = 0
     i = 0
     while i < n {
         b = list.list_get_raw(lo.boxes, i) as *WfBox
         if b.bi == best_b && b.wi >= 0 {
-            on_line = 0
-            if y >= b.y && y <= b.y + b.h { on_line = 1 }
-            below = 0
-            if y > b.y + b.h { below = 1 }
-            if on_line == 1 && x > b.x + b.w / 2.0 { gap = b.wi + 1 }
-            if below == 1 { gap = b.wi + 1 }
+            if b.y < best_ly - 0.5 { gap = b.wi + 1 }
+            if b.y > best_ly - 0.5 && b.y < best_ly + 0.5 {
+                if x > b.x + b.w / 2.0 { gap = b.wi + 1 }
+            }
         }
         i = i + 1
     }

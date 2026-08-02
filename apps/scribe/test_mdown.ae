@@ -93,6 +93,27 @@ main() {
                   mdown.md_word_text(mdown.md_block_word(bx, 4)), "hush")
     mdown.md_doc_free(dx)
 
+    println("-- word source form (expand/collapse for the editor)")
+    dsw = mdown.md_parse("==note== plain **++both++**")
+    bsw = mdown.md_doc_block(dsw, 0)
+    assert_eq_str("mark source",
+                  mdown.md_word_source(mdown.md_block_word(bsw, 0)), "==note==")
+    assert_eq_str("plain source",
+                  mdown.md_word_source(mdown.md_block_word(bsw, 1)), "plain")
+    assert_eq_str("nested source",
+                  mdown.md_word_source(mdown.md_block_word(bsw, 2)), "**++both++**")
+    pw = mdown.md_parse_word("==note==")
+    assert_eq_str("parse_word text", mdown.md_word_text(pw), "note")
+    assert_eq_int("parse_word flags", mdown.md_word_flags(pw), mdown.MD_MARK)
+    pw2 = mdown.md_parse_word("**++x++**")
+    assert_eq_int("parse_word nested flags", mdown.md_word_flags(pw2),
+                  mdown.MD_BOLD + mdown.MD_UNDER)
+    pw3 = mdown.md_parse_word("plain")
+    assert_eq_int("parse_word plain", mdown.md_word_flags(pw3), 0)
+    pw4 = mdown.md_parse_word("``")
+    assert_eq_str("marker-only → empty text", mdown.md_word_text(pw4), "")
+    mdown.md_doc_free(dsw)
+
     println("-- round trips (canonical form reproduced byte-for-byte)")
     round_trip("heading", "# Title words here")
     round_trip("paragraph", "One two three.")
