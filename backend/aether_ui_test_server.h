@@ -123,6 +123,15 @@ typedef struct {
     // On success, set *out_data (caller-freed with free()) and *out_len,
     // return 0. On failure, return non-zero. NULL hook → 501.
     int (*screenshot_png)(unsigned char** out_data, size_t* out_len);
+
+    // Optional: last canvas paint metrics for compositor instrumentation.
+    // `area` is the pixel area the last paint covered; under immediate mode
+    // that is always w*h (the whole canvas is replayed every frame), and it
+    // only becomes a meaningful "how much did we actually repaint" number
+    // once dirty-region clipping lands (see docs/design/retained-compositor.md
+    // Stage 2). `commands` is the replay command count for that paint; w/h
+    // are the paint allocation. NULL hook → /canvas/{id}/debug returns 501.
+    int (*canvas_debug)(int canvas_id, int* area, int* commands, int* w, int* h);
 } AetherDriverHooks;
 
 // Spawn the accept-loop thread. Returns immediately. The server stays up

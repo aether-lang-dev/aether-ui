@@ -10,13 +10,18 @@ import ui (
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
-           scene_canvas, scene_refresh)
+           scene_canvas, scene_refresh, scene_set_refreshing, path, opacity)
 import ui.frames (
     frames_new, frame_add, frame_set_content,
     frame_bounds, frame_z, frames_hit, frames_draw,
     frames_on_click, frames_on_move, frames_on_release
 )
 import std.os (os_getenv)
+import vg.geom.vec3 (v3_new, v3_x, v3_y, v3_z)
+import vg.geom.mat4 (
+    m4_mul, m4_rotation_x, m4_rotation_y, m4_transform_point, m4_transform_dir
+)
+import vg.geom.polypath (pp_new, pp_begin, pp_push, pp_to_path, pp_free)
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
@@ -30,9 +35,31 @@ struct App {
     canvas: int
     alpha: ptr
     beta: ptr
+    cube_a: ptr
+    cube_b: ptr
     st_bounds: int
     st_z: int
     st_hit: int
+}
+
+struct CubeSpin {
+    ax: float
+    ay: float
+    vx: float
+    vy: float
+    last_t: float
+    tint: int
+}
+
+mk_cube(ax: float, ay: float, vx: float, vy: float, tint: int) -> ptr {
+    c = malloc(64) as *CubeSpin
+    c.ax = ax
+    c.ay = ay
+    c.vx = vx
+    c.vy = vy
+    c.last_t = 0.0 - 1.0
+    c.tint = tint
+    return c as ptr
 }
 
 publish(app: *App, hx: float, hy: float) {
@@ -60,26 +87,111 @@ publish(app: *App, hx: float, hy: float) {
     _h = ui_set_s(app.st_hit, "hit: ${name} at ${hxi},${hyi}")
 }
 
-draw_alpha(rn: ptr, t: float, x: float, y: float, w: float, h: float) {
-    _ = t
-    bg = rect(rn, x, y, w, h)
-    fill(bg, "#e8f2ff")
-    stroke(bg, "#6b8fbd", 1.0)
-    label = text_sized(rn, x + 14.0, y + 34.0, 18.0, "Alpha payload")
-    fill(label, "#1f3654")
-    chip = rect(rn, x + 16.0, y + h - 42.0, w - 32.0, 22.0)
-    fill(chip, "#2864b4")
+draw_alpha(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr) {
+    draw_tumbling_payload(rn, t, x, y, w, h, cube)
+    label = text_sized(rn, x + 12.0, y + 22.0, 13.0, "Alpha cube")
+    fill(label, "#dbeafe")
 }
 
-draw_beta(rn: ptr, t: float, x: float, y: float, w: float, h: float) {
-    _ = t
+draw_beta(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr) {
+    draw_tumbling_payload(rn, t, x, y, w, h, cube)
+    label = text_sized(rn, x + 12.0, y + 22.0, 13.0, "Beta cube")
+    fill(label, "#fde68a")
+}
+
+const F_VERTS: float[24] = [
+    -1.0, -1.0, -1.0,   1.0, -1.0, -1.0,  -1.0, 1.0, -1.0,   1.0, 1.0, -1.0,
+    -1.0, -1.0,  1.0,   1.0, -1.0,  1.0,  -1.0, 1.0,  1.0,   1.0, 1.0,  1.0]
+const F_FACE_VERTS: int[24] = [
+    4, 5, 7, 6, 1, 0, 2, 3, 5, 1, 3, 7, 0, 4, 6, 2, 6, 7, 3, 2, 0, 1, 5, 4]
+const F_FACE_NX: float[6] = [0.0, 0.0, 1.0, -1.0, 0.0, 0.0]
+const F_FACE_NY: float[6] = [0.0, 0.0, 0.0, 0.0, 1.0, -1.0]
+const F_FACE_NZ: float[6] = [1.0, -1.0, 0.0, 0.0, 0.0, 0.0]
+const F_FACE_BIT: int[6] = [1, 2, 4, 8, 16, 32]
+const F_COLORS_A: string[6] = ["#5aa0e6", "#64748b", "#ef7058", "#9ac65c", "#f7bd4a", "#9876d9"]
+const F_COLORS_B: string[6] = ["#36b7a8", "#64748b", "#e08f3d", "#7cb342", "#ffd166", "#7e57c2"]
+
+cube_step(c: *CubeSpin, t: float) {
+    if c.last_t < 0.0 { c.last_t = t }
+    dt = t - c.last_t
+    c.last_t = t
+    if dt < 0.0 { dt = 0.0 }
+    if dt > 0.05 { dt = 0.05 }
+    c.ax = c.ax + c.vx * dt
+    c.ay = c.ay + c.vy * dt
+}
+
+cube_model(c: *CubeSpin) -> ptr {
+    return m4_mul(m4_rotation_x((0.0 - c.ax) * 57.29577951308232),
+                  m4_rotation_y(c.ay * 57.29577951308232)) as ptr
+}
+
+cube_face_depth(f: int, mdl: ptr) -> float {
+    nd = m4_transform_dir(mdl, v3_new(F_FACE_NX[f], F_FACE_NY[f], F_FACE_NZ[f]))
+    return v3_z(nd)
+}
+
+cube_project(mdl: ptr, x: float, y: float, z: float,
+             cx: float, cy: float, sc: float) -> ptr {
+    p = m4_transform_point(mdl, v3_new(x, y, z))
+    d = 3.0 - v3_z(p)
+    return v3_new(cx + v3_x(p) * sc / d, cy + v3_y(p) * sc / d, v3_z(p)) as ptr
+}
+
+face_color(c: *CubeSpin, f: int) -> string {
+    if c.tint == 1 { return F_COLORS_B[f] }
+    return F_COLORS_A[f]
+}
+
+draw_cube_face(rn: ptr, c: *CubeSpin, f: int, mdl: ptr,
+               cx: float, cy: float, sc: float) {
+    pp = pp_new()
+    pp_begin(pp, 1)
+    k = 0
+    while k < 4 {
+        vi = F_FACE_VERTS[f * 4 + k]
+        sp = cube_project(mdl, F_VERTS[vi * 3], F_VERTS[vi * 3 + 1], F_VERTS[vi * 3 + 2],
+                          cx, cy, sc)
+        pp_push(pp, v3_x(sp), v3_y(sp))
+        k = k + 1
+    }
+    p = path(rn, pp_to_path(pp))
+    pp_free(pp)
+    fill(p, face_color(c, f))
+    opacity(p, 0.62)
+    stroke(p, "#111827", 1.4)
+}
+
+draw_tumbling_payload(rn: ptr, t: float, x: float, y: float, w: float, h: float,
+                      cube: ptr) {
+    c = cube as *CubeSpin
+    cube_step(c, t)
     bg = rect(rn, x, y, w, h)
-    fill(bg, "#fff4df")
-    stroke(bg, "#b78a2b", 1.0)
-    label = text_sized(rn, x + 14.0, y + 34.0, 18.0, "Beta payload")
-    fill(label, "#4d3714")
-    chip = rect(rn, x + 16.0, y + h - 42.0, w - 32.0, 22.0)
-    fill(chip, "#d79b2b")
+    fill(bg, "#111827")
+    stroke(bg, "#334155", 1.0)
+    side = w
+    if h < side { side = h }
+    cx = x + w / 2.0
+    cy = y + h / 2.0 + 6.0
+    sc = side * 0.44
+    mdl = cube_model(c)
+    painted = 0
+    pass_i = 0
+    while pass_i < 6 {
+        best = -1
+        bestd = 10.0
+        f = 0
+        while f < 6 {
+            if (painted / F_FACE_BIT[f]) % 2 == 0 {
+                d = cube_face_depth(f, mdl)
+                if d < bestd { bestd = d; best = f }
+            }
+            f = f + 1
+        }
+        painted = painted + F_FACE_BIT[best]
+        draw_cube_face(rn, c, best, mdl, cx, cy, sc)
+        pass_i = pass_i + 1
+    }
 }
 
 main() {
@@ -87,6 +199,8 @@ main() {
     app.st_bounds = ui_state_s("bounds: pending")
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
+    app.cube_a = mk_cube(0.0 - 0.35, 0.55, 0.52, 0.78, 0)
+    app.cube_b = mk_cube(0.45, 0.0 - 0.25, 0.66, 0.44, 1)
 
     window("ui.frames retained harness", 700, 520) {
         vstack(8) {
@@ -94,15 +208,16 @@ main() {
                 anchor = rect(0.0, 0.0, 0.0, 0.0)
                 root = vg_root(node_scene(anchor))
                 app.scene = node_scene(root)
+                scene_set_refreshing(app.scene, 1)
                 app.canvas = scene_canvas(app.scene)
                 app.host = frames_new(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0)
                 app.alpha = frame_add(app.host, "Alpha", 60.0, 60.0, 230.0, 160.0)
                 app.beta = frame_add(app.host, "Beta", 180.0, 110.0, 250.0, 180.0)
                 frame_set_content(app.alpha) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
-                    draw_alpha(rn, t, x, y, w, h)
+                    draw_alpha(rn, t, x, y, w, h, app.cube_a)
                 }
                 frame_set_content(app.beta) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
-                    draw_beta(rn, t, x, y, w, h)
+                    draw_beta(rn, t, x, y, w, h, app.cube_b)
                 }
                 reg = canvas_region(root, 0.0, 0.0, FW * 1.0, FH * 1.0)
                     callback |rn: ptr, t: float| {

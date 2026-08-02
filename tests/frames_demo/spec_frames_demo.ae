@@ -15,6 +15,29 @@ main() {
             aeocha.assert_contains(body, "hit: Beta at 200,130", "overlap hit is topmost")
         }
 
+        aeocha.it("reports last repaint area and replay command count") callback {
+            // The readback plumbing, pinned end to end. NOTE what this can
+            // and cannot show today: `area` is the canvas allocation
+            // (width*height), a CONSTANT under immediate mode — which
+            // repaints everything every frame, so repainted-area and
+            // canvas-area are the same number. Asserting the Stage 3
+            // occlusion claim here would pass vacuously; it becomes
+            // falsifiable only once Stage 2 makes area the summed clip
+            // rects. So: assert the metric is EXACTLY the canvas area
+            // (a real equality, and the thing that must CHANGE when
+            // dirty regions land), and that the animated cube payload
+            // keeps a live command stream.
+            sleep(120)
+            area = uidriver.canvas_debug_area()
+            cmds = uidriver.canvas_debug_commands()
+            w = uidriver.canvas_debug_w()
+            h = uidriver.canvas_debug_h()
+            aeocha.assert_gt(area, 0, "last repaint area is positive")
+            aeocha.assert_eq(area, w * h,
+                "immediate mode repaints the whole canvas (${w}x${h})")
+            aeocha.assert_gt(cmds, 20, "cube payload emits a non-trivial command stream")
+        }
+
         aeocha.it("clicking alpha raises it above beta") callback {
             uidriver.click(80.0, 70.0)
             body = uidriver.get_body("/widgets")

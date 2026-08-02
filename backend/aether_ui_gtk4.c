@@ -3718,6 +3718,10 @@ typedef struct {
     unsigned long gen;
     unsigned long cache_gen;
     int cache_count, cache_w, cache_h;
+    int last_paint_w;
+    int last_paint_h;
+    int last_paint_area;
+    int last_paint_count;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -3953,9 +3957,15 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
     // alternating 8414 commands / 2 commands on ONE physical click) —
     // keep it: paint bugs that only appear under a real pointer cannot
     // be seen any other way, and the gate costs nothing when unset.
+    if (cs) {
+        cs->last_paint_w = width;
+        cs->last_paint_h = height;
+        cs->last_paint_area = width * height;
+        cs->last_paint_count = cs->count;
+    }
     if (getenv("AEUI_CANVAS_DEBUG") && cs)
-        fprintf(stderr, "[draw] id=%d count=%d w=%d h=%d last=%dx%d resize_hook=%d\n",
-                canvas_id, cs->count, width, height, cs->last_w, cs->last_h,
+        fprintf(stderr, "[draw] id=%d count=%d w=%d h=%d area=%d last=%dx%d resize_hook=%d\n",
+                canvas_id, cs->count, width, height, cs->last_paint_area, cs->last_w, cs->last_h,
                 cs->on_resize && (width != cs->last_w || height != cs->last_h) ? 1 : 0);
     // Resize: GTK re-invokes the draw func with the new allocation. If a
     // scene registered a resize hook and the size changed, fire it so it can
@@ -4042,6 +4052,26 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     // ARGB32 is premultiplied, native-endian 32-bit.
     unsigned int v = *(unsigned int*)(data + py * stride + px * 4);
     return (int)v;
+}
+
+int aether_ui_canvas_last_paint_area_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->last_paint_area : -1;
+}
+
+int aether_ui_canvas_last_paint_count_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->last_paint_count : -1;
+}
+
+int aether_ui_canvas_last_paint_w_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->last_paint_w : -1;
+}
+
+int aether_ui_canvas_last_paint_h_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->last_paint_h : -1;
 }
 
 int aether_ui_canvas_create_impl(int width, int height) {
@@ -5073,6 +5103,25 @@ static gboolean pixel_req_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+typedef struct {
+    int canvas_id;
+    int area;
+    int count;
+    int w;
+    int h;
+    int done;
+} CanvasDebugReq;
+
+static gboolean canvas_debug_req_idle(gpointer data) {
+    CanvasDebugReq* rq = (CanvasDebugReq*)data;
+    rq->area = aether_ui_canvas_last_paint_area_impl(rq->canvas_id);
+    rq->count = aether_ui_canvas_last_paint_count_impl(rq->canvas_id);
+    rq->w = aether_ui_canvas_last_paint_w_impl(rq->canvas_id);
+    rq->h = aether_ui_canvas_last_paint_h_impl(rq->canvas_id);
+    rq->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 typedef struct { int done; int handle; char type[32]; } FocusQuery;
 
 // Close a window on the GTK thread (window ops must not run off it).
@@ -6021,6 +6070,23 @@ static void handle_test_request(int client_fd) {
         while (!prq.done) usleep(1000);
         char buf[128];
         snprintf(buf, sizeof(buf), "{\"pixel\":%d}", prq.result);
+        send_response(client_fd, 200, "OK", "application/json", buf);
+        close(client_fd);
+        return;
+    }
+
+    // GET /canvas/{id}/debug — last on-screen paint metrics. In immediate
+    // mode area is the full canvas allocation; Stage 2's clipped redraw can
+    // lower this without changing the route shape.
+    if (method == 0 && strncmp(path, "/canvas/", 8) == 0 && strstr(path, "/debug")) {
+        CanvasDebugReq drq = {0};
+        drq.canvas_id = atoi(path + 8);
+        g_idle_add(canvas_debug_req_idle, &drq);
+        while (!drq.done) usleep(1000);
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+            "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d}",
+            drq.area, drq.count, drq.w, drq.h);
         send_response(client_fd, 200, "OK", "application/json", buf);
         close(client_fd);
         return;

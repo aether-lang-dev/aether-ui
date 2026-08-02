@@ -544,6 +544,26 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
                           "screenshot capture failed");
             }
         }
+    } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
+               && strstr(path, "/debug")) {
+        if (!h->canvas_debug) {
+            send_http(client_fd, 501, "Not Implemented", "application/json",
+                      "{\"error\":\"canvas debug metrics not wired on this backend\"}");
+        } else {
+            int id = extract_id_from_path(path, "/canvas/");
+            int area = -1, commands = -1, w = -1, ht = -1;
+            int ok = h->canvas_debug(id, &area, &commands, &w, &ht);
+            if (ok != 0) {
+                send_http(client_fd, 404, "Not Found", "application/json",
+                          "{\"error\":\"canvas not found\"}");
+            } else {
+                char body[192];
+                snprintf(body, sizeof(body),
+                         "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d}",
+                         area, commands, w, ht);
+                send_http(client_fd, 200, "OK", "application/json", body);
+            }
+        }
     } else if (method == 0 && strncmp(path, "/widget/", 8) == 0) {
         int id = extract_id_from_path(path, "/widget/");
         if (id > 0) {

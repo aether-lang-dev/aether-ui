@@ -22,7 +22,8 @@ exports (
     set_state, state_value_int,
     widget_id_by_text, widget_id_of, widget_id_last_of, widget_text_by_id, widget_bool_by_text,
     widget_int_field_by_id, field_str, field_int,
-    canvas_w, canvas_h, canvas_widget_id,
+    canvas_w, canvas_h, canvas_widget_id, canvas_debug_area, canvas_debug_commands,
+    canvas_debug_w, canvas_debug_h,
     wait_server, wait_body_contains,
     menus_body, menu_handle_with, menu_activate, menu_activate_item
 )
@@ -310,6 +311,22 @@ widget_bool_by_text(text: string, fieldname: string) -> int {
 canvas_w() -> int { return canvas_field("w") }
 canvas_h() -> int { return canvas_field("h") }
 canvas_widget_id() -> int { return canvas_field("id") }
+
+canvas_debug_area() -> int { return canvas_debug_field("area") }
+canvas_debug_commands() -> int { return canvas_debug_field("commands") }
+// The canvas allocation the last paint covered — the denominator a
+// dirty-region compositor's repaint area must eventually fall below.
+canvas_debug_w() -> int { return canvas_debug_field("w") }
+canvas_debug_h() -> int { return canvas_debug_field("h") }
+
+canvas_debug_field(f: string) -> int {
+    body = get_body("/canvas/1/debug")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = field_int(v, f)
+    json.json_free(v)
+    return r
+}
 
 canvas_field(f: string) -> int {
     body = get_body("/widgets")

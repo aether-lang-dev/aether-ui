@@ -143,13 +143,27 @@ deliverable, its acceptance test, and how it is proven.
 
 ### Stage 0 — `ui.frames`: the internal-frame widget *(the harness)*
 
-**Status: initial harness built.** `ui/frames.ae` now provides the retained
-frame host/model, z-order, hit testing, drag, resize, close, and VG chrome.
-`apps/frames_demo` exercises two overlapping frames inside one canvas, and
-`tests/frames_demo/spec_frames_demo.ae` gates the retained behaviours through
-AetherUIDriver. The demo payload is intentionally simple for this first cut;
-swapping in two tumbling-cube content callbacks remains the next Stage-0
-polish item before using it as a compositor cost benchmark.
+**Status: built as the benchmark harness.** `ui/frames.ae` now provides the
+retained frame host/model, z-order, hit testing, drag, resize, close, and VG
+chrome. `apps/frames_demo` exercises two overlapping, continuously tumbling
+cube payloads inside one canvas, and `tests/frames_demo/spec_frames_demo.ae`
+gates the retained behaviours plus the last-paint area/command-count readback
+through AetherUIDriver. GTK reports paint metrics via
+`GET /canvas/{id}/debug`; the shared driver server exposes the same route and
+returns 501 on backends that have not wired the metric yet.
+
+**What the `area` metric is NOT, yet.** `last_paint_area` currently reports
+`width * height` — the canvas allocation, which is a CONSTANT while the
+window is unresized (700x420 = 294000 in the demo today). It proves the
+readback plumbing works end to end; it cannot yet express the Stage 3
+claim, because immediate mode genuinely does repaint the whole canvas
+every frame, so "area repainted" and "canvas area" are the same number
+until dirty regions exist. Stage 2 is where the metric acquires meaning:
+once the composite sets a clip from a dirty region, `last_paint_area`
+must become the summed area of the clip rects actually painted. The
+Stage 3 assertion (B repaints ~(1-f) of its area when A covers fraction
+f) is only falsifiable after that change — asserting on it before then
+would pass vacuously against a constant.
 
 **Build this first.** It is useful on its own, it is pure vg over today's
 immediate-mode canvas, and it is the consumer that makes every later stage
