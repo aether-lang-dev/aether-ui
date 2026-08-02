@@ -4,14 +4,15 @@
 // labels below the canvas expose the retained model to AetherUIDriver specs.
 
 import ui (
-    window, vstack, hstack, text, enable_test_server,
+    window, vstack, hstack, text, btn, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_release,
-    canvas_set_clip_rects, canvas_redraw,
+    canvas_set_clip_rects, canvas_redraw, canvas_read_pixel,
     ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
-           scene_canvas, scene_refresh, scene_set_refreshing, path, opacity)
+           scene_canvas, scene_refresh, scene_set_refreshing, scene_is_refreshing,
+           path, opacity)
 import ui.frames (
     frames_new, frame_add, frame_set_content,
     frame_bounds, frame_z, frames_hit, frames_draw,
@@ -43,6 +44,7 @@ struct App {
     st_bounds: int
     st_z: int
     st_hit: int
+    st_probe: int
 }
 
 struct CubeSpin {
@@ -91,6 +93,10 @@ publish(app: *App, hx: float, hy: float) {
 }
 
 apply_dirty_clip(app: *App) {
+    // Live scenes have their own 60fps painter; a one-shot gesture clip can
+    // race that painter after canvas_clear and leave stale/blank backing-store
+    // pixels outside the clip. Until the painter owns damage, clip static only.
+    if scene_is_refreshing(app.scene) == 1 { return }
     n = frames_dirty_nrects(app.host)
     if n <= 0 { return }
     rects = floatarr_new_raw(n * 4)
@@ -108,6 +114,33 @@ apply_dirty_clip(app: *App) {
     frames_clear_dirty(app.host)
     floatarr_free(tmp)
     floatarr_free(rects)
+}
+
+probe_background(app: *App) {
+    _r = scene_refresh(app.scene)
+    pv = canvas_read_pixel(app.canvas, 40, 20, 700, FH)
+    r = (pv >> 16) & 255
+    g = (pv >> 8) & 255
+    b = pv & 255
+    bg = 0
+    if r > 200 {
+        if r < 245 {
+            if g > 205 {
+                if g < 245 {
+                    if b > 210 {
+                        if b < 250 { bg = 1 }
+                    }
+                }
+            }
+        }
+    }
+    white = 0
+    if r > 248 {
+        if g > 248 {
+            if b > 248 { white = 1 }
+        }
+    }
+    _p = ui_set_s(app.st_probe, "probe: bg=${bg} white=${white} rgb=${r},${g},${b}")
 }
 
 draw_alpha(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr) {
@@ -222,6 +255,7 @@ main() {
     app.st_bounds = ui_state_s("bounds: pending")
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
+    app.st_probe = ui_state_s("probe: unprobed")
     app.cube_a = mk_cube(0.0 - 0.35, 0.55, 0.52, 0.78, 0)
     app.cube_b = mk_cube(0.45, 0.0 - 0.25, 0.66, 0.44, 1)
 
@@ -257,10 +291,16 @@ main() {
                 bind_text(tb, app.st_bounds)
             }
             _ = row
+            hstack(8) {
+                btn("Animate") callback { scene_set_refreshing(app.scene, 1) }
+                btn("Probe") callback { probe_background(app) }
+            }
             tz = text("z: pending")
             bind_text(tz, app.st_z)
             th = text("hit: none")
             bind_text(th, app.st_hit)
+            tp = text("probe: unprobed")
+            bind_text(tp, app.st_probe)
             canvas_on_click(app.canvas) callback |x: float, y: float| {
                 frames_on_click(app.host, x, y)
                 publish(app, x, y)

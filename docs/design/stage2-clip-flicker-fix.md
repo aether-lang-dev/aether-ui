@@ -7,6 +7,13 @@ an animated canvas and reproducibly flickers. This note says exactly why, with
 evidence, and what the fix has to look like. Stage 1 (`da0f626`, the region
 type) is independent and fine — keep it.
 
+**Resolution landed after this note:** Stage 2 now takes the interim-safe
+option below: clipped paints are used only while the frame scene is static.
+When `scene_is_refreshing(scene)` is true, `frames_demo` skips
+`canvas_set_clip_rects` and lets the live painter repaint the whole canvas.
+The frames spec keeps the static area assertion and adds an animation-on
+background probe so this flicker class has a correctness tripwire.
+
 ## The symptom
 
 Run `apps/frames_demo` on a real desktop (not Xvfb, not `AETHER_UI_NO_ANIMATION`)

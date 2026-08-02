@@ -268,9 +268,12 @@ add/subtract sequences; degenerate and zero-size inputs.
 `frame_raise`, `frame_close`, and active drag/resize gestures dirty the old
 and/or new frame bounds, and `frames_dirty_nrects/rect/area/clear` expose that
 region to callers. `apps/frames_demo` submits those rects before event-driven
-`scene_refresh` calls, and honors `AETHER_UI_NO_ANIMATION=1` so the driver
-spec can measure the clipped event paint without the live cube loop racing in
-with a later full repaint.
+`scene_refresh` calls only while the scene is static; if
+`scene_is_refreshing(scene)` is true it skips the clip and takes the full-canvas
+paint. That preserves correctness for animated canvases until Stage 3 moves
+clip ownership into the painter/compositor itself. The demo also honors
+`AETHER_UI_NO_ANIMATION=1` so the driver spec can measure the static clipped
+event paint deterministically.
 
 The canvas ABI has the one-shot paint clip surface on all three backends:
 `canvas_set_clip_rects(canvas_id, rects, n)` and `canvas_reset_clip(canvas_id)`.
@@ -292,8 +295,9 @@ canvas_reset_clip(canvas_id)                 // CGContextClipToRects, GDI
 ```
 
 This still replays the whole buffer, but the backend rasterizes only inside
-the clip — so an animating frame over a static background already costs its
-own area rather than the whole canvas.
+the clip. In this Stage 2 shape, clipping is used for static event-driven
+scene refreshes; refreshing/live scenes repaint the full canvas until the
+compositor owns the clip.
 
 *Acceptance:* `tests/frames_demo/spec_frames_demo.ae` asserts that moving one
 frame reports a dirty paint area close to `(old bounds ∪ new bounds)` and much
