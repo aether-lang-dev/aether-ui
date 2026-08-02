@@ -98,7 +98,17 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
     ui.canvas_on_click(canvas_id) callback |cx: float, cy: float| {
         events.dispatch_click(es, vg.scene_ctx(scene), cx, cy)
         ui.canvas_clear(canvas_id)
-        _flush_clipped(scene, canvas_id)
+        // FULL render, not just the recorded static shapes — the same
+        // lesson the resize hook (below) already carries: canvas_region
+        // content isn't retained between frames, so a clear followed by a
+        // static-only flush paints a nearly EMPTY frame. On a scene whose
+        // content lives in a draw region, that frame is a white-out — and
+        // because a real pointer click fires every registered controller
+        // (an app's canvas_on_click AND this internal one, newest first),
+        // this hook paints LAST and its half-frame used to win the screen.
+        // The driver's /canvas/{id}/click invokes only the app's closure,
+        // which is why no synthesized spec ever reproduced it.
+        _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
         ui.canvas_redraw(canvas_id)
     }
     // Hover: on the drawn-tooltip path (sommelier, or $AETHER_UI_TOOLTIP=drawn),
