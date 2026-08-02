@@ -1,0 +1,149 @@
+// vg/test/test_region.ae — disjoint rectangle regions for compositor damage.
+
+import std.floatarr
+import vg.geom.region
+
+extern exit(code: int)
+
+const EPS: float = 0.001
+
+assert_true(label: string, got: int) {
+    if got == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label}"); exit(1) }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+assert_near(label: string, got: float, want: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < EPS { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+rect_overlaps(a: ptr, b: ptr) -> int {
+    ax = floatarr_get_raw(a, 0)
+    ay = floatarr_get_raw(a, 1)
+    aw = floatarr_get_raw(a, 2)
+    ah = floatarr_get_raw(a, 3)
+    bx = floatarr_get_raw(b, 0)
+    by = floatarr_get_raw(b, 1)
+    bw = floatarr_get_raw(b, 2)
+    bh = floatarr_get_raw(b, 3)
+    if ax + aw <= bx { return 0 }
+    if bx + bw <= ax { return 0 }
+    if ay + ah <= by { return 0 }
+    if by + bh <= ay { return 0 }
+    return 1
+}
+
+assert_disjoint(label: string, r: ptr) {
+    a = floatarr_new_raw(4)
+    b = floatarr_new_raw(4)
+    n = region.rgn_nrects(r)
+    i = 0
+    while i < n {
+        _aok = region.rgn_rect(r, i, a)
+        j = i + 1
+        while j < n {
+            _bok = region.rgn_rect(r, j, b)
+            if rect_overlaps(a, b) == 1 {
+                println("  FAIL: ${label}: rects ${i} and ${j} overlap")
+                exit(1)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    floatarr_free(a)
+    floatarr_free(b)
+    println("  PASS: ${label}")
+}
+
+assert_bounds(label: string, r: ptr, x: float, y: float, w: float, h: float) {
+    out = floatarr_new_raw(4)
+    ok = region.rgn_bounds(r, out)
+    assert_eq_int("${label}.ok", ok, 1)
+    assert_near("${label}.x", floatarr_get_raw(out, 0), x)
+    assert_near("${label}.y", floatarr_get_raw(out, 1), y)
+    assert_near("${label}.w", floatarr_get_raw(out, 2), w)
+    assert_near("${label}.h", floatarr_get_raw(out, 3), h)
+    floatarr_free(out)
+}
+
+main() {
+    println("=== test_region ===")
+
+    println("-- add overlapping rects")
+    r = region.rgn_new()
+    region.rgn_add_rect(r, 0.0, 0.0, 10.0, 10.0)
+    region.rgn_add_rect(r, 5.0, 5.0, 10.0, 10.0)
+    assert_near("overlap union area", region.rgn_area(r), 175.0)
+    assert_disjoint("overlap union stays disjoint", r)
+    assert_bounds("overlap union bounds", r, 0.0, 0.0, 15.0, 15.0)
+
+    println("-- subtract middle")
+    m = region.rgn_new()
+    region.rgn_add_rect(m, 0.0, 0.0, 10.0, 10.0)
+    region.rgn_sub_rect(m, 3.0, 3.0, 4.0, 4.0)
+    assert_eq_int("middle subtract survivors", region.rgn_nrects(m), 4)
+    assert_near("middle subtract area", region.rgn_area(m), 84.0)
+    assert_disjoint("middle subtract stays disjoint", m)
+
+    println("-- subtract covering")
+    c = region.rgn_new()
+    region.rgn_add_rect(c, 1.0, 2.0, 3.0, 4.0)
+    region.rgn_sub_rect(c, 0.0, 0.0, 10.0, 10.0)
+    assert_true("covering subtract empties", region.rgn_is_empty(c))
+    bout = floatarr_new_raw(4)
+    assert_eq_int("empty has no bounds", region.rgn_bounds(c, bout), 0)
+    floatarr_free(bout)
+
+    println("-- translate then intersect")
+    t = region.rgn_new()
+    region.rgn_add_rect(t, 0.0, 0.0, 8.0, 6.0)
+    region.rgn_translate(t, 4.0, 3.0)
+    region.rgn_intersect_rect(t, 8.0, 5.0, 10.0, 10.0)
+    assert_near("translated/intersected area", region.rgn_area(t), 16.0)
+    assert_bounds("translated/intersected bounds", t, 8.0, 5.0, 4.0, 4.0)
+
+    println("-- sub region and clone")
+    sr = region.rgn_new()
+    region.rgn_add_rect(sr, 0.0, 0.0, 20.0, 10.0)
+    occ = region.rgn_new()
+    region.rgn_add_rect(occ, 2.0, 2.0, 4.0, 4.0)
+    region.rgn_add_rect(occ, 10.0, 0.0, 5.0, 10.0)
+    before = region.rgn_area(sr)
+    removed = region.rgn_area(occ)
+    region.rgn_sub_region(sr, occ)
+    assert_near("sub_region area conservation", region.rgn_area(sr), before - removed)
+    cp = region.rgn_clone(sr)
+    region.rgn_translate(cp, 100.0, 0.0)
+    assert_near("clone translate leaves original area", region.rgn_area(sr), before - removed)
+    assert_near("clone preserves area", region.rgn_area(cp), before - removed)
+    assert_disjoint("sub_region stays disjoint", sr)
+
+    println("-- degenerate inputs")
+    d = region.rgn_new()
+    region.rgn_add_rect(d, 0.0, 0.0, 0.0, 10.0)
+    region.rgn_add_rect(d, 0.0, 0.0, 10.0, 0.0)
+    assert_true("degenerate add ignored", region.rgn_is_empty(d))
+    region.rgn_add_rect(d, 0.0, 0.0, 5.0, 5.0)
+    region.rgn_sub_rect(d, 1.0, 1.0, 0.0, 8.0)
+    region.rgn_intersect_rect(d, 0.0, 0.0, -1.0, 10.0)
+    assert_true("degenerate/empty intersect empties", region.rgn_is_empty(d))
+
+    region.rgn_free(r)
+    region.rgn_free(m)
+    region.rgn_free(c)
+    region.rgn_free(t)
+    region.rgn_free(sr)
+    region.rgn_free(occ)
+    region.rgn_free(cp)
+    region.rgn_free(d)
+
+    println("=== test_region passed ===")
+}

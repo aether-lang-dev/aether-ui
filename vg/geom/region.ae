@@ -1,0 +1,265 @@
+// vg.geom.region — disjoint rectangle regions for retained compositor damage.
+//
+// V1 is deliberately a small rect-list implementation. The invariant is that
+// every stored rect is non-overlapping and positive-area. rgn_add_rect keeps
+// that by subtracting the current region from the incoming rect, then appending
+// only uncovered survivors. That is O(n^2), but the Stage 1/2 frame harness
+// has tiny rect counts and the API can later grow a banded implementation
+// behind the same surface.
+
+exports (
+    rgn_new, rgn_free, rgn_clone,
+    rgn_add_rect, rgn_sub_rect, rgn_sub_region, rgn_intersect_rect,
+    rgn_translate, rgn_is_empty, rgn_bounds,
+    rgn_nrects, rgn_rect, rgn_area
+)
+
+import std.floatarr
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct Region {
+    rects: ptr   // floatarr, x/y/w/h quads
+    n: int
+    cap: int
+}
+
+rgn_new() -> ptr {
+    r = malloc(64) as *Region
+    r.cap = 8
+    r.n = 0
+    r.rects = floatarr_new_raw(r.cap * 4)
+    return r as ptr
+}
+
+rgn_free(rp: ptr) {
+    if rp == null { return }
+    r = rp as *Region
+    if r.rects != null { floatarr_free(r.rects) }
+    free(rp)
+}
+
+rgn_clone(rp: ptr) -> ptr {
+    r = rp as *Region
+    out = rgn_new()
+    o = out as *Region
+    _rgn_reserve(o, r.n)
+    i = 0
+    while i < r.n * 4 {
+        floatarr_set_raw(o.rects, i, floatarr_get_raw(r.rects, i))
+        i = i + 1
+    }
+    o.n = r.n
+    return out
+}
+
+rgn_add_rect(rp: ptr, x: float, y: float, w: float, h: float) {
+    if w <= 0.0 { return }
+    if h <= 0.0 { return }
+    r = rp as *Region
+    pieces = rgn_new()
+    _rgn_append_raw(pieces as *Region, x, y, w, h)
+
+    i = 0
+    while i < r.n {
+        ex = _rx(r, i)
+        ey = _ry(r, i)
+        ew = _rw(r, i)
+        eh = _rh(r, i)
+        _region_subtract_rect_in_place(pieces as *Region, ex, ey, ew, eh)
+        i = i + 1
+    }
+
+    p = pieces as *Region
+    _rgn_reserve(r, r.n + p.n)
+    j = 0
+    while j < p.n {
+        _rgn_append_raw(r, _rx(p, j), _ry(p, j), _rw(p, j), _rh(p, j))
+        j = j + 1
+    }
+    rgn_free(pieces)
+}
+
+rgn_sub_rect(rp: ptr, x: float, y: float, w: float, h: float) {
+    if w <= 0.0 { return }
+    if h <= 0.0 { return }
+    _region_subtract_rect_in_place(rp as *Region, x, y, w, h)
+}
+
+rgn_sub_region(rp: ptr, other: ptr) {
+    o = other as *Region
+    i = 0
+    while i < o.n {
+        rgn_sub_rect(rp, _rx(o, i), _ry(o, i), _rw(o, i), _rh(o, i))
+        i = i + 1
+    }
+}
+
+rgn_intersect_rect(rp: ptr, x: float, y: float, w: float, h: float) {
+    r = rp as *Region
+    out = rgn_new()
+    o = out as *Region
+    if w > 0.0 {
+        if h > 0.0 {
+            i = 0
+            while i < r.n {
+                ix0 = _maxf(_rx(r, i), x)
+                iy0 = _maxf(_ry(r, i), y)
+                ix1 = _minf(_rx(r, i) + _rw(r, i), x + w)
+                iy1 = _minf(_ry(r, i) + _rh(r, i), y + h)
+                if ix1 > ix0 {
+                    if iy1 > iy0 { _rgn_append_raw(o, ix0, iy0, ix1 - ix0, iy1 - iy0) }
+                }
+                i = i + 1
+            }
+        }
+    }
+    _rgn_replace(r, o)
+    rgn_free(out)
+}
+
+rgn_translate(rp: ptr, dx: float, dy: float) {
+    r = rp as *Region
+    i = 0
+    while i < r.n {
+        _set_rx(r, i, _rx(r, i) + dx)
+        _set_ry(r, i, _ry(r, i) + dy)
+        i = i + 1
+    }
+}
+
+rgn_is_empty(rp: ptr) -> int {
+    r = rp as *Region
+    if r.n == 0 { return 1 }
+    return 0
+}
+
+// Bounds as x,y,w,h into out4. Returns 0 for empty.
+rgn_bounds(rp: ptr, out4: ptr) -> int {
+    r = rp as *Region
+    if r.n == 0 { return 0 }
+    minx = _rx(r, 0)
+    miny = _ry(r, 0)
+    maxx = minx + _rw(r, 0)
+    maxy = miny + _rh(r, 0)
+    i = 1
+    while i < r.n {
+        minx = _minf(minx, _rx(r, i))
+        miny = _minf(miny, _ry(r, i))
+        maxx = _maxf(maxx, _rx(r, i) + _rw(r, i))
+        maxy = _maxf(maxy, _ry(r, i) + _rh(r, i))
+        i = i + 1
+    }
+    floatarr_set_raw(out4, 0, minx)
+    floatarr_set_raw(out4, 1, miny)
+    floatarr_set_raw(out4, 2, maxx - minx)
+    floatarr_set_raw(out4, 3, maxy - miny)
+    return 1
+}
+
+rgn_nrects(rp: ptr) -> int {
+    r = rp as *Region
+    return r.n
+}
+
+// Rect as x,y,w,h into out4. Returns 0 when i is out of range.
+rgn_rect(rp: ptr, i: int, out4: ptr) -> int {
+    r = rp as *Region
+    if i < 0 { return 0 }
+    if i >= r.n { return 0 }
+    floatarr_set_raw(out4, 0, _rx(r, i))
+    floatarr_set_raw(out4, 1, _ry(r, i))
+    floatarr_set_raw(out4, 2, _rw(r, i))
+    floatarr_set_raw(out4, 3, _rh(r, i))
+    return 1
+}
+
+rgn_area(rp: ptr) -> float {
+    r = rp as *Region
+    a = 0.0
+    i = 0
+    while i < r.n {
+        a = a + _rw(r, i) * _rh(r, i)
+        i = i + 1
+    }
+    return a
+}
+
+_region_subtract_rect_in_place(r: *Region, sx: float, sy: float, sw: float, sh: float) {
+    out = rgn_new()
+    o = out as *Region
+    i = 0
+    while i < r.n {
+        _append_minus_rect(o, _rx(r, i), _ry(r, i), _rw(r, i), _rh(r, i),
+                           sx, sy, sw, sh)
+        i = i + 1
+    }
+    _rgn_replace(r, o)
+    rgn_free(out)
+}
+
+_append_minus_rect(out: *Region, x: float, y: float, w: float, h: float,
+                   sx: float, sy: float, sw: float, sh: float) {
+    ix0 = _maxf(x, sx)
+    iy0 = _maxf(y, sy)
+    ix1 = _minf(x + w, sx + sw)
+    iy1 = _minf(y + h, sy + sh)
+    if ix1 <= ix0 || iy1 <= iy0 {
+        _rgn_append_raw(out, x, y, w, h)
+        return
+    }
+    // Top and bottom bands span the full original width.
+    if iy0 > y { _rgn_append_raw(out, x, y, w, iy0 - y) }
+    if iy1 < y + h { _rgn_append_raw(out, x, iy1, w, y + h - iy1) }
+    // Left and right bands sit beside the intersection's vertical span.
+    if ix0 > x { _rgn_append_raw(out, x, iy0, ix0 - x, iy1 - iy0) }
+    if ix1 < x + w { _rgn_append_raw(out, ix1, iy0, x + w - ix1, iy1 - iy0) }
+}
+
+_rgn_replace(dst: *Region, src: *Region) {
+    dst.n = 0
+    _rgn_reserve(dst, src.n)
+    i = 0
+    while i < src.n {
+        _rgn_append_raw(dst, _rx(src, i), _ry(src, i), _rw(src, i), _rh(src, i))
+        i = i + 1
+    }
+}
+
+_rgn_append_raw(r: *Region, x: float, y: float, w: float, h: float) {
+    if w <= 0.0 { return }
+    if h <= 0.0 { return }
+    _rgn_reserve(r, r.n + 1)
+    base = r.n * 4
+    floatarr_set_raw(r.rects, base, x)
+    floatarr_set_raw(r.rects, base + 1, y)
+    floatarr_set_raw(r.rects, base + 2, w)
+    floatarr_set_raw(r.rects, base + 3, h)
+    r.n = r.n + 1
+}
+
+_rgn_reserve(r: *Region, want: int) {
+    if want <= r.cap { return }
+    ncap = r.cap
+    while ncap < want { ncap = ncap * 2 }
+    nr = floatarr_new_raw(ncap * 4)
+    i = 0
+    while i < r.n * 4 {
+        floatarr_set_raw(nr, i, floatarr_get_raw(r.rects, i))
+        i = i + 1
+    }
+    floatarr_free(r.rects)
+    r.rects = nr
+    r.cap = ncap
+}
+
+_rx(r: *Region, i: int) -> float { return floatarr_get_raw(r.rects, i * 4) }
+_ry(r: *Region, i: int) -> float { return floatarr_get_raw(r.rects, i * 4 + 1) }
+_rw(r: *Region, i: int) -> float { return floatarr_get_raw(r.rects, i * 4 + 2) }
+_rh(r: *Region, i: int) -> float { return floatarr_get_raw(r.rects, i * 4 + 3) }
+_set_rx(r: *Region, i: int, v: float) { floatarr_set_raw(r.rects, i * 4, v) }
+_set_ry(r: *Region, i: int, v: float) { floatarr_set_raw(r.rects, i * 4 + 1, v) }
+
+_minf(a: float, b: float) -> float { if a < b { return a } return b }
+_maxf(a: float, b: float) -> float { if a > b { return a } return b }

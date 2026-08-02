@@ -221,6 +221,15 @@ headers on Windows.
 
 ### Stage 1 — the region type *(the one new data structure)*
 
+**Status: built as a rect-list v1.** `vg/geom/region.ae` implements the
+region API below using a disjoint rectangle list: adding a rect subtracts
+existing coverage from the incoming rect, then appends only uncovered
+survivors; subtract/intersect/translate operate in place. The implementation
+is intentionally simple rather than banded because Stage 1/2 rect counts are
+tiny. `vg/test/test_region.ae` covers overlapping union, middle and covering
+subtractions, region subtraction, translate/intersect, clone independence,
+area conservation, and degenerate inputs; it is wired into `ci.sh` Phase 0.
+
 `vg/geom/region.ae` — a set of **non-overlapping** rectangles. (Note: the
 name `vg/region.ae` is taken by the live-region abstraction; this is
 `geom/region` to avoid the collision.)
