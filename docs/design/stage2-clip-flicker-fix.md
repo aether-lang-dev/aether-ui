@@ -176,6 +176,62 @@ Note that running the spec by hand with animation genuinely on also made
 nondeterminism the existing cases were not written for. That is worth knowing
 before wiring an animated suite into the matrix.
 
+## Round 3 — the remaining bug is not a race, it is the damage model
+
+Reported after `1a86edf`: pointer-move flicker is gone, but **dragging a frame
+blanks the other frame** for the duration of the drag — everything except a
+~10px border around the dragged frame goes white. Reproduced and photographed
+here on a DEFAULT launch (no Animate clicked).
+
+`AEUI_CANVAS_DEBUG` during that drag, non-animating scene:
+
+```
+      1 area=36800
+      4 area=294000
+      1 area=47600
+      1 area=294000
+      2 area=43200
+     57 area=294000
+```
+
+Clips are active, because `scene_is_refreshing` is FALSE by default — the
+Animate button is opt-in. So the round-2 guard does not cover the path a user
+actually exercises. But the deeper problem is not the interleaving:
+
+**`frame_move` marks only the moved frame's old and new bounds dirty**
+(`ui/frames.ae`, `_mark_frame_dirty` before and after the position change).
+That is correct damage bookkeeping *for a compositor that redraws per frame
+object*. It is fatal for the paint model we actually have, where a clipped
+paint does `canvas_clear` and then replays THE WHOLE SCENE through the clip:
+
+- clear discards the command buffer,
+- the replay is clipped to Alpha's old ∪ new bounds,
+- Beta and the page background lie outside that clip and are never drawn,
+- the ~10px surviving border is where Alpha's old/new bounds overlap Beta.
+
+This is the same invariant from the top of this note, stated the other way
+round: *a clip is only valid if the painter redraws everything visible inside
+it* — and equally, **everything visible outside the clip must already be
+correct on the surface.** With a full-scene clear before every replay, nothing
+outside the clip is ever correct. Damage-based clipping cannot work at all
+until the painter stops clearing what it is not going to repaint.
+
+Hence the ordering matters more than round 2 suggested: **Stage 2 cannot be
+completed as a gesture-side concern.** Either
+
+- the painter clears only the dirty region (clip the CLEAR as well as the
+  replay, so untouched pixels genuinely survive), or
+- the scene is composited from retained per-frame content that can be
+  re-drawn selectively — which is Stage 3/4 territory.
+
+Until one of those exists, the honest position is **clipping off by default**:
+correct beats fast, per the doc's standing rule. `frames_demo` should ship
+with clips disabled unless an explicit opt-in flag is set for measurement.
+
+Recommend reverting the clip application in `frames_demo` (keep `ui/frames.ae`
+damage tracking and the Stage 1 region type — both are wanted) and folding the
+clip into the painter as part of Stage 3.
+
 ## Repro recipe
 
 ```sh
