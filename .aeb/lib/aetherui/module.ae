@@ -78,6 +78,9 @@ builder ui_backend(root: string) {
         link_flag("-lcomdlg32")
         link_flag("-lshell32")
         link_flag("-lole32")
+        // VariantInit/VariantClear — the MSAA Dynamic Annotation path in
+        // aether_ui_win32.c (a11y_role/label) calls them.
+        link_flag("-loleaut32")
         link_flag("-luuid")
         link_flag("-ldwmapi")
         link_flag("-luxtheme")
