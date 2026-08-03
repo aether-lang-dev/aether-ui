@@ -315,6 +315,39 @@ the "fast and wrong" the design doc rules out. The win32 case needs no
 testing to condemn — a fresh `CreateCompatibleBitmap` per paint cannot
 preserve anything by construction.
 
+## Round 6 — why Windows cannot self-verify (both instruments share one cause)
+
+Wiring `canvas_debug` on win32 (`1c7a792`) was supposed to give Windows a
+pixel-free way to check the Stage 2.5 invariant. It does not work, and the
+reason is worth writing down because it also explains the blank screenshot.
+
+`GET /canvas/{id}/debug` answers — so the hook is wired, not 501 — but with
+`{"area":0,"commands":0,"w":0,"h":0}`, before AND after a drag. The metrics
+are recorded inside `canvas_paint`, and `canvas_paint` is reachable from
+exactly one place: `case WM_PAINT` in the canvas window proc (~5351).
+
+Under the driver, these apps run **headless in a Windows service session**
+with no mapped, visible window — so `WM_PAINT` never fires. Nothing paints,
+so there are no paint metrics to report, and equally nothing for
+`PrintWindow`/`WM_PRINTCLIENT` to capture. **The blank `/screenshot` and the
+zeroed `/canvas/{id}/debug` are the same bug**, not two.
+
+Consequences:
+
+- Windows cannot verify Stage 2.5 (or Stage 3) by either instrument until
+  something drives painting headlessly. The `frames` suite's four failures
+  on Windows are this, not a compositor regression: every metric assertion
+  reads 0.
+- The fix is to make canvas painting reachable without `WM_PAINT` — e.g. an
+  explicit "render to DC" entry point the driver can call (win32 already has
+  `canvas_replay_to_dc`, used by `canvas_read_pixel`), with the metrics
+  recorded there too. That single change would light up both the screenshot
+  and the debug counters.
+- Until then, treat win32's Stage 2.5 status as **unverified by execution**;
+  the source-level argument in Round 5 (fresh `CreateCompatibleBitmap` per
+  paint cannot preserve pixels outside a clip) still stands and is why
+  `frames_demo` gates clips off on non-GTK backends.
+
 ## Repro recipe
 
 ```sh
