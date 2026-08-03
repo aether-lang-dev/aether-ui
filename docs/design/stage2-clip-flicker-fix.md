@@ -315,7 +315,40 @@ the "fast and wrong" the design doc rules out. The win32 case needs no
 testing to condemn — a fresh `CreateCompatibleBitmap` per paint cannot
 preserve anything by construction.
 
-## Round 6 — why Windows cannot self-verify (both instruments share one cause)
+## Round 7 — canvas_paint NEVER runs on win32 (measured, not theorised)
+
+Round 6 guessed that a locked session was the cause. **Wrong.** Paul
+unlocked the desktop and the metrics still read
+`{"area":0,"commands":0,"w":0,"h":0}`. Two further guesses also died:
+`AETHER_UI_HEADLESS=1` (exported for Windows/macOS at
+`tests/spec_matrix.sh:33`, which hides the window via `SW_HIDE`) is not it
+either — running explicitly non-headless, with a visible window on an
+unlocked desktop, still reports zeros.
+
+Settled by measurement instead: a `fprintf` tap at the top of
+`canvas_paint` (compiled in — verified `grep -c` on the source and a binary
+newer than it) fired **zero times** across app start, a click and a drag.
+The hook resolves the right canvas (`/canvas/1/debug` answers,
+`/canvas/2/debug` correctly 404s) and the metrics assignment is present at
+`aether_ui_win32.c:5232`. `canvas_paint` is simply never called.
+
+So the win32 canvas window is not receiving `WM_PAINT` — not because the
+session is locked, not because the window is hidden, but for some reason
+still to be found in the canvas HWND's creation/parenting or message
+routing. That single fact explains ALL of it: the blank `/screenshot`, the
+zeroed debug counters, and the four `frames` failures on Windows, which are
+therefore NOT a compositor regression.
+
+Next diagnostic step (not yet done): confirm the canvas HWND exists and is
+visible (`IsWindow`/`IsWindowVisible`/`GetClientRect` from the driver
+thread), and check whether it is parented under the off-screen
+`widget_holder` that `hook_screenshot_png`'s comments already describe as
+"never composited". If the canvas lives there, nothing will ever paint it
+and the fix is a driver-callable render-to-DC entry point
+(`canvas_replay_to_dc` already exists for `canvas_read_pixel`) that records
+metrics too.
+
+## Round 6 — the earlier (wrong) locked-session theory
 
 Wiring `canvas_debug` on win32 (`1c7a792`) was supposed to give Windows a
 pixel-free way to check the Stage 2.5 invariant. It does not work, and the
