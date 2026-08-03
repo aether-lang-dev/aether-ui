@@ -1,6 +1,13 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: Stages 0–2.5 built; 3–5 specified.**
+> **Status: Stages 0–2.5 built on GTK4 only; 3–5 specified.**
+> ⚠️ **Stage 2.5's retained surface exists on GTK4 alone** (`grep -c
+> paint_surface`: gtk4 39, macos 0, win32 0), yet `frames_demo` enables
+> clips by DEFAULT on every backend. On win32 that is unsafe by
+> construction — `canvas_paint` builds a fresh `CreateCompatibleBitmap`
+> each paint, so pixels outside the clip are uninitialised. macOS renders
+> correctly only because AppKit happens to preserve its backing store,
+> which is not a contract. **Close this before Stage 3.**
 > Stage 0 (the internal-frame harness) and Stage 1 (the region type) are done
 > and green. Stage 2 built the damage bookkeeping and the backend clip ABI,
 > and Stage 2.5 made GTK's canvas painter own damage by retaining a backing
@@ -8,6 +15,15 @@
 > submits dirty clips by default, with `AETHER_UI_FRAMES_DIRTY_CLIP=0` as the
 > local escape hatch. See `stage2-clip-flicker-fix.md` for the diagnosis and
 > resolution history.
+>
+> **Four-OS parity is part of a stage, not a follow-up.** A stage is not
+> "built" until GTK4, win32, macOS and FreeBSD either implement it or
+> explicitly and safely opt out of it. Where a backend cannot yet honour a
+> stage's invariant, the feature must be **gated off for that backend** —
+> never left enabled-and-wrong. Shipping a default that only one backend
+> can satisfy is how Stage 2.5 came to be described as "built" while two
+> backends were unsafe. Cross-platform verification runs at the END of a
+> tranche, but the GATE ships WITH it.
 >
 > A standing rule earned during Stage 2, and now part of every stage's
 > acceptance: **a test must be demonstrated failing against the unfixed code
@@ -349,6 +365,35 @@ replaying the command buffer into a fresh surface.
 failing against the unfixed code first. Four rounds of Stage 2 were declared
 green by tests that could not fail; that is what this stage exists to
 correct.
+
+### Stage 2.5b — retained surface on the other three backends
+
+The GTK4 mechanism is small — a ~24-line `canvas_ensure_paint_surface`
+(allocate/reuse keyed on size), a `canvas_clear_current_clip` helper, and
+one branch in the paint function that clears *within the clip* before
+replaying, then blits the retained surface. Porting it is bounded work,
+and both remaining backends already have the primitive they need:
+
+- **win32**: `canvas_paint` currently does `CreateCompatibleBitmap` at
+  entry and `DeleteObject` at exit (~5218/5258). Cache that HBITMAP on
+  `Canvas` instead, recreating only when the size changes; clear with
+  `FillRect` through the clip region rather than relying on a fresh
+  bitmap; keep the final `BitBlt` of the whole bitmap. The clip region is
+  already computed there.
+- **macOS**: `drawRect:` clips and replays straight into the window's CG
+  context. Retain a `CGBitmapContextCreate` surface (the same call already
+  used for the PNG path, ~4282/4315), replay into it under the clip, then
+  draw the resulting image into the view context.
+- **FreeBSD**: shares the GTK4 backend, so it inherits the fix — but it
+  still needs a verification run, not an assumption.
+
+*Acceptance:* per backend, the Stage 2.5 invariant with clips ENABLED —
+dragging one frame over another leaves the far frame's interior intact.
+On win32, where `/screenshot` returns blank for native-widget apps, use
+the counters from `GET /canvas/{id}/debug` (wired in `1c7a792`) instead:
+assert no clipped paint is issued while a scene is refreshing. Until a
+backend passes, `frames_demo` must gate clips OFF for it rather than
+shipping the unsafe default.
 
 ### Stage 3 — opaque subtraction + z-order *(the miracle)*
 

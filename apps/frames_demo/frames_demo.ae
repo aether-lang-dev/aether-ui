@@ -6,7 +6,7 @@
 import ui (
     window, vstack, hstack, text, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_release,
-    canvas_set_clip_rects, canvas_redraw,
+    canvas_set_clip_rects, canvas_redraw, backend_name,
     ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg, canvas_region, region_set_animated)
@@ -232,9 +232,24 @@ main() {
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
     app.clip_enabled = 1
+    // Dirty clipping is only CORRECT where the painter retains its
+    // surface between paints (Stage 2.5). Today that is GTK4 alone —
+    // win32 rebuilds a fresh CreateCompatibleBitmap per paint, so pixels
+    // outside the clip are uninitialised, and macOS survives only because
+    // AppKit happens to preserve its backing store, which is not a
+    // contract. Default OFF where the invariant cannot be honoured rather
+    // than shipping something we have proven wrong; see Stage 2.5b in
+    // docs/design/retained-compositor.md.
+    if string.equals(backend_name(), "gtk4") == 0 {
+        app.clip_enabled = 0
+    }
+    // Explicit override either way, for measurement on any backend.
     if os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP") != null {
         if string.equals(os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP"), "0") == 1 {
             app.clip_enabled = 0
+        }
+        if string.equals(os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP"), "1") == 1 {
+            app.clip_enabled = 1
         }
     }
     app.cube_a = mk_cube(0.0 - 0.35, 0.55, 0.52, 0.78, 0)
