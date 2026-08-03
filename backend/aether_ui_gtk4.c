@@ -3722,9 +3722,16 @@ typedef struct {
     int last_paint_h;
     int last_paint_area;
     int last_paint_count;
+    int paint_full_count;
+    int paint_clip_count_total;
+    int last_clip_area;
     double* paint_clip_rects;
     int paint_clip_count;
     int paint_clip_capacity;
+    cairo_surface_t* paint_surface;
+    int paint_surface_w;
+    int paint_surface_h;
+    int paint_surface_dirty;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -3746,6 +3753,7 @@ static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
         cs->cmds = realloc(cs->cmds, sizeof(CanvasCmd) * cs->capacity);
     }
     cs->cmds[cs->count++] = cmd;
+    cs->paint_surface_dirty = 1;
 }
 
 static int canvas_clip_area_sum(const double* rects, int n) {
@@ -3766,6 +3774,42 @@ static void canvas_apply_paint_clip(cairo_t* cr, CanvasState* cs) {
     }
     cairo_clip(cr);
     cairo_new_path(cr);
+}
+
+static int canvas_has_paint_clip(CanvasState* cs) {
+    return cs && cs->paint_clip_count > 0;
+}
+
+static cairo_surface_t* canvas_ensure_paint_surface(CanvasState* cs,
+                                                     int width, int height) {
+    if (!cs || width <= 0 || height <= 0) return NULL;
+    if (cs->paint_surface && cs->paint_surface_w == width &&
+        cs->paint_surface_h == height) {
+        return cs->paint_surface;
+    }
+    if (cs->paint_surface) {
+        cairo_surface_destroy(cs->paint_surface);
+        cs->paint_surface = NULL;
+    }
+    cs->paint_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+                                                   width, height);
+    if (cairo_surface_status(cs->paint_surface) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(cs->paint_surface);
+        cs->paint_surface = NULL;
+        cs->paint_surface_w = 0;
+        cs->paint_surface_h = 0;
+        return NULL;
+    }
+    cs->paint_surface_w = width;
+    cs->paint_surface_h = height;
+    return cs->paint_surface;
+}
+
+static void canvas_clear_current_clip(cairo_t* cr) {
+    cairo_save(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_restore(cr);
 }
 
 // Replay a canvas command buffer onto any cairo context. Shared by the live
@@ -3982,13 +4026,23 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
     // alternating 8414 commands / 2 commands on ONE physical click) —
     // keep it: paint bugs that only appear under a real pointer cannot
     // be seen any other way, and the gate costs nothing when unset.
+    int clipped = canvas_has_paint_clip(cs);
+    int must_repaint_surface = cs &&
+        (cs->paint_surface_dirty || !cs->paint_surface ||
+         cs->paint_surface_w != width || cs->paint_surface_h != height);
     if (cs) {
         cs->last_paint_w = width;
         cs->last_paint_h = height;
-        cs->last_paint_area = cs->paint_clip_count > 0
+        cs->last_paint_area = (must_repaint_surface && clipped)
             ? canvas_clip_area_sum(cs->paint_clip_rects, cs->paint_clip_count)
             : width * height;
         cs->last_paint_count = cs->count;
+        if (must_repaint_surface && clipped) {
+            cs->paint_clip_count_total++;
+            cs->last_clip_area = cs->last_paint_area;
+        } else if (must_repaint_surface) {
+            cs->paint_full_count++;
+        }
     }
     if (getenv("AEUI_CANVAS_DEBUG") && cs)
         fprintf(stderr, "[draw] id=%d count=%d w=%d h=%d area=%d last=%dx%d resize_hook=%d\n",
@@ -4006,12 +4060,42 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
         ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
             cs->on_resize->env, (intptr_t)width, (intptr_t)height);
     }
-    if (cs && cs->paint_clip_count > 0) {
-        cairo_save(cr);
-        canvas_apply_paint_clip(cr, cs);
-        canvas_replay(cr, cs);
-        cairo_restore(cr);
-        cs->paint_clip_count = 0;
+    if (cs) {
+        cairo_surface_t* surf = canvas_ensure_paint_surface(cs, width, height);
+        if (!surf) {
+            if (must_repaint_surface && clipped) {
+                cairo_save(cr);
+                canvas_apply_paint_clip(cr, cs);
+                canvas_replay(cr, cs);
+                cairo_restore(cr);
+                cs->paint_clip_count = 0;
+            } else {
+                canvas_replay(cr, cs);
+            }
+            return;
+        }
+        if (must_repaint_surface) {
+            cairo_t* bcr = cairo_create(surf);
+            if (clipped) {
+                cairo_save(bcr);
+                canvas_apply_paint_clip(bcr, cs);
+                canvas_clear_current_clip(bcr);
+                canvas_replay(bcr, cs);
+                cairo_restore(bcr);
+                cs->paint_clip_count = 0;
+            } else {
+                cairo_save(bcr);
+                cairo_set_operator(bcr, CAIRO_OPERATOR_CLEAR);
+                cairo_paint(bcr);
+                cairo_restore(bcr);
+                canvas_replay(bcr, cs);
+            }
+            cairo_destroy(bcr);
+            cairo_surface_flush(surf);
+            cs->paint_surface_dirty = 0;
+        }
+        cairo_set_source_surface(cr, surf, 0, 0);
+        cairo_paint(cr);
     } else {
         canvas_replay(cr, cs);
     }
@@ -4153,9 +4237,16 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->last_paint_h = 0;
     cs->last_paint_area = 0;
     cs->last_paint_count = 0;
+    cs->paint_full_count = 0;
+    cs->paint_clip_count_total = 0;
+    cs->last_clip_area = 0;
     cs->paint_clip_rects = NULL;
     cs->paint_clip_count = 0;
     cs->paint_clip_capacity = 0;
+    cs->paint_surface = NULL;
+    cs->paint_surface_w = 0;
+    cs->paint_surface_h = 0;
+    cs->paint_surface_dirty = 1;
     canvas_state_count++;
     int canvas_id = canvas_state_count; // 1-based
 
@@ -4630,6 +4721,7 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
         }
         cs->count = 0;
         cs->gen++;   // invalidates the read_pixel replay cache
+        cs->paint_surface_dirty = 1;
         if (getenv("AEUI_CANVAS_DEBUG"))
             fprintf(stderr, "[clear] id=%d gen=%lu\n", canvas_id, cs->gen);
         GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
@@ -5177,15 +5269,22 @@ typedef struct {
     int count;
     int w;
     int h;
+    int full_paints;
+    int clip_paints;
+    int last_clip_area;
     int done;
 } CanvasDebugReq;
 
 static gboolean canvas_debug_req_idle(gpointer data) {
     CanvasDebugReq* rq = (CanvasDebugReq*)data;
-    rq->area = aether_ui_canvas_last_paint_area_impl(rq->canvas_id);
-    rq->count = aether_ui_canvas_last_paint_count_impl(rq->canvas_id);
-    rq->w = aether_ui_canvas_last_paint_w_impl(rq->canvas_id);
-    rq->h = aether_ui_canvas_last_paint_h_impl(rq->canvas_id);
+    CanvasState* cs = get_canvas_state(rq->canvas_id);
+    rq->area = cs ? cs->last_paint_area : -1;
+    rq->count = cs ? cs->last_paint_count : -1;
+    rq->w = cs ? cs->last_paint_w : -1;
+    rq->h = cs ? cs->last_paint_h : -1;
+    rq->full_paints = cs ? cs->paint_full_count : 0;
+    rq->clip_paints = cs ? cs->paint_clip_count_total : 0;
+    rq->last_clip_area = cs ? cs->last_clip_area : 0;
     rq->done = 1;
     return G_SOURCE_REMOVE;
 }
@@ -5817,18 +5916,55 @@ static unsigned char* ss_result_data = NULL;
 static gsize ss_result_len = 0;
 static volatile int ss_result_done = 0;
 
+static cairo_status_t png_array_write(void* closure,
+                                      const unsigned char* data,
+                                      unsigned int length) {
+    GByteArray* arr = (GByteArray*)closure;
+    g_byte_array_append(arr, data, length);
+    return CAIRO_STATUS_SUCCESS;
+}
+
+static int screenshot_from_canvas_surface(void) {
+    for (int i = 0; i < canvas_state_count; i++) {
+        CanvasState* cs = &canvas_states[i];
+        if (!cs->paint_surface) continue;
+        cairo_surface_flush(cs->paint_surface);
+        GByteArray* arr = g_byte_array_new();
+        cairo_status_t st = cairo_surface_write_to_png_stream(
+            cs->paint_surface, png_array_write, arr);
+        if (st == CAIRO_STATUS_SUCCESS && arr->len > 0) {
+            ss_result_data = malloc(arr->len);
+            if (ss_result_data) {
+                memcpy(ss_result_data, arr->data, arr->len);
+                ss_result_len = arr->len;
+            }
+        }
+        g_byte_array_unref(arr);
+        return ss_result_data ? 1 : 0;
+    }
+    return 0;
+}
+
 static gboolean screenshot_idle_cb(gpointer data) {
     (void)data;
     ss_result_data = NULL;
     ss_result_len = 0;
 
     GtkWidget* root = aether_ui_get_widget(1);
-    if (!root) { ss_result_done = 1; return G_SOURCE_REMOVE; }
+    if (!root) {
+        screenshot_from_canvas_surface();
+        ss_result_done = 1;
+        return G_SOURCE_REMOVE;
+    }
 
     GtkWidget* toplevel = root;
     while (gtk_widget_get_parent(toplevel))
         toplevel = gtk_widget_get_parent(toplevel);
-    if (!GTK_IS_WINDOW(toplevel)) { ss_result_done = 1; return G_SOURCE_REMOVE; }
+    if (!GTK_IS_WINDOW(toplevel)) {
+        screenshot_from_canvas_surface();
+        ss_result_done = 1;
+        return G_SOURCE_REMOVE;
+    }
 
     GdkPaintable* paintable = gtk_widget_paintable_new(toplevel);
     int w = gdk_paintable_get_intrinsic_width(paintable);
@@ -5840,6 +5976,7 @@ static gboolean screenshot_idle_cb(gpointer data) {
     GskRenderNode* node = gtk_snapshot_free_to_node(snapshot);
     if (!node) {
         g_object_unref(paintable);
+        screenshot_from_canvas_surface();
         ss_result_done = 1;
         return G_SOURCE_REMOVE;
     }
@@ -5848,13 +5985,36 @@ static gboolean screenshot_idle_cb(gpointer data) {
     GskRenderer* renderer = gsk_renderer_new_for_surface(surface);
     GdkTexture* texture = gsk_renderer_render_texture(renderer, node,
         &GRAPHENE_RECT_INIT(0, 0, w, h));
+    if (!texture) {
+        gsk_render_node_unref(node);
+        gsk_renderer_unrealize(renderer);
+        g_object_unref(renderer);
+        g_object_unref(paintable);
+        screenshot_from_canvas_surface();
+        ss_result_done = 1;
+        return G_SOURCE_REMOVE;
+    }
     GBytes* bytes = gdk_texture_save_to_png_bytes(texture);
+    if (!bytes) {
+        g_object_unref(texture);
+        gsk_render_node_unref(node);
+        gsk_renderer_unrealize(renderer);
+        g_object_unref(renderer);
+        g_object_unref(paintable);
+        screenshot_from_canvas_surface();
+        ss_result_done = 1;
+        return G_SOURCE_REMOVE;
+    }
 
     gsize len = 0;
     const unsigned char* raw = g_bytes_get_data(bytes, &len);
-    ss_result_data = malloc(len);
-    memcpy(ss_result_data, raw, len);
-    ss_result_len = len;
+    if (raw && len > 0) {
+        ss_result_data = malloc(len);
+        if (ss_result_data) {
+            memcpy(ss_result_data, raw, len);
+            ss_result_len = len;
+        }
+    }
 
     g_bytes_unref(bytes);
     g_object_unref(texture);
@@ -6153,8 +6313,10 @@ static void handle_test_request(int client_fd) {
         while (!drq.done) usleep(1000);
         char buf[192];
         snprintf(buf, sizeof(buf),
-            "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d}",
-            drq.area, drq.count, drq.w, drq.h);
+            "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d,"
+            "\"full_paints\":%d,\"clip_paints\":%d,\"last_clip_area\":%d}",
+            drq.area, drq.count, drq.w, drq.h,
+            drq.full_paints, drq.clip_paints, drq.last_clip_area);
         send_response(client_fd, 200, "OK", "application/json", buf);
         close(client_fd);
         return;

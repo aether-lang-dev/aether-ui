@@ -11,8 +11,7 @@ import ui (
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
-           scene_canvas, scene_refresh, scene_set_refreshing, scene_is_refreshing,
-           path, opacity)
+           scene_canvas, scene_refresh, scene_set_refreshing, path, opacity)
 import ui.frames (
     frames_new, frame_add, frame_set_content,
     frame_bounds, frame_z, frames_hit, frames_draw,
@@ -20,6 +19,7 @@ import ui.frames (
     frames_on_click, frames_on_move, frames_on_release
 )
 import std.os (os_getenv)
+import std.string
 import std.floatarr
 import vg.geom.vec3 (v3_new, v3_x, v3_y, v3_z)
 import vg.geom.mat4 (
@@ -95,14 +95,10 @@ publish(app: *App, hx: float, hy: float) {
 apply_dirty_clip(app: *App) {
     n = frames_dirty_nrects(app.host)
     if n <= 0 { return }
-    // Stage 2 damage bookkeeping is useful, but gesture-side clips are not
-    // sound while the painter clears and replays the full command buffer.
-    // Keep clips opt-in for measurement until the painter/compositor owns them.
+    // Stage 2.5 makes the painter preserve pixels outside this damage clip by
+    // clearing and replaying only inside the same region. Keep an escape hatch
+    // for local comparison against the full-canvas path.
     if app.clip_enabled != 1 {
-        frames_clear_dirty(app.host)
-        return
-    }
-    if scene_is_refreshing(app.scene) == 1 {
         frames_clear_dirty(app.host)
         return
     }
@@ -235,9 +231,11 @@ main() {
     app.st_bounds = ui_state_s("bounds: pending")
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
-    app.clip_enabled = 0
+    app.clip_enabled = 1
     if os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP") != null {
-        app.clip_enabled = 1
+        if string.equals(os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP"), "0") == 1 {
+            app.clip_enabled = 0
+        }
     }
     app.cube_a = mk_cube(0.0 - 0.35, 0.55, 0.52, 0.78, 0)
     app.cube_b = mk_cube(0.45, 0.0 - 0.25, 0.66, 0.44, 1)

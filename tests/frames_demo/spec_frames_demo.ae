@@ -43,8 +43,8 @@ main() {
             area = uidriver.canvas_debug_area()
             w = uidriver.canvas_debug_w()
             h = uidriver.canvas_debug_h()
-            aeocha.assert_eq(area, w * h,
-                "gesture-side clips stay disabled by default until the painter owns damage")
+            aeocha.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
+            aeocha.assert_true(area < w * h, "dirty clip is much smaller than the canvas")
             uidriver.post_ok("/canvas/1/release?x=140&y=100", "canvas release")
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "bounds: alpha=120,90,230,160",

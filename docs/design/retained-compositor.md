@@ -1,16 +1,13 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: Stages 0–2 built; 2.5 is the next build step; 3–5 specified.**
+> **Status: Stages 0–2.5 built; 3–5 specified.**
 > Stage 0 (the internal-frame harness) and Stage 1 (the region type) are done
 > and green. Stage 2 built the damage bookkeeping and the backend clip ABI,
-> but its clipped repaint is **disabled by default and unsafe to enable** —
-> see Stage 2.5 for why, and `stage2-clip-flicker-fix.md` for the four rounds
-> of evidence. The rendering path is therefore still immediate-mode in
-> practice: every paint covers the whole canvas.
->
-> **Next up: Stage 2.5 — make the painter own damage.** Stage 3 is blocked on
-> it; its acceptance test presumes a working clipped repaint that does not yet
-> exist.
+> and Stage 2.5 made GTK's canvas painter own damage by retaining a backing
+> surface and applying the same clip to clear and replay. `frames_demo` now
+> submits dirty clips by default, with `AETHER_UI_FRAMES_DIRTY_CLIP=0` as the
+> local escape hatch. See `stage2-clip-flicker-fix.md` for the diagnosis and
+> resolution history.
 >
 > A standing rule earned during Stage 2, and now part of every stage's
 > acceptance: **a test must be demonstrated failing against the unfixed code
@@ -272,17 +269,16 @@ add/subtract sequences; degenerate and zero-size inputs.
 
 ### Stage 2 — dirty invalidation, single buffer
 
-**Status: damage bookkeeping built; gesture-side clipping disabled by default.**
+**Status: damage bookkeeping built; GTK clipped repaint safe after Stage 2.5.**
 `FrameHost` now owns a
 `vg.geom.region` dirty region. `frame_add`, `frame_move`, `frame_resize`,
 `frame_raise`, `frame_close`, and active drag/resize gestures dirty the old
 and/or new frame bounds, and `frames_dirty_nrects/rect/area/clear` expose that
-region to callers. `apps/frames_demo` does **not** submit those rects by
-default, because the current painter clears and replays the full command buffer
-and a gesture-owned clip can leave pixels outside the clip stale or blank.
-Set `AETHER_UI_FRAMES_DIRTY_CLIP=1` only for local measurement while Stage 3
-moves clip ownership into the painter/compositor itself. The demo also honors
-`AETHER_UI_NO_ANIMATION=1` so the driver spec can make deterministic assertions.
+region to callers. `apps/frames_demo` submits those rects by default on GTK now
+that Stage 2.5 makes the painter preserve pixels outside the clip. Set
+`AETHER_UI_FRAMES_DIRTY_CLIP=0` only for local full-paint comparison. The demo
+also honors `AETHER_UI_NO_ANIMATION=1` so the driver spec can make
+deterministic assertions.
 
 The canvas ABI has the one-shot paint clip surface on all three backends:
 `canvas_set_clip_rects(canvas_id, rects, n)` and `canvas_reset_clip(canvas_id)`.
@@ -304,39 +300,37 @@ canvas_reset_clip(canvas_id)                 // CGContextClipToRects, GDI
 ```
 
 This still replays the whole buffer, but the backend rasterizes only inside
-the clip. That is not safe when the painter has cleared and rebuilt the full
-command buffer, so `frames_demo` keeps this path opt-in until Stage 3 can
-apply the clip inside the painter/compositor.
+the clip. Stage 2.5 makes this safe on GTK by retaining the previous surface
+and clipping the clear as well as the replay; macOS and Win32 have the ABI
+surface but still need equivalent painter-owned backing-store work before this
+is claimed cross-backend.
 
 *Acceptance:* `tests/frames_demo/spec_frames_demo.ae` asserts that moving one
-frame still moves and resizes correctly, while the default drag repaint reports
-the full canvas area through `GET /canvas/{id}/debug`. That is the correctness
-guard until clipped repaint is owned by the painter/compositor.
+frame still moves and resizes correctly, and that the default drag repaint
+reports an area below the full canvas through `GET /canvas/{id}/debug`.
 
-### Stage 2.5 — the painter must own damage *(prerequisite, NOT yet built)*
+### Stage 2.5 — the painter must own damage *(built on GTK)*
 
-**Stage 3 cannot start until this exists.** Round 3 of the Stage 2 work
+Round 3 of the Stage 2 work
 (see `stage2-clip-flicker-fix.md`) established the missing invariant the
 hard way, on screen:
 
 > A clip is valid only if the painter redraws everything visible **inside**
 > it AND everything **outside** it is already correct on the surface.
 
-Today the second half never holds. `canvas_clear` discards the whole command
-buffer and the subsequent replay is clipped, so anything outside the clip was
-cleared and never redrawn — dragging one frame blanked the other, all but a
-~10px border. That is why gesture-side clipping is opt-in and off.
+Before Stage 2.5 the second half never held. `canvas_clear` discarded the
+whole command buffer and the subsequent replay was clipped, so anything
+outside the clip was cleared and never redrawn — dragging one frame blanked the
+other, all but a ~10px border.
 
-So the next build step is not occlusion; it is making a clipped paint
-*safe*. Two candidate shapes:
+The chosen shape was the first candidate:
 
-1. **Clip the clear as well as the replay.** Smallest change that keeps the
-   current architecture: untouched pixels genuinely survive between paints,
-   at which point Stage 2's existing clip becomes sound and
-   `AETHER_UI_FRAMES_DIRTY_CLIP=1` can become the default. The wrinkle is
-   that `canvas_clear` today is a *model* operation (it frees the command
-   buffer) while the clip is a *surface* operation; those two roles have to
-   be separated before this works.
+1. **Clip the clear as well as the replay.** GTK's canvas now keeps a retained
+   cairo image surface. Model operations (`canvas_clear` and command appends)
+   mark that surface dirty; the next real paint updates only the submitted
+   damage clip by clearing and replaying through the same clip. Paints with no
+   dirty model state, including driver snapshots, just present the retained
+   surface and do not repair the sample by replaying the model.
 
 2. **Retained per-frame content.** Each frame owns a drawable it can
    re-render independently; the composite blits them in z-order. Larger, but
@@ -344,14 +338,12 @@ So the next build step is not occlusion; it is making a clipped paint
    only meaningful when the thing behind can be redrawn *without* redrawing
    everything.
 
-*Acceptance:* re-enable `AETHER_UI_FRAMES_DIRTY_CLIP=1`, drag a frame over
-another with animation on, and assert BOTH that the repaint area is well
-below the canvas area AND that the far frame's interior still renders (a
-real pixel check, by a means that can actually observe the surface — note
-`canvas_read_pixel` replays the command buffer into a fresh surface and is
-structurally blind to backing-store staleness; see
-`stage2-clip-flicker-fix.md` Round 2). The spec's current
-`assert_eq(area, w * h)` guard flips to the clipped expectation here.
+*Acceptance:* default dirty clips are enabled, drag a frame over another with
+animation on, and assert BOTH that the repaint area is well below the canvas
+area AND that the far frame's interior still renders. The regression
+`tests/frames_demo/test_stage25_clip_surface.sh` samples `/screenshot`, not
+`canvas_read_pixel`, so it observes the widget/backing-surface path instead of
+replaying the command buffer into a fresh surface.
 
 **Falsify before landing.** Every test added for this must be demonstrated
 failing against the unfixed code first. Four rounds of Stage 2 were declared

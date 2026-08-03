@@ -8,11 +8,11 @@ evidence, and what the fix has to look like. Stage 1 (`da0f626`, the region
 type) is independent and fine — keep it.
 
 **Superseded resolution:** `1a86edf` took the interim-safe live-scene guard,
-but Round 2 and Round 3 below showed that was still not enough. The current
-resolution is stricter: `frames_demo` keeps dirty-region bookkeeping but does
-not submit gesture-side clips by default. Set `AETHER_UI_FRAMES_DIRTY_CLIP=1`
-only for local measurement until Stage 3 moves clip ownership into the
-painter/compositor.
+but Round 2 and Round 3 below showed that was still not enough. Round 4
+disabled gesture-side clips by default. Round 5 is the current resolution:
+GTK's canvas painter owns a retained backing surface, clips the clear as well
+as replay, and `frames_demo` submits dirty-region clips by default. Set
+`AETHER_UI_FRAMES_DIRTY_CLIP=0` only for local full-paint comparison.
 
 ## The symptom
 
@@ -234,7 +234,7 @@ clip into the painter as part of Stage 3.
 
 ## Round 4 — current repo state
 
-`frames_demo` now implements the Round 3 recommendation:
+`frames_demo` implemented the Round 3 recommendation:
 
 - `FrameHost` still tracks dirty regions and exposes
   `frames_dirty_nrects/rect/area/clear`.
@@ -245,6 +245,37 @@ clip into the painter as part of Stage 3.
 - The driver spec no longer uses the invalid app-side pixel probe. It asserts
   that default drags repaint the full canvas, preserving correctness until
   Stage 3 owns the clip in the painter/compositor.
+
+## Round 5 — Stage 2.5 resolution
+
+The GTK painter now owns damage for the canvas path:
+
+- `canvas_clear` remains a model operation that frees the command buffer, but
+  it also marks the retained paint surface dirty.
+- Command appends mark the retained paint surface dirty.
+- The next real paint updates the retained cairo image surface. If a dirty
+  clip is pending, the painter applies that clip to both the clear and the
+  replay, so pixels outside the clip survive from the previous correct
+  surface.
+- Paints with no dirty model state, including driver snapshots, present the
+  retained surface without replaying the model and therefore do not repair the
+  probe.
+- `/canvas/{id}/debug` reports cumulative full/clip paint counts and the last
+  clipped paint area, so tests can assert that a live drag actually hit the
+  clipped painter.
+
+`tests/frames_demo/test_stage25_clip_surface.sh` is the Stage 2.5 regression.
+It runs with animation enabled, drives a title-bar drag, requires a clipped
+paint below the full canvas area, then samples `/screenshot` to confirm the
+far frame interior is still rendered. The first version was run red against
+the unfixed dirty-clip path with:
+
+```
+FAIL: expected clipped drag paint below full canvas, got area=294000 full=294000
+```
+
+After the painter-owned surface change, the same scenario reports a clipped
+area and a retained far-frame pixel.
 
 ## Repro recipe
 

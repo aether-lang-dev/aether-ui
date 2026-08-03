@@ -620,6 +620,10 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
     UI_SPEC=frames_demo/spec_frames_demo \
     run_server_test "$(AEVG_BIN frames_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" frames_demo || FAIL=$((FAIL + 1))
+    ( unset AETHER_UI_NO_ANIMATION
+      run_server_test "$(AEVG_BIN frames_demo)" \
+                      "$SCRIPT_DIR/tests/frames_demo/test_stage25_clip_surface.sh" \
+                      frames_stage25 ) || FAIL=$((FAIL + 1))
     UI_SPEC=falling_blocks/spec_falling_blocks \
     run_server_test "$(AEVG_BIN falling_blocks)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" falling_blocks || FAIL=$((FAIL + 1))
