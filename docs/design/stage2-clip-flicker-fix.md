@@ -277,6 +277,44 @@ FAIL: expected clipped drag paint below full canvas, got area=294000 full=294000
 After the painter-owned surface change, the same scenario reports a clipped
 area and a retained far-frame pixel.
 
+## Round 5 — Stage 2.5 is GTK-only, and the other two backends are unsafe
+
+`d4ca538` gives GTK a retained `cairo_surface_t` and makes a clipped paint
+clear *within the clip only*, so pixels outside survive. Verified here on a
+real display: dragging Alpha over Beta keeps Beta's interior intact, with
+clips genuinely active (36800/49600/43200 among full paints). Good fix.
+
+But `frames_demo` now enables clips **by default**, and the other two
+backends have the clip ABI with **no retained surface** (`grep -c
+paint_surface`: gtk4 39, macos 0, win32 0). Both are structurally the Round 3
+bug:
+
+- **win32** (`canvas_paint`, ~5194): `CreateCompatibleDC` +
+  `CreateCompatibleBitmap` build a **fresh** bitmap every paint, the clip is
+  applied to it, the buffer is replayed, and then the WHOLE bitmap is
+  `BitBlt`-ed to the window. A fresh compatible bitmap is uninitialised — so
+  everything outside the clip is blitted as garbage over good pixels. There
+  is no previous content to preserve because the bitmap is new each time.
+- **macOS** (`drawRect:`, ~3826): clips and replays straight into the
+  `NSGraphicsContext` CG context. AppKit does not guarantee backing-store
+  content outside the dirty rect, so this is unsafe by contract even where it
+  happens to look right.
+
+Empirically macOS *did* render correctly in a driver-driven drag (screenshot
+clean, Beta intact) — but that is AppKit choosing to preserve the backing
+store, not a guarantee we hold. Windows could not be tested: aeb's own
+tooling is broken there independently of this work (`transform-ae` invocation
+fails with `C:/Users/paul/aether-ui: Is a directory`), so `frames_demo` does
+not currently build on winbaz at all.
+
+**Ask:** either give macOS and win32 the same retained-surface treatment, or
+gate the clipped path on a backend capability so it stays off where the
+painter cannot own damage. Shipping `AETHER_UI_FRAMES_DIRTY_CLIP` on by
+default while two of three backends cannot honour the invariant is exactly
+the "fast and wrong" the design doc rules out. The win32 case needs no
+testing to condemn — a fresh `CreateCompatibleBitmap` per paint cannot
+preserve anything by construction.
+
 ## Repro recipe
 
 ```sh
