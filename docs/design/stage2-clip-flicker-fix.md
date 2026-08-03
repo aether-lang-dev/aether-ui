@@ -315,6 +315,47 @@ the "fast and wrong" the design doc rules out. The win32 case needs no
 testing to condemn — a fresh `CreateCompatibleBitmap` per paint cannot
 preserve anything by construction.
 
+## Round 8 — nothing regressed: win32 on-screen painting has ALWAYS been dead
+
+Paul launched `frames_demo` and `tumbling_cube` from Windows Search (no
+scripts, no driver harness, unlocked desktop). Result: **windows open and
+move, drag counters increment, and the canvas is empty** — no cubes, no
+frame content. Every non-painting path works; every painting path does not.
+
+That prompted a bisect. It is not needed, and the reason is more useful
+than a commit hash.
+
+**The apparent contradiction.** `1a1b1b2` (Aug 1) fixed a win32 canvas bug
+and its message quotes exact read-back pixels — "dark 15,15,22 / red
+229,76,51 / blue 51,102,229". So canvases demonstrably rendered on Windows
+two days ago, which seems to refute "win32 never paints".
+
+**The resolution.** There are TWO independent paths:
+
+- `canvas_read_pixel` → builds its own memory DC → `canvas_replay_to_dc`
+  (5288). **Never calls `canvas_paint`.**
+- on-screen painting → `WM_PAINT` → `canvas_paint` → `canvas_replay_to_dc`
+  (5249).
+
+Every win32 pixel proof this repo has ever recorded — the `begin_path`
+frame-wipe fix, the `CV_STROKE` pen fix, the goldens, every spec probe —
+went through the FIRST path. They tested the command buffer and the replay,
+both of which are fine. **No test has ever asserted that a win32 canvas
+reaches the screen**, and the human check that would have caught it (look
+at the window) had never been done until now.
+
+So: nothing regressed, there is no bad commit, and the four `frames`
+failures plus the `sketchpad`/`maerkdown`/`golden` reds are not
+compositor damage. On-screen canvas painting on win32 is an
+**unimplemented-and-untested capability**, not a broken one — hidden for
+months because the replay path it shares is genuinely correct, and because
+the apps that pass on Windows are built from native widgets.
+
+Corollary for the compositor track: Stage 2.5b (retained surface on win32)
+is pointless until `canvas_paint` runs at all. And the missing test is not
+a pixel probe — those pass — but an assertion that `canvas_paint` executes,
+which the `canvas_debug` counters (`1c7a792`) can now express.
+
 ## Round 7 — canvas_paint NEVER runs on win32 (measured, not theorised)
 
 Round 6 guessed that a locked session was the cause. **Wrong.** Paul
