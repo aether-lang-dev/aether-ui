@@ -4563,6 +4563,16 @@ typedef struct {
     AeClosure* on_release; // pointer-release hook (canvas-local x,y)
     AeClosure* on_key;     // key-press hook (GDK key name string)
     AeClosure* on_resize;  // |w, h| — fired from WM_SIZE (canvas rescale)
+    // Last-paint metrics for the compositor instrumentation
+    // (GET /canvas/{id}/debug). `last_paint_area` is the pixel area the
+    // last paint covered: the summed clip-rect area when the paint was
+    // clipped, else the whole allocation. See
+    // docs/design/retained-compositor.md — under immediate mode the two
+    // coincide, and only become distinguishable once damage is owned by
+    // the painter.
+    int last_paint_w, last_paint_h;
+    int last_paint_area, last_paint_count;
+    int full_paints, clip_paints, last_clip_area;
     double* paint_clip_rects;
     int paint_clip_count;
     int paint_clip_cap;
@@ -4635,6 +4645,15 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cv->paint_clip_rects = NULL;
     cv->paint_clip_count = 0;
     cv->paint_clip_cap = 0;
+    // realloc above does not zero, so the metrics need explicit init like
+    // every other field here.
+    cv->last_paint_w = 0;
+    cv->last_paint_h = 0;
+    cv->last_paint_area = 0;
+    cv->last_paint_count = 0;
+    cv->full_paints = 0;
+    cv->clip_paints = 0;
+    cv->last_clip_area = 0;
     int widget_handle = register_widget_typed(h, WK_CANVAS);
     Widget* ww = widget_at(widget_handle);
     if (ww) {
@@ -5199,6 +5218,20 @@ static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
     HBITMAP bmp = CreateCompatibleBitmap(hdc, width, height);
     HBITMAP old_bmp = (HBITMAP)SelectObject(mem, bmp);
     HRGN clip = NULL;
+    {
+        int clipped_now = (cv->paint_clip_count > 0);
+        double a = 0.0;
+        for (int i = 0; clipped_now && i < cv->paint_clip_count; i++) {
+            double* r = &cv->paint_clip_rects[i * 4];
+            if (r[2] > 0.0 && r[3] > 0.0) a += r[2] * r[3];
+        }
+        cv->last_paint_w = width;
+        cv->last_paint_h = height;
+        cv->last_paint_count = cv->cmd_count;
+        cv->last_clip_area = clipped_now ? (int)(a + 0.5) : 0;
+        cv->last_paint_area = clipped_now ? cv->last_clip_area : width * height;
+        if (clipped_now) cv->clip_paints++; else cv->full_paints++;
+    }
     if (cv->paint_clip_count > 0) {
         clip = CreateRectRgn(0, 0, 0, 0);
         for (int i = 0; clip && i < cv->paint_clip_count; i++) {
@@ -6207,6 +6240,20 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     return rc;
 }
 
+// Last-paint metrics for GET /canvas/{id}/debug. Returns 0 on success,
+// non-zero when the canvas id is unknown (the shared server maps that to
+// 404; a NULL hook would be 501 "not wired on this backend").
+static int hook_canvas_debug(int canvas_id, int* area, int* commands,
+                             int* w, int* h) {
+    if (canvas_id < 1 || canvas_id > canvas_count) return 1;
+    Canvas* cv = &canvases[canvas_id - 1];
+    if (area) *area = cv->last_paint_area;
+    if (commands) *commands = cv->last_paint_count;
+    if (w) *w = cv->last_paint_w;
+    if (h) *h = cv->last_paint_h;
+    return 0;
+}
+
 static const AetherDriverHooks win32_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -6226,6 +6273,7 @@ static const AetherDriverHooks win32_driver_hooks = {
     .widget_hovered       = hook_widget_hovered,
     .widget_pressed       = hook_widget_pressed,
     .screenshot_png       = hook_screenshot_png,
+    .canvas_debug         = hook_canvas_debug,
 };
 
 static int test_server_started = 0;
