@@ -36,6 +36,14 @@ main() {
             aeocha.assert_gt(cmds, 20, "cube payload emits a non-trivial command stream")
         }
 
+        aeocha.it("reports current frame composite work") callback {
+            _ = uidriver.get_body("/screenshot")
+            sleep(120)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "composite: rerender=2 blit=0",
+                "immediate compositor re-renders both frames and blits none")
+        }
+
         aeocha.it("clicking alpha raises it above beta") callback {
             uidriver.click(80.0, 70.0)
             body = uidriver.get_body("/widgets")

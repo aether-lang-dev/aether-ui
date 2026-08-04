@@ -16,6 +16,7 @@ import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
 import ui.frames (
     frames, frame,
     frame_bounds, frame_z, frames_hit, frames_draw,
+    frames_rerender_count, frames_blit_count,
     frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_on_click, frames_on_move, frames_on_release
 )
@@ -46,8 +47,16 @@ struct App {
     st_z: int
     st_hit: int
     st_clip: int
+    st_composite: int
     clip_enabled: int
     clip_mode: int       // 0 configured off, 1 full paint, 2 clipped paint
+}
+
+publish_composite(app: *App) {
+    rerenders = frames_rerender_count(app.host)
+    blits = frames_blit_count(app.host)
+    _c = ui_set_s(app.st_composite,
+        "composite: rerender=${rerenders} blit=${blits}")
 }
 
 struct CubeSpin {
@@ -256,6 +265,7 @@ main() {
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
     app.st_clip = ui_state_s("clip: pending")
+    app.st_composite = ui_state_s("composite: pending")
     app.clip_enabled = 1
     app.clip_mode = 1
     // Dirty clipping is only CORRECT where the painter retains its
@@ -318,6 +328,7 @@ main() {
                         back = rect(rn, 0.0, 0.0, FW * 1.0, FH * 1.0)
                         fill(back, "#dfe5ec")
                         frames_draw(app.host, rn, t)
+                        publish_composite(app)
                     }
                 region_set_animated(reg, 0)
             }
@@ -332,6 +343,8 @@ main() {
             bind_text(th, app.st_hit)
             tc = text("clip: pending")
             bind_text(tc, app.st_clip)
+            tcomp = text("composite: pending")
+            bind_text(tcomp, app.st_composite)
             canvas_on_click(app.canvas) callback |x: float, y: float| {
                 frames_on_click(app.host, x, y)
                 apply_dirty_clip(app)

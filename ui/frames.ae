@@ -10,6 +10,7 @@ exports (
     frames_new, frame_add, frame_set_content,
     frame_move, frame_resize, frame_raise, frame_close,
     frame_bounds, frame_z, frame_count, frames_hit,
+    frames_rerender_count, frames_blit_count,
     frames_dirty_area, frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_draw, frames_on_click, frames_on_move, frames_on_release
 )
@@ -42,6 +43,8 @@ struct FrameHost {
     start_y: float
     start_w: float
     start_h: float
+    last_rerender_count: int
+    last_blit_count: int
 }
 
 struct Frame {
@@ -100,6 +103,8 @@ frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
     hst.start_y = 0.0
     hst.start_w = 0.0
     hst.start_h = 0.0
+    hst.last_rerender_count = 0
+    hst.last_blit_count = 0
     return hst as ptr
 }
 
@@ -201,6 +206,16 @@ frame_count(host: ptr) -> int {
     return count
 }
 
+frames_rerender_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    return hst.last_rerender_count
+}
+
+frames_blit_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    return hst.last_blit_count
+}
+
 frames_hit(host: ptr, x: float, y: float) -> ptr {
     hst = host as *FrameHost
     best = null
@@ -245,6 +260,8 @@ frames_clear_dirty(host: ptr) {
 
 frames_draw(host: ptr, rn: ptr, t: float) {
     hst = host as *FrameHost
+    hst.last_rerender_count = 0
+    hst.last_blit_count = 0
     n = list.size(hst.frames)
     drawn = 0
     last_z = 0 - 2147483647
@@ -266,6 +283,7 @@ frames_draw(host: ptr, rn: ptr, t: float) {
             i = i + 1
         }
         if best == null { return }
+        hst.last_rerender_count = hst.last_rerender_count + 1
         _draw_frame(best as *Frame, rn, t)
         last_z = best_z
         drawn = drawn + 1
