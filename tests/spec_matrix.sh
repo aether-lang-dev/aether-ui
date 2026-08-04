@@ -193,6 +193,21 @@ for row in "${SUITES[@]}"; do
 
     base="$(basename "$appdir")"
     bin="target/build/$appdir/bin/$base"
+    # STALENESS WARNING. This harness runs whatever binary it finds; it does
+    # NOT rebuild. That has produced false greens twice: four days of them on
+    # FreeBSD (matrix read target/build/ while the real artifacts sat in
+    # build/), and a stale aeb build that masked a compile error outright.
+    # It bites hardest during falsification — edit a source, run the matrix,
+    # see the OLD binary stay green, and wrongly conclude the test cannot
+    # detect the change. Warn loudly rather than silently measuring the past.
+    if [ -x "$bin" ]; then
+        newer="$(find "$appdir" ui vg -name '*.ae' -newer "$bin" 2>/dev/null | head -3)"
+        if [ -n "$newer" ]; then
+            printf "  \033[33mWARN\033[0m %s: binary older than sources — measuring a STALE build.\n" "$name" >&2
+            printf "       %s\n" $newer >&2
+            printf "       rebuild: aeb %s/.build.ae\n" "$appdir" >&2
+        fi
+    fi
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
             # aeb's fan-out can't build UI apps on MSYS yet (the
