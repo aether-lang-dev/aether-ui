@@ -18,7 +18,7 @@ import std.string
 import vg.geom.region (
     rgn_new, rgn_add_rect, rgn_sub_rect, rgn_nrects, rgn_rect, rgn_area
 )
-import vg (rect, path, text_sized, fill, stroke)
+import vg (rect, path, text_sized, fill, stroke, opacity)
 
 extern malloc(size: int) -> ptr
 extern string_retain(s: string)
@@ -313,21 +313,25 @@ _draw_frame(f: *Frame, rn: ptr, t: float) {
 
     shadow = rect(rn, f.x + 4.0, f.y + 5.0, f.w, f.h)
     fill(shadow, "#000000")
-    // Keep shadows subtle without relying on a group opacity primitive.
+    // Per-element alpha keeps the shadow soft without dimming frame contents.
+    opacity(shadow, 0.18)
     body = rect(rn, f.x, f.y, f.w, f.h)
     fill(body, "#f7f8fb")
+    opacity(body, 0.42)
     stroke(body, "#27313d", 1.0)
 
     title_col = "#526070"
     if active == 1 { title_col = "#2864b4" }
     bar = rect(rn, f.x, f.y, f.w, _title_h())
     fill(bar, title_col)
+    opacity(bar, 0.88)
     stroke(bar, "#27313d", 1.0)
     lbl = text_sized(rn, f.x + 10.0, f.y + 18.0, 13.0, f.title)
     fill(lbl, "#ffffff")
 
     cbg = rect(rn, f.x + f.w - 22.0, f.y + 6.0, 14.0, 14.0)
     fill(cbg, "#eef2f7")
+    opacity(cbg, 0.92)
     stroke(cbg, "#1f2937", 1.0)
     // The close glyph and gripper are simple stroked paths.
     p1 = path(rn, _line_path(f.x + f.w - 18.5, f.y + 9.5, f.x + f.w - 11.5, f.y + 16.5))

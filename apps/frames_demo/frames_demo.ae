@@ -207,6 +207,7 @@ draw_tumbling_payload(rn: ptr, t: float, x: float, y: float, w: float, h: float,
     cube_step(c, t)
     bg = rect(rn, x, y, w, h)
     fill(bg, "#111827")
+    opacity(bg, 0.72)
     stroke(bg, "#334155", 1.0)
     side = w
     if h < side { side = h }
