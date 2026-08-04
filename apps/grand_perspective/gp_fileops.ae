@@ -93,6 +93,32 @@ do_delete(s: *AppState) {
     }
 }
 
+// MSYS/Cygwin path -> native Windows path. "/c/Users/paul/x" becomes
+// "C:\\Users\\paul\\x". PowerShell is a native Win32 program and cannot
+// resolve MSYS paths: passing one through verbatim fails with
+// `Could not find file '/c/Users/...'` and the Delete silently does
+// nothing (measured on winbaz — the gp_fileops spec's only red). Paths
+// that are already native are returned unchanged.
+_win_native_path(p: string) -> string {
+    n = string.length(p)
+    if n < 3 { return p }
+    if string.equals(string.substring(p, 0, 1), "/") == 0 { return p }
+    // /<letter>/... — the MSYS drive form.
+    if string.equals(string.substring(p, 2, 3), "/") == 0 { return p }
+    drive = string.to_upper(string.substring(p, 1, 2))
+    rest = string.substring(p, 3, n)
+    out = string.concat(drive, ":\\")
+    i = 0
+    m = string.length(rest)
+    while i < m {
+        c = string.substring(rest, i, i + 1)
+        if string.equals(c, "/") == 1 { out = string.concat(out, "\\") }
+        else { out = string.concat(out, c) }
+        i = i + 1
+    }
+    return out
+}
+
 execute_trash(s: *AppState) {
     e = s.selected
     // Platform trash: `gio trash` on Linux/macOS; on Windows the REAL
@@ -104,7 +130,7 @@ execute_trash(s: *AppState) {
     terr = ""
     if string.equals(win, "Windows_NT") == 1 {
         cmdline = "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('"
-        cmdline = string.concat(cmdline, e.path)
+        cmdline = string.concat(cmdline, _win_native_path(e.path))
         cmdline = string.concat(cmdline, "','OnlyErrorDialogs','SendToRecycleBin')")
         _ = list.add(av, "-NoProfile")
         _ = list.add(av, "-Command")
