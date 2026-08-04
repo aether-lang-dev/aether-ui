@@ -1,5 +1,11 @@
 # Stage 2 rework: the paint clip must be owned by the painter
 
+> **READ ROUND 9 FIRST.** Rounds 6–8 chased a win32 "canvas never paints"
+> bug that did not exist. The real cause was a toolchain built without
+> pcre2, which made `regex.compile` fail at runtime and silently turned
+> every `path()` in vg into a no-op. Rounds are also in a confusing order
+> (5, 5b, 8, 7, 6, 9) because each was prepended above the last — sorry.
+
 **For:** whoever picks up Stage 2 of `retained-compositor.md` next.
 **Status of `067ed50` ("Add frame dirty-region paint clips"):** the region
 maths and the backend clip plumbing are good; the *integration* is unsound on
@@ -277,7 +283,7 @@ FAIL: expected clipped drag paint below full canvas, got area=294000 full=294000
 After the painter-owned surface change, the same scenario reports a clipped
 area and a retained far-frame pixel.
 
-## Round 5 — Stage 2.5 is GTK-only, and the other two backends are unsafe
+## Round 5b — Stage 2.5 is GTK-only, and the other two backends are unsafe
 
 `d4ca538` gives GTK a retained `cairo_surface_t` and makes a clipped paint
 clear *within the clip only*, so pixels outside survive. Verified here on a
@@ -315,7 +321,7 @@ the "fast and wrong" the design doc rules out. The win32 case needs no
 testing to condemn — a fresh `CreateCompatibleBitmap` per paint cannot
 preserve anything by construction.
 
-## Round 8 — nothing regressed: win32 on-screen painting has ALWAYS been dead
+## Round 8 — SUPERSEDED by Round 9. (Claimed win32 on-screen paint was never wired.)
 
 Paul launched `frames_demo` and `tumbling_cube` from Windows Search (no
 scripts, no driver harness, unlocked desktop). Result: **windows open and
@@ -356,7 +362,7 @@ is pointless until `canvas_paint` runs at all. And the missing test is not
 a pixel probe — those pass — but an assertion that `canvas_paint` executes,
 which the `canvas_debug` counters (`1c7a792`) can now express.
 
-## Round 7 — canvas_paint NEVER runs on win32 (measured, not theorised)
+## Round 7 — SUPERSEDED by Round 9. (Claimed canvas_paint never runs.)
 
 Round 6 guessed that a locked session was the cause. **Wrong.** Paul
 unlocked the desktop and the metrics still read
@@ -389,7 +395,7 @@ and the fix is a driver-callable render-to-DC entry point
 (`canvas_replay_to_dc` already exists for `canvas_read_pixel`) that records
 metrics too.
 
-## Round 6 — the earlier (wrong) locked-session theory
+## Round 6 — the session-0 theory (VINDICATED by Round 9; I wrongly discarded it)
 
 Wiring `canvas_debug` on win32 (`1c7a792`) was supposed to give Windows a
 pixel-free way to check the Stage 2.5 invariant. It does not work, and the
@@ -431,3 +437,88 @@ AEUI_CANVAS_DEBUG=1 ./target/build/apps/frames_demo/bin/frames_demo 2> /tmp/fd.l
 grep -oE 'area=[0-9]+' /tmp/fd.log | uniq -c
 # interleaved 294000 / ~40000 lines == the race is present
 ```
+
+
+## Round 9 — it was never win32. It was pcre2. *(the winbaz agent, 2026-08-04)*
+
+Diagnosed on the machine, by an agent that could see the screen. Three
+"established facts" I handed it in the brief were wrong, and it produced
+measurements for each rather than arguing.
+
+**Round 7's "canvas_paint runs zero times" was a measurement artifact.**
+Launches from the SSH/MSYS context land in Windows **session 0**, window
+station `Service-0x0-...`. A 60-line vanilla Win32 program — one window,
+one child, none of our code — also gets zero `WM_PAINT` there, with
+`IsWindowVisible` returning 0 despite `WS_VISIBLE`. Reached properly on the
+real desktop (session 1, WinSta0) via an interactive scheduled task,
+`canvas_paint` runs **565–777 times in a few seconds**. Round 6 had already
+identified session-0; I discarded it as "the earlier (wrong) locked-session
+theory" and then took Round 7's number *inside the very session Round 6
+named*. That is the methodological failure worth remembering: I replaced a
+correct diagnosis with a measurement taken under the condition it warned
+about.
+
+**The parenting theory was also wrong.** The first diagnostic came back
+clean: `AetherUICanvas → AetherUIStack → AetherUIStack → AetherUIAppWindow`,
+all visible, client 470x446. Never under `widget_holder`.
+
+**The actual cause.** The command buffer held exactly **3** commands —
+CLEAR, the zero-size anchor rect, and the backdrop. `pp_to_path` emitted
+perfect `d` strings, but `normalizer.parse_path` returned zero commands,
+because `regex.compile` fails at runtime with *"regex: built without
+libpcre2-8"*. The Aether toolchain on that box was built without pcre2, so
+**every `path()` in vg silently rendered nothing** while `rect`/line
+drawing still worked. Hence "black canvas with no cube" and "frames with no
+content": frame chrome is rects, the cubes inside are paths.
+`vg/svg/normalizer.ae:172` is the call.
+
+The fix was to the machine, not the repo: rebuild 0.478.0 with pcre2. Three
+traps, each costing real time — `make` alone reuses `.o` files and ignores
+changed CFLAGS (needs `make clean`); `pkg-config --libs libpcre2-8` yields
+the import lib, so apps die silently when double-clicked (link
+`-l:libpcre2-8.a`); and stale extensionless `ae`/`aetherc` in
+`/usr/local/bin` shadow the new `.exe`s.
+
+**Result:** 243 pass / 23 fail / 8 red → **255 pass / 13 fail / 2 red**.
+`vg_tooltip`, `stroker`, `vg3d`, `golden`, `sketchpad`, `tumbling_cube` all
+went green. The cube visibly tumbles; `frames_demo` shows both cubes with
+Beta occluding Alpha.
+
+**The new test** (`tests/tumbling_cube/spec_tumbling_cube.ae`, +40) asserts
+the *painter*, not pixels: `GET /screenshot` (which drives a real
+`canvas_paint` even under `AETHER_UI_HEADLESS=1`), then `w`, `h`,
+`area == w*h`, and **`commands > 100`**. Note my brief suggested
+`commands > 0` — **that would have passed against the bug**, which emitted
+3. The floor is the whole point.
+
+Falsified before landing, same spec against two binaries:
+
+```
+FAIL: the replayed scene carries real path geometry, not just a backdrop
+      — expected > 100, got 3
+tumbling_cube       3      3   RED      <- pre-fix binary
+tumbling_cube       6      0   green    <- rebuilt binary
+```
+
+### Two loose ends, diagnosed and deliberately untouched
+
+- **maerkdown** regressed 9/1 → 7/3, and honestly so: the H1 word's left hit
+  edge moved from ≤24 to ~31 now that glyph outlines actually render, so the
+  spec's hard-coded `/canvas/1/click?x=30&y=30` lands ~1px outside. `x=40` is
+  solidly inside. The old pass was a false green against a canvas where
+  outlines never rendered. Left alone because the spec calls that coordinate
+  a cross-backend contract, and GTK4/macOS can't be tested from that box.
+- **frames** stays 4/4 red, and it is *not* the compositor: as the spec
+  reads it, `{"area":0,...}`; after a `GET /screenshot`, `{"area":299600,
+  "commands":305,"w":700,"h":428}`. Two assertions just need a driven paint;
+  the other two assert a *clipped* paint, which win32 gates off by design
+  (Round 5b), so they need a backend-aware expectation.
+
+### The durable question, raised by that agent and worth answering upstream
+
+A missing optional dependency turned every vector path into a silent no-op
+and cost eight rounds pointed at the wrong file. Should `vg` **fail loudly**
+when `regex.compile` errors, or drop the dependency for a hand-rolled path
+tokenizer? That belongs in aether/vg, not the win32 backend. Note this is
+the *second* time pcre2 has done this to us — it killed the SVG d-parser on
+macOS in an earlier session too.

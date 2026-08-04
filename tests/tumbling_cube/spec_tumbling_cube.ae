@@ -33,6 +33,46 @@ main() {
                 "both toggles start on")
         }
 
+        // The missing test. Every canvas assertion we had went through
+        // canvas_read_pixel, which builds its OWN memory DC and replays the
+        // command buffer into it — it never touches the painter. So the whole
+        // pixel-probe family stayed green through a period when win32 canvases
+        // rendered a bare background wash and nothing else. This asserts the
+        // painter instead: /canvas/{id}/debug reports what canvas_paint
+        // recorded on its last run (last_paint_w/h/area/count), so a non-zero
+        // reading is proof the painter EXECUTED, and the command count is
+        // proof it had a real scene to replay.
+        //
+        // The GET /screenshot is load-bearing, not decoration: under
+        // AETHER_UI_HEADLESS=1 (which spec_matrix.sh exports on win32 and
+        // macOS) the window never maps, so no WM_PAINT/draw ever arrives on
+        // its own and the metrics stay at 0/0/0/0. /screenshot drives one real
+        // paint through the same canvas_paint → canvas_replay_to_dc path, so
+        // the assertions below hold mapped or unmapped.
+        aeocha.it("the painter runs and replays the whole scene") callback {
+            _ = uidriver.get_body("/screenshot")     // force one real paint
+            w = uidriver.canvas_debug_w()
+            h = uidriver.canvas_debug_h()
+            area = uidriver.canvas_debug_area()
+            cmds = uidriver.canvas_debug_commands()
+            aeocha.assert_gt(w, 0, "painter recorded a canvas width")
+            aeocha.assert_gt(h, 0, "painter recorded a canvas height")
+            aeocha.assert_gt(area, 0, "painter recorded a repaint area")
+            aeocha.assert_eq(area, w * h,
+                "immediate mode repaints the whole canvas (${w}x${h})")
+            // The floor is the point. `> 0` is NOT enough and must not be
+            // weakened back to it: the failure this guards emitted exactly
+            // THREE commands — clear, the zero-size anchor rect, and the
+            // #14141c backdrop — which is `> 0` and still a blank canvas.
+            // Every path() in the scene was dropped, so the cube, the AeVG
+            // writing and the projected checkboxes were all absent. The real
+            // frozen-pose stream is ~780: six projected faces (fill + stroke
+            // each), the word's 6 glyph contours, and two checkboxes. 100 sits
+            // far above the blank-canvas signature and far below the truth.
+            aeocha.assert_gt(cmds, 100,
+                "the replayed scene carries real path geometry, not just a backdrop")
+        }
+
         aeocha.it("a TAP on the projected Spin checkbox flips the REAL toggle") callback {
             // The Spin box centre at the frozen pose is viewBox (213.7, 214.9);
             // scale to canvas pixels. Click+release at one point = a tap.
