@@ -11,7 +11,8 @@ import ui (
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
-           scene_canvas, scene_refresh, scene_set_refreshing, path, opacity)
+           scene_canvas, scene_refresh, scene_set_refreshing,
+           scene_is_refreshing, path, opacity)
 import ui.frames (
     frames_new, frame_add, frame_set_content,
     frame_bounds, frame_z, frames_hit, frames_draw,
@@ -106,6 +107,16 @@ apply_dirty_clip(app: *App) {
     // clearing and replaying only inside the same region. Keep an escape hatch
     // for local comparison against the full-canvas path.
     if app.clip_enabled != 1 {
+        frames_clear_dirty(app.host)
+        return
+    }
+    // A clip is only valid if everything OUTSIDE it is already correct on the
+    // surface. With live content that is never true: the cubes advance every
+    // frame, so the other frame's pixels are stale the moment we skip them —
+    // it goes blank, and the dragged frame leaves a copy of its old content
+    // behind. Dragging while the scene animates therefore takes the
+    // full-canvas path. (docs/design/stage2-clip-flicker-fix.md, Round 3.)
+    if scene_is_refreshing(app.scene) == 1 {
         frames_clear_dirty(app.host)
         return
     }
