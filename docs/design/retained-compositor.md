@@ -436,6 +436,10 @@ shipping the unsafe default.
 
 **Not blocked on Stage 2.5b — it supersedes that approach for live content.**
 
+**Design note: `stage3-per-frame-surfaces.md`** — the API shape, what already
+exists to build on, and the falsifiable acceptance test. Read it before
+writing code.
+
 #### What Stage 3 actually has to be
 
 The original framing here was "opaque subtraction + z-order", assuming Stage 2
