@@ -14,7 +14,7 @@ import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
            scene_canvas, scene_refresh, scene_set_refreshing,
            scene_is_refreshing, path, opacity)
 import ui.frames (
-    frames_new, frame_add, frame_set_content,
+    frames, frame,
     frame_bounds, frame_z, frames_hit, frames_draw,
     frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_on_click, frames_on_move, frames_on_release
@@ -302,15 +302,17 @@ main() {
                 // sketchpad and maerkdown.)
                 _cw = width(canvas_widget(app.canvas), FW)
                 _ch = height(canvas_widget(app.canvas), FH)
-                app.host = frames_new(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0)
-                app.alpha = frame_add(app.host, "Alpha", 60.0, 60.0, 460.0, 320.0)
-                app.beta = frame_add(app.host, "Beta", 180.0, 110.0, 500.0, 360.0)
-                frame_set_content(app.alpha) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
-                    draw_alpha(rn, t, x, y, w, h, app.cube_a)
+                host = frames(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0) {
+                    app.alpha = frame("Alpha", 60.0, 60.0, 460.0, 320.0)
+                        callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            draw_alpha(rn, t, x, y, w, h, app.cube_a)
+                        }
+                    app.beta = frame("Beta", 180.0, 110.0, 500.0, 360.0)
+                        callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            draw_beta(rn, t, x, y, w, h, app.cube_b)
+                        }
                 }
-                frame_set_content(app.beta) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
-                    draw_beta(rn, t, x, y, w, h, app.cube_b)
-                }
+                app.host = host
                 reg = canvas_region(root, 0.0, 0.0, FW * 1.0, FH * 1.0)
                     callback |rn: ptr, t: float| {
                         back = rect(rn, 0.0, 0.0, FW * 1.0, FH * 1.0)

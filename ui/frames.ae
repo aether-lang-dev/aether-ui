@@ -6,6 +6,7 @@
 // events; no native child windows are involved.
 
 exports (
+    frames, frame,
     frames_new, frame_add, frame_set_content,
     frame_move, frame_resize, frame_raise, frame_close,
     frame_bounds, frame_z, frame_count, frames_hit,
@@ -53,6 +54,31 @@ struct Frame {
     z: int
     closed: int
     content: ptr       // boxed |rn, t, x, y, w, h|
+}
+
+// Declarative composition layer:
+//
+//   host = frames(scene, x, y, w, h) {
+//       first = frame("First", fx, fy, fw, fh) callback |rn, t, x, y, w, h| {
+//           // draw content into rn
+//       }
+//   }
+//
+// Returning the host makes it the context for frame() calls in the trailing
+// block. The scene is explicit because frames{} may be nested in mixed UI/VG
+// builder scopes where the ambient context is not necessarily a VgNode.
+frames(_ctx: ptr, scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
+    _ = _ctx
+    return frames_new(scene, x, y, w, h)
+}
+
+// A declarative child of frames{}. The callback is retained and invoked for
+// each paint with the frame-local content bounds.
+frame(_ctx: ptr, title: string, x: float, y: float, w: float, h: float,
+      content: fn) -> ptr {
+    f = frame_add(_ctx, title, x, y, w, h)
+    frame_set_content(f, content)
+    return f
 }
 
 frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
