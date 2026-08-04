@@ -40,21 +40,48 @@ main() {
             _ = uidriver.get_body("/screenshot")
             sleep(120)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "composite: rerender=1 blit=1",
-                "decision layer separates invalidated and valid frames")
+            // Alpha and Beta both animate and invalidate every tick; Gamma
+            // holds no payload, so once painted it stays valid. These are the
+            // numbers the SHIPPING app reports -- there is deliberately no
+            // test-only frame configuration, because an assertion that only
+            // holds under a spec env var proves nothing about what users run.
+            aeocha.assert_contains(body, "composite: rerender=2 blit=1",
+                "animating frames re-render while the static frame would blit")
         }
 
-        aeocha.it("distinguishes invalidated and static frames") callback {
-            uidriver.click(900.0, 600.0)
+        aeocha.it("keeps a static frame valid across repeated paints") callback {
+            // Validity must PERSIST. One paint proving blit=1 could be a frame
+            // that happens to be valid once; the point of the cache is that it
+            // stays valid while nothing touches it.
+            _ = uidriver.get_body("/screenshot")
+            sleep(120)
+            _ = uidriver.get_body("/screenshot")
+            sleep(120)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "composite: rerender=1 blit=1",
-                "animating frame re-renders while static frame would blit")
+            aeocha.assert_contains(body, "composite: rerender=2 blit=1",
+                "static frame stays valid over successive paints")
+        }
+
+        aeocha.it("moving a frame does not invalidate it") callback {
+            // The design's least-certain claim, and the whole saving: a
+            // dragged frame's PIXELS are unchanged, only its position is.
+            // Bake this in now, before surfaces depend on it.
+            uidriver.click(700.0, 420.0)
+            uidriver.move_to(720.0, 440.0)
+            uidriver.post_ok("/canvas/1/release?x=720&y=440", "canvas release")
+            _ = uidriver.get_body("/screenshot")
+            sleep(120)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "composite: rerender=2 blit=1",
+                "a moved frame is still blittable")
         }
 
         aeocha.it("clicking alpha raises it above beta") callback {
             uidriver.click(80.0, 70.0)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "z: alpha=1 beta=0", "alpha raised")
+            // alpha=2, not 1: the static Gamma frame took a Z slot when it
+            // was added, so raising Alpha puts it above Gamma as well as Beta.
+            aeocha.assert_contains(body, "z: alpha=2 beta=0", "alpha raised")
             aeocha.assert_contains(body, "hit: Alpha at 80,70", "click hit alpha")
         }
 
