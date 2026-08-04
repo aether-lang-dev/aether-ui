@@ -1,5 +1,6 @@
 import aeocha
 import uidriver
+import std.string
 
 main() {
     fw = aeocha.init()
@@ -16,8 +17,14 @@ main() {
         }
 
         aeocha.it("reports last repaint area and replay command count") callback {
-            // Before a retained dirty region is submitted, area is still the
-            // live canvas allocation.
+            // Drive one real paint first. Under AETHER_UI_HEADLESS=1 (which
+            // spec_matrix.sh exports on win32 and macOS) the window never
+            // maps, so no WM_PAINT/draw arrives on its own and the metrics
+            // sit at 0/0/0/0 — the counters report what canvas_paint
+            // recorded on its LAST run, so with no run there is nothing to
+            // read. GET /screenshot forces one paint through the same
+            // painter, making these assertions hold mapped or unmapped.
+            _ = uidriver.get_body("/screenshot")
             sleep(120)
             area = uidriver.canvas_debug_area()
             cmds = uidriver.canvas_debug_commands()
@@ -39,12 +46,25 @@ main() {
         aeocha.it("title-bar drag moves the raised frame") callback {
             uidriver.click(80.0, 70.0)
             uidriver.move_to(140.0, 100.0)
+            _ = uidriver.get_body("/screenshot")
             sleep(120)
             area = uidriver.canvas_debug_area()
             w = uidriver.canvas_debug_w()
             h = uidriver.canvas_debug_h()
-            aeocha.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
-            aeocha.assert_true(area < w * h, "dirty clip is much smaller than the canvas")
+            // What the repaint area SHOULD be depends on whether this
+            // backend can clip safely, so ask the app rather than assuming.
+            // Only GTK4 retains a paint surface (Stage 2.5); win32 and macOS
+            // rebuild theirs per paint, so frames_demo gates clipping OFF
+            // there and a full-canvas repaint is the CORRECT answer, not a
+            // failure. See docs/design/retained-compositor.md Stage 2.5b.
+            clipping = uidriver.get_body("/widgets")
+            if string.contains(clipping, "clip: 1") == 1 {
+                aeocha.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
+                aeocha.assert_true(area < w * h, "dirty clip is much smaller than the canvas")
+            } else {
+                aeocha.assert_eq(area, w * h,
+                    "clipping gated off on this backend — full canvas repaint is correct")
+            }
             uidriver.post_ok("/canvas/1/release?x=140&y=100", "canvas release")
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "bounds: alpha=120,90,230,160",

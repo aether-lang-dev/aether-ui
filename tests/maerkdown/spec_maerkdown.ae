@@ -110,10 +110,18 @@ main() {
             uidriver.click_widget(b)
             ok = uidriver.wait_body_contains("/widgets", "blocks: 6", 20)
             aeocha.assert_true(ok, "sample document loaded")
-            // (30, 30) is inside the H1 word "Maerkdown" (first word, first
-            // line) at every backend — the layout is pure Aether and
-            // byte-identical, so the coordinate is a contract.
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "click on the title")
+            // (60, 30) is inside the H1 word "Maerkdown" (first word, first
+            // line) on every backend. NOT because the layout is
+            // byte-identical — it is not. Measured hit edges for that word:
+            // GTK4 from x<=20, macOS from x<=24, win32 only from x=32. The
+            // old x=30 sat 2px inside the win32 edge and failed there the
+            // moment glyph outlines actually started rendering (before the
+            // pcre2 fix every path() was a no-op, so the word had no ink and
+            // the assertion passed for the wrong reason). 60 is ~28px clear
+            // of the tightest backend and still well short of the word's
+            // right edge, so it survives font-metric drift in either
+            // direction.
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "click on the title")
             ok1 = uidriver.wait_body_contains("/widgets", "buf: [Maerkdown]", 20)
             aeocha.assert_true(ok1, "plain word expands to bare text")
             bb = uidriver.widget_id_of("button", "B")
@@ -127,7 +135,7 @@ main() {
             aeocha.assert_true(ok2, "markdown records the bold word")
             // THE momentary-source claim: the styled word expands with
             // its markers inline, char-addressable.
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "click the bold title")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "click the bold title")
             ok3 = uidriver.wait_body_contains("/widgets", "buf: [**Maerkdown**]", 20)
             aeocha.assert_true(ok3, "bold word expands to **source**")
             uidriver.key("Escape")
@@ -156,7 +164,7 @@ main() {
                 "the page reads as mostly dark ground (${bold_dark})")
             aeocha.assert_true(bold_dark < 14900,
                 "but not ALL dark — words exist (${bold_dark} of ~15k)")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand the title")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand the title")
             bb = uidriver.widget_id_of("button", "B")
             uidriver.click_widget(bb)
             uidriver.key("Escape")
@@ -183,7 +191,7 @@ main() {
             // Clicking the title expands it (that's the editing model);
             // H3 retypes the block around the edit, Escape commits the
             // word back before we look at the source.
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand the title")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand the title")
             h3 = uidriver.widget_id_of("button", "H3")
             uidriver.click_widget(h3)
             uidriver.key("Escape")
@@ -205,39 +213,39 @@ main() {
             supb = uidriver.widget_id_of("button", "Sup")
             subb = uidriver.widget_id_of("button", "Sub")
             srcb = uidriver.widget_id_of("button", "Source")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand the title")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand the title")
             uidriver.click_widget(ub)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok1 = uidriver.wait_body_contains("/widgets", "### ++Maerkdown++", 20)
             aeocha.assert_true(ok1, "underline serializes as ++ ++")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand again")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand again")
             okx = uidriver.wait_body_contains("/widgets", "buf: [++Maerkdown++]", 20)
             aeocha.assert_true(okx, "underlined word expands WITH its markers")
             uidriver.click_widget(ub)
             uidriver.key("Escape")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(mb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok2 = uidriver.wait_body_contains("/widgets", "### ==Maerkdown==", 20)
             aeocha.assert_true(ok2, "highlight serializes as == ==")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(mb)
             uidriver.key("Escape")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(supb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok3 = uidriver.wait_body_contains("/widgets", "### ^Maerkdown^", 20)
             aeocha.assert_true(ok3, "superscript serializes as ^ ^")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(subb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok4 = uidriver.wait_body_contains("/widgets", "### ~Maerkdown~", 20)
             aeocha.assert_true(ok4, "sub replaces sup (mutually exclusive)")
-            uidriver.post_ok("/canvas/1/click?x=30&y=30", "expand")
+            uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(subb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)

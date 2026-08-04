@@ -44,6 +44,7 @@ struct App {
     st_bounds: int
     st_z: int
     st_hit: int
+    st_clip: int
     clip_enabled: int
 }
 
@@ -83,6 +84,12 @@ publish(app: *App, hx: float, hy: float) {
     az = frame_z(app.alpha)
     bz = frame_z(app.beta)
     _z = ui_set_s(app.st_z, "z: alpha=${az} beta=${bz}")
+    // Published because the spec's repaint-area expectation depends on it:
+    // a clipped paint reports the dirty area, an unclipped one the whole
+    // canvas. Only GTK4 retains a paint surface (Stage 2.5), so the other
+    // backends run unclipped BY DESIGN and must be asserted as such rather
+    // than treated as failures.
+    _c = ui_set_s(app.st_clip, "clip: ${app.clip_enabled}")
     hit = frames_hit(app.host, hx, hy)
     name = "none"
     if hit == app.alpha { name = "Alpha" }
@@ -231,6 +238,7 @@ main() {
     app.st_bounds = ui_state_s("bounds: pending")
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
+    app.st_clip = ui_state_s("clip: pending")
     app.clip_enabled = 1
     // Dirty clipping is only CORRECT where the painter retains its
     // surface between paints (Stage 2.5). Today that is GTK4 alone —
@@ -291,6 +299,8 @@ main() {
             bind_text(tz, app.st_z)
             th = text("hit: none")
             bind_text(th, app.st_hit)
+            tc = text("clip: pending")
+            bind_text(tc, app.st_clip)
             canvas_on_click(app.canvas) callback |x: float, y: float| {
                 frames_on_click(app.host, x, y)
                 publish(app, x, y)
