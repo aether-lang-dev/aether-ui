@@ -1,20 +1,29 @@
 # The Retained Compositor — aether-ui's rendering north star
 
-> **Status: Stages 0–2.5 built on GTK4 only; 3–5 specified.**
-> ⚠️ **Stage 2.5's retained surface exists on GTK4 alone** (`grep -c
-> paint_surface`: gtk4 39, macos 0, win32 0), yet `frames_demo` enables
-> clips by DEFAULT on every backend. On win32 that is unsafe by
-> construction — `canvas_paint` builds a fresh `CreateCompatibleBitmap`
-> each paint, so pixels outside the clip are uninitialised. macOS renders
-> correctly only because AppKit happens to preserve its backing store,
-> which is not a contract. **Close this before Stage 3.**
-> Stage 0 (the internal-frame harness) and Stage 1 (the region type) are done
-> and green. Stage 2 built the damage bookkeeping and the backend clip ABI,
-> and Stage 2.5 made GTK's canvas painter own damage by retaining a backing
-> surface and applying the same clip to clear and replay. `frames_demo` now
-> submits dirty clips by default, with `AETHER_UI_FRAMES_DIRTY_CLIP=0` as the
-> local escape hatch. See `stage2-clip-flicker-fix.md` for the diagnosis and
-> resolution history.
+> **Status: Stages 0–2.5 built. Clipping is built and currently delivers
+> nothing. Stage 3 is the next real work.**
+>
+> Stage 0 (the internal-frame harness), Stage 1 (the region type), Stage 2
+> (damage bookkeeping + the backend clip ABI) and Stage 2.5 (GTK's painter
+> owning damage via a retained surface) are all done and green.
+>
+> ⚠️ **But no clipped paint occurs in `frames_demo` today.** Clipping is gated
+> off on win32 and macOS (no retained surface there), and gated off on GTK4
+> too whenever the scene animates (`7e1ebd1`) — which the demo always does. A
+> drag produces ~237 paints, every one full-canvas. Measured, not assumed.
+>
+> The reason is structural and is the key finding of this track so far: **a
+> retained surface can only preserve pixels that do not change.** Live content
+> outside the clip is stale the moment it is skipped, so the Stage 2.5
+> invariant is unsatisfiable for animated scenes under one shared surface.
+> Extending Stage 2 cannot fix this.
+>
+> **Next: Stage 3, reframed as per-frame surfaces** — each frame owns a
+> drawable, animating frames re-render only themselves, and the composite
+> blits them in z-order with occlusion subtracted. That is what makes a
+> non-animating frame cost nothing and an obscured one cost only its exposed
+> slivers. **Stage 2.5b (porting the shared surface to win32/macOS) is
+> deprioritised** — still correct for static scenes, no longer a prerequisite.
 >
 > **Four-OS parity is part of a stage, not a follow-up.** A stage is not
 > "built" until GTK4, win32, macOS and FreeBSD either implement it or
@@ -354,19 +363,47 @@ The chosen shape was the first candidate:
    only meaningful when the thing behind can be redrawn *without* redrawing
    everything.
 
-*Acceptance:* default dirty clips are enabled, drag a frame over another with
-animation on, and assert BOTH that the repaint area is well below the canvas
-area AND that the far frame's interior still renders. The regression
-`tests/frames_demo/test_stage25_clip_surface.sh` samples `/screenshot`, not
-`canvas_read_pixel`, so it observes the widget/backing-surface path instead of
-replaying the command buffer into a fresh surface.
+*Acceptance (as originally written):* default dirty clips enabled, drag a
+frame over another with animation on, and assert BOTH that the repaint area
+is well below the canvas area AND that the far frame's interior still
+renders. The regression `tests/frames_demo/test_stage25_clip_surface.sh`
+samples `/screenshot`, not `canvas_read_pixel`, so it observes the
+widget/backing-surface path instead of replaying the command buffer into a
+fresh surface.
+
+> ### ⚠️ That acceptance cannot be met, and the reason caps this whole approach
+>
+> **Measured 2026-08-04.** With animation on, a clipped drag leaves the OTHER
+> frame's cube stale — it stops advancing and then blanks — and the dragged
+> frame leaves a copy of its old content behind. The retained surface does not
+> help, because it cannot: **a retained surface preserves only pixels that do
+> not change.** The cubes advance every frame, so everything outside the clip
+> is stale the instant it is skipped. The invariant's second half ("everything
+> outside it is already correct on the surface") is unsatisfiable for live
+> content under one shared surface.
+>
+> `frames_demo` therefore skips clipping whenever `scene_is_refreshing`
+> (commit `7e1ebd1`), on top of the existing gate for non-GTK backends. The
+> net effect today: **zero clipped paints occur in the demo.** A drag produces
+> 236–238 paints, every one of them full-canvas (614400px). The Stage 2
+> machinery is built, correct, and delivering nothing.
+>
+> This is not a defect to fix by extending Stage 2. Clipping and animation are
+> irreconcilable under a single shared surface — which is exactly what Stage 3
+> is for. See "What Stage 3 actually has to be" below.
 
 **Falsify before landing.** Every test added for this must be demonstrated
 failing against the unfixed code first. Four rounds of Stage 2 were declared
 green by tests that could not fail; that is what this stage exists to
 correct.
 
-### Stage 2.5b — retained surface on the other three backends
+### Stage 2.5b — retained surface on the other three backends *(deprioritised)*
+
+**Read Stage 3 first.** A shared retained surface is correct for STATIC
+scenes and this port is small and still wanted eventually — but it is no
+longer a prerequisite for anything, because it cannot help the animated case
+(see the Stage 2.5 warning). Do not do this before Stage 3 expecting it to
+unlock clipping in `frames_demo`; it will not.
 
 The GTK4 mechanism is small — a ~24-line `canvas_ensure_paint_surface`
 (allocate/reuse keyed on size), a `canvas_clear_current_clip` helper, and
@@ -395,9 +432,43 @@ assert no clipped paint is issued while a scene is refreshing. Until a
 backend passes, `frames_demo` must gate clips OFF for it rather than
 shipping the unsafe default.
 
-### Stage 3 — opaque subtraction + z-order *(the miracle)*
+### Stage 3 — per-frame surfaces, then occlusion *(the miracle)*
 
-**Blocked on Stage 2.5.** The acceptance test below reads back "the area B
+**Not blocked on Stage 2.5b — it supersedes that approach for live content.**
+
+#### What Stage 3 actually has to be
+
+The original framing here was "opaque subtraction + z-order", assuming Stage 2
+had produced a working clipped repaint to subtract *from*. It has not, and
+cannot for animated content (see the Stage 2.5 note above). So the ordering in
+this document was wrong, and Stage 2.5b — porting the shared retained surface
+to win32 and macOS — would spread a technique that is already capped.
+
+The shape that delivers the TaOS/ChrysaLisp property honestly is the one this
+document listed as candidate 2 back in Stage 2.5 and then did not take:
+**each frame owns its own drawable.**
+
+- A frame that is not animating is not re-rendered at all; its surface is
+  simply blitted.
+- A frame that IS animating re-renders **only itself**, into its own surface,
+  at its own rate. Its neighbours are untouched, so they cannot go stale —
+  which is the failure that caps the shared-surface approach.
+- The composite walks frames back-to-front, subtracting each opaque frame's
+  region from what remains to be drawn behind it. THAT is where occlusion
+  subtraction becomes meaningful: the thing behind can now be redrawn (or not
+  redrawn) independently.
+
+Note the demo's own frames are 0.42-alpha translucent (`c284f99`), so they are
+NOT opaque and cannot be subtracted. Occlusion applies to opaque content only;
+the translucent case still composites bottom-up. That is a useful honesty
+check on any implementation that claims a saving.
+
+*Sequencing consequence:* **Stage 2.5b is deprioritised, not cancelled.** A
+shared retained surface is still the right thing for a STATIC scene on
+win32/macOS, and the port is small. But it is no longer the prerequisite for
+Stage 3, and doing it first buys nothing for the animated case.
+
+#### Original Stage 3 text (still applicable once per-frame surfaces exist) The acceptance test below reads back "the area B
 actually repainted", which presumes clipped repaint works. It does not yet.
 
 Each frame declares an opaque region (its chrome and any opaque content).
