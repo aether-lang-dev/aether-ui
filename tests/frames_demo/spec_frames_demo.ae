@@ -10,7 +10,7 @@ main() {
         aeocha.it("starts with two overlapping frames and topmost hit") callback {
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
-            aeocha.assert_contains(body, "bounds: alpha=60,60,230,160 beta=180,110,250,180",
+            aeocha.assert_contains(body, "bounds: alpha=60,60,460,320 beta=180,110,500,360",
                 "initial frame bounds")
             aeocha.assert_contains(body, "z: alpha=0 beta=1", "beta starts above alpha")
             aeocha.assert_contains(body, "hit: Beta at 200,130", "overlap hit is topmost")
@@ -67,21 +67,21 @@ main() {
             }
             uidriver.post_ok("/canvas/1/release?x=140&y=100", "canvas release")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "bounds: alpha=120,90,230,160",
+            aeocha.assert_contains(body, "bounds: alpha=120,90,460,320",
                 "alpha moved by drag delta")
         }
 
         aeocha.it("bottom-right gripper resizes with minimums enforced") callback {
-            uidriver.click(345.0, 245.0)
-            uidriver.move_to(395.0, 285.0)
-            uidriver.post_ok("/canvas/1/release?x=395&y=285", "canvas release")
+            uidriver.click(575.0, 405.0)
+            uidriver.move_to(625.0, 445.0)
+            uidriver.post_ok("/canvas/1/release?x=625&y=445", "canvas release")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "bounds: alpha=120,90,280,200",
+            aeocha.assert_contains(body, "bounds: alpha=120,90,510,360",
                 "alpha resized by gripper delta")
         }
 
         aeocha.it("close box removes a frame from hit testing") callback {
-            uidriver.click(386.0, 100.0)
+            uidriver.click(616.0, 100.0)
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "z: alpha=-1 beta=0", "alpha closed")
             uidriver.click(200.0, 130.0)

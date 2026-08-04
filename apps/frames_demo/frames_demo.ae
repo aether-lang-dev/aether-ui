@@ -6,7 +6,7 @@
 import ui (
     window, vstack, hstack, text, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_release,
-    canvas_set_clip_rects, canvas_redraw, backend_name,
+    canvas_set_clip_rects, backend_name,
     ui_state_s, ui_set_s, bind_text
 )
 import vg.live (vg, canvas_region, region_set_animated)
@@ -30,8 +30,8 @@ import vg.geom.polypath (pp_new, pp_begin, pp_push, pp_to_path, pp_free)
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
 
-const FW: int = 640
-const FH: int = 420
+const FW: int = 960
+const FH: int = 640
 
 struct App {
     host: ptr
@@ -264,9 +264,9 @@ main() {
     app.cube_a = mk_cube(0.0 - 0.35, 0.55, 0.52, 0.78, 0)
     app.cube_b = mk_cube(0.45, 0.0 - 0.25, 0.66, 0.44, 1)
 
-    window("ui.frames retained harness", 700, 520) {
+    window("ui.frames retained harness", 1020, 740) {
         vstack(8) {
-            vg(view_box(0, 0, 640, 420), FW, FH) {
+            vg(view_box(0, 0, FW, FH), FW, FH) {
                 anchor = rect(0.0, 0.0, 0.0, 0.0)
                 root = vg_root(node_scene(anchor))
                 app.scene = node_scene(root)
@@ -275,8 +275,8 @@ main() {
                 }
                 app.canvas = scene_canvas(app.scene)
                 app.host = frames_new(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0)
-                app.alpha = frame_add(app.host, "Alpha", 60.0, 60.0, 230.0, 160.0)
-                app.beta = frame_add(app.host, "Beta", 180.0, 110.0, 250.0, 180.0)
+                app.alpha = frame_add(app.host, "Alpha", 60.0, 60.0, 460.0, 320.0)
+                app.beta = frame_add(app.host, "Beta", 180.0, 110.0, 500.0, 360.0)
                 frame_set_content(app.alpha) callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
                     draw_alpha(rn, t, x, y, w, h, app.cube_a)
                 }
@@ -307,14 +307,12 @@ main() {
                 publish(app, x, y)
                 apply_dirty_clip(app)
                 _r = scene_refresh(app.scene)
-                canvas_redraw(app.canvas)
             }
             canvas_on_move(app.canvas) callback |x: float, y: float| {
                 frames_on_move(app.host, x, y)
                 publish(app, x, y)
                 apply_dirty_clip(app)
                 _r = scene_refresh(app.scene)
-                canvas_redraw(app.canvas)
             }
             canvas_on_release(app.canvas) callback |x: float, y: float| {
                 frames_on_release(app.host, x, y)
