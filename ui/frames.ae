@@ -385,7 +385,10 @@ _min_h() -> float { return 60.0 }
 _mark_frame_dirty(f: *Frame) {
     if f == null { return }
     hst = f.host as *FrameHost
-    rgn_add_rect(hst.dirty, f.x, f.y, f.w, f.h)
+    // Include the antialiased border and the shadow at (+4,+5). Without
+    // this overdraw margin a clipped move leaves a one-pixel trace at the
+    // old edge — visible as a ghost outline while dragging.
+    rgn_add_rect(hst.dirty, f.x - 1.0, f.y - 1.0, f.w + 6.0, f.h + 7.0)
 }
 
 _line_path(x0: float, y0: float, x1: float, y1: float) -> string {
