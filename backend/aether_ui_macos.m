@@ -3583,6 +3583,11 @@ typedef struct {
     double* paint_clip_rects;
     int paint_clip_count;
     int paint_clip_capacity;
+    // Last-paint metrics for GET /canvas/{id}/debug — the compositor
+    // instrumentation. `area` is the summed clip-rect area when the paint
+    // was clipped, else the whole allocation, matching gtk4 and win32.
+    int last_paint_w, last_paint_h;
+    int last_paint_area, last_paint_count;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -3827,6 +3832,20 @@ static void canvas_replay(CGContextRef cg, CanvasState* cs) {
     (void)dirtyRect;
     CGContextRef cg = [[NSGraphicsContext currentContext] CGContext];
     CanvasState* cs = get_canvas_state(self.canvasId);
+    if (cs) {
+        NSRect b = [self bounds];
+        int pw = (int)(b.size.width + 0.5), ph = (int)(b.size.height + 0.5);
+        double a = 0.0;
+        for (int i = 0; i < cs->paint_clip_count; i++) {
+            double* r = &cs->paint_clip_rects[i * 4];
+            if (r[2] > 0.0 && r[3] > 0.0) a += r[2] * r[3];
+        }
+        cs->last_paint_w = pw;
+        cs->last_paint_h = ph;
+        cs->last_paint_count = cs->count;
+        cs->last_paint_area = (cs->paint_clip_count > 0)
+            ? (int)(a + 0.5) : pw * ph;
+    }
     if (cs && cs->paint_clip_count > 0) {
         CGContextSaveGState(cg);
         canvas_apply_paint_clip(cg, cs);
@@ -5486,6 +5505,20 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     return 0;
 }
 
+// Last-paint metrics for GET /canvas/{id}/debug. 0 on success, non-zero
+// when the canvas id is unknown (the shared server maps that to 404; a
+// NULL hook would be 501 "not wired on this backend").
+static int hook_canvas_debug(int canvas_id, int* area, int* commands,
+                             int* w, int* h) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    if (area) *area = cs->last_paint_area;
+    if (commands) *commands = cs->last_paint_count;
+    if (w) *w = cs->last_paint_w;
+    if (h) *h = cs->last_paint_h;
+    return 0;
+}
+
 static const AetherDriverHooks macos_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -5505,6 +5538,7 @@ static const AetherDriverHooks macos_driver_hooks = {
     .widget_hovered       = hook_widget_hovered,
     .widget_pressed       = hook_widget_pressed,
     .screenshot_png       = hook_screenshot_png,
+    .canvas_debug         = hook_canvas_debug,
 };
 
 // Inject the "Under Remote Control" banner as the first arranged subview.
