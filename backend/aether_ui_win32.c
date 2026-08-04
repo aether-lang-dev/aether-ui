@@ -4573,6 +4573,17 @@ typedef struct {
     int last_paint_w, last_paint_h;
     int last_paint_area, last_paint_count;
     int full_paints, clip_paints, last_clip_area;
+    // read_pixel replay cache. A grid probe asks for ~15k pixels of the
+    // SAME frame; without this each call rebuilds a DC+bitmap and replays
+    // the whole command buffer, which on a path-heavy scene takes minutes
+    // and hangs the spec run. Keyed on (generation, command count, size):
+    // canvas_clear bumps the generation, and within a generation the
+    // buffer only grows, so the pair identifies the content. Mirrors the
+    // gtk4 cache added for exactly the same symptom.
+    HDC rp_dc;
+    HBITMAP rp_bmp, rp_old_bmp;
+    unsigned long rp_gen, rp_cache_gen;
+    int rp_cache_count, rp_cache_w, rp_cache_h;
     double* paint_clip_rects;
     int paint_clip_count;
     int paint_clip_cap;
@@ -4654,6 +4665,14 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cv->full_paints = 0;
     cv->clip_paints = 0;
     cv->last_clip_area = 0;
+    cv->rp_dc = NULL;
+    cv->rp_bmp = NULL;
+    cv->rp_old_bmp = NULL;
+    cv->rp_gen = 0;
+    cv->rp_cache_gen = 0;
+    cv->rp_cache_count = -1;
+    cv->rp_cache_w = 0;
+    cv->rp_cache_h = 0;
     int widget_handle = register_widget_typed(h, WK_CANVAS);
     Widget* ww = widget_at(widget_handle);
     if (ww) {
@@ -4975,6 +4994,7 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
     if (canvas_id < 1 || canvas_id > canvas_count) return;
     canvas_free_text(canvas_id);
     canvases[canvas_id - 1].cmd_count = 0;
+    canvases[canvas_id - 1].rp_gen++;   // invalidates the read_pixel cache
     CanvasCmd c = {0}; c.k = CV_CLEAR;
     canvas_add_cmd(canvas_id, c);
 }
@@ -5274,23 +5294,36 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     if (canvas_id < 1 || canvas_id > canvas_count) return -1;
     if (px < 0 || py < 0 || px >= width || py >= height) return -1;
     Canvas* cv = &canvases[canvas_id - 1];
-    HDC screen = GetDC(NULL);
-    if (!screen) return -1;
-    HDC mem = CreateCompatibleDC(screen);
-    HBITMAP bmp = CreateCompatibleBitmap(screen, width, height);
-    if (!mem || !bmp) {
-        if (bmp) DeleteObject(bmp);
-        if (mem) DeleteDC(mem);
+    int fresh = (cv->rp_dc && cv->rp_cache_gen == cv->rp_gen &&
+                 cv->rp_cache_count == cv->cmd_count &&
+                 cv->rp_cache_w == width && cv->rp_cache_h == height);
+    if (!fresh) {
+        if (cv->rp_dc) {
+            if (cv->rp_old_bmp) SelectObject(cv->rp_dc, cv->rp_old_bmp);
+            if (cv->rp_bmp) DeleteObject(cv->rp_bmp);
+            DeleteDC(cv->rp_dc);
+            cv->rp_dc = NULL; cv->rp_bmp = NULL; cv->rp_old_bmp = NULL;
+        }
+        HDC screen = GetDC(NULL);
+        if (!screen) return -1;
+        HDC mem = CreateCompatibleDC(screen);
+        HBITMAP bmp = CreateCompatibleBitmap(screen, width, height);
         ReleaseDC(NULL, screen);
-        return -1;
+        if (!mem || !bmp) {
+            if (bmp) DeleteObject(bmp);
+            if (mem) DeleteDC(mem);
+            return -1;
+        }
+        cv->rp_old_bmp = (HBITMAP)SelectObject(mem, bmp);
+        canvas_replay_to_dc(cv, mem, width, height);
+        cv->rp_dc = mem;
+        cv->rp_bmp = bmp;
+        cv->rp_cache_gen = cv->rp_gen;
+        cv->rp_cache_count = cv->cmd_count;
+        cv->rp_cache_w = width;
+        cv->rp_cache_h = height;
     }
-    HBITMAP old_bmp = (HBITMAP)SelectObject(mem, bmp);
-    canvas_replay_to_dc(cv, mem, width, height);
-    COLORREF c = GetPixel(mem, px, py);
-    SelectObject(mem, old_bmp);
-    DeleteObject(bmp);
-    DeleteDC(mem);
-    ReleaseDC(NULL, screen);
+    COLORREF c = GetPixel(cv->rp_dc, px, py);
     if (c == CLR_INVALID) return -1;
     return (255 << 24) | (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c);
 }
