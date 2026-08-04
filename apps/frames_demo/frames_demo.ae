@@ -47,6 +47,7 @@ struct App {
     st_hit: int
     st_clip: int
     clip_enabled: int
+    clip_mode: int       // 0 configured off, 1 full paint, 2 clipped paint
 }
 
 struct CubeSpin {
@@ -85,12 +86,10 @@ publish(app: *App, hx: float, hy: float) {
     az = frame_z(app.alpha)
     bz = frame_z(app.beta)
     _z = ui_set_s(app.st_z, "z: alpha=${az} beta=${bz}")
-    // Published because the spec's repaint-area expectation depends on it:
-    // a clipped paint reports the dirty area, an unclipped one the whole
-    // canvas. Only GTK4 retains a paint surface (Stage 2.5), so the other
-    // backends run unclipped BY DESIGN and must be asserted as such rather
-    // than treated as failures.
-    _c = ui_set_s(app.st_clip, "clip: ${app.clip_enabled}")
+    clip_status = "clip: off"
+    if app.clip_mode == 1 { clip_status = "clip: on/full" }
+    if app.clip_mode == 2 { clip_status = "clip: on/clipped" }
+    _c = ui_set_s(app.st_clip, clip_status)
     hit = frames_hit(app.host, hx, hy)
     name = "none"
     if hit == app.alpha { name = "Alpha" }
@@ -102,11 +101,15 @@ publish(app: *App, hx: float, hy: float) {
 
 apply_dirty_clip(app: *App) {
     n = frames_dirty_nrects(app.host)
-    if n <= 0 { return }
+    if n <= 0 {
+        if app.clip_enabled == 1 { app.clip_mode = 1 }
+        return
+    }
     // Stage 2.5 makes the painter preserve pixels outside this damage clip by
     // clearing and replaying only inside the same region. Keep an escape hatch
     // for local comparison against the full-canvas path.
     if app.clip_enabled != 1 {
+        app.clip_mode = 0
         frames_clear_dirty(app.host)
         return
     }
@@ -117,6 +120,7 @@ apply_dirty_clip(app: *App) {
     // behind. Dragging while the scene animates therefore takes the
     // full-canvas path. (docs/design/stage2-clip-flicker-fix.md, Round 3.)
     if scene_is_refreshing(app.scene) == 1 {
+        app.clip_mode = 1
         frames_clear_dirty(app.host)
         return
     }
@@ -132,6 +136,7 @@ apply_dirty_clip(app: *App) {
         i = i + 1
     }
     canvas_set_clip_rects(app.canvas, rects, n)
+    app.clip_mode = 2
     frames_clear_dirty(app.host)
     floatarr_free(tmp)
     floatarr_free(rects)
@@ -252,6 +257,7 @@ main() {
     app.st_hit = ui_state_s("hit: none")
     app.st_clip = ui_state_s("clip: pending")
     app.clip_enabled = 1
+    app.clip_mode = 1
     // Dirty clipping is only CORRECT where the painter retains its
     // surface between paints (Stage 2.5). Today that is GTK4 alone —
     // win32 rebuilds a fresh CreateCompatibleBitmap per paint, so pixels
@@ -262,14 +268,17 @@ main() {
     // docs/design/retained-compositor.md.
     if string.equals(backend_name(), "gtk4") == 0 {
         app.clip_enabled = 0
+        app.clip_mode = 0
     }
     // Explicit override either way, for measurement on any backend.
     if os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP") != null {
         if string.equals(os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP"), "0") == 1 {
             app.clip_enabled = 0
+            app.clip_mode = 0
         }
         if string.equals(os_getenv("AETHER_UI_FRAMES_DIRTY_CLIP"), "1") == 1 {
             app.clip_enabled = 1
+            app.clip_mode = 1
         }
     }
     app.cube_a = mk_cube(0.0 - 0.35, 0.55, 0.52, 0.78, 0)
@@ -323,20 +332,20 @@ main() {
             bind_text(tc, app.st_clip)
             canvas_on_click(app.canvas) callback |x: float, y: float| {
                 frames_on_click(app.host, x, y)
-                publish(app, x, y)
                 apply_dirty_clip(app)
                 _r = scene_refresh(app.scene)
+                publish(app, x, y)
             }
             canvas_on_move(app.canvas) callback |x: float, y: float| {
                 frames_on_move(app.host, x, y)
-                publish(app, x, y)
                 apply_dirty_clip(app)
                 _r = scene_refresh(app.scene)
+                publish(app, x, y)
             }
             canvas_on_release(app.canvas) callback |x: float, y: float| {
                 frames_on_release(app.host, x, y)
-                publish(app, x, y)
                 apply_dirty_clip(app)
+                publish(app, x, y)
             }
             publish(app, 200.0, 130.0)
             frames_clear_dirty(app.host)

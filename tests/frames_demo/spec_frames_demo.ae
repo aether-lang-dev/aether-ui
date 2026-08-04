@@ -58,12 +58,18 @@ main() {
             // there and a full-canvas repaint is the CORRECT answer, not a
             // failure. See docs/design/retained-compositor.md Stage 2.5b.
             clipping = uidriver.get_body("/widgets")
-            if string.contains(clipping, "clip: 1") == 1 {
+            honest = 0
+            if string.contains(clipping, "clip: on/clipped") == 1 { honest = 1 }
+            if string.contains(clipping, "clip: on/full") == 1 { honest = 1 }
+            if string.contains(clipping, "clip: off") == 1 { honest = 1 }
+            aeocha.assert_eq(honest, 1,
+                "clip readout reports observed paint mode")
+            if string.contains(clipping, "clip: on/clipped") == 1 {
                 aeocha.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
                 aeocha.assert_true(area < w * h, "dirty clip is much smaller than the canvas")
             } else {
                 aeocha.assert_eq(area, w * h,
-                    "clipping gated off on this backend — full canvas repaint is correct")
+                    "reported full paint covers the canvas")
             }
             uidriver.post_ok("/canvas/1/release?x=140&y=100", "canvas release")
             body = uidriver.get_body("/widgets")
