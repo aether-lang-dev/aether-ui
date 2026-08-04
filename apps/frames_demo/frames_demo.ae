@@ -15,6 +15,7 @@ import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
            scene_is_refreshing, path, opacity)
 import ui.frames (
     frames, frame,
+    frame_invalidate,
     frame_bounds, frame_z, frames_hit, frames_draw,
     frames_rerender_count, frames_blit_count,
     frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
@@ -160,6 +161,15 @@ draw_alpha(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr)
 draw_beta(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr) {
     draw_tumbling_payload(rn, t, x, y, w, h, cube)
     label = text_sized(rn, x + 12.0, y + 22.0, 13.0, "Beta cube")
+    fill(label, "#fde68a")
+}
+
+draw_static_beta(rn: ptr, x: float, y: float, w: float, h: float) {
+    bg = rect(rn, x, y, w, h)
+    fill(bg, "#111827")
+    opacity(bg, 0.72)
+    stroke(bg, "#334155", 1.0)
+    label = text_sized(rn, x + 12.0, y + 22.0, 13.0, "Beta static")
     fill(label, "#fde68a")
 }
 
@@ -315,12 +325,23 @@ main() {
                 host = frames(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0) {
                     app.alpha = frame("Alpha", 60.0, 60.0, 460.0, 320.0)
                         callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            frame_invalidate(app.alpha)
                             draw_alpha(rn, t, x, y, w, h, app.cube_a)
                         }
-                    app.beta = frame("Beta", 180.0, 110.0, 500.0, 360.0)
-                        callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
-                            draw_beta(rn, t, x, y, w, h, app.cube_b)
-                        }
+                    // The matrix disables animation; make Beta genuinely
+                    // static there so validity persistence is observable.
+                    if os_getenv("AETHER_UI_NO_ANIMATION") == null {
+                        app.beta = frame("Beta", 180.0, 110.0, 500.0, 360.0)
+                            callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                                frame_invalidate(app.beta)
+                                draw_beta(rn, t, x, y, w, h, app.cube_b)
+                            }
+                    } else {
+                        app.beta = frame("Beta", 180.0, 110.0, 500.0, 360.0)
+                            callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                                draw_static_beta(rn, x, y, w, h)
+                            }
+                    }
                 }
                 app.host = host
                 reg = canvas_region(root, 0.0, 0.0, FW * 1.0, FH * 1.0)

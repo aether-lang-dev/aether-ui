@@ -40,8 +40,15 @@ main() {
             _ = uidriver.get_body("/screenshot")
             sleep(120)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "composite: rerender=2 blit=0",
-                "immediate compositor re-renders both frames and blits none")
+            aeocha.assert_contains(body, "composite: rerender=1 blit=1",
+                "decision layer separates invalidated and valid frames")
+        }
+
+        aeocha.it("distinguishes invalidated and static frames") callback {
+            uidriver.click(900.0, 600.0)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "composite: rerender=1 blit=1",
+                "animating frame re-renders while static frame would blit")
         }
 
         aeocha.it("clicking alpha raises it above beta") callback {

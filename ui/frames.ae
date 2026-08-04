@@ -8,6 +8,7 @@
 exports (
     frames, frame,
     frames_new, frame_add, frame_set_content,
+    frame_invalidate, frame_surface_valid,
     frame_move, frame_resize, frame_raise, frame_close,
     frame_bounds, frame_z, frame_count, frames_hit,
     frames_rerender_count, frames_blit_count,
@@ -56,6 +57,7 @@ struct Frame {
     h: float
     z: int
     closed: int
+    surface_valid: int
     content: ptr       // boxed |rn, t, x, y, w, h|
 }
 
@@ -121,6 +123,7 @@ frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> p
     f.z = hst.next_z
     hst.next_z = hst.next_z + 1
     f.closed = 0
+    f.surface_valid = 0
     f.content = null
     _ = list.add(hst.frames, f as ptr)
     hst.active = f as ptr
@@ -131,6 +134,19 @@ frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> p
 frame_set_content(frame: ptr, cb: fn) {
     f = frame as *Frame
     f.content = box_closure(cb)
+    frame_invalidate(frame)
+}
+
+frame_invalidate(frame: ptr) {
+    if frame == null { return }
+    f = frame as *Frame
+    f.surface_valid = 0
+}
+
+frame_surface_valid(frame: ptr) -> int {
+    if frame == null { return 0 }
+    f = frame as *Frame
+    return f.surface_valid
 }
 
 frame_move(frame: ptr, x: float, y: float) {
@@ -146,6 +162,7 @@ frame_resize(frame: ptr, w: float, h: float) {
     _mark_frame_dirty(f)
     f.w = _maxf(w, _min_w())
     f.h = _maxf(h, _min_h())
+    frame_invalidate(frame)
     _mark_frame_dirty(f)
 }
 
@@ -283,8 +300,16 @@ frames_draw(host: ptr, rn: ptr, t: float) {
             i = i + 1
         }
         if best == null { return }
-        hst.last_rerender_count = hst.last_rerender_count + 1
-        _draw_frame(best as *Frame, rn, t)
+        bf = best as *Frame
+        if bf.surface_valid == 1 {
+            hst.last_blit_count = hst.last_blit_count + 1
+        } else {
+            hst.last_rerender_count = hst.last_rerender_count + 1
+        }
+        // Surface creation comes next commit. Marking valid before the inline
+        // draw lets an animating content callback invalidate the next paint.
+        bf.surface_valid = 1
+        _draw_frame(bf, rn, t)
         last_z = best_z
         drawn = drawn + 1
     }
@@ -335,6 +360,7 @@ frames_on_move(host: ptr, x: float, y: float) {
         _mark_frame_dirty(f)
         f.w = _maxf(hst.start_w + dx, _min_w())
         f.h = _maxf(hst.start_h + dy, _min_h())
+        frame_invalidate(f as ptr)
         _mark_frame_dirty(f)
     }
 }
