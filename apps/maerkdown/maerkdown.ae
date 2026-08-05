@@ -38,7 +38,8 @@ import ui (
     canvas_read_pixel, canvas_widget, width, height, widget_shortcut, scrollview,
     ui_state_s, ui_set_s, bind_text,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator, menu_bar_add,
-    attach_menu_bar_to_window, open_file, save_file
+    attach_menu_bar_to_window, open_file, save_file,
+    style_bg_color, is_dark_mode
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (
@@ -74,11 +75,47 @@ struct Ed {
     st_caret: int
     st_src: int
     cur_path: string   // last opened/saved path ("" = untitled)
+    dark: int          // 1 when the desktop theme is dark
+    tb_bold: int
+    tb_italic: int
+    tb_under: int
+    tb_code: int
+    tb_mark: int
+    tb_spoil: int
+    tb_sup: int
+    tb_sub: int
 }
 
 // ---- publishing ------------------------------------------------------------
 
+// An armed toggle carries the accent; an idle one carries the plate colour
+// for the desktop theme. Labels stay put: the driver and screen readers
+// address these buttons by label, so the state has to ride on colour.
+mark_btn(ed: *Ed, handle: int, on: int) {
+    if handle == 0 { return }
+    if on == 1 {
+        _m = style_bg_color(handle, 0.24, 0.47, 0.78, 1.0)
+        return
+    }
+    if ed.dark == 1 { _d = style_bg_color(handle, 0.16, 0.16, 0.20, 1.0) }
+    else { _l = style_bg_color(handle, 0.87, 0.87, 0.89, 1.0) }
+}
+
+// `pend` is the only source of truth: it is XORed into the word at commit and
+// cleared there, so the row re-reads it rather than latching on click.
+sync_toolbar(ed: *Ed) {
+    mark_btn(ed, ed.tb_bold,   (ed.pend / mdown.MD_BOLD) % 2)
+    mark_btn(ed, ed.tb_italic, (ed.pend / mdown.MD_ITALIC) % 2)
+    mark_btn(ed, ed.tb_under,  (ed.pend / mdown.MD_UNDER) % 2)
+    mark_btn(ed, ed.tb_code,   (ed.pend / mdown.MD_CODEW) % 2)
+    mark_btn(ed, ed.tb_mark,   (ed.pend / mdown.MD_MARK) % 2)
+    mark_btn(ed, ed.tb_spoil,  (ed.pend / mdown.MD_SPOIL) % 2)
+    mark_btn(ed, ed.tb_sup,    (ed.pend / mdown.MD_SUP) % 2)
+    mark_btn(ed, ed.tb_sub,    (ed.pend / mdown.MD_SUB) % 2)
+}
+
 publish(ed: *Ed) {
+    sync_toolbar(ed)
     nb = mdown.md_doc_blocks(ed.doc)
     nw = 0
     i = 0
@@ -534,7 +571,7 @@ probe(ed: *Ed) -> int {
 }
 
 main() {
-    ed = malloc(104) as *Ed
+    ed = malloc(176) as *Ed
     ed.doc = mdown.md_doc_new()
     ed.lo = null
     ed.cb = 0
@@ -543,6 +580,16 @@ main() {
     ed.bpos = 0
     ed.pend = 0
     ed.cur_path = ""
+    ed.dark = 0
+    if is_dark_mode() == 1 { ed.dark = 1 }
+    ed.tb_bold = 0
+    ed.tb_italic = 0
+    ed.tb_under = 0
+    ed.tb_code = 0
+    ed.tb_mark = 0
+    ed.tb_spoil = 0
+    ed.tb_sup = 0
+    ed.tb_sub = 0
 
     if args_count() > 1 {
         arg_path = args_get(1)
@@ -566,16 +613,16 @@ main() {
     window("Maerkdown", 600, 660) {
         vstack(6) {
             hstack(6) {
-                btn("B") callback { toggle_flag(ed, mdown.MD_BOLD) }
-                btn("I") callback { toggle_flag(ed, mdown.MD_ITALIC) }
-                btn("U") callback { toggle_flag(ed, mdown.MD_UNDER) }
-                btn("Code") callback { toggle_flag(ed, mdown.MD_CODEW) }
-                btn("Mark") callback { toggle_flag(ed, mdown.MD_MARK) }
-                btn("Spoil") callback { toggle_flag(ed, mdown.MD_SPOIL) }
-                btn("Sup") callback {
+                ed.tb_bold = btn("B") callback { toggle_flag(ed, mdown.MD_BOLD) }
+                ed.tb_italic = btn("I") callback { toggle_flag(ed, mdown.MD_ITALIC) }
+                ed.tb_under = btn("U") callback { toggle_flag(ed, mdown.MD_UNDER) }
+                ed.tb_code = btn("Code") callback { toggle_flag(ed, mdown.MD_CODEW) }
+                ed.tb_mark = btn("Mark") callback { toggle_flag(ed, mdown.MD_MARK) }
+                ed.tb_spoil = btn("Spoil") callback { toggle_flag(ed, mdown.MD_SPOIL) }
+                ed.tb_sup = btn("Sup") callback {
                     toggle_excl(ed, mdown.MD_SUP, mdown.MD_SUB)
                 }
-                btn("Sub") callback {
+                ed.tb_sub = btn("Sub") callback {
                     toggle_excl(ed, mdown.MD_SUB, mdown.MD_SUP)
                 }
             }
@@ -652,6 +699,10 @@ main() {
             bind_text(t_i, inkl)
         }
         // Window handle 1 is the primary window this builder owns.
+        // Plate the row once the buttons exist, so it does not jump from
+        // native to plated on the first edit.
+        sync_toolbar(ed)
+
         bar = menu_bar()
         fmenu = menu("File")
         menu_item(fmenu, "Open...") callback {
