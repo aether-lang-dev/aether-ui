@@ -79,6 +79,7 @@ exports (
     canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
     canvas_set_clip_rects, canvas_reset_clip,
     canvas_clear, canvas_redraw, canvas_write_png,
+    canvas_cmd_count, canvas_render_range_rgba, canvas_draw_image_ptr,
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
@@ -404,6 +405,13 @@ extern aether_ui_canvas_reset_clip_impl(canvas_id: int)
 extern aether_ui_canvas_clear_impl(canvas_id: int)
 extern aether_ui_canvas_redraw_impl(canvas_id: int)
 extern aether_ui_canvas_write_png_impl(canvas_id: int, path: string, width: int, height: int) -> int
+extern aether_ui_canvas_cmd_count_impl(canvas_id: int) -> int
+extern aether_ui_canvas_draw_image_impl_ptr(canvas_id: int, x: float, y: float,
+                                            iw: int, ih: int, rgba: ptr, byte_len: int)
+extern aether_ui_canvas_render_range_rgba_impl(canvas_id: int, start: int, end: int,
+                                               ox: float, oy: float,
+                                               width: int, height: int,
+                                               out: ptr, out_len: int) -> int
 
 extern aether_ui_on_hover_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
@@ -3165,6 +3173,30 @@ canvas_redraw(cid: int) {
 // a canvas drew without a live display. Same pixels as on-screen.
 canvas_write_png(cid: int, path: string, width: int, height: int) -> int {
     return aether_ui_canvas_write_png_impl(cid, path, width, height)
+}
+
+// canvas_cmd_count — how many commands the canvas buffer holds right now.
+// Bracket a piece of drawing with two reads and the difference is that
+// drawing's contiguous command range. Returns -1 where unsupported.
+// Blit from raw memory rather than a binary string -- Stage 3's per-frame
+// surfaces live in malloc'd buffers, and ptr is not castable to string.
+canvas_draw_image_ptr(cid: int, x: float, y: float, iw: int, ih: int,
+                      rgba: ptr, byte_len: int) {
+    aether_ui_canvas_draw_image_impl_ptr(cid, x, y, iw, ih, rgba, byte_len)
+}
+
+canvas_cmd_count(cid: int) -> int {
+    return aether_ui_canvas_cmd_count_impl(cid)
+}
+
+// canvas_render_range_rgba — render command range [start, end) offscreen and
+// copy it out as tightly packed, non-premultiplied RGBA8 (width*height*4
+// bytes) into `out`. Returns bytes written, 0 on error or where the backend
+// does not support it (win32/macOS today — callers must treat 0 as "cannot
+// cache" and fall back to drawing inline).
+canvas_render_range_rgba(cid: int, start: int, end: int, ox: float, oy: float,
+                         width: int, height: int, out: ptr, out_len: int) -> int {
+    return aether_ui_canvas_render_range_rgba_impl(cid, start, end, ox, oy, width, height, out, out_len)
 }
 
 // --- Event handlers ---

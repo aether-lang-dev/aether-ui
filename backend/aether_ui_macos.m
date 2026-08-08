@@ -5891,3 +5891,30 @@ void aether_ui_app_run_headless_impl(void) {
 }
 
 #endif // __APPLE__
+
+// Stage 3 per-frame surfaces: NOT IMPLEMENTED on this backend yet.
+// Returning 0 is the gate -- ui.frames reads it as "cannot cache here" and
+// falls back to drawing every frame inline, which is exactly today's correct
+// behaviour. Deliberately not stubbed with something plausible-but-wrong:
+// a backend that half-caches would leave stale pixels on screen.
+// Porting means reusing this file's existing offscreen replay (the one
+// write_png_impl already uses) and copying out non-premultiplied RGBA8.
+void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
+                                          int iw, int ih,
+                                          const unsigned char* rgba, int byte_len) {
+    aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
+}
+
+int aether_ui_canvas_cmd_count_impl(int canvas_id) {
+    (void)canvas_id;
+    return -1;
+}
+
+int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
+                                            double ox, double oy,
+                                            int width, int height,
+                                            unsigned char* out, int out_len) {
+    (void)canvas_id; (void)start; (void)end; (void)ox; (void)oy;
+    (void)width; (void)height; (void)out; (void)out_len;
+    return 0;
+}

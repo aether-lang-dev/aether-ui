@@ -392,6 +392,26 @@ void aether_ui_canvas_clear_impl(int canvas_id);
 void aether_ui_canvas_redraw_impl(int canvas_id);
 // Off-screen render of the canvas command buffer to a PNG. Headless-capable
 // (pure cairo image surface; no window). Returns 1 on success, 0 on failure.
+/* Stage 3 (per-frame surfaces). canvas_cmd_count lets a caller bracket one
+   frame's drawing as a contiguous command range; render_range_rgba renders
+   that range offscreen and copies it out as tightly packed, NON-premultiplied
+   RGBA8 -- the form canvas_draw_image takes, so a rendered frame can be
+   blitted back.
+
+   Implemented on GTK4 only for now. win32 and macOS return 0/-1, and
+   ui.frames treats that as "this backend cannot cache" and draws inline, so
+   they are gated OFF rather than left enabled-and-wrong (see the four-OS
+   parity rule in docs/design/retained-compositor.md). Both already have an
+   offscreen replay for write_png to build on when they are ported. */
+void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
+                                          int iw, int ih,
+                                          const unsigned char* rgba, int byte_len);
+int aether_ui_canvas_cmd_count_impl(int canvas_id);
+int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
+                                            double ox, double oy,
+                                            int width, int height,
+                                            unsigned char* out, int out_len);
+
 int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
                                      int width, int height);
 

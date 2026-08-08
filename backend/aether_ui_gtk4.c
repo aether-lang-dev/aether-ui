@@ -3829,9 +3829,18 @@ static void canvas_select_font(cairo_t* cr, int flags) {
     cairo_select_font_face(cr, family, slant, weight);
 }
 
-static void canvas_replay(cairo_t* cr, CanvasState* cs) {
+// Replay a RANGE [start, end) of the command buffer. Stage 3 (per-frame
+// surfaces) needs this: frames emit their commands sequentially into the
+// shared buffer, so one frame's drawing is a contiguous slice, and rendering
+// that slice alone into an offscreen surface is what lets an unchanged frame
+// be blitted instead of re-drawn. The whole-buffer canvas_replay below is
+// this with the full range, so every existing caller is unaffected.
+static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
+                                int start, int end) {
     if (!cs) return;
-    for (int i = 0; i < cs->count; i++) {
+    if (start < 0) start = 0;
+    if (end > cs->count) end = cs->count;
+    for (int i = start; i < end; i++) {
         CanvasCmd* c = &cs->cmds[i];
         switch (c->type) {
             case CANVAS_BEGIN_PATH:
@@ -4013,6 +4022,93 @@ static void canvas_replay(cairo_t* cr, CanvasState* cs) {
                 break;
         }
     }
+}
+
+static void canvas_replay(cairo_t* cr, CanvasState* cs) {
+    if (!cs) return;
+    canvas_replay_range(cr, cs, 0, cs->count);
+}
+
+// How many commands the buffer currently holds. Lets the caller bracket a
+// frame's drawing: read the count before and after, and the difference is
+// that frame's contiguous slice.
+// Same as canvas_draw_image_impl, but taking raw memory. Stage 3's frame
+// surfaces are malloc'd buffers, not Aether strings.
+void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
+                                          int iw, int ih,
+                                          const unsigned char* rgba, int byte_len) {
+    aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
+}
+
+int aether_ui_canvas_cmd_count_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->count : -1;
+}
+
+// Render command range [start, end) offscreen and copy it out as tightly
+// packed RGBA8 (w*h*4 bytes) into caller-provided storage. Returns the bytes
+// written, or 0 on error.
+//
+// This is the primitive Stage 3 was missing. Everything else already
+// existed: canvas_write_png proves the offscreen replay works, and
+// canvas_draw_image_scaled puts a buffer back. What no extern could do was
+// hand a rendered buffer BACK to Aether -- RGBA has only ever travelled into
+// the backend.
+//
+// Cairo's ARGB32 is premultiplied and native-endian, whereas
+// canvas_draw_image expects straight (non-premultiplied) RGBA bytes, so this
+// unpremultiplies on the way out. Skipping that step makes translucent
+// content -- which is exactly what frames_demo uses -- come out too dark.
+int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
+                                            double ox, double oy,
+                                            int width, int height,
+                                            unsigned char* out, int out_len) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !out || width <= 0 || height <= 0) return 0;
+    int need = width * height * 4;
+    if (out_len < need) return 0;
+    cairo_surface_t* surf = cairo_image_surface_create(
+        CAIRO_FORMAT_ARGB32, width, height);
+    if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(surf);
+        return 0;
+    }
+    cairo_t* cr = cairo_create(surf);
+    // Commands carry ABSOLUTE canvas coordinates, but the surface is
+    // frame-local. Translating by -(ox, oy) puts the frame's top-left at the
+    // buffer's origin; without this a frame-sized buffer would capture the
+    // wrong region of the canvas entirely.
+    cairo_translate(cr, -ox, -oy);
+    canvas_replay_range(cr, cs, start, end);
+    cairo_destroy(cr);
+    cairo_surface_flush(surf);
+    unsigned char* data = cairo_image_surface_get_data(surf);
+    int stride = cairo_image_surface_get_stride(surf);
+    for (int y = 0; y < height; y++) {
+        unsigned char* row = data + (size_t)y * stride;
+        unsigned char* dst = out + (size_t)y * width * 4;
+        for (int x = 0; x < width; x++) {
+            unsigned int v = *(unsigned int*)(row + x * 4);
+            unsigned int a = (v >> 24) & 0xff;
+            unsigned int r = (v >> 16) & 0xff;
+            unsigned int g = (v >> 8) & 0xff;
+            unsigned int b = v & 0xff;
+            if (a != 0 && a != 255) {
+                r = (r * 255 + a / 2) / a;
+                g = (g * 255 + a / 2) / a;
+                b = (b * 255 + a / 2) / a;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b > 255) b = 255;
+            }
+            dst[x * 4 + 0] = (unsigned char)r;
+            dst[x * 4 + 1] = (unsigned char)g;
+            dst[x * 4 + 2] = (unsigned char)b;
+            dst[x * 4 + 3] = (unsigned char)a;
+        }
+    }
+    cairo_surface_destroy(surf);
+    return need;
 }
 
 static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
