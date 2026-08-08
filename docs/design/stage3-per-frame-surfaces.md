@@ -110,6 +110,60 @@ offscreen replay to build on. This is not new rasterisation on any backend.
 `canvas_draw_image_scaled` already blits source→dest with scaling, which
 covers the hidpi risk listed below.
 
+## The blocker: deferred scenes have no command range to bracket
+
+**Attempted 2026-08-08, measured, reverted.** The obvious wiring does not
+work, and the reason is worth stating precisely because it looks like it
+should.
+
+The plan was: bracket `_draw_frame` with `canvas_cmd_count` before and after,
+take the difference as that frame's contiguous command slice, render the
+slice offscreen, blit it next paint. Implemented end to end. Result:
+
+```
+composite: rerender=3 blit=0 total=249/0 gdraw=83 paints=83
+```
+
+Zero blits in 83 paints. Instrumenting the loop showed why — `cmd_count`
+read **2 on every call and never grew**:
+
+```
+DBG cid=1 cmdcount=2   (identical for every frame, every paint)
+```
+
+**The live `vg` path runs the scene DEFERRED** (`scene_set_deferred(sub, 1)`
+in `render_one_draw`; `deferred = 1` in `vg/module.ae`). Shapes are recorded
+into a `pending` list during the block and dispatched to the canvas by
+`vg_flush` only *after* the whole callback returns. So while `frames_draw` is
+running, **no frame's commands exist in the canvas buffer yet** — there is
+nothing to bracket, and nothing to slice.
+
+This is not a bug to fix in the frames layer. It is the deferred design doing
+what it is for: shapes are dispatched with their final cached style, which is
+why the live path can re-style without redrawing.
+
+**Consequences for the next attempt.** Bracketing at the frames layer is
+dead. The seam must be somewhere the commands actually exist:
+
+1. **Slice at flush time.** `vg_flush` walks `pending` in draw order. If a
+   frame tags its pending entries, the flush knows each frame's range as it
+   dispatches. Most faithful to the existing design; needs a tag on
+   `VgPending`.
+2. **Give each frame its own sub-scene**, as `render_one_draw` already does
+   per draw-region: `scene_new` → invoke content → `vg_flush` → capture. The
+   frame's commands then land in a buffer of its own, and no range arithmetic
+   is needed. Closest to the note's original "generalise the raster region"
+   instinct, and probably the right one.
+3. **Capture after the fact from the shared buffer** using the frame's *rect*
+   rather than a command range — render the whole buffer once and cut out
+   each frame's pixels. Wrong: it cannot skip the drawing work, which is the
+   entire point.
+
+Option 2 is the recommended next step. Note it needs the frame's content to
+be renderable into a sub-scene whose backend targets an offscreen surface,
+which the `(ox, oy)` argument on `canvas_render_range_rgba` already
+anticipates.
+
 ## Proposed API
 
 In `ui/frames.ae`, additive — the existing `frames_draw` path stays working:
