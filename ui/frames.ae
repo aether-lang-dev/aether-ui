@@ -12,6 +12,7 @@ exports (
     frame_move, frame_resize, frame_raise, frame_close,
     frame_bounds, frame_z, frame_count, frames_hit,
     frames_rerender_count, frames_blit_count,
+    frames_total_rerender_count, frames_total_blit_count, frames_reset_totals,
     frames_dirty_area, frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_draw, frames_on_click, frames_on_move, frames_on_release
 )
@@ -46,6 +47,8 @@ struct FrameHost {
     start_h: float
     last_rerender_count: int
     last_blit_count: int
+    total_rerender_count: int
+    total_blit_count: int
 }
 
 struct Frame {
@@ -107,6 +110,8 @@ frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
     hst.start_h = 0.0
     hst.last_rerender_count = 0
     hst.last_blit_count = 0
+    hst.total_rerender_count = 0
+    hst.total_blit_count = 0
     return hst as ptr
 }
 
@@ -228,6 +233,25 @@ frames_rerender_count(host: ptr) -> int {
     return hst.last_rerender_count
 }
 
+// Cumulative since start. The acceptance test sums over many paints: a
+// per-paint reading cannot tell "re-renders every time" from "re-rendered
+// once", which is exactly the distinction Stage 3 has to make.
+frames_total_rerender_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    return hst.total_rerender_count
+}
+
+frames_total_blit_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    return hst.total_blit_count
+}
+
+frames_reset_totals(host: ptr) {
+    hst = host as *FrameHost
+    hst.total_rerender_count = 0
+    hst.total_blit_count = 0
+}
+
 frames_blit_count(host: ptr) -> int {
     hst = host as *FrameHost
     return hst.last_blit_count
@@ -303,8 +327,10 @@ frames_draw(host: ptr, rn: ptr, t: float) {
         bf = best as *Frame
         if bf.surface_valid == 1 {
             hst.last_blit_count = hst.last_blit_count + 1
+            hst.total_blit_count = hst.total_blit_count + 1
         } else {
             hst.last_rerender_count = hst.last_rerender_count + 1
+            hst.total_rerender_count = hst.total_rerender_count + 1
         }
         // Surface creation comes next commit. Marking valid before the inline
         // draw lets an animating content callback invalidate the next paint.

@@ -18,6 +18,7 @@ import ui.frames (
     frame_invalidate,
     frame_bounds, frame_z, frames_hit, frames_draw,
     frames_rerender_count, frames_blit_count,
+    frames_total_rerender_count, frames_total_blit_count,
     frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_on_click, frames_on_move, frames_on_release
 )
@@ -43,6 +44,8 @@ struct App {
     alpha: ptr
     beta: ptr
     gamma: ptr
+    gamma_draws: int
+    paints: int
     cube_a: ptr
     cube_b: ptr
     st_bounds: int
@@ -57,8 +60,12 @@ struct App {
 publish_composite(app: *App) {
     rerenders = frames_rerender_count(app.host)
     blits = frames_blit_count(app.host)
+    trr = frames_total_rerender_count(app.host)
+    tbl = frames_total_blit_count(app.host)
+    gd = app.gamma_draws
+    pc = app.paints
     _c = ui_set_s(app.st_composite,
-        "composite: rerender=${rerenders} blit=${blits}")
+        "composite: rerender=${rerenders} blit=${blits} total=${trr}/${tbl} gdraw=${gd} paints=${pc}")
 }
 
 struct CubeSpin {
@@ -277,6 +284,8 @@ main() {
     app.st_hit = ui_state_s("hit: none")
     app.st_clip = ui_state_s("clip: pending")
     app.st_composite = ui_state_s("composite: pending")
+    app.gamma_draws = 0
+    app.paints = 0
     app.clip_enabled = 1
     app.clip_mode = 1
     // Dirty clipping is only CORRECT where the painter retains its
@@ -342,6 +351,9 @@ main() {
                     // not only under a test-only env var.
                     app.gamma = frame("Gamma (static)", 620.0, 400.0, 300.0, 200.0)
                         callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            // Ground truth for the Stage 3 acceptance test:
+                            // how many times Gamma's PIXELS were produced.
+                            app.gamma_draws = app.gamma_draws + 1
                             draw_static_gamma(rn, x, y, w, h)
                         }
                 }
@@ -350,6 +362,7 @@ main() {
                     callback |rn: ptr, t: float| {
                         back = rect(rn, 0.0, 0.0, FW * 1.0, FH * 1.0)
                         fill(back, "#dfe5ec")
+                        app.paints = app.paints + 1
                         frames_draw(app.host, rn, t)
                         publish_composite(app)
                     }

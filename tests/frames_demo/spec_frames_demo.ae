@@ -62,6 +62,31 @@ main() {
                 "static frame stays valid over successive paints")
         }
 
+        // ── Stage 3 acceptance ────────────────────────────────────────
+        // THE claim from docs/design/stage3-per-frame-surfaces.md: with a
+        // frame that does not animate, that frame re-renders ZERO times
+        // beyond its first paint while the animating ones re-render every
+        // paint. Today every frame is drawn inline on every paint and Gamma
+        // is merely COUNTED as a blit, so its pixels are still produced from
+        // scratch each time. This test is expected to FAIL until per-frame
+        // surfaces exist -- that failure is the point, and per the design
+        // note it must be demonstrated before the fix lands.
+        aeocha.it("static frame is drawn once, not once per paint") callback {
+            // Force several paints, then read the app's own count of how many
+            // times Gamma's content callback actually RAN. That counts pixels
+            // being produced, so no bookkeeping in frames_draw can fake it --
+            // unlike the blit tally, which already reads 1 today.
+            _ = uidriver.get_body("/screenshot")
+            sleep(60)
+            _ = uidriver.get_body("/screenshot")
+            sleep(60)
+            _ = uidriver.get_body("/screenshot")
+            sleep(60)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "gdraw=1",
+                "static frame content produced once, however many paints occur")
+        }
+
         aeocha.it("moving a frame does not invalidate it") callback {
             // The design's least-certain claim, and the whole saving: a
             // dragged frame's PIXELS are unchanged, only its position is.
