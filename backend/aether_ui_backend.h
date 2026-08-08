@@ -407,6 +407,10 @@ void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
                                           int iw, int ih,
                                           const unsigned char* rgba, int byte_len);
 int aether_ui_canvas_cmd_count_impl(int canvas_id);
+/* Pixels of the painter's retained surface differing from the background.
+   0 means the app painted nothing. GTK4 only; -1 elsewhere (no retained
+   paint surface to read -- see Stage 2.5b). */
+int aether_ui_canvas_painted_pixels_impl(int canvas_id);
 int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
                                             double ox, double oy,
                                             int width, int height,

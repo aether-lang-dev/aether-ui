@@ -80,6 +80,31 @@ main() {
         // scratch each time. This test is expected to FAIL until per-frame
         // surfaces exist -- that failure is the point, and per the design
         // note it must be demonstrated before the fix lands.
+        // The check that no counter can fake. Stage 3's first attempt made
+        // every automated signal green -- counters, acceptance test,
+        // goldens, eleven specs -- while the window rendered nothing at all,
+        // because the cached blit was queued into a command buffer that
+        // canvas_clear empties (freeing CANVAS_DRAW_IMAGE pixel buffers)
+        // before the painter runs. Only a human looking at a PNG caught it.
+        // painted_pixels reads the painter's own retained surface, so it
+        // sees what actually reached the screen.
+        aeocha.it("the painter actually put frames on the canvas") callback {
+            uidriver.click(900.0, 600.0)
+            sleep(120)
+            px = uidriver.canvas_painted_pixels()
+            if px < 0 {
+                // No retained paint surface on this backend (Stage 2.5b);
+                // nothing to assert rather than a false pass.
+                aeocha.assert_eq(px, -1, "backend reports no paint surface")
+            } else {
+                // Three frames with titles, borders and two cubes over a flat
+                // wash. Thousands of sampled pixels differ; a blank canvas
+                // gives exactly 0.
+                aeocha.assert_gt(px, 500,
+                    "the painted surface is not a blank wash")
+            }
+        }
+
         aeocha.it("static frame is drawn once, not once per paint") callback {
             // Force several paints, then read the app's own count of how many
             // times Gamma's content callback actually RAN. That counts pixels

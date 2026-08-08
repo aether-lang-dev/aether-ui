@@ -4269,6 +4269,48 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     return (int)v;
 }
 
+// How many pixels of the PAINTER'S OWN retained surface differ from the
+// surface's top-left pixel. A blank canvas -- background colour and nothing
+// else -- reports 0.
+//
+// This exists because every other canvas metric can be green while the app
+// renders nothing. canvas_read_pixel and /screenshot's write_png path both
+// REPLAY the command buffer into a private surface, so they see commands
+// that were queued; they cannot see that those commands were freed by
+// canvas_clear before the painter ever ran. Stage 3's first attempt was
+// caught only by a human looking at a PNG: counters, acceptance test,
+// goldens and eleven specs were all green against a blank window.
+// This reads what actually reached the paint surface.
+//
+// Sampled on a grid rather than every pixel: a 960x640 canvas is 614400
+// pixels and this runs inside a driver request. Step 4 in each axis still
+// gives ~38k samples, far more than enough to tell "drew something" from
+// "drew nothing", which is the distinction that matters.
+int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !cs->paint_surface) return -1;
+    cairo_surface_flush(cs->paint_surface);
+    if (cairo_image_surface_get_format(cs->paint_surface) != CAIRO_FORMAT_ARGB32 &&
+        cairo_image_surface_get_format(cs->paint_surface) != CAIRO_FORMAT_RGB24) {
+        return -1;
+    }
+    unsigned char* data = cairo_image_surface_get_data(cs->paint_surface);
+    if (!data) return -1;
+    int w = cairo_image_surface_get_width(cs->paint_surface);
+    int h = cairo_image_surface_get_height(cs->paint_surface);
+    int stride = cairo_image_surface_get_stride(cs->paint_surface);
+    if (w <= 0 || h <= 0) return -1;
+    unsigned int bg = *(unsigned int*)data;   // top-left = the background wash
+    int differing = 0;
+    for (int y = 0; y < h; y += 4) {
+        unsigned char* row = data + (size_t)y * stride;
+        for (int x = 0; x < w; x += 4) {
+            if (*(unsigned int*)(row + x * 4) != bg) differing++;
+        }
+    }
+    return differing;
+}
+
 int aether_ui_canvas_last_paint_area_impl(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     return cs ? cs->last_paint_area : -1;
@@ -5368,6 +5410,7 @@ typedef struct {
     int full_paints;
     int clip_paints;
     int last_clip_area;
+    int painted_pixels;
     int done;
 } CanvasDebugReq;
 
@@ -5381,6 +5424,7 @@ static gboolean canvas_debug_req_idle(gpointer data) {
     rq->full_paints = cs ? cs->paint_full_count : 0;
     rq->clip_paints = cs ? cs->paint_clip_count_total : 0;
     rq->last_clip_area = cs ? cs->last_clip_area : 0;
+    rq->painted_pixels = aether_ui_canvas_painted_pixels_impl(rq->canvas_id);
     rq->done = 1;
     return G_SOURCE_REMOVE;
 }
@@ -6407,12 +6451,14 @@ static void handle_test_request(int client_fd) {
         drq.canvas_id = atoi(path + 8);
         g_idle_add(canvas_debug_req_idle, &drq);
         while (!drq.done) usleep(1000);
-        char buf[192];
+        char buf[256];
         snprintf(buf, sizeof(buf),
             "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d,"
-            "\"full_paints\":%d,\"clip_paints\":%d,\"last_clip_area\":%d}",
+            "\"full_paints\":%d,\"clip_paints\":%d,\"last_clip_area\":%d,"
+            "\"painted_pixels\":%d}",
             drq.area, drq.count, drq.w, drq.h,
-            drq.full_paints, drq.clip_paints, drq.last_clip_area);
+            drq.full_paints, drq.clip_paints, drq.last_clip_area,
+            drq.painted_pixels);
         send_response(client_fd, 200, "OK", "application/json", buf);
         close(client_fd);
         return;

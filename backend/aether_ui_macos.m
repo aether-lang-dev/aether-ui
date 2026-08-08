@@ -5905,6 +5905,14 @@ void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
     aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
 }
 
+// No retained paint surface on this backend yet (Stage 2.5b), so there is
+// nothing to sample. -1 = "cannot answer", distinct from 0 = "painted
+// nothing".
+int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
+    (void)canvas_id;
+    return -1;
+}
+
 int aether_ui_canvas_cmd_count_impl(int canvas_id) {
     (void)canvas_id;
     return -1;
