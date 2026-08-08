@@ -30,6 +30,23 @@ main() {
             ok = uidriver.wait_body_contains("/widgets", "saved: w2", 20)
             aeocha.assert_true(ok, "W2Save ran its closure")
         }
+
+        aeocha.it("closing window 2 leaves the first window live") callback {
+            // This spec used to end with window 2 still open. Nothing broke
+            // -- spec_matrix kills the whole process at teardown -- but the
+            // suite was relying on that rather than cleaning up after
+            // itself, and it left a stray window on screen for anyone
+            // running the demo's specs by hand. Its sibling
+            // spec_multiwindow_demo has always closed its second window;
+            // this makes the two agree.
+            uidriver.post_ok("/window/2/close", "close window 2")
+            ok = uidriver.wait_body_contains("/windows",
+                "\"id\":2,\"title\":\"Window 2\",\"live\":false", 20)
+            aeocha.assert_true(ok, "window 2 is closed")
+            b = uidriver.get_body("/windows")
+            aeocha.assert_contains(b, "\"live\":true",
+                "the primary window is still live")
+        }
     }
     aeocha.run_summary(fw)
 }
