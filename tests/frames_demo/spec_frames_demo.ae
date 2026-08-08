@@ -37,7 +37,15 @@ main() {
         }
 
         aeocha.it("reports current frame composite work") callback {
-            _ = uidriver.get_body("/screenshot")
+            // Drive a paint with a CLICK on empty canvas, not /screenshot.
+            // On macOS (and win32) /screenshot takes the headless
+            // canvas_write_png route, which renders the command buffer
+            // without running the painter -- the composite counters never
+            // advance and this reads one paint however many times it is
+            // called. A click goes through the normal repaint path on every
+            // backend. Measured on the .160 VM: two /screenshot calls left
+            // paints=1, two clicks gave paints=2 then 3.
+            uidriver.click(900.0, 600.0)
             sleep(120)
             body = uidriver.get_body("/widgets")
             // Alpha and Beta both animate and invalidate every tick; Gamma
@@ -53,9 +61,10 @@ main() {
             // Validity must PERSIST. One paint proving blit=1 could be a frame
             // that happens to be valid once; the point of the cache is that it
             // stays valid while nothing touches it.
-            _ = uidriver.get_body("/screenshot")
+            // Two REAL paints (see the note above on /screenshot).
+            uidriver.click(900.0, 600.0)
             sleep(120)
-            _ = uidriver.get_body("/screenshot")
+            uidriver.click(900.0, 600.0)
             sleep(120)
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "composite: rerender=2 blit=1",
@@ -76,11 +85,11 @@ main() {
             // times Gamma's content callback actually RAN. That counts pixels
             // being produced, so no bookkeeping in frames_draw can fake it --
             // unlike the blit tally, which already reads 1 today.
-            _ = uidriver.get_body("/screenshot")
+            uidriver.click(900.0, 600.0)
             sleep(60)
-            _ = uidriver.get_body("/screenshot")
+            uidriver.click(900.0, 600.0)
             sleep(60)
-            _ = uidriver.get_body("/screenshot")
+            uidriver.click(900.0, 600.0)
             sleep(60)
             body = uidriver.get_body("/widgets")
             aeocha.assert_contains(body, "gdraw=1",
