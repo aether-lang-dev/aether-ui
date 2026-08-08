@@ -557,10 +557,19 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
                 send_http(client_fd, 404, "Not Found", "application/json",
                           "{\"error\":\"canvas not found\"}");
             } else {
-                char body[192];
+                // painted_pixels comes straight from the backend rather
+                // than through the canvas_debug hook, whose signature is
+                // fixed at four fields and shared by every backend. It must
+                // be PRESENT on all of them: a missing key parses as 0,
+                // which a spec cannot tell from "painted nothing" -- and
+                // that is exactly what this metric exists to detect. -1
+                // means "this backend has no retained paint surface".
+                int painted = aether_ui_canvas_painted_pixels_impl(id);
+                char body[256];
                 snprintf(body, sizeof(body),
-                         "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d}",
-                         area, commands, w, ht);
+                         "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d,"
+                         "\"painted_pixels\":%d}",
+                         area, commands, w, ht, painted);
                 send_http(client_fd, 200, "OK", "application/json", body);
             }
         }
