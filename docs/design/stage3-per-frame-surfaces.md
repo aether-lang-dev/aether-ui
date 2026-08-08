@@ -164,6 +164,66 @@ be renderable into a sub-scene whose backend targets an offscreen surface,
 which the `(ox, oy)` argument on `canvas_render_range_rgba` already
 anticipates.
 
+## Option 2 attempted: the sub-scene works, the CACHE does not
+
+**Attempted 2026-08-08, measured, reverted.** Option 2 above — give each
+frame its own sub-scene — was implemented. The sub-scene mechanism works
+exactly as predicted, and the cache built on it is still wrong. Both halves
+matter.
+
+**What worked.** `scene_new(scene_ctx, scene_backend)` + `scene_set_deferred`
++ `_draw_frame(bf, vg_root(sub), t)` + `vg_flush(sub)` puts a frame's
+commands in the canvas buffer at a point where they can be bracketed. The
+ranges came out contiguous and correct:
+
+```
+DBG enter cid=1 start=2   iw=460 ih=320   -> fin=153   (151 commands)
+DBG enter cid=1 start=153 iw=500 ih=360   -> fin=304   (151 commands)
+DBG enter cid=1 start=304 iw=300 ih=200   -> fin=371   ( 67 commands)
+DBG cap got=588800 need=588800            (capture full, every frame)
+```
+
+The acceptance test went **green** — `gdraw=1` across `paints=102`, exactly
+the claim. `frames` 10/0, `golden` 2/0, goldens unchanged.
+
+**And the canvas was blank.** A screenshot showed nothing but the `#dfe5ec`
+background: no frames, no cubes. Before the change, 27557 bytes of PNG with
+three frames and two cubes; after, 3231 bytes of flat colour.
+
+**Why.** `vg/live.ae` calls `ui.canvas_clear(canvas_id)` at the start of
+every paint, and `aether_ui_canvas_clear_impl` **frees the pixel buffers of
+`CANVAS_DRAW_IMAGE` commands** as it empties the buffer. So the blit command
+issued for a cached frame is queued into a command buffer that is cleared
+before it is ever painted. Nothing survives to the screen. The `start=2` at
+the top of each paint is the clear's fingerprint.
+
+The deeper point: **a command-buffer blit is not a substitute for drawing,
+because the command buffer is rebuilt from scratch every paint.** Caching
+pixels only helps if the cache lives somewhere the per-paint clear does not
+reach. The retained *paint surface* (Stage 2.5, GTK4's
+`canvas_ensure_paint_surface`) is such a place; the command buffer is not.
+
+**Every automated signal said success.** The counters, the acceptance test,
+the goldens and all 11 other specs were green while the app rendered
+nothing. The specs read the status *label*; the goldens have no frames. The
+only thing that caught it was looking at a screenshot — which is exactly the
+check the Risks section below says to do by eye, written before any of this
+was built.
+
+**Consequences for attempt 3.** Options 1 and 2 are both dead for the same
+underlying reason, so the surviving direction is narrower:
+
+- The cached surface must be composited **at paint time**, not queued as a
+  command — i.e. into the retained paint surface, below/around the clip, in
+  the painter itself. That means the frames layer cannot own the blit; the
+  backend paint path has to.
+- Or: frames stop drawing into the shared scene at all and become genuine
+  live regions (`LIVE_RASTER`), which already have a paint-time blit that
+  survives the clear (`_blit_one_raster`). This is the closest thing to a
+  working precedent in the tree and should be evaluated first.
+- **Any attempt 3 must be checked with a screenshot before it is believed.**
+  Add a pixel assertion to the frames spec so the harness can see it too.
+
 ## Proposed API
 
 In `ui/frames.ae`, additive — the existing `frames_draw` path stays working:
