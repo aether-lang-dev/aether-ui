@@ -27,6 +27,7 @@ exports (
     live_raster_new, live_draw_new,
     region_set_animated, region_animated,
     region_kind, region_x, region_y, region_w, region_h,
+    region_set_rect, region_set_pixel_size, region_free,
     region_push, region_frame, region_frame_len, region_pw, region_ph,
     new_frame_buffer, buf_set_px, frame_finish,
     region_draw_fn, invoke_region_draw,
@@ -39,6 +40,8 @@ import std.bytes
 
 extern malloc(size: int) -> ptr
 extern string_retain(s: string)
+extern string_release(s: string)
+extern free(p: ptr)
 
 const LIVE_RASTER: int = 0
 const LIVE_DRAW: int = 1
@@ -170,6 +173,52 @@ region_x(p: ptr) -> float        { r = p as *LiveRegion; return r.x }
 region_y(p: ptr) -> float        { r = p as *LiveRegion; return r.y }
 region_w(p: ptr) -> float        { r = p as *LiveRegion; return r.w }
 region_h(p: ptr) -> float        { r = p as *LiveRegion; return r.h }
+// region_set_rect(region, x, y, w, h) — move/resize a region's ON-SCREEN
+// rect (viewBox space) after creation.
+//
+// Regions were create-only until now, which is fine for a video pane or a
+// treemap that owns a fixed area, but not for anything that follows a
+// moving object. ui.frames needs it: a dragged frame whose region cannot
+// move would keep blitting its cached pixels at the old position.
+//
+// The frame's own pixel resolution is unchanged — the blit scales source to
+// dest, so a region can be resized without re-rendering its content, which
+// is exactly what makes a drag cheap.
+region_set_rect(p: ptr, x: float, y: float, w: float, h: float) {
+    r = p as *LiveRegion
+    r.x = x
+    r.y = y
+    r.w = w
+    r.h = h
+}
+
+// region_set_pixel_size(region, pw, ph) — declare the resolution of the
+// frames that will be pushed from now on. Call this when the SOURCE
+// resolution changes (a resized frame re-rendered at its new size), not
+// merely when the on-screen rect moves.
+region_set_pixel_size(p: ptr, pw: int, ph: int) {
+    r = p as *LiveRegion
+    r.pw = pw
+    r.ph = ph
+}
+
+// region_free(region) — release a region's owned frame and the region
+// itself. Callers must have removed it from its scene FIRST
+// (vg.scene_remove_live_region), or the scene will blit freed memory.
+//
+// region_push retains the frame string it stores, so dropping a region
+// without releasing that reference leaks the pixel buffer — w*h*4 bytes per
+// region, which for a frame-sized surface is hundreds of KB.
+region_free(p: ptr) {
+    if p == null { return }
+    r = p as *LiveRegion
+    if r.frame_len > 0 {
+        string_release(r.frame)
+        r.frame_len = 0
+    }
+    free(p)
+}
+
 region_draw_fn(p: ptr) -> ptr    { r = p as *LiveRegion; return r.draw_fn }
 region_z(p: ptr) -> int          { r = p as *LiveRegion; return r.z }
 region_set_z(p: ptr, z: int)     { r = p as *LiveRegion; r.z = z }

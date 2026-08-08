@@ -14,6 +14,7 @@ import vg.backend.record
 import vg.grammar.context
 import vg.geom.transform
 import std.string
+import std.list
 
 extern exit(code: int)
 extern malloc(size: int) -> ptr
@@ -161,8 +162,58 @@ main() {
     assert_eq_int("source fired twice", srec.calls, 2)
     assert_near("source saw t=1.1", srec.last_t, 1.1)
 
+    // ── mutable rect + removal (Stage 3 needs both) ────────────────
+    // Regions were create-only and add-only: no way to move one, and no way
+    // to detach one from its scene. That is fine for a video pane that owns
+    // a fixed area for the life of the scene, and useless for anything
+    // tracking a moving object -- ui.frames cannot cache a DRAGGED frame if
+    // its region is pinned where it was created, and a CLOSED frame would
+    // keep blitting after the window is gone.
+    println("-- region_set_rect / region_set_pixel_size")
+    mv = region.live_raster_new(10.0, 20.0, 30.0, 40.0, 64, 48)
+    assert_near("initial x", region.region_x(mv), 10.0)
+    assert_near("initial w", region.region_w(mv), 30.0)
+    assert_eq_int("initial pw", region.region_pw(mv), 64)
+    region.region_set_rect(mv, 100.0, 200.0, 300.0, 400.0)
+    assert_near("moved x", region.region_x(mv), 100.0)
+    assert_near("moved y", region.region_y(mv), 200.0)
+    assert_near("resized w", region.region_w(mv), 300.0)
+    assert_near("resized h", region.region_h(mv), 400.0)
+    // Moving the on-screen rect must NOT touch the source resolution: the
+    // blit scales source to dest, so a frame can be moved or resized
+    // without re-rendering its pixels. That is what makes a drag cheap.
+    assert_eq_int("pixel size survives a move", region.region_pw(mv), 64)
+    assert_eq_int("pixel height survives a move", region.region_ph(mv), 48)
+    region.region_set_pixel_size(mv, 128, 96)
+    assert_eq_int("pixel width set", region.region_pw(mv), 128)
+    assert_eq_int("pixel height set", region.region_ph(mv), 96)
+
+    println("-- scene_remove_live_region")
+    rsc = vg.scene_new(ctx, bk)
+    ra = region.live_raster_new(0.0, 0.0, 10.0, 10.0, 8, 8)
+    rb = region.live_raster_new(0.0, 0.0, 10.0, 10.0, 8, 8)
+    vg.scene_add_live_region(rsc, ra)
+    vg.scene_add_live_region(rsc, rb)
+    assert_eq_int("two regions attached", list.size(vg.scene_live_regions(rsc)), 2)
+    assert_eq_int("removing an attached region reports 1",
+        vg.scene_remove_live_region(rsc, ra), 1)
+    assert_eq_int("one region left", list.size(vg.scene_live_regions(rsc)), 1)
+    // The SURVIVOR must be the one we kept -- an index slip would remove the
+    // wrong region and still leave the count right.
+    kept, _ = list.get(vg.scene_live_regions(rsc), 0)
+    assert_eq_int("the right region survived", ptr_eq(kept, rb), 1)
+    assert_eq_int("removing it twice reports 0",
+        vg.scene_remove_live_region(rsc, ra), 0)
+    assert_eq_int("count unchanged by the no-op removal",
+        list.size(vg.scene_live_regions(rsc)), 1)
+    // Detach-then-free is the required order: freeing first would leave the
+    // scene walking a dangling pointer.
+    region.region_free(ra)
+
     println("=== test_live_region passed ===")
 }
+
+ptr_eq(a: ptr, b: ptr) -> int { if a == b { return 1 } return 0 }
 
 null_ptr_is(p: ptr) -> int { if p == null { return 1 } return 0 }
 

@@ -61,7 +61,7 @@ exports (
     scene_set_deferred, scene_is_deferred, vg_flush, scene_refresh,
     bind_to, bind_items, bind_trackby, bind_render, bind_update, bind_start,
     animate, scene_animation_manager, scene_is_animating, scene_tick, scene_advance,
-    scene_add_live_region, scene_live_regions, scene_render_live_draws, render_one_draw,
+    scene_add_live_region, scene_remove_live_region, scene_live_regions, scene_render_live_draws, render_one_draw,
     scene_free_recording,
     scene_set_refreshing, scene_is_refreshing, scene_eval_bindings,
     scene_set_arm_hook, scene_set_present_hook, scene_set_timer, scene_timer,
@@ -1123,6 +1123,32 @@ scene_add_live_region(scene: ptr, lr: ptr) {
     // An (animated-by-default) region makes the scene live; a region later
     // marked static (region_set_animated 0) lets the timer retire again.
     _scene_request_frames(s)
+}
+
+// scene_remove_live_region(scene, lr) — detach a region so it stops being
+// rendered. Returns 1 if it was found and removed, 0 otherwise.
+//
+// Regions were add-only, which is fine while every region lives as long as
+// its scene. ui.frames breaks that: a closed frame must stop blitting, and
+// leaving its region attached would keep painting a window the user shut.
+//
+// This does NOT free the region — the caller owns it and should call
+// region.region_free after removing, in that order. Detaching first means
+// the render walk can never see a freed pointer.
+scene_remove_live_region(scene: ptr, lr: ptr) -> int {
+    s = scene as *VgScene
+    if s.live_regions == null { return 0 }
+    n = list.size(s.live_regions)
+    i = 0
+    while i < n {
+        item, _ = list.get(s.live_regions, i)
+        if item == lr {
+            list.remove(s.live_regions, i)
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
 }
 
 scene_live_regions(scene: ptr) -> ptr {
