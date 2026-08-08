@@ -35,5 +35,21 @@ cd "$TESTS_DIR/$(dirname "$SPEC")"
 # AETHER_LIB_DIR is multi-entry with the PLATFORM path separator — ";" on
 # Windows (MSYS), ":" elsewhere (aether #413).
 SEP=":"
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";" ;; esac
-exec env AETHER_LIB_DIR="${AEOCHA_DIR}${SEP}${TESTS_DIR}/lib" ae run "$(basename "$SPEC").ae"
+LIBA="$AEOCHA_DIR"
+LIBT="$TESTS_DIR/lib"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        SEP=";"
+        # ae.exe is a NATIVE Windows binary: it cannot resolve MSYS mount
+        # paths like /home/paul/aeocha, only real Windows paths. That works
+        # by accident whenever a checkout sits under /c/Users/... (which IS
+        # a Windows path spelled MSYS-style) and breaks the moment one lives
+        # under the MSYS root, where /home/paul is really
+        # C:/msys64/home/paul. Convert both entries so either layout works.
+        command -v cygpath >/dev/null 2>&1 && {
+            LIBA="$(cygpath -m "$LIBA")"
+            LIBT="$(cygpath -m "$LIBT")"
+        }
+        ;;
+esac
+exec env AETHER_LIB_DIR="${LIBA}${SEP}${LIBT}" ae run "$(basename "$SPEC").ae"
