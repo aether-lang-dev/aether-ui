@@ -22,7 +22,16 @@ import std.string
 import vg.geom.region (
     rgn_new, rgn_add_rect, rgn_sub_rect, rgn_nrects, rgn_rect, rgn_area
 )
-import vg (rect, path, text_sized, fill, stroke, opacity)
+import vg (rect, path, text_sized, fill, stroke, opacity,
+           scene_canvas, scene_ctx, scene_backend, scene_new, scene_set_deferred,
+           vg_root, vg_flush, scene_free_recording,
+           scene_add_live_region, scene_remove_live_region)
+// The live-region module. Note vg.geom.region above is a DIFFERENT module
+// (rectangle set algebra) imported selectively, so the bare `region.` name
+// is free for this one -- the same form vg/live.ae and vg/module.ae use.
+import vg.region
+import ui (canvas_cmd_count, canvas_render_range_rgba)
+import std.bytes
 
 extern malloc(size: int) -> ptr
 extern string_retain(s: string)
@@ -61,6 +70,14 @@ struct Frame {
     z: int
     closed: int
     surface_valid: int
+    // Stage 3: this frame's cached pixels, held in a source-less
+    // LIVE_RASTER region. A region with no source "just blits its
+    // once-pushed frame" every paint without re-running any content
+    // callback -- which is the whole Stage 3 claim, already implemented by
+    // the live path. rgn == null means not cached (or unavailable here).
+    rgn: ptr
+    rgn_pw: int
+    rgn_ph: int
     content: ptr       // boxed |rn, t, x, y, w, h|
 }
 
@@ -129,6 +146,9 @@ frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> p
     hst.next_z = hst.next_z + 1
     f.closed = 0
     f.surface_valid = 0
+    f.rgn = null
+    f.rgn_pw = 0
+    f.rgn_ph = 0
     f.content = null
     _ = list.add(hst.frames, f as ptr)
     hst.active = f as ptr
@@ -299,6 +319,98 @@ frames_clear_dirty(host: ptr) {
     rgn_sub_rect(hst.dirty, hst.x, hst.y, hst.w, hst.h)
 }
 
+extern lrint(x: float) -> long
+_ceil_i(v: float) -> int {
+    i = lrint(v) as int
+    if i < 0 { return 0 }
+    if v > (i as float) { i = i + 1 }
+    return i
+}
+
+// _composite_frame — draw a frame, or let its cached region blit it.
+//
+// A frame whose surface is still valid is NOT drawn here at all: its
+// source-less raster region blits the pixels itself, from the live path's
+// own region walk, after each canvas_clear. That is the mechanism two
+// earlier attempts were missing -- a blit queued as a command is freed by
+// the next clear, but a region is RE-ISSUED every paint, so its pixels
+// survive. See docs/design/stage3-per-frame-surfaces.md.
+//
+// Every failure path falls back to drawing inline, which is exactly today's
+// correct behaviour. Nothing here can leave a frame unpainted.
+_composite_frame(hst: *FrameHost, bf: *Frame, rn: ptr, t: float) {
+    if bf.surface_valid == 1 {
+        if bf.rgn != null {
+            // Keep the region tracking the frame: a drag moves the rect
+            // WITHOUT re-rendering, since the blit scales source to dest.
+            region.region_set_rect(bf.rgn, bf.x, bf.y, bf.w, bf.h)
+            region.region_set_z(bf.rgn, bf.z)
+            hst.last_blit_count = hst.last_blit_count + 1
+            hst.total_blit_count = hst.total_blit_count + 1
+            return
+        }
+    }
+
+    hst.last_rerender_count = hst.last_rerender_count + 1
+    hst.total_rerender_count = hst.total_rerender_count + 1
+
+    // Mark valid BEFORE drawing so an animating content callback can
+    // invalidate the next paint from inside its own draw.
+    bf.surface_valid = 1
+
+    cid = 0
+    if hst.scene != null { cid = scene_canvas(hst.scene) }
+    if cid == 0 { _draw_frame(bf, rn, t); return }
+    iw = _ceil_i(bf.w)
+    ih = _ceil_i(bf.h)
+    if iw <= 0 { _draw_frame(bf, rn, t); return }
+    if ih <= 0 { _draw_frame(bf, rn, t); return }
+    start = canvas_cmd_count(cid)
+    if start < 0 { _draw_frame(bf, rn, t); return }
+
+    // Render this frame alone into its own sub-scene. The live path is
+    // DEFERRED -- shapes are recorded and only dispatched by the flush -- so
+    // a sub-scene is what gives this frame a clean, contiguous command range
+    // to capture.
+    sub = scene_new(scene_ctx(hst.scene), scene_backend(hst.scene))
+    scene_set_deferred(sub, 1)
+    _draw_frame(bf, vg_root(sub), t)
+    vg_flush(sub)
+    fin = canvas_cmd_count(cid)
+    scene_free_recording(sub)
+    if fin <= start { return }
+
+    // Capture what it emitted into a bytes buffer -- bytes.data() hands the
+    // backend a writable region, and bytes.finish turns it into the binary
+    // string region_push stores.
+    need = iw * ih * 4
+    buf = bytes.new(need)
+    got = canvas_render_range_rgba(cid, start, fin, bf.x, bf.y,
+                                   iw, ih, bytes.data(buf), need)
+    if got != need {
+        // Capture unavailable (win32/macOS today) -- stay uncached. The
+        // frame was already drawn into the canvas above, so it IS painted.
+        bf.surface_valid = 0
+        return
+    }
+    _ = bytes.set_length(buf, need)
+    px = bytes.finish(buf, need)
+
+    if bf.rgn == null {
+        bf.rgn = region.live_raster_new(bf.x, bf.y, bf.w, bf.h, iw, ih)
+        region.region_set_animated(bf.rgn, 0)
+        scene_add_live_region(hst.scene, bf.rgn)
+    }
+    if bf.rgn_pw != iw {
+        region.region_set_pixel_size(bf.rgn, iw, ih)
+        bf.rgn_pw = iw
+        bf.rgn_ph = ih
+    }
+    region.region_set_rect(bf.rgn, bf.x, bf.y, bf.w, bf.h)
+    region.region_set_z(bf.rgn, bf.z)
+    region.region_push(bf.rgn, px, need)
+}
+
 frames_draw(host: ptr, rn: ptr, t: float) {
     hst = host as *FrameHost
     hst.last_rerender_count = 0
@@ -325,17 +437,7 @@ frames_draw(host: ptr, rn: ptr, t: float) {
         }
         if best == null { return }
         bf = best as *Frame
-        if bf.surface_valid == 1 {
-            hst.last_blit_count = hst.last_blit_count + 1
-            hst.total_blit_count = hst.total_blit_count + 1
-        } else {
-            hst.last_rerender_count = hst.last_rerender_count + 1
-            hst.total_rerender_count = hst.total_rerender_count + 1
-        }
-        // Surface creation comes next commit. Marking valid before the inline
-        // draw lets an animating content callback invalidate the next paint.
-        bf.surface_valid = 1
-        _draw_frame(bf, rn, t)
+        _composite_frame(hst, bf, rn, t)
         last_z = best_z
         drawn = drawn + 1
     }
