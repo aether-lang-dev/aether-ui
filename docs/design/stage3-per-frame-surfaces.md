@@ -224,6 +224,79 @@ underlying reason, so the surviving direction is narrower:
 - **Any attempt 3 must be checked with a screenshot before it is believed.**
   Add a pixel assertion to the frames spec so the harness can see it too.
 
+## Attempt 3 direction: static LIVE_RASTER regions already do this
+
+**Surveyed 2026-08-08 after attempt 2 was reverted.** Reading the live path
+properly turns up a mechanism that already implements per-frame caching,
+correctly, today. It should be the basis of attempt 3.
+
+**The clear is not an obstacle to work around — the live path already
+re-emits after it.** `_flush_live` runs `_flush_clipped` (static shapes) then
+`_render_live_z_ordered`, which calls `_render_one_region` for every region
+on every paint. So regions are (re)blitted *after* each `canvas_clear`, which
+is why they survive it. Attempt 2 failed because it queued a blit and let the
+clear free it; the region path instead re-issues its blit each paint.
+
+**And a source-less raster region already caches.** `_render_one_region`:
+
+```
+if region.region_kind(region) == region.LIVE_RASTER {
+    // Animated source: produce + push this frame before blitting. Static
+    // regions (no source) just blit their once-pushed frame.
+    src = region.region_src_fn(region)
+    if src != null { region.invoke_region_source(src, region, t) }
+    _blit_one_raster(scene, canvas_id, region)
+}
+```
+
+A `LIVE_RASTER` region with **no source function** holds its pushed pixels
+and re-blits them every paint without invoking any content callback. That is
+exactly the Stage 3 claim — content produced once, presented N times —
+already built, already shipping, already exercised by the raster demos.
+
+The API is present too: `region_push(region, frame, len)` sets the pixels,
+`region_pw`/`region_ph` carry their dimensions, and `_blit_one_raster`
+handles the scaled source→dest blit including hidpi.
+
+**So attempt 3 is a composition, not a new mechanism.** For each frame:
+
+1. render the frame's content once into an RGBA buffer — this is what
+   `canvas_render_range_rgba` (9ca9da9) exists for, and the sub-scene
+   plumbing from attempt 2 is the way to get a clean command range for it;
+2. `region_push` that buffer into a source-less `LIVE_RASTER` region
+   positioned at the frame's rect;
+3. on invalidation, re-render and push again; otherwise do nothing and let
+   the existing region path blit it each paint.
+
+Both halves of the failed attempts are reusable: attempt 2 proved the
+sub-scene gives a correct, contiguous command range (151/151/67 commands,
+full capture), and attempt 1 produced the offscreen render primitive. What
+was missing was somewhere durable to put the pixels — regions are that place.
+
+**Open questions to settle before coding.**
+
+- **Region rects are immutable and regions cannot be removed.** Checked:
+  `vg/region.ae` exports `region_set_z` but no `region_set_x/y/w/h`, and
+  there is no `region_free`/`scene_remove_region` anywhere. A frame that
+  moves, resizes or closes therefore has no way to update or retire its
+  region. **This is the one genuine blocker for attempt 3** — dragging is
+  the headline interaction, and moving a frame must not orphan a blit at the
+  old position. Fixing it means either adding rect setters + a removal call
+  to the region API (small, contained, benefits every region user), or
+  keeping a fixed full-canvas region and compositing frames into its buffer
+  (loses per-frame granularity and re-introduces a shared surface).
+  **Prefer the setters.**
+- Z-order: regions render by `region_z`, frames by their own `z`. These must
+  agree, or a raised frame will blit under a lower one.
+- Interaction: frames hit-test through `frames_hit` on the host, not through
+  the region. Blitting must not change where clicks land.
+- The chrome (title bar, close glyph, gripper) is drawn by `_draw_frame`
+  alongside content. Either it goes in the cached buffer too — meaning a
+  title-bar hover restyle invalidates the surface — or it stays inline and
+  only the content payload is cached. **The second is simpler and still wins
+  the measurement**, since the cube payload dominates the command count
+  (151 commands per frame, of which chrome is ~20).
+
 ## Proposed API
 
 In `ui/frames.ae`, additive — the existing `frames_draw` path stays working:
