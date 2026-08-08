@@ -65,6 +65,51 @@ So Stage 3 is less "new backend capability" than "generalise the raster region
 from one-per-scene to one-per-frame, and drive it from damage rather than from
 a frame clock".
 
+## What the code actually looks like (surveyed 2026-08-08, before implementing)
+
+Reading the real call path changed the plan in one important way, recorded
+here so it is not rediscovered.
+
+**Frames do not own command buffers.** `_draw_frame` emits *vg scene nodes*
+(`rect`, `text_sized`, `path`) into a shared node tree `rn`, which is
+rasterised once, downstream, by whoever owns the canvas. There is no
+per-frame command buffer sitting there waiting to be replayed offscreen, so
+"render this frame to its own surface" has no seam to cut at as written.
+
+**But the seam does exist, one layer down.** `render_one_draw`
+(`vg/module.ae`) already renders a DRAW region's callback as an independent
+**sub-scene**: `scene_new` → invoke the callback → `vg_flush` →
+`scene_free_recording`. That is exactly "produce this rectangle's contents
+independently", and it is the mechanism Stage 3 should generalise — the
+design note's instinct to extend the region path rather than invent a
+parallel one was right.
+
+**What is missing is the offscreen target.** `render_one_draw` passes the
+parent's `s.backend` into the sub-scene, so its commands land in the same
+canvas buffer as everything else. Nothing in the stack can currently
+redirect a render into memory:
+
+- `canvas_write_png` renders a command buffer offscreen — but only to a
+  **file**;
+- `canvas_read_pixel` renders offscreen — and returns **one pixel**;
+- every RGBA extern in `aether_ui_backend.h` passes buffers **into** the
+  backend (`canvas_draw_image`, gradient stops), never out.
+
+So Stage 3 needs one new backend primitive: **render the current command
+buffer into an in-memory RGBA buffer**. Confirmed absent on all three.
+
+**That primitive is a variant of code that already works.** GTK4's
+`canvas_write_png_impl` is 16 lines: create a cairo image surface, call
+`canvas_replay(cr, cs)`, write it out. Returning
+`cairo_image_surface_get_data` instead of writing a PNG is a small change,
+and `canvas_read_pixel_impl` already keeps a cached replay surface keyed on
+`(gen, count, w, h)` — the caching Stage 3 wants, already written. **win32
+and macOS both implement `write_png_impl` too**, so all three have a working
+offscreen replay to build on. This is not new rasterisation on any backend.
+
+`canvas_draw_image_scaled` already blits source→dest with scaling, which
+covers the hidpi risk listed below.
+
 ## Proposed API
 
 In `ui/frames.ae`, additive — the existing `frames_draw` path stays working:
