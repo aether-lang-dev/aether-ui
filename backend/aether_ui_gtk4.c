@@ -4273,6 +4273,17 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
 // surface's top-left pixel. A blank canvas -- background colour and nothing
 // else -- reports 0.
 //
+// LIMIT, measured 2026-08-09: this reports what is ON the surface, NOT what
+// the last paint drew. The Stage 2.5 surface is RETAINED and not cleared
+// between paints, so an app that stops drawing entirely keeps reporting its
+// last good frame. Verified on video_frame: with all drawing disabled the
+// /screenshot came back blank (3890 bytes) while this still read 38400.
+//
+// So it catches a canvas that NEVER drew (the Stage 3 blank-canvas
+// regression, where it correctly read 0), and does NOT catch one that drew
+// once and then stopped. For the latter, compare successive /screenshot
+// sizes or assert on content that must CHANGE.
+//
 // This exists because every other canvas metric can be green while the app
 // renders nothing. canvas_read_pixel and /screenshot's write_png path both
 // REPLAY the command buffer into a private surface, so they see commands

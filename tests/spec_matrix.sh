@@ -119,6 +119,10 @@ SUITES=(
   "golden|examples/golden_gallery|golden_gallery/spec_golden_gallery|"
   "frames|apps/frames_demo|frames_demo/spec_frames_demo|"
   "sketchpad|apps/sketchpad|sketchpad/spec_sketchpad|"
+  # video_frame needs ffmpeg to transcode its clip; the suite is SKIPPED
+  # where ffmpeg is absent rather than failing, since the app is a demo of
+  # the region path and not a portability claim.
+  "video_frame|apps/video_frame|video_frame/spec_video_frame|"
   "maerkdown|apps/maerkdown|maerkdown/spec_maerkdown|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
   "svg_tetris|apps/svg_tetris|svg_tetris/spec_svg_tetris|"

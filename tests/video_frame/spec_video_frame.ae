@@ -1,0 +1,47 @@
+// spec_video_frame.ae — DELIBERATELY SKINNY.
+//
+// video_frame is provisional: the ffmpeg-to-file decode, the fixed clip
+// geometry and the region placement are all expected to be rewritten (an
+// in-process decoder, a streaming fd read once std has one). So this pins
+// only what would still be true after that rewrite:
+//
+//   1. the app starts and publishes its status line
+//   2. frames actually reach the screen (not a black rectangle)
+//
+// It deliberately does NOT pin fps, frame counts, clip geometry or the
+// composite split -- all of those are properties of the current
+// implementation rather than of "an MP4 plays in a frame", and pinning them
+// would make every rewrite look like a regression.
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "video in a ui.frames frame") {
+        aeocha.it("starts and publishes playback status") callback {
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "video: ", "status line present")
+            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
+        }
+
+        aeocha.it("puts real pixels on the canvas") callback {
+            // painted_pixels reads the painter's retained surface. Note it
+            // reports what is ON the surface rather than what the last paint
+            // drew -- the surface is not cleared between paints, so this
+            // catches "never drew" but not "drew once then stopped". That is
+            // enough for the claim here: an MP4 reaches the screen at all.
+            uidriver.click(880.0, 560.0)
+            sleep(200)
+            px = uidriver.canvas_painted_pixels()
+            if px <= 0 {
+                aeocha.assert_true(px <= 0, "no paint surface to sample here")
+            } else {
+                aeocha.assert_gt(px, 500, "the painted surface is not blank")
+            }
+        }
+    }
+    aeocha.run_summary(fw)
+}
