@@ -39,6 +39,12 @@ if grep -rqs "import contrib.sqlite" "$(dirname "$SOURCE")"; then
     # The aether archive wraps the real sqlite3 — link both.
     CONTRIB_LIBS="$CONTRIB_LIBS -laether_sqlite -lsqlite3"
 fi
+if grep -rqs "import contrib.avcodec" "$(dirname "$SOURCE")"; then
+    # Same shape as sqlite: our shim archive plus FFmpeg's own libraries.
+    # swscale does the RGBA conversion and avutil carries the frame helpers,
+    # so all four are needed together.
+    CONTRIB_LIBS="$CONTRIB_LIBS -laether_avcodec -lavcodec -lavformat -lavutil -lswscale"
+fi
 
 mkdir -p "$(dirname "$C_FILE")"
 echo "Compiling $SOURCE -> $C_FILE"

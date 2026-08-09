@@ -1,16 +1,19 @@
 // video_frame.ae — an MP4 playing inside a ui.frames internal frame, with
 // other Aether-UI widgets around it.
 //
-// The decode is ffmpeg's, not ours: aether-ui links no codec. ffmpeg is
-// spawned to transcode the clip into a file of concatenated RGBA8888 frames,
-// and the app preads frames out of that file as they appear. That is the
-// "pipe" without needing a streaming fd read, which the stdlib does not have
-// (std.ipc is write-only from the child, and there is no fd_read) --
-// fs.pread_into gives positional reads into a REUSED buffer, so playback
-// costs no per-frame allocation.
+// Decode is IN-PROCESS via contrib.avcodec (aether 63b42e55). The earlier
+// version spawned ffmpeg to transcode the whole clip to a raw-RGBA file and
+// fs.pread'd frames back out: 27.6 MB for six seconds of 320x240, ~1.5 GB
+// per minute of 1080p, and no workaround at all for a LIVE source, which has
+// no file to read. That intermediate is gone.
 //
-// Swap the ffmpeg spawn for an in-process decoder and everything below the
-// region_push is unchanged.
+// Everything below region_push is unchanged from that version -- which was
+// the point of the exercise: the region path did not care where the pixels
+// came from.
+//
+// avcodec.next_frame_into writes into ONE reused buffer, so playback costs
+// no per-frame allocation. bytes.to_string then hands the region a string
+// without consuming the buffer (bytes.finish would destroy it).
 //
 //   VF_CLIP=/path/clip.mp4 ./build/video_frame
 //
@@ -28,7 +31,8 @@ import ui.frames (
 )
 import std.fs
 import std.os
-import std.os (os_getenv, run_capture, spawn_proc)
+import std.os (os_getenv)
+import contrib.avcodec
 import std.string
 import std.list
 import std.bytes
@@ -59,98 +63,73 @@ struct App {
     canvas: int
     vframe: ptr
     st_status: int
-    fh: ptr          // open handle on the raw-RGBA file
+    dec: ptr         // contrib.avcodec decoder
+    src: string      // clip path, kept for the loop-at-EOF reopen
     buf: ptr         // ONE reusable frame buffer, w*h*4
     rgn: ptr         // the raster region the frames are pushed into
-    shown: int       // how many distinct frames have been presented
-    last_idx: int
-    avail: int       // frames currently decoded and readable
+    shown: int       // how many frames have been presented
+    pts: int         // presentation timestamp of the last frame, ms
 }
 
-// Transcode the MP4 to concatenated RGBA8888 frames. Runs to completion
-// before playback here for simplicity; ffmpeg writes progressively, so a
-// longer clip could start playing while this is still running -- the pread
-// loop below already tolerates a file that is still growing.
-decode_to_raw(src: string, dst: string) -> int {
-    VF_R = env_int("VF_FPS", 15)
-    av = list.new()
-    _ = list.add(av, "-y")
-    _ = list.add(av, "-i")
-    _ = list.add(av, src)
-    _ = list.add(av, "-f")
-    _ = list.add(av, "rawvideo")
-    _ = list.add(av, "-pix_fmt")
-    _ = list.add(av, "rgba")
-    _ = list.add(av, "-s")
-    _ = list.add(av, "${VW_of()}x${VH_of()}")
-    _ = list.add(av, "-r")
-    _ = list.add(av, "${VF_R}")
-    _ = list.add(av, dst)
-    _out, status, err = run_capture("ffmpeg", av, null)
-    list.free(av)
-    if string.length(err) > 0 { return 0 }
-    if status != 0 { return 0 }
-    return 1
+// Open the clip. The decoder scales to VW x VH during its RGBA conversion,
+// so resizing costs no extra pass.
+open_clip(src: string) -> ptr {
+    d, err = avcodec.open(src, VW_of(), VH_of())
+    if string.length(err) > 0 {
+        println("avcodec.open failed: ${err}")
+        return null
+    }
+    num, den = avcodec.fps(d)
+    println("clip: ${avcodec.width(d)}x${avcodec.height(d)} fps=${num}/${den}")
+    return d
 }
 
-// How many whole frames are readable right now.
-frames_available(path: string) -> int {
-    kind, size, _mt, err = fs.file_stat(path)
-    if string.length(err) > 0 { return 0 }
+// Present the next frame. At EOF, reopen and loop -- there is no seek in the
+// v1 shim surface, and reopening a local file is cheap.
+show_next(app: *App) {
+    if app.dec == null { return }
     fb = VW_of() * VH_of() * 4
-    return (size as int) / fb
-}
-
-// Present frame `idx`: pread it into the reusable buffer, push to the region.
-show_frame(app: *App, idx: int) {
-    if app.fh == null { return }
-    fb = VW_of() * VH_of() * 4
-    off = (idx * fb) as long
-    // pread_into + bytes.to_string: the buffer is REUSED across frames
-    // (no per-frame allocation of a 300KB..8MB buffer), and to_string is
-    // the non-consuming reader -- bytes.finish would DESTROY the buffer,
-    // so a reused one is freed on frame 1 and every later read scribbles
-    // on freed memory. That froze playback at shown=1 with the scene's
-    // repaint timer retired, which looks like a timer bug, not corruption.
-    n, err = fs.pread_into(app.fh, app.buf, fb, off)
-    if string.length(err) > 0 { return }
-    if n < fb { return }
+    n, err = avcodec.next_frame_into(app.dec, bytes.data(app.buf), fb)
+    if n == 0 {
+        avcodec.close(app.dec)
+        app.dec = open_clip(app.src)
+        if app.dec == null { return }
+        n2, _e = avcodec.next_frame_into(app.dec, bytes.data(app.buf), fb)
+        if n2 == 0 { return }
+    }
+    // set_length FIRST. bytes.new(fb) reserves CAPACITY but leaves length
+    // at 0, and bytes.to_string clamps to the LOGICAL length -- so writing
+    // through bytes.data() and calling to_string straight after mints an
+    // EMPTY string, and the region blits uninitialised memory. That is what
+    // made the video render as noise while every counter looked healthy.
+    _ = bytes.set_length(app.buf, fb)
     px = bytes.to_string(app.buf, fb)
     region.region_push(app.rgn, px, fb)
     app.shown = app.shown + 1
-    app.last_idx = idx
+    app.pts = avcodec.pts_ms(app.dec)
 }
 
 publish(app: *App) {
     sh = app.shown
-    av = app.avail
-    li = app.last_idx
+    pt = app.pts
     rr = frames_rerender_count(app.host)
     bl = frames_blit_count(app.host)
     _s = ui_set_s(app.st_status,
-        "video: frame=${li} shown=${sh} avail=${av} | composite: rerender=${rr} blit=${bl}")
+        "video: shown=${sh} pts_ms=${pt} | composite: rerender=${rr} blit=${bl}")
 }
 
 main() {
     src = os_getenv("VF_CLIP")
     if string.length(src) == 0 { src = "/tmp/vidtest/clip.mp4" }
-    // No clip and no ffmpeg is not a failure -- the app still opens and
-    // draws its frames, just with an empty video rect. The spec asserts
+    // A missing or unreadable clip is not a failure -- the app still opens
+    // and draws its frames, just with an empty video rect. The spec asserts
     // only that pixels reach the screen, which the chrome alone satisfies.
-    raw = "/tmp/vidtest/clip.rgba"
-
-    ok = decode_to_raw(src, raw)
-    if ok == 0 { println("ffmpeg decode failed for ${src}") }
-
     app = malloc(256) as *App
     app.shown = 0
-    app.last_idx = 0 - 1
-    app.avail = frames_available(raw)
+    app.pts = 0
+    app.src = src
     app.buf = bytes.new(VW_of() * VH_of() * 4)
-    fh, ferr = fs.open(raw, "rb")
-    app.fh = fh
-    if string.length(ferr) > 0 { println("open failed: ${ferr}") }
-    println("clip: ${app.avail} frames ${VW_of()}x${VH_of()}")
+    app.dec = open_clip(src)
 
     window("Aether-UI — MP4 in a frame", 960, 720) {
         vstack(0) {
@@ -194,12 +173,13 @@ main() {
                 region.region_set_animated(app.rgn, 1)
                 vg.scene_add_live_region(app.scene, app.rgn)
                 region.region_set_z(app.rgn, 50)
+                // One decoded frame per tick. The old version computed a
+                // frame INDEX from t*fps and pread it; a decoder has its own
+                // cursor, so advancing it is the whole policy. Presenting at
+                // the clip's true rate (rather than the tick rate) wants the
+                // PTS model in TODO.md aim #4 -- pts_ms is already published.
                 region.region_set_source(app.rgn) callback |rgn: ptr, t: float| {
-                    if app.avail <= 0 { app.avail = frames_available(raw) }
-                    if app.avail > 0 {
-                        idx = (lrint(t * FPS_of()) as int) % app.avail
-                        if idx != app.last_idx { show_frame(app, idx) }
-                    }
+                    show_next(app)
                 }
 
                 reg = canvas_region(root, 0.0, 0.0, CW * 1.0, CH * 1.0)

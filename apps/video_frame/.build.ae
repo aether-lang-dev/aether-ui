@@ -1,7 +1,7 @@
 // video_frame — aether-ui toolkit example, built as its own cached aeb node.
 import build
 import aether
-import aether (source, output, no_closure_regen, lib)
+import aether (source, output, no_closure_regen, lib, link_flag)
 import aetherui (ui_backend)
 
 main() {
@@ -11,6 +11,16 @@ main() {
         source("video_frame.ae")
         output("video_frame")
         lib("${root}")
+        // contrib.avcodec lives in the sibling aether checkout, like
+        // LisMusic's contrib.sqlite: module path plus the prebuilt bridge
+        // archive and FFmpeg's own libraries.
+        lib("${root}/../aether")
+        link_flag("-L${root}/../../.local/lib/aether")
+        link_flag("-laether_avcodec")
+        link_flag("-lavcodec")
+        link_flag("-lavformat")
+        link_flag("-lavutil")
+        link_flag("-lswscale")
         no_closure_regen()
         ui_backend(root)
     }
