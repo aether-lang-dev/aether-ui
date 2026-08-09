@@ -6423,13 +6423,28 @@ void aether_ui_app_run_headless_impl(void) {
     aether_ui_park_until_killed();
 }
 
-// Stage 3 per-frame surfaces: NOT IMPLEMENTED on this backend yet.
-// Returning 0 is the gate -- ui.frames reads it as "cannot cache here" and
-// falls back to drawing every frame inline, which is exactly today's correct
-// behaviour. Deliberately not stubbed with something plausible-but-wrong:
-// a backend that half-caches would leave stale pixels on screen.
-// Porting means reusing this file's existing offscreen replay (the one
-// write_png_impl already uses) and copying out non-premultiplied RGBA8.
+// Stage 3 per-frame surfaces: DELIBERATELY NOT IMPLEMENTED on win32.
+// Returning -1/0 gates ui.frames into drawing every frame inline, which is
+// today's correct behaviour. macOS was ported (Stage 2.5b); this one cannot
+// be, yet, and the reason is worth stating so nobody "finishes the job".
+//
+// GDI HAS NO ALPHA, and this file's own code proves it twice:
+//
+//   * canvas_replay_to_dc opens by filling the ENTIRE surface white
+//     (FillRect(mem, &full, white)). A frame-sized capture would therefore
+//     come back with an opaque white background, and blitting it would paint
+//     a white rectangle over whatever sits beneath the frame.
+//   * the CV_IMAGE path composites incoming RGBA against white and stores
+//     a=255 (conv[px*4+3] = 255), so alpha does not survive a round trip
+//     even for images we hand it.
+//   * canvas_read_pixel_impl returns (255 << 24) unconditionally.
+//
+// frames_demo's frames are 0.42-alpha translucent, so a win32 cache would be
+// visibly wrong -- and wrong in the way that looks fine in counters while
+// the screen is broken, which is precisely the failure mode Stage 3 already
+// hit once. A real port needs an alpha-capable backend here (GDI+, Direct2D,
+// or a DIB section the replay composites into by hand), not a wrapper around
+// canvas_replay_to_dc.
 void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
                                           int iw, int ih,
                                           const unsigned char* rgba, int byte_len) {

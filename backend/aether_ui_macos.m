@@ -3666,10 +3666,19 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
 //
 // The context must already be in canvas coordinates (y down, origin top-left);
 // the view gets that from isFlipped, the bitmap gets an explicit transform.
-static void canvas_replay(CGContextRef cg, CanvasState* cs) {
+// Replay a RANGE [start, end) of the command buffer. Stage 3 (per-frame
+// surfaces) needs this: frames emit their commands sequentially into the
+// shared buffer, so one frame's drawing is a contiguous slice, and rendering
+// that slice alone offscreen is what lets an unchanged frame be blitted
+// instead of re-drawn. canvas_replay below is this with the full range, so
+// every existing caller is unaffected.
+static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
+                                int start, int end) {
     if (!cg || !cs) return;
+    if (start < 0) start = 0;
+    if (end > cs->count) end = cs->count;
     {
-    for (int i = 0; i < cs->count; i++) {
+    for (int i = start; i < end; i++) {
         CanvasCmd* c = &cs->cmds[i];
         switch (c->type) {
             case CANVAS_BEGIN_PATH:
@@ -3823,6 +3832,82 @@ static void canvas_replay(CGContextRef cg, CanvasState* cs) {
         }
     }
     }
+}
+
+static void canvas_replay(CGContextRef cg, CanvasState* cs) {
+    if (!cs) return;
+    canvas_replay_range(cg, cs, 0, cs->count);
+}
+
+// How many commands the buffer currently holds. Bracket a piece of drawing
+// with two reads and the difference is that drawing's contiguous slice.
+int aether_ui_canvas_cmd_count_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->count : -1;
+}
+
+// Render command range [start, end) offscreen and copy it out as tightly
+// packed, NON-premultiplied RGBA8 (w*h*4). Returns bytes written, 0 on error.
+// The win32/macOS half of Stage 3 (Stage 2.5b).
+//
+// CoreGraphics gives us premultiplied alpha (kCGImageAlphaPremultipliedLast),
+// but canvas_draw_image expects straight RGBA, so this unpremultiplies on the
+// way out. Skipping that makes translucent content -- exactly what
+// frames_demo uses -- come out too dark.
+//
+// Commands carry ABSOLUTE canvas coordinates while a per-frame surface is
+// frame-local, so the render is offset by (ox, oy). Note the y-flip is
+// applied FIRST (bitmap contexts are y-up, the command buffer is y-down),
+// then the frame origin is translated in the flipped space.
+int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
+                                            double ox, double oy,
+                                            int width, int height,
+                                            unsigned char* out, int out_len) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !out || width <= 0 || height <= 0) return 0;
+    int need = width * height * 4;
+    if (out_len < need) return 0;
+
+    CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef cg = CGBitmapContextCreate(
+        NULL, (size_t)width, (size_t)height, 8, 0, cspace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cspace);
+    if (!cg) return 0;
+
+    CGContextTranslateCTM(cg, 0, height);
+    CGContextScaleCTM(cg, 1.0, -1.0);
+    CGContextTranslateCTM(cg, -ox, -oy);
+
+    canvas_replay_range(cg, cs, start, end);
+
+    unsigned char* data = (unsigned char*)CGBitmapContextGetData(cg);
+    size_t stride = CGBitmapContextGetBytesPerRow(cg);
+    if (!data) { CGContextRelease(cg); return 0; }
+    for (int y = 0; y < height; y++) {
+        unsigned char* row = data + (size_t)y * stride;
+        unsigned char* dst = out + (size_t)y * width * 4;
+        for (int x = 0; x < width; x++) {
+            unsigned int r = row[x * 4 + 0];
+            unsigned int g = row[x * 4 + 1];
+            unsigned int b = row[x * 4 + 2];
+            unsigned int a = row[x * 4 + 3];
+            if (a != 0 && a != 255) {
+                r = (r * 255 + a / 2) / a;
+                g = (g * 255 + a / 2) / a;
+                b = (b * 255 + a / 2) / a;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b > 255) b = 255;
+            }
+            dst[x * 4 + 0] = (unsigned char)r;
+            dst[x * 4 + 1] = (unsigned char)g;
+            dst[x * 4 + 2] = (unsigned char)b;
+            dst[x * 4 + 3] = (unsigned char)a;
+        }
+    }
+    CGContextRelease(cg);
+    return need;
 }
 
 @implementation AetherCanvasView
@@ -5911,18 +5996,4 @@ void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
 int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
     (void)canvas_id;
     return -1;
-}
-
-int aether_ui_canvas_cmd_count_impl(int canvas_id) {
-    (void)canvas_id;
-    return -1;
-}
-
-int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
-                                            double ox, double oy,
-                                            int width, int height,
-                                            unsigned char* out, int out_len) {
-    (void)canvas_id; (void)start; (void)end; (void)ox; (void)oy;
-    (void)width; (void)height; (void)out; (void)out_len;
-    return 0;
 }

@@ -59,8 +59,11 @@ main() {
             // the CORRECT gated behaviour, not a failure. Assert whichever
             // this backend is, so the fallback is covered rather than
             // excused.
-            cached = uidriver.canvas_painted_pixels()
-            if cached > 0 {
+            // Ask the app whether IT cached, not whether the backend has a
+            // retained paint surface -- macOS has the former without the
+            // latter, and conflating them made this assert the fallback on a
+            // backend that had just gained caching.
+            if string.contains(body, "cache=1") == 1 {
                 aeocha.assert_contains(body, "composite: rerender=2 blit=1",
                     "static frame blits, animating frames re-render")
             } else {
@@ -79,8 +82,7 @@ main() {
             uidriver.click(900.0, 600.0)
             sleep(120)
             body = uidriver.get_body("/widgets")
-            cached2 = uidriver.canvas_painted_pixels()
-            if cached2 > 0 {
+            if string.contains(body, "cache=1") == 1 {
                 aeocha.assert_contains(body, "composite: rerender=2 blit=1",
                     "static frame stays valid over successive paints")
             } else {
@@ -140,8 +142,7 @@ main() {
             uidriver.click(900.0, 600.0)
             sleep(60)
             body = uidriver.get_body("/widgets")
-            gcached = uidriver.canvas_painted_pixels()
-            if gcached > 0 {
+            if string.contains(body, "cache=1") == 1 {
                 aeocha.assert_contains(body, "gdraw=1",
                     "static frame content produced once, however many paints occur")
             } else {
@@ -164,8 +165,7 @@ main() {
             _ = uidriver.get_body("/screenshot")
             sleep(120)
             body = uidriver.get_body("/widgets")
-            cached3 = uidriver.canvas_painted_pixels()
-            if cached3 > 0 {
+            if string.contains(body, "cache=1") == 1 {
                 aeocha.assert_contains(body, "composite: rerender=2 blit=1",
                     "a moved frame is still blittable")
             } else {
