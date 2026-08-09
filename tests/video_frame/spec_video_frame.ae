@@ -42,6 +42,24 @@ main() {
                 aeocha.assert_gt(px, 500, "the painted surface is not blank")
             }
         }
+        aeocha.it("presents against the clock, not the paint rate") callback {
+            // The compositor paints far more often than a 15fps clip
+            // advances, so a clock-driven player HOLDS the current frame on
+            // most paints. held > 0 is the observable that distinguishes
+            // "presenting on PTS" from the old "one frame per tick", which
+            // ran a 15fps clip at 41fps and could never hold anything.
+            //
+            // Deliberately not asserting an fps NUMBER: the harness sets
+            // AETHER_UI_NO_ANIMATION and paint cadence varies by machine, so
+            // a rate assertion would be flaky by construction. held is the
+            // structural claim and holds on any box.
+            uidriver.click(880.0, 560.0)
+            sleep(400)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "held=", "hold counter published")
+            aeocha.assert_false(string.contains(body, "held=0 "),
+                "frames are held between presentations, not shown per paint")
+        }
     }
     aeocha.run_summary(fw)
 }

@@ -70,6 +70,10 @@ struct App {
     vframe: ptr
     st_status: int
     dec: ptr         // contrib.avcodec decoder
+    t0: float        // scene clock at playback start (or after a loop)
+    held: int        // frames NOT presented because their PTS was in the future
+    late: int        // frames dropped because their PTS was already past
+    looped: int      // set on wrap; tells present_at to stop for this tick
     src: string      // clip path, kept for the loop-at-EOF reopen
     buf: ptr         // ONE reusable frame buffer, w*h*4
     rgn: ptr         // the raster region the frames are pushed into
@@ -92,16 +96,74 @@ open_clip(src: string) -> ptr {
 
 // Present the next frame. At EOF, reopen and loop -- there is no seek in the
 // v1 shim surface, and reopening a local file is cheap.
-show_next(app: *App) {
+// present_at(app, t) — show the frame whose PRESENTATION TIME has arrived.
+//
+// The old policy was "one decoded frame per paint tick", which plays at
+// whatever rate the compositor happens to paint: measured 41fps for a 15fps
+// clip, ~2.7x too fast, and a 60fps clip would crawl. Frame rate was a
+// property of the renderer rather than of the video.
+//
+// Now the decoder's own PTS decides. Wall-clock elapsed comes from the scene
+// clock `t`; a frame is presented once its pts_ms is due, HELD if it is
+// still in the future (paint again, same pixels -- the region blits the
+// cached frame, costing nothing), and if decode falls behind we keep
+// decoding until we catch up rather than presenting stale frames in slow
+// motion.
+//
+// This is the half of A/V sync that does not need audio: video correct
+// against a clock. Adding audio later means swapping the scene clock for the
+// audio device's clock -- the structure does not change, which is why it is
+// worth doing first.
+present_at(app: *App, t: float) {
     if app.dec == null { return }
+    if app.t0 < 0.0 { app.t0 = t }
+    elapsed_ms = (t - app.t0) * 1000.0
+
+    // Already showed a frame whose time has not come yet -- hold it.
+    if app.shown > 0 {
+        if (app.pts as float) > elapsed_ms {
+            app.held = app.held + 1
+            return
+        }
+    }
+
+    // Decode forward until we reach a frame that is due now or later. If
+    // several are already past (a slow paint, a stall), the intermediate
+    // ones are DROPPED rather than shown late -- dropping is what keeps a
+    // clock-driven player honest.
+    app.looped = 0
+    guard = 0
+    while guard < 64 {
+        if show_next(app) == 0 { return }
+        if app.looped == 1 { return }
+        if (app.pts as float) >= elapsed_ms { guard = 64 }
+        else {
+            app.late = app.late + 1
+            guard = guard + 1
+        }
+    }
+}
+
+// Decode and present exactly one frame. Returns 1 on success, 0 if the clip
+// could not be advanced. Looping resets the clock origin so the next cycle
+// is timed from its own start rather than drifting further each pass.
+show_next(app: *App) -> int {
+    if app.dec == null { return 0 }
     fb = VW_of() * VH_of() * 4
     n, err = avcodec.next_frame_into(app.dec, bytes.data(app.buf), fb)
     if n == 0 {
         avcodec.close(app.dec)
         app.dec = open_clip(app.src)
-        if app.dec == null { return }
+        if app.dec == null { return 0 }
         n2, _e = avcodec.next_frame_into(app.dec, bytes.data(app.buf), fb)
-        if n2 == 0 { return }
+        if n2 == 0 { return 0 }
+        // Re-anchor at the loop point AND signal the caller to stop
+        // decoding this tick. Without the stop, present_at keeps comparing
+        // the new clip's early PTS against the OLD elapsed time -- every
+        // frame reads as "late", and the catch-up loop burns through the
+        // start of the clip (measured: late jumped 2 -> 67 at each wrap).
+        app.t0 = 0.0 - 1.0
+        app.looped = 1
     }
     // set_length FIRST. bytes.new(fb) reserves CAPACITY but leaves length
     // at 0, and bytes.to_string clamps to the LOGICAL length -- so writing
@@ -113,15 +175,18 @@ show_next(app: *App) {
     region.region_push(app.rgn, px, fb)
     app.shown = app.shown + 1
     app.pts = avcodec.pts_ms(app.dec)
+    return 1
 }
 
 publish(app: *App) {
     sh = app.shown
     pt = app.pts
+    hd = app.held
+    lt = app.late
     rr = frames_rerender_count(app.host)
     bl = frames_blit_count(app.host)
     _s = ui_set_s(app.st_status,
-        "video: shown=${sh} pts_ms=${pt} cid=${app.canvas} | composite: rerender=${rr} blit=${bl}")
+        "video: shown=${sh} pts_ms=${pt} held=${hd} late=${lt} | composite: rerender=${rr} blit=${bl}")
 }
 
 main() {
@@ -133,6 +198,10 @@ main() {
     app = malloc(256) as *App
     app.shown = 0
     app.pts = 0
+    app.t0 = 0.0 - 1.0
+    app.held = 0
+    app.late = 0
+    app.looped = 0
     app.src = src
     app.buf = bytes.new(VW_of() * VH_of() * 4)
     app.dec = open_clip(src)
@@ -189,7 +258,7 @@ main() {
                 // the clip's true rate (rather than the tick rate) wants the
                 // PTS model in TODO.md aim #4 -- pts_ms is already published.
                 region.region_set_source(app.rgn) callback |rgn: ptr, t: float| {
-                    show_next(app)
+                    present_at(app, t)
                 }
 
                 reg = canvas_region(root, 0.0, 0.0, CW * 1.0, CH * 1.0)
