@@ -44,3 +44,72 @@ app: dogfood). Connect to any running app's port and:
 - bonus: /window/pick under a crosshair mode ("what widget is here?").
 No new backend surface required for v1; anything missing (e.g. a
 subscribe/poll diff) becomes a driver follow-up.
+
+## Video / live external content in a frame
+
+`apps/video_frame` (b5d765d) proves the mechanism end-to-end: an MP4 plays
+inside a `ui.frames` internal frame with other widgets around it, at 15fps
+320x240 (clock-accurate against the source) and 28fps / 33 MB/s at 640x480.
+The toolkit needed no changes — `LIVE_RASTER` regions were designed for
+exactly this, and everything below `region_push` is the existing path.
+Stage 5 shows plainly in the counters: `rerender=1 blit=1`, the video frame
+re-rendering while the static frame beside it is served from cache.
+
+What ships today is a **proof, not a video player**. Everything in that app
+is up for rewrite. The long-term aims, roughly in dependency order:
+
+### 1. Real decode, in-process
+Today ffmpeg is spawned to transcode the whole clip to a raw-RGBA file,
+which the app `fs.pread`s frames out of. That costs a full intermediate:
+27.6 MB for 6s of 320x240, ~1.5 GB per minute of 1080p. Worse, a **live**
+source (camera, network stream, screen capture) has no file to pread and
+no workaround at all.
+
+Wants a libavcodec contrib shim in the aether tree — the same shape as
+`aether_sqlite` (`make contrib` → `libaether_avcodec.a` → `link_flags`).
+Then decode happens in-process and the intermediate disappears.
+
+### 2. Streaming input (blocked upstream)
+Even with ffmpeg as an external process, the natural shape is a pipe:
+`ffmpeg -i clip.mp4 -f rawvideo -pix_fmt rgba -` read frame by frame. Not
+possible today: `std.os.run_pipe` returns a `parent_read_fd` that Aether
+cannot read (`std.net` has `fd_write`/`fd_close` and no `fd_read`;
+`std.ipc` is write-only from the child; `run_pipe_drain_and_wait` drains
+in C and yields bytes only at exit). Filed upstream — see the
+`net.fd_read` / `fd_read_into` ask. Unblocks live sources without a
+decoder binding.
+
+### 3. Zero-copy to the region
+`bytes.to_string` + `fs.pread_into` already reuse one frame buffer, so
+there is no per-frame allocation. The remaining copy is `region_push`
+retaining the string. At 1080p a frame is 8 MB; at 30fps that is 250 MB/s
+of copying. Wants a decoder writing **directly into the region's buffer** —
+`region_frame_buffer(rgn) -> ptr` plus a "contents changed" nudge, so the
+pixels land where the blit reads them.
+
+### 4. Audio, and A/V sync
+There is no audio path for video at all. LisMusic has audio machinery
+worth reading first. Sync is the real work: today the frame index is
+`t * fps` off the scene clock, which drifts against an audio device's own
+clock. Wants a presentation-timestamp model (decode-time PTS per frame,
+present against the audio clock, drop/repeat to hold sync) rather than
+frame-index arithmetic.
+
+### 5. Faster than the compositor
+28fps at 640x480 was the compositor's paint rate, not the region path.
+A 60fps video in a frame needs the paint loop to keep up — worth measuring
+where that ceiling actually is before optimising, and worth checking
+whether a video region can present on its own cadence independently of the
+scene's repaint (Stage 5 for regions, in effect).
+
+### 6. Windows
+The region blit path works on win32, but Stage 3 caching is gated off
+there (GDI has no alpha — see `backend/aether_ui_win32.c`). A video frame
+will still play; its *neighbours* just will not be cached. Worth a
+measurement rather than an assumption once there is something to measure.
+
+### Not yet decided
+Whether `video_frame` belongs in `apps/` long-term or becomes a
+`ui.video_frame` widget that any app can drop in. The latter is the point
+of the exercise, but the API should follow a second real consumer rather
+than be guessed at from one demo.
