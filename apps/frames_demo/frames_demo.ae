@@ -15,7 +15,8 @@ import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
            scene_is_refreshing, path, opacity)
 import ui.frames (
     frames, frame,
-    frame_invalidate,
+    frame_invalidate, frame_set_opacity,
+    frames_occluded_count, frames_total_occluded_count,
     frame_bounds, frame_z, frames_hit, frames_draw,
     frames_rerender_count, frames_blit_count,
     frames_total_rerender_count, frames_total_blit_count,
@@ -44,6 +45,10 @@ struct App {
     alpha: ptr
     beta: ptr
     gamma: ptr
+    delta: ptr
+    delta_draws: int
+    epsilon: ptr
+    epsilon_draws: int
     gamma_draws: int
     paints: int
     cube_a: ptr
@@ -70,8 +75,12 @@ publish_composite(app: *App) {
     cch = 0
     if frames_blit_count(app.host) > 0 { cch = 1 }
     if tbl > 0 { cch = 1 }
+    occ = frames_occluded_count(app.host)
+    tocc = frames_total_occluded_count(app.host)
+    ddraw = app.delta_draws
+    edraw = app.epsilon_draws
     _c = ui_set_s(app.st_composite,
-        "composite: rerender=${rerenders} blit=${blits} total=${trr}/${tbl} gdraw=${gd} paints=${pc} cache=${cch}")
+        "composite: rerender=${rerenders} blit=${blits} total=${trr}/${tbl} gdraw=${gd} paints=${pc} cache=${cch} occ=${occ}/${tocc} ddraw=${ddraw} edraw=${edraw}")
 }
 
 struct CubeSpin {
@@ -176,6 +185,20 @@ draw_beta(rn: ptr, t: float, x: float, y: float, w: float, h: float, cube: ptr) 
     draw_tumbling_payload(rn, t, x, y, w, h, cube)
     label = text_sized(rn, x + 12.0, y + 22.0, 13.0, "Beta cube")
     fill(label, "#fde68a")
+}
+
+draw_static_epsilon(rn: ptr, x: float, y: float, w: float, h: float) {
+    bg = rect(rn, x, y, w, h)
+    fill(bg, "#1e3a5f")
+    label = text_sized(rn, x + 10.0, y + 20.0, 12.0, "Epsilon - visible through Beta")
+    fill(label, "#bfdbfe")
+}
+
+draw_static_delta(rn: ptr, x: float, y: float, w: float, h: float) {
+    bg = rect(rn, x, y, w, h)
+    fill(bg, "#7f1d1d")
+    label = text_sized(rn, x + 10.0, y + 20.0, 12.0, "Delta - should be hidden")
+    fill(label, "#fecaca")
 }
 
 draw_static_gamma(rn: ptr, x: float, y: float, w: float, h: float) {
@@ -291,6 +314,8 @@ main() {
     app.st_clip = ui_state_s("clip: pending")
     app.st_composite = ui_state_s("composite: pending")
     app.gamma_draws = 0
+    app.delta_draws = 0
+    app.epsilon_draws = 0
     app.paints = 0
     app.clip_enabled = 1
     app.clip_mode = 1
@@ -344,6 +369,17 @@ main() {
                             frame_invalidate(app.alpha)
                             draw_alpha(rn, t, x, y, w, h, app.cube_a)
                         }
+                    // Epsilon sits wholly inside BETA, which is 0.42-alpha.
+                    // A translucent cover must NOT occlude, so Epsilon has to
+                    // keep drawing every paint. The demo previously had no
+                    // frame fully inside another translucent one, which made
+                    // the honesty check untriggerable -- it passed even with
+                    // the opacity test disabled.
+                    app.epsilon = frame("Epsilon (under glass)", 240.0, 170.0, 180.0, 110.0)
+                        callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            app.epsilon_draws = app.epsilon_draws + 1
+                            draw_static_epsilon(rn, x, y, w, h)
+                        }
                     app.beta = frame("Beta", 180.0, 110.0, 500.0, 360.0)
                         callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
                             frame_invalidate(app.beta)
@@ -355,6 +391,15 @@ main() {
                     // across paints, and it exists in every configuration --
                     // the counters must be provable in the build users run,
                     // not only under a test-only env var.
+                    // Delta sits UNDER Gamma and is completely covered by
+                    // it. Added before Gamma so its z is lower.
+                    app.delta = frame("Delta (hidden)", 650.0, 430.0, 200.0, 120.0)
+                        callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            // Ground truth for Stage 4: if occlusion works,
+                            // this never runs after the first paint.
+                            app.delta_draws = app.delta_draws + 1
+                            draw_static_delta(rn, x, y, w, h)
+                        }
                     app.gamma = frame("Gamma (static)", 620.0, 400.0, 300.0, 200.0)
                         callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
                             // Ground truth for the Stage 3 acceptance test:
@@ -363,6 +408,10 @@ main() {
                             draw_static_gamma(rn, x, y, w, h)
                         }
                 }
+                // Stage 4 needs an OPAQUE occluder. The other frames stay
+                // translucent -- that is the demo's look, and it also keeps
+                // the honesty check honest: only Gamma can occlude.
+                frame_set_opacity(app.gamma, 1.0)
                 app.host = host
                 reg = canvas_region(root, 0.0, 0.0, FW * 1.0, FH * 1.0)
                     callback |rn: ptr, t: float| {

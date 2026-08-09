@@ -12,7 +12,8 @@ main() {
             aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
             aeocha.assert_contains(body, "bounds: alpha=60,60,460,320 beta=180,110,500,360",
                 "initial frame bounds")
-            aeocha.assert_contains(body, "z: alpha=0 beta=1", "beta starts above alpha")
+            // Epsilon was created between them, so Beta is z=2 not z=1.
+            aeocha.assert_contains(body, "z: alpha=0 beta=2", "beta starts above alpha")
             aeocha.assert_contains(body, "hit: Beta at 200,130", "overlap hit is topmost")
         }
 
@@ -64,11 +65,11 @@ main() {
             // latter, and conflating them made this assert the fallback on a
             // backend that had just gained caching.
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=2 blit=1",
-                    "static frame blits, animating frames re-render")
+                aeocha.assert_contains(body, "composite: rerender=2 blit=2",
+                    "two static frames blit, animating frames re-render")
             } else {
-                aeocha.assert_contains(body, "composite: rerender=3 blit=0",
-                    "uncached backend draws every frame inline")
+                aeocha.assert_contains(body, "composite: rerender=4 blit=0",
+                    "uncached backend draws every visible frame inline")
             }
         }
 
@@ -83,11 +84,11 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=2 blit=1",
-                    "static frame stays valid over successive paints")
+                aeocha.assert_contains(body, "composite: rerender=2 blit=2",
+                    "static frames stay valid over successive paints")
             } else {
-                aeocha.assert_contains(body, "composite: rerender=3 blit=0",
-                    "uncached backend redraws every frame, every paint")
+                aeocha.assert_contains(body, "composite: rerender=4 blit=0",
+                    "uncached backend redraws every visible frame, every paint")
             }
         }
 
@@ -155,6 +156,44 @@ main() {
             }
         }
 
+        // ── Stage 4 acceptance ────────────────────────────────────────
+        aeocha.it("a frame behind an opaque frame is skipped entirely") callback {
+            // Delta sits wholly inside Gamma's rect and Gamma is opaque, so
+            // Delta must be neither re-rendered NOR blitted. ddraw counts
+            // actual runs of Delta's content callback -- ground truth, which
+            // no bookkeeping can fake.
+            uidriver.click(900.0, 600.0)
+            sleep(120)
+            uidriver.click(900.0, 600.0)
+            sleep(120)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "ddraw=0",
+                "the hidden frame's content never runs")
+            aeocha.assert_contains(body, "occ=1/",
+                "exactly one frame reported occluded per paint")
+        }
+
+        aeocha.it("occlusion needs a genuinely opaque frame") callback {
+            // The honesty check from the design note. Alpha and Beta are
+            // 0.42-alpha, so they can occlude NOTHING however much they
+            // overlap -- and they do overlap heavily. If occ ever exceeds 1
+            // here, something is treating a translucent frame as an
+            // occluder, which would be a visible bug rather than a saving.
+            // Epsilon is wholly INSIDE Beta, and Beta is 0.42-alpha. If the
+            // opacity test were dropped, Epsilon would be occluded and its
+            // draw count would freeze. Asserting it KEEPS climbing is what
+            // makes this check triggerable -- the earlier version compared
+            // occ counts and passed even with opacity ignored, because no two
+            // frames in the demo fully contained one another.
+            uidriver.click(900.0, 600.0)
+            sleep(120)
+            b1 = uidriver.get_body("/widgets")
+            aeocha.assert_false(string.contains(b1, "edraw=0"),
+                "a frame under a TRANSLUCENT cover still draws")
+            aeocha.assert_contains(b1, "occ=1/",
+                "only the genuinely opaque cover occludes")
+        }
+
         aeocha.it("moving a frame does not invalidate it") callback {
             // The design's least-certain claim, and the whole saving: a
             // dragged frame's PIXELS are unchanged, only its position is.
@@ -166,10 +205,10 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=2 blit=1",
+                aeocha.assert_contains(body, "composite: rerender=2 blit=2",
                     "a moved frame is still blittable")
             } else {
-                aeocha.assert_contains(body, "composite: rerender=3 blit=0",
+                aeocha.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend redraws a moved frame inline")
             }
         }
@@ -177,9 +216,9 @@ main() {
         aeocha.it("clicking alpha raises it above beta") callback {
             uidriver.click(80.0, 70.0)
             body = uidriver.get_body("/widgets")
-            // alpha=2, not 1: the static Gamma frame took a Z slot when it
-            // was added, so raising Alpha puts it above Gamma as well as Beta.
-            aeocha.assert_contains(body, "z: alpha=2 beta=0", "alpha raised")
+            // alpha=4, not 1: Epsilon, Delta and Gamma each took a Z slot,
+            // so raising Alpha puts it above all four others.
+            aeocha.assert_contains(body, "z: alpha=4 beta=1", "alpha raised")
             aeocha.assert_contains(body, "hit: Alpha at 80,70", "click hit alpha")
         }
 
@@ -229,7 +268,7 @@ main() {
         aeocha.it("close box removes a frame from hit testing") callback {
             uidriver.click(616.0, 100.0)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "z: alpha=-1 beta=0", "alpha closed")
+            aeocha.assert_contains(body, "z: alpha=-1 beta=1", "alpha closed")
             uidriver.click(200.0, 130.0)
             body2 = uidriver.get_body("/widgets")
             aeocha.assert_contains(body2, "hit: Beta at 200,130", "closed alpha no longer hits")

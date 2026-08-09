@@ -9,10 +9,12 @@ exports (
     frames, frame,
     frames_new, frame_add, frame_set_content,
     frame_invalidate, frame_surface_valid,
+    frame_set_opacity, frame_opacity, frame_is_opaque,
     frame_move, frame_resize, frame_raise, frame_close,
     frame_bounds, frame_z, frame_count, frames_hit,
     frames_rerender_count, frames_blit_count,
     frames_total_rerender_count, frames_total_blit_count, frames_reset_totals,
+    frames_occluded_count, frames_total_occluded_count,
     frames_dirty_area, frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
     frames_draw, frames_on_click, frames_on_move, frames_on_release
 )
@@ -56,6 +58,8 @@ struct FrameHost {
     start_h: float
     last_rerender_count: int
     last_blit_count: int
+    last_occluded_count: int
+    total_occluded_count: int
     total_rerender_count: int
     total_blit_count: int
 }
@@ -78,6 +82,10 @@ struct Frame {
     rgn: ptr
     rgn_pw: int
     rgn_ph: int
+    // Body alpha. 1.0 = fully opaque, which is what makes a frame able to
+    // OCCLUDE the frames beneath it -- Stage 4 cannot save anything on a
+    // translucent frame, because you can see through it.
+    body_alpha: float
     content: ptr       // boxed |rn, t, x, y, w, h|
 }
 
@@ -127,6 +135,8 @@ frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
     hst.start_h = 0.0
     hst.last_rerender_count = 0
     hst.last_blit_count = 0
+    hst.last_occluded_count = 0
+    hst.total_occluded_count = 0
     hst.total_rerender_count = 0
     hst.total_blit_count = 0
     return hst as ptr
@@ -149,6 +159,7 @@ frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> p
     f.rgn = null
     f.rgn_pw = 0
     f.rgn_ph = 0
+    f.body_alpha = 0.42
     f.content = null
     _ = list.add(hst.frames, f as ptr)
     hst.active = f as ptr
@@ -160,6 +171,33 @@ frame_set_content(frame: ptr, cb: fn) {
     f = frame as *Frame
     f.content = box_closure(cb)
     frame_invalidate(frame)
+}
+
+// frame_set_opacity(frame, a) — body alpha, 0..1. A frame at 1.0 is opaque
+// and can occlude what is behind it; anything less and the frames beneath
+// it remain visible, so they must still be drawn.
+frame_set_opacity(frame: ptr, a: float) {
+    if frame == null { return }
+    f = frame as *Frame
+    f.body_alpha = a
+    frame_invalidate(frame)
+}
+
+frame_opacity(frame: ptr) -> float {
+    if frame == null { return 0.0 }
+    f = frame as *Frame
+    return f.body_alpha
+}
+
+// Opaque enough to hide what is behind it. Deliberately strict: anything
+// below 1.0 lets some of the lower frame through, and "nearly opaque" is
+// exactly the kind of almost-right that produces a visibly wrong screen
+// while the counters look excellent.
+frame_is_opaque(frame: ptr) -> int {
+    if frame == null { return 0 }
+    f = frame as *Frame
+    if f.body_alpha >= 1.0 { return 1 }
+    return 0
 }
 
 frame_invalidate(frame: ptr) {
@@ -256,6 +294,18 @@ frames_rerender_count(host: ptr) -> int {
 // Cumulative since start. The acceptance test sums over many paints: a
 // per-paint reading cannot tell "re-renders every time" from "re-rendered
 // once", which is exactly the distinction Stage 3 has to make.
+// How many frames the last paint SKIPPED ENTIRELY -- neither re-rendered
+// nor blitted -- because an opaque frame above covers them completely.
+frames_occluded_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    return hst.last_occluded_count
+}
+
+frames_total_occluded_count(host: ptr) -> int {
+    hst = host as *FrameHost
+    return hst.total_occluded_count
+}
+
 frames_total_rerender_count(host: ptr) -> int {
     hst = host as *FrameHost
     return hst.total_rerender_count
@@ -338,7 +388,51 @@ _ceil_i(v: float) -> int {
 //
 // Every failure path falls back to drawing inline, which is exactly today's
 // correct behaviour. Nothing here can leave a frame unpainted.
+// _is_occluded — is `bf` completely covered by a higher OPAQUE frame?
+//
+// Deliberately conservative. Only a single frame that covers bf entirely
+// counts: two opaque frames that jointly cover it are NOT detected, because
+// proving that needs real region subtraction and a wrong answer here means
+// a frame silently vanishes from the screen. A missed occlusion costs a
+// redraw; a false one costs correctness.
+_is_occluded(hst: *FrameHost, bf: *Frame) -> int {
+    n = list.size(hst.frames)
+    i = 0
+    while i < n {
+        item, _e = list.get(hst.frames, i)
+        o = item as *Frame
+        if o != bf {
+            if o.closed == 0 {
+                if o.z > bf.z {
+                    if frame_is_opaque(o as ptr) == 1 {
+                        // Covers bf entirely?
+                        if o.x <= bf.x {
+                            if o.y <= bf.y {
+                                if o.x + o.w >= bf.x + bf.w {
+                                    if o.y + o.h >= bf.y + bf.h {
+                                        return 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
 _composite_frame(hst: *FrameHost, bf: *Frame, rn: ptr, t: float) {
+    // Stage 4: a fully-covered frame is skipped outright -- no render, no
+    // blit. Its cached surface (if any) is kept, so re-exposing it costs a
+    // blit rather than a re-render.
+    if _is_occluded(hst, bf) == 1 {
+        hst.last_occluded_count = hst.last_occluded_count + 1
+        hst.total_occluded_count = hst.total_occluded_count + 1
+        return
+    }
     if bf.surface_valid == 1 {
         if bf.rgn != null {
             // Keep the region tracking the frame: a drag moves the rect
@@ -415,6 +509,7 @@ frames_draw(host: ptr, rn: ptr, t: float) {
     hst = host as *FrameHost
     hst.last_rerender_count = 0
     hst.last_blit_count = 0
+    hst.last_occluded_count = 0
     n = list.size(hst.frames)
     drawn = 0
     last_z = 0 - 2147483647
@@ -515,7 +610,7 @@ _draw_frame(f: *Frame, rn: ptr, t: float) {
     opacity(shadow, 0.18)
     body = rect(rn, f.x, f.y, f.w, f.h)
     fill(body, "#f7f8fb")
-    opacity(body, 0.42)
+    opacity(body, f.body_alpha)
     stroke(body, "#27313d", 1.0)
 
     title_col = "#526070"
