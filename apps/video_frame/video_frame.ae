@@ -34,6 +34,7 @@ import std.fs
 import std.os
 import std.os (os_getenv)
 import contrib.avcodec
+import std.audio
 import std.string
 import std.list
 import std.bytes
@@ -74,6 +75,8 @@ struct App {
     held: int        // frames NOT presented because their PTS was in the future
     late: int        // frames dropped because their PTS was already past
     looped: int      // set on wrap; tells present_at to stop for this tick
+    asrc: ptr        // std.audio source; null = no audio, scene clock is master
+    aclock: int      // 1 = presenting against the AUDIO clock
     src: string      // clip path, kept for the loop-at-EOF reopen
     buf: ptr         // ONE reusable frame buffer, w*h*4
     rgn: ptr         // the raster region the frames are pushed into
@@ -116,8 +119,20 @@ open_clip(src: string) -> ptr {
 // worth doing first.
 present_at(app: *App, t: float) {
     if app.dec == null { return }
-    if app.t0 < 0.0 { app.t0 = t }
-    elapsed_ms = (t - app.t0) * 1000.0
+
+    // THE A/V SYNC SUBSTITUTION. With audio loaded the master clock is the
+    // audio DEVICE's own position, not the scene clock -- audio cannot drop
+    // or repeat samples the way video can drop frames, so it leads and video
+    // chases. Without audio the scene clock stands in and the rest of this
+    // function is unchanged, which is exactly what presenting on PTS bought:
+    // the timing structure did not have to change to gain sync.
+    elapsed_ms = 0.0
+    if app.aclock == 1 {
+        elapsed_ms = (audio.position_ms(app.asrc) as float)
+    } else {
+        if app.t0 < 0.0 { app.t0 = t }
+        elapsed_ms = (t - app.t0) * 1000.0
+    }
 
     // Already showed a frame whose time has not come yet -- hold it.
     if app.shown > 0 {
@@ -164,6 +179,15 @@ show_next(app: *App) -> int {
         // start of the clip (measured: late jumped 2 -> 67 at each wrap).
         app.t0 = 0.0 - 1.0
         app.looped = 1
+        // Restart the audio too, or video wraps to 0 while the audio clock
+        // keeps climbing to the end of the track -- every subsequent frame
+        // reads as hopelessly late and the catch-up loop burns 64 frames a
+        // tick (measured: late exploding to 1771). The two streams must
+        // loop TOGETHER or the master clock stops describing the video.
+        if app.aclock == 1 {
+            _sk = audio.seek_ms(app.asrc, 0)
+            _rp = audio.play(app.asrc)
+        }
     }
     // set_length FIRST. bytes.new(fb) reserves CAPACITY but leaves length
     // at 0, and bytes.to_string clamps to the LOGICAL length -- so writing
@@ -183,10 +207,16 @@ publish(app: *App) {
     pt = app.pts
     hd = app.held
     lt = app.late
+    ck = "scene"
+    ap = 0
+    if app.aclock == 1 {
+        ck = "audio"
+        ap = audio.position_ms(app.asrc) as int
+    }
     rr = frames_rerender_count(app.host)
     bl = frames_blit_count(app.host)
     _s = ui_set_s(app.st_status,
-        "video: shown=${sh} pts_ms=${pt} held=${hd} late=${lt} | composite: rerender=${rr} blit=${bl}")
+        "video: shown=${sh} pts_ms=${pt} held=${hd} late=${lt} clock=${ck} apos=${ap} | composite: rerender=${rr} blit=${bl}")
 }
 
 main() {
@@ -202,9 +232,32 @@ main() {
     app.held = 0
     app.late = 0
     app.looped = 0
+    app.asrc = null
+    app.aclock = 0
     app.src = src
     app.buf = bytes.new(VW_of() * VH_of() * 4)
     app.dec = open_clip(src)
+
+    // Audio, if a sidecar WAV is present. std.audio v1 decodes WAV, and the
+    // avcodec shim is video-only, so the demo takes audio from a .wav beside
+    // the clip rather than demuxing it. That is a DEMO limitation, not an
+    // architectural one: what matters here is which CLOCK drives
+    // presentation, and audio.position_ms is that clock either way.
+    wav = os_getenv("VF_WAV")
+    if string.length(wav) == 0 { wav = "/tmp/vidtest/av.wav" }
+    if audio.open() == true {
+        wdata, wn, werr = fs.read_binary(wav)
+        if string.length(werr) == 0 {
+            asrc, aerr = audio.load_wav(wdata, wn)
+            if string.length(aerr) == 0 {
+                app.asrc = asrc
+                app.aclock = 1
+                _ap = audio.play(asrc)
+                println("audio: ${audio.duration_ms(asrc)}ms, clock=audio")
+            }
+        }
+    }
+    if app.aclock == 0 { println("audio: none, clock=scene") }
 
     window("Aether-UI — MP4 in a frame", CW + 60, CH + 120) {
         vstack(0) {

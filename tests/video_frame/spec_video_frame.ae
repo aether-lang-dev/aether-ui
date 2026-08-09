@@ -60,6 +60,23 @@ main() {
             aeocha.assert_false(string.contains(body, "held=0 "),
                 "frames are held between presentations, not shown per paint")
         }
+        aeocha.it("names the clock driving presentation") callback {
+            // Which CLOCK is master is the whole A/V sync claim, and it is
+            // observable without asserting drift numbers: with audio loaded
+            // the master is the audio device's position, otherwise the scene
+            // clock stands in. Both are correct -- the spec pins that the app
+            // SAYS which, so a silent regression to the wrong clock shows up.
+            //
+            // Not asserting clock=audio specifically: the matrix runs without
+            // the sidecar WAV, and on a headless box std.audio may fall back
+            // to its NULL backend. Asserting a particular clock would fail on
+            // a correctly-behaving machine.
+            body = uidriver.get_body("/widgets")
+            has = 0
+            if string.contains(body, "clock=audio") == 1 { has = 1 }
+            if string.contains(body, "clock=scene") == 1 { has = 1 }
+            aeocha.assert_eq(has, 1, "the presentation clock is reported")
+        }
     }
     aeocha.run_summary(fw)
 }
