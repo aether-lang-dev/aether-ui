@@ -65,8 +65,15 @@ main() {
             // latter, and conflating them made this assert the fallback on a
             // backend that had just gained caching.
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=1 blit=3",
-                    "only the fast frame re-renders; the rest are served from cache")
+                // NOT a fixed rerender/blit split: whether Beta's 0.2s interval
+                // has elapsed by paint N depends on how fast this box drives
+                // paints, and macOS legitimately reports 2/2 where Linux
+                // reports 1/3. The invariant that holds everywhere is that
+                // SOMETHING is served from cache -- if frames were still
+                // coupled, every visible frame would re-render and blit
+                // would be 0.
+                aeocha.assert_false(string.contains(body, "blit=0"),
+                    "cached frames are served from cache, not re-rendered")
             } else {
                 aeocha.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend draws every visible frame inline")
@@ -84,7 +91,7 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=1 blit=3",
+                aeocha.assert_false(string.contains(body, "blit=0"),
                     "cached frames stay valid over successive paints")
             } else {
                 aeocha.assert_contains(body, "composite: rerender=4 blit=0",
@@ -215,8 +222,16 @@ main() {
             aeocha.assert_contains(body, "bdraw=",
                 "the slow frame has its own counter")
             // Independence, stated as the thing that would break without it.
-            aeocha.assert_false(string.contains(body, "blit=0"),
-                "an animating frame does not force its neighbours to redraw")
+            // Gated on cache=1: win32 reports blit=0 LEGITIMATELY (Stage 3
+            // is off there, every frame draws inline), so asserting this
+            // unconditionally would fail a correctly-gated backend.
+            if string.contains(body, "cache=1") == 1 {
+                aeocha.assert_false(string.contains(body, "blit=0"),
+                    "an animating frame does not force its neighbours to redraw")
+            } else {
+                aeocha.assert_contains(body, "blit=0",
+                    "uncached backend draws every visible frame inline")
+            }
         }
 
         aeocha.it("moving a frame does not invalidate it") callback {
@@ -230,7 +245,7 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=1 blit=3",
+                aeocha.assert_false(string.contains(body, "blit=0"),
                     "a moved frame is still blittable")
             } else {
                 aeocha.assert_contains(body, "composite: rerender=4 blit=0",

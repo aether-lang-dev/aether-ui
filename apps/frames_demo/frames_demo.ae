@@ -7,7 +7,7 @@ import ui (
     window, vstack, hstack, text, enable_test_server,
     canvas_on_click, canvas_on_move, canvas_on_release,
     canvas_set_clip_rects, backend_name, canvas_widget, width, height,
-    ui_state_s, ui_set_s, bind_text
+    ui_state_s, ui_set_s, bind_text, canvas_cmd_count
 )
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
@@ -75,9 +75,14 @@ publish_composite(app: *App) {
     // Whether THIS backend can cache frames. Distinct from painted_pixels,
     // which reports on a retained PAINT surface -- macOS caches frames but
     // has no paint surface, so inferring one from the other is wrong.
+    // Backend CAPABILITY, not observed outcome. Deriving this from blit
+    // counts was circular: sabotaging the cache flipped cache= to 0, every
+    // spec took the "uncached backend" branch, and the suite stayed green
+    // while the feature was broken. canvas_cmd_count returns -1 exactly
+    // where render_range_rgba is unavailable (win32 today), so it reports
+    // whether this backend CAN cache regardless of whether it did.
     cch = 0
-    if frames_blit_count(app.host) > 0 { cch = 1 }
-    if tbl > 0 { cch = 1 }
+    if canvas_cmd_count(app.canvas) >= 0 { cch = 1 }
     occ = frames_occluded_count(app.host)
     tocc = frames_total_occluded_count(app.host)
     ddraw = app.delta_draws
