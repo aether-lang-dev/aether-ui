@@ -19,13 +19,14 @@
 //
 import ui
 import ui (window, vstack, hstack, text, btn, enable_test_server,
-           ui_state_s, ui_set_s, bind_text, canvas_widget, width, height)
+           ui_state_s, ui_set_s, bind_text, canvas_widget, width, height,
+           canvas_on_click, canvas_on_move, canvas_on_release)
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
-           scene_refresh, scene_set_refreshing, opacity)
+           scene_refresh, scene_set_refreshing, opacity, scene_canvas)
 import vg.region
 import ui.frames (
-    frames, frame, frame_invalidate, frame_set_opacity,
+    frames, frame, frame_invalidate, frame_set_opacity, frame_bounds,
     frames_draw, frames_rerender_count, frames_blit_count,
     frames_on_click, frames_on_move, frames_on_release
 )
@@ -54,6 +55,11 @@ env_int(name: string, dflt: int) -> int {
 VW_of() -> int { return env_int("VF_W", 320) }
 VH_of() -> int { return env_int("VF_H", 240) }
 FPS_of() -> float { return (env_int("VF_FPS", 15) as float) }
+// viewBox units == canvas pixels, deliberately. ui.frames hit-tests the
+// coordinates canvas_on_click delivers, which are canvas PIXELS; if the
+// viewBox is a different size those coordinates are scaled and every click
+// misses the frame it looks like it hit. frames_demo has the same 1:1
+// mapping for the same reason. Keep CW/CH equal to the vg() canvas size.
 const CW: int = 900
 const CH: int = 600
 
@@ -115,7 +121,7 @@ publish(app: *App) {
     rr = frames_rerender_count(app.host)
     bl = frames_blit_count(app.host)
     _s = ui_set_s(app.st_status,
-        "video: shown=${sh} pts_ms=${pt} | composite: rerender=${rr} blit=${bl}")
+        "video: shown=${sh} pts_ms=${pt} cid=${app.canvas} | composite: rerender=${rr} blit=${bl}")
 }
 
 main() {
@@ -131,13 +137,17 @@ main() {
     app.buf = bytes.new(VW_of() * VH_of() * 4)
     app.dec = open_clip(src)
 
-    window("Aether-UI — MP4 in a frame", 960, 720) {
+    window("Aether-UI — MP4 in a frame", CW + 60, CH + 120) {
         vstack(0) {
             app.st_status = ui_state_s("video: starting")
             vg(view_box(0, 0, CW, CH), CW, CH) {
                 root = rect(0, 0, CW * 1.0, CH * 1.0) { fill("#151a21") }
                 app.scene = node_scene(root)
-                app.canvas = 0
+                // scene_canvas, NOT 0. Hardcoding zero registered every
+                // pointer handler against a canvas that does not exist, so
+                // the frames drew but never dragged -- and nothing errored,
+                // because registering a handler on a bogus id is silent.
+                app.canvas = scene_canvas(app.scene)
                 _cw = width(canvas_widget(app.canvas), CW)
                 _ch = height(canvas_widget(app.canvas), CH)
                 scene_set_refreshing(app.scene, 1)
@@ -187,9 +197,35 @@ main() {
                         back = rect(rn, 0.0, 0.0, CW * 1.0, CH * 1.0)
                         fill(back, "#151a21")
                         frames_draw(app.host, rn, t)
+                        // Keep the video region glued to the frame. The rect
+                        // is set at creation, so without this a dragged frame
+                        // leaves its picture behind -- the frame moves and the
+                        // video does not. region_set_rect is cheap: the blit
+                        // scales source to dest, so moving costs no re-decode.
+                        fx, fy, fw2, fh2 = frame_bounds(app.vframe)
+                        region.region_set_rect(app.rgn,
+                            fx + 12.0, fy + 36.0, fw2 - 24.0, fh2 - 48.0)
                         publish(app)
                     }
                 region_set_animated(reg, 0)
+
+                // Pointer -> frames. Without these three the frames draw but
+                // do not DRAG: ui.frames tracks the gesture, but nothing
+                // feeds it pointer events. The imports were here and the
+                // wiring was not, which looks identical until you try to
+                // move a frame.
+                canvas_on_click(app.canvas) callback |x: float, y: float| {
+                    frames_on_click(app.host, x, y)
+                    _r = scene_refresh(app.scene)
+                }
+                canvas_on_move(app.canvas) callback |x: float, y: float| {
+                    frames_on_move(app.host, x, y)
+                    _r = scene_refresh(app.scene)
+                }
+                canvas_on_release(app.canvas) callback |x: float, y: float| {
+                    frames_on_release(app.host, x, y)
+                    _r = scene_refresh(app.scene)
+                }
             }
             st = text("video: starting")
             bind_text(st, app.st_status)
