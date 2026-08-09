@@ -16,6 +16,7 @@ exports (
 import std.list
 import std.string
 import std.os (run_capture, os_getenv)
+import ui (backend_name)
 import ui (set_button_label)
 import gp_model
 import gp_model (FileEntry, bump_ancestors, fmt_size)
@@ -124,7 +125,15 @@ execute_trash(s: *AppState) {
     // Platform trash: `gio trash` on Linux/macOS; on Windows the REAL
     // Recycle Bin via the VB FileSystem shim (SHFileOperation underneath) —
     // cmd `del` would be a permanent delete, which is not what Delete means.
-    win = os_getenv("OS")
+    // Detect Windows from the BACKEND, not $OS. cmd.exe sets OS=Windows_NT
+    // but MSYS/MinGW bash does NOT export it, so under the spec harness this
+    // read empty and every Delete fell into the UNIX branch -- running
+    // `uname`, which died with "error while loading shared libraries" in the
+    // app's environment, and reported "Trash FAILED" while the file stayed
+    // on disk. That is the gp_fileops red, and it was never in the
+    // PowerShell call: that code was simply never reached.
+    win = ""
+    if string.equals(backend_name(), "win32") == 1 { win = "Windows_NT" }
     av = list.new()
     tstatus = 0
     terr = ""
