@@ -87,13 +87,15 @@ of copying. Wants a decoder writing **directly into the region's buffer** —
 `region_frame_buffer(rgn) -> ptr` plus a "contents changed" nudge, so the
 pixels land where the blit reads them.
 
-### 4. Audio, and A/V sync
-There is no audio path for video at all. LisMusic has audio machinery
-worth reading first. Sync is the real work: today the frame index is
-`t * fps` off the scene clock, which drifts against an audio device's own
-clock. Wants a presentation-timestamp model (decode-time PTS per frame,
-present against the audio clock, drop/repeat to hold sync) rather than
-frame-index arithmetic.
+### 4. Audio, and A/V sync — DONE 2026-08-10 (86a95cf + edcd6a2 + the load_pcm round)
+Shipped in three steps: PTS presentation (edcd6a2 — a 15fps clip stopped
+playing at 41fps), the audio device's clock as master (86a95cf — video
+chases audio.position_ms, ~25ms on synthetic, 20-25ms on a real 720p/5.1
+clip), and in-clip audio via avcodec.audio_pcm -> std.audio load_pcm
+(0.512.0), which removed the sidecar-WAV extraction. One file in, both
+streams out, no intermediates anywhere. Residue: audio is whole-buffer
+(~20 MB in memory for 2 min), so a feature film wants load_pcm's
+streaming-push sibling when it exists.
 
 ### 5. Faster than the compositor
 28fps at 640x480 was the compositor's paint rate, not the region path.

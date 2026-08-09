@@ -21,6 +21,7 @@ main() {
         link_flag("-lavformat")
         link_flag("-lavutil")
         link_flag("-lswscale")
+        link_flag("-lswresample")
         no_closure_regen()
         ui_backend(root)
     }

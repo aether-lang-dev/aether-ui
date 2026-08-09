@@ -43,7 +43,7 @@ if grep -rqs "import contrib.avcodec" "$(dirname "$SOURCE")"; then
     # Same shape as sqlite: our shim archive plus FFmpeg's own libraries.
     # swscale does the RGBA conversion and avutil carries the frame helpers,
     # so all four are needed together.
-    CONTRIB_LIBS="$CONTRIB_LIBS -laether_avcodec -lavcodec -lavformat -lavutil -lswscale"
+    CONTRIB_LIBS="$CONTRIB_LIBS -laether_avcodec -lavcodec -lavformat -lavutil -lswscale -lswresample"
 fi
 
 mkdir -p "$(dirname "$C_FILE")"

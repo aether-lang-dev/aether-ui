@@ -238,22 +238,23 @@ main() {
     app.buf = bytes.new(VW_of() * VH_of() * 4)
     app.dec = open_clip(src)
 
-    // Audio, if a sidecar WAV is present. std.audio v1 decodes WAV, and the
-    // avcodec shim is video-only, so the demo takes audio from a .wav beside
-    // the clip rather than demuxing it. That is a DEMO limitation, not an
-    // architectural one: what matters here is which CLOCK drives
-    // presentation, and audio.position_ms is that clock either way.
-    wav = os_getenv("VF_WAV")
-    if string.length(wav) == 0 { wav = "/tmp/vidtest/av.wav" }
+    // Audio from the SAME FILE, decoded in-process: avcodec.audio_pcm
+    // demuxes and decodes the clip's audio stream (whatever it is -- Big
+    // Buck Bunny is 5.1 float-planar AAC) to interleaved s16 stereo, and
+    // std.audio's load_pcm (0.512.0) plays samples the caller already
+    // decoded. This replaces the sidecar-WAV extraction that doubled
+    // on-disk cost and needed a manual ffmpeg step before playback --
+    // the last hand-cranked stage in an otherwise in-process pipeline.
+    // A clip with no audio stream falls back to the scene clock.
     if audio.open() == true {
-        wdata, wn, werr = fs.read_binary(wav)
-        if string.length(werr) == 0 {
-            asrc, aerr = audio.load_wav(wdata, wn)
+        pcm, pn, prate, pch, perr = avcodec.audio_pcm(src)
+        if string.length(perr) == 0 {
+            asrc, aerr = audio.load_pcm(pcm, pn, prate, pch, audio.FORMAT_S16)
             if string.length(aerr) == 0 {
                 app.asrc = asrc
                 app.aclock = 1
                 _ap = audio.play(asrc)
-                println("audio: ${audio.duration_ms(asrc)}ms, clock=audio")
+                println("audio: ${audio.duration_ms(asrc)}ms from the clip itself, clock=audio")
             }
         }
     }
