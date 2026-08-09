@@ -326,3 +326,214 @@ Worth stating, so this is not one-directional:
 `InputMap`-as-data (#5) is the one I would most like but is the biggest
 change, since it means rebuilding shortcut registration around a table
 rather than calls.
+
+---
+
+# Round 2 — the change series to functional equivalence
+
+The envy list above, converted into an ordered series of changes. Each is
+stated in aether-ui's own idiom — closures and builders, no inheritance —
+names what it builds on (every cited primitive exists today), and says how
+it gets falsified, because three assertions this year shipped green against
+the bug they guarded and the discipline is now house rule.
+
+Order is by dependency, not importance: #1 and #2 unblock most of the rest.
+
+## C1. `command` — one callback, many surfaces  (S)
+
+```
+save = command("Save", "Ctrl+S") callback { do_save() }
+command_set_enabled(save, 0)          // greys button + menu + kills the key
+btn_command(save)                     // a button wired to it
+menu_item_command(fmenu, save)        // a menu item wired to it
+```
+
+Builds on: `shortcut` (the accelerator registers through it), the
+state-observer primitive behind `computed_s` (enabled-state fans out to
+every attached surface), `menu_item`.
+
+Acceptance: one command attached to a button, a menu item and its key;
+`command_set_enabled(0)` must disable all three — asserted via the driver's
+widget `enabled` field and a shortcut fire that must NOT run the callback.
+Falsify by detaching the enabled fan-out: the button greys, the key still
+fires, spec goes red.
+
+## C2. `rowview` — the view↔model index split  (M)
+
+```
+rv = rowview(items)                   // wraps a ui_state_list
+rowview_sort(rv, cmp)                 // reorders the MAPPING, not the data
+rowview_filter(rv, pred)              // hides rows; data untouched
+rowview_to_model(rv, i) / rowview_to_view(rv, i) / rowview_count(rv)
+```
+
+`listbox`, `table`, `vlist` and `tree` accept a `rowview` wherever they
+take list-state today; selection is stored in model coordinates and
+survives a re-sort. `on_sort`'s header-click hook stops meaning "the app
+mutates its data" and starts meaning `rowview_sort`.
+
+Builds on: `ui_state_list`, `each_bind`, `on_sort`.
+
+Acceptance: sort a bound table, assert the underlying list-state is
+byte-identical (driver reads it back) while the first visible row changed;
+select a row, re-sort, assert the SAME model item is still selected.
+Falsify by making rowview_sort mutate the list: the byte-identical
+assertion goes red. This is the "cheap now, expensive later" item — it
+should land before more apps bind tables directly.
+
+## C3. One renderer contract, and the vg stamp  (M)
+
+```
+r = cell_renderer() callback |item, i, sel, focus, cell| { ... }   // widgets
+rs = cell_renderer_vg() callback |item, i, sel, focus, rn, x, y, w, h| { ... }
+```
+
+Both forms accepted by `listbox`, `table_col_delegate`, `tree` and the
+dropdown — one contract, four consumers, which is the whole point. The
+`_vg` form is the rubber-stamp: it emits vg nodes into the row's rect and
+retains nothing, so a 100k-row table costs a window of stamps, not 100k
+widget rows. That is also the fix for tables/trees riding a plain
+`listbox`: rebase them on `vlist` + the stamp.
+
+Builds on: `table_col_delegate` (the shape already exists for one widget),
+`vlist` (the windowing), vg deferred scenes (a stamp with no tree to attach
+to — easier here than in Swing).
+
+Acceptance: same renderer closure passed to a listbox and a table column
+renders identically (golden-cell signature); a 100k-row stamped table's
+widget count stays bounded (driver counts widgets). Falsify by pointing the
+table back at the widget path: the count assertion goes red.
+
+## C4. Cell editing lifecycle  (M, needs C3)
+
+```
+e = cell_editor(
+    callback |item| { textfield_bound(...) },   // begin: build the editor
+    callback |w| { ... },                        // value out
+)
+table_col_editable(cols, "Name", 160, r, e)     // renderer + editor pair
+```
+
+Enter commits, Escape cancels, focus-loss commits (Swing's default);
+`on_cell_edited(t) callback |row, col, value|` tells the app. The adapter
+insight is the part to keep: any existing widget becomes an editor by
+wrapping, no bespoke kind.
+
+Builds on: C3 (the renderer half of the pair), `textfield_bound`,
+`focused_widget`.
+
+Acceptance: double-click edits, Enter fires on_cell_edited with the new
+value, Escape restores the rendered cell unchanged — all driveable today
+(`/widget/{id}/double_click` exists). Falsify by breaking cancel: Escape
+leaves the new value, red.
+
+## C5. `keymap` — bindings as data  (M, needs C1)
+
+```
+km = keymap(parent_km)                          // chained lookup
+keymap_bind(km, "Ctrl+S", "file.save")          // key -> NAME
+command_register("file.save", save)             // name -> command (C1)
+keymap_attach(km, scope)                        // widget | window | global
+keymap_bindings(km)                             // enumerable -> rebind UI
+```
+
+`shortcut`/`shortcut_when`/`shortcut_chord` become sugar that writes into
+the default keymap — no caller changes. The parent chain is what lets a
+platform keymap ship defaults an app overrides, and `keymap_bindings` is
+what makes a user-facing "customise shortcuts" panel possible at all.
+
+Builds on: C1, the existing `shortcut_when` scoping and chord machinery.
+
+Acceptance: rebind Ctrl-S to Ctrl-Shift-S through the API at runtime; old
+key inert, new key fires, `keymap_bindings` reflects it. Falsify by
+skipping the unbind: both keys fire, red.
+
+## C6. Clipboard read + `transfer`  (M–L, wants C5; backend work)
+
+```
+transfer(widget) {
+    t_export("text/plain") callback { selected_text() }
+    t_import("text/plain") callback |s| { insert(s) }
+}
+```
+
+Two halves. First `clipboard_read_impl` on all three backends — today
+`clipboard_write` exists and there is NO read, so paste into an aether-ui
+app is impossible; that is the sharpest single gap in this document. Then
+the transfer builder: Ctrl-C/X/V arrive via the keymap (C5) at the focused
+widget's transfer, and cross-widget drag negotiates the first common
+flavour, generalising what `row_drag_reorder` already does for one list.
+
+Per the four-OS rule: a backend without clipboard read returns -1 and the
+spec asserts that, not a vacuous pass.
+
+Acceptance: driver route `POST /clipboard?text=...` then Ctrl-V into a
+textfield lands the text; copy from widget A, paste into widget B via
+their declared flavours. Falsifiable at every step.
+
+## C7. Scroll negotiation  (S)
+
+```
+scroll_units(widget, unit_px, block_px, tracks_width)
+```
+
+Scrollview asks its child; wheel scrolls a table by rows and a text area by
+lines. Three numbers and a lookup — smallest real item here.
+
+## C8. Theme-owned vs app-owned styling  (S–M)
+
+AeCS values applied by `apply_styles` get tagged theme-owned; `style_*`
+setters tag app-owned; a re-theme only overwrites theme-owned values.
+`GET /widget/{id}/style_origin` exposes the tag so the spec can assert that
+an app-set colour SURVIVES a live re-theme and a theme-set one changes —
+which is precisely Swing's `UIResource` test, minus the marker interface.
+
+## C9. Tooltip policy  (S)
+
+```
+tooltip_delays(initial_ms, dismiss_ms, reshow_ms)   // app-wide, once
+```
+
+Applies to both the native and drawn (`vg_tooltip_show`) paths. Today there
+is per-widget text and no delay policy anywhere.
+
+## C10. `undo_group` — the CompoundEdit  (S)
+
+```
+undo_group("Move 3 frames") {
+    undoable(...) ; undoable(...) ; undoable(...)
+}                                    // one undo step, one label
+```
+
+Builds on the existing `undoable`/`undo`/`redo` stack, which already covers
+UndoManager's core. A drag becomes one gesture instead of thirty steps.
+maerkdown is the first real consumer.
+
+## Deliberately NOT in the series
+
+- **The text tier.** maerkdown's `mdown`/`wordflow` is the proto-tier, and
+  the house rule applies: the API follows a second real consumer, not a
+  port of `javax.swing.text`. When a second app needs attributed text,
+  extract; until then, leave. `DocumentFilter`'s before-mutation hook is
+  the one piece worth adding to `mdown` on its own merits.
+- **Pluggable ComponentUI.** The most inheritance-bound idea in Swing, and
+  vg gives drawn components more directly. C8 takes the useful residue.
+- **`InputVerifier`.** Focus-veto needs per-backend investigation (whether
+  win32/AppKit can even refuse a focus transfer cleanly) before it is worth
+  an API. Parked, not rejected.
+- **`SwingWorker`.** Actors plus `ui.timer` cover the need; sugar can wait
+  for evidence it is missed.
+
+## Sequencing
+
+```
+C1 command ──► C5 keymap ──► C6 transfer (+ clipboard_read backends)
+C2 rowview ──► (tables/trees gain sort+filter for free)
+C3 renderer ─► C4 editors, and tables/trees move onto vlist
+C7, C8, C9, C10 — independent, any time, S-sized
+```
+
+Three phases if phased: **A** = C1+C2 (the foundations, both small enough
+to land falsified in a session each), **B** = C3+C4+C5 (the collection
+widgets become Swing-class), **C** = C6 (the only one needing new backend
+surface on all three platforms at once).
