@@ -8,6 +8,7 @@
 #
 #   ./tests/spec_matrix.sh              # every suite
 #   ./tests/spec_matrix.sh split table  # just these
+#   ./tests/spec_matrix.sh --rebuild    # rebuild each app first (see below)
 #
 # Binaries come from `aeb .all.ae` (target/build/...). Run that first.
 #
@@ -133,7 +134,46 @@ SUITES=(
 # /tmp on some systems.
 GP_SPECS=(scan_and_list map_nav legend fileops hover_and_resize)
 
-WANT=("$@")
+# --rebuild: build every selected suite's app before running it, and treat a
+# still-stale binary as a hard error rather than a warning.
+#
+# OFF by default because the inner loop wants speed: `spec_matrix.sh frames`
+# in 20s beats a 100s rebuild while iterating. ON for any run whose NUMBER
+# you intend to believe -- CI, a release check, a four-platform sweep.
+#
+# The warning this complements has caught real phantom failures (a 4-day-old
+# frames_demo reporting 11 bogus failures on Windows; 12 on FreeBSD), but a
+# warning only tells you the run was worthless AFTER it finishes. This
+# prevents it. Worth doing now that aeb's [miss] genuinely means "rebuilt"
+# (aeb 63bcb14) -- before that fix, rebuilding could silently no-op.
+REBUILD=0
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --rebuild) REBUILD=1 ;;
+        *) ARGS+=("$a") ;;
+    esac
+done
+WANT=("${ARGS[@]}")
+
+# rebuild_app <appdir> <base> — build one app with whatever this platform has.
+# Mirrors the per-OS fallbacks in the binary-resolution block below: aeb where
+# its fan-out works, build.sh where it does not (Windows, FreeBSD).
+rebuild_app() {
+    local appdir="$1" base="$2" log="/tmp/smx_rebuild_${2}.log"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*|FreeBSD)
+            ./build.sh "$appdir/$base.ae" "$base" > "$log" 2>&1
+            ;;
+        *)
+            if [ -f "$appdir/.build.ae" ] && command -v aeb >/dev/null 2>&1; then
+                aeb "$appdir/.build.ae" > "$log" 2>&1
+            else
+                ./build.sh "$appdir/$base.ae" "$base" > "$log" 2>&1
+            fi
+            ;;
+    esac
+}
 want_suite() {
     [ ${#WANT[@]} -eq 0 ] && return 0
     for w in "${WANT[@]}"; do [ "$w" = "$1" ] && return 0; done
@@ -192,6 +232,7 @@ for row in "${SUITES[@]}"; do
     want_suite "$name" || continue
 
     base="$(basename "$appdir")"
+    if [ "$REBUILD" = "1" ]; then rebuild_app "$appdir" "$base"; fi
     bin="target/build/$appdir/bin/$base"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
@@ -239,9 +280,19 @@ for row in "${SUITES[@]}"; do
     # detect the change. Warn loudly rather than silently measuring the past.
     newer="$(find "$appdir" ui vg -name '*.ae' -newer "$bin" 2>/dev/null | head -3)"
     if [ -n "$newer" ]; then
+        if [ "$REBUILD" = "1" ]; then
+            # We just built this and it is STILL older than its sources, so
+            # the build silently did nothing. Under --rebuild the whole point
+            # is that the number can be believed; carrying on would produce
+            # exactly the false green the flag exists to prevent.
+            printf "%-14s %6s %6s   %s\n" "$name" - - "STALE AFTER REBUILD — see /tmp/smx_rebuild_$base.log"
+            printf "       %s\n" $newer >&2
+            SUITES_RED=$((SUITES_RED + 1))
+            continue
+        fi
         printf "  \033[33mWARN\033[0m %s: binary older than sources — measuring a STALE build.\n" "$name" >&2
         printf "       %s\n" $newer >&2
-        printf "       rebuild: aeb %s/.build.ae\n" "$appdir" >&2
+        printf "       rebuild: aeb %s/.build.ae (or pass --rebuild)\n" "$appdir" >&2
     fi
 
     port_free || { echo "port $PORT still busy; aborting"; exit 1; }
