@@ -45,8 +45,9 @@ renderer written once works in all four.
 `vlist` does windowed virtualisation for lists. Two gaps:
 
 - the delegate builds **real widgets per cell**, not a stamped one. `vlist`
-  bounds this for lists; `table_col_delegate` does not obviously do so for
-  tables.
+  bounds this for lists only: tables and trees both ride a plain `listbox`
+  underneath (`TableDef.lb`, `TreeDef.lb`), so every row of either is a live
+  widget however large the model.
 - there is **no shared renderer protocol**. A delegate written for a table
   column cannot be handed to a list or a tree.
 
@@ -220,8 +221,13 @@ Swing wires the standard keyboard bindings to it automatically. Data moves
 as a `Transferable` with declared flavours, so a drag between two
 unrelated components negotiates a common representation.
 
-**Where we are.** There are `drop`/`clipboard` mentions in the surface but
-no unified transfer protocol, and no flavour negotiation.
+**Where we are.** More than "mentions", and less than a protocol.
+`listbox_reorderable` does real row drag-reorder within one list — a drag
+source carrying its index, a drop target, `on_drop(source_index)` — and
+`clipboard_write` puts text out. That is the whole surface: there is **no
+clipboard read**, so nothing can be pasted *into* an aether-ui app at all;
+no cross-widget drag; no flavours. The missing paste is the sharpest gap —
+Swing gets Ctrl-V for free the moment a `TransferHandler` exists.
 
 **Worth stealing:** the single-object framing, and flavours. Less urgent
 than the rest unless a real app needs inter-widget drag.
