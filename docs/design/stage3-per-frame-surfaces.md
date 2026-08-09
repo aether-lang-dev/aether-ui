@@ -1,6 +1,33 @@
 # Stage 3 design note — per-frame surfaces, then occlusion
 
-**Status: design only, not built.** Written after Stages 0–2.5 landed and
+**Status: BUILT.** Stage 3 (per-frame surfaces) landed in 737c4ba, ported to
+macOS in 2e10596, and Stage 4 (occlusion) in ff5a8cc. Verified on four
+platforms 2026-08-09:
+
+| Platform | frames | caching | occlusion |
+| --- | --- | --- | --- |
+| Linux / GTK4 | 13/0 | yes | yes |
+| FreeBSD / GTK4 | 13/0 | yes | yes |
+| macOS / AppKit | 13/0 | yes | yes |
+| Windows / win32 | 13/0 | **gated off** | yes |
+
+The headline result: a static frame's content is produced ONCE and presented
+every paint (`gdraw=1` across 102 paints, previously 108/108), and a frame
+fully covered by an opaque frame is skipped entirely (`ddraw=0`).
+
+**Occlusion is independent of caching.** It is a Z-order plus containment
+test, so it works on win32 even though `canvas_render_range_rgba` returns 0
+there and nothing is cached: measured `rerender=4 blit=0 cache=0 occ=1/65
+ddraw=0`. That separation was intended and is worth preserving — a backend
+that cannot cache still gets the occlusion saving.
+
+win32 caching stays gated because GDI has no alpha; see the comment in
+`backend/aether_ui_win32.c` for the three places that file proves it.
+
+The original design notes follow, including the two failed attempts, because
+how the approach was wrong twice is the most reusable part.
+
+**Originally: design only, not built.** Written after Stages 0–2.5 landed and
 clipping turned out to deliver nothing (see
 `retained-compositor.md` and `stage2-clip-flicker-fix.md`). This note fixes
 the API shape and the acceptance test *before* implementation, because the
