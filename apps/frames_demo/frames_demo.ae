@@ -49,6 +49,9 @@ struct App {
     delta_draws: int
     epsilon: ptr
     epsilon_draws: int
+    alpha_draws: int
+    beta_draws: int
+    beta_next_t: float
     gamma_draws: int
     paints: int
     cube_a: ptr
@@ -79,8 +82,10 @@ publish_composite(app: *App) {
     tocc = frames_total_occluded_count(app.host)
     ddraw = app.delta_draws
     edraw = app.epsilon_draws
+    adraw = app.alpha_draws
+    bdraw = app.beta_draws
     _c = ui_set_s(app.st_composite,
-        "composite: rerender=${rerenders} blit=${blits} total=${trr}/${tbl} gdraw=${gd} paints=${pc} cache=${cch} occ=${occ}/${tocc} ddraw=${ddraw} edraw=${edraw}")
+        "composite: rerender=${rerenders} blit=${blits} total=${trr}/${tbl} gdraw=${gd} paints=${pc} cache=${cch} occ=${occ}/${tocc} ddraw=${ddraw} edraw=${edraw} adraw=${adraw} bdraw=${bdraw}")
 }
 
 struct CubeSpin {
@@ -307,7 +312,12 @@ draw_tumbling_payload(rn: ptr, t: float, x: float, y: float, w: float, h: float,
 }
 
 main() {
-    app = malloc(128) as *App
+    // 256, not 128: App outgrew the old hardcoded size when Stage 5 added
+    // its draw counters, and the overflow showed up as
+    // "malloc(): unaligned tcache chunk detected" at startup rather than as
+    // anything pointing at this line. Sized with headroom deliberately --
+    // the next field added should not corrupt the heap.
+    app = malloc(256) as *App
     app.st_bounds = ui_state_s("bounds: pending")
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")
@@ -316,6 +326,9 @@ main() {
     app.gamma_draws = 0
     app.delta_draws = 0
     app.epsilon_draws = 0
+    app.alpha_draws = 0
+    app.beta_draws = 0
+    app.beta_next_t = 0.0
     app.paints = 0
     app.clip_enabled = 1
     app.clip_mode = 1
@@ -366,6 +379,7 @@ main() {
                 host = frames(app.scene, 0.0, 0.0, FW * 1.0, FH * 1.0) {
                     app.alpha = frame("Alpha", 60.0, 60.0, 460.0, 320.0)
                         callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
+                            app.alpha_draws = app.alpha_draws + 1
                             frame_invalidate(app.alpha)
                             draw_alpha(rn, t, x, y, w, h, app.cube_a)
                         }
@@ -382,7 +396,17 @@ main() {
                         }
                     app.beta = frame("Beta", 180.0, 110.0, 500.0, 360.0)
                         callback |rn: ptr, t: float, x: float, y: float, w: float, h: float| {
-                            frame_invalidate(app.beta)
+                            // Stage 5: Beta animates at ~5fps, not 60. It
+                            // re-invalidates only when its own interval has
+                            // elapsed, so between those it must stay cached
+                            // while Alpha keeps re-rendering every tick.
+                            // That is the claim: each frame re-renders at
+                            // ITS OWN rate, independent of its neighbours.
+                            app.beta_draws = app.beta_draws + 1
+                            if t >= app.beta_next_t {
+                                app.beta_next_t = t + 0.2
+                                frame_invalidate(app.beta)
+                            }
                             draw_beta(rn, t, x, y, w, h, app.cube_b)
                         }
                     // Gamma holds no animating payload and never invalidates

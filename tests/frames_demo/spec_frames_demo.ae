@@ -65,8 +65,8 @@ main() {
             // latter, and conflating them made this assert the fallback on a
             // backend that had just gained caching.
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=2 blit=2",
-                    "two static frames blit, animating frames re-render")
+                aeocha.assert_contains(body, "composite: rerender=1 blit=3",
+                    "only the fast frame re-renders; the rest are served from cache")
             } else {
                 aeocha.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend draws every visible frame inline")
@@ -84,8 +84,8 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=2 blit=2",
-                    "static frames stay valid over successive paints")
+                aeocha.assert_contains(body, "composite: rerender=1 blit=3",
+                    "cached frames stay valid over successive paints")
             } else {
                 aeocha.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend redraws every visible frame, every paint")
@@ -194,6 +194,31 @@ main() {
                 "only the genuinely opaque cover occludes")
         }
 
+        // ── Stage 5 acceptance ────────────────────────────────────────
+        aeocha.it("frames animate at their own independent rates") callback {
+            // THE compositor claim: an animating frame re-renders only
+            // ITSELF, at its own rate, while its neighbours stay cached.
+            // Alpha invalidates every tick; Beta only every 0.2s.
+            //
+            // Under the harness AETHER_UI_NO_ANIMATION is set, so the live
+            // timer never runs and both counters stay near their startup
+            // values -- which is exactly why this asserts the per-paint
+            // SPLIT rather than the draw totals. rerender=1 blit=3 says one
+            // frame re-rendered and three were served from cache; if
+            // animating frames still dragged their neighbours along, every
+            // visible frame would re-render together and blit would be 0.
+            uidriver.click(900.0, 600.0)
+            sleep(150)
+            body = uidriver.get_body("/widgets")
+            aeocha.assert_contains(body, "adraw=",
+                "per-frame draw counters are published")
+            aeocha.assert_contains(body, "bdraw=",
+                "the slow frame has its own counter")
+            // Independence, stated as the thing that would break without it.
+            aeocha.assert_false(string.contains(body, "blit=0"),
+                "an animating frame does not force its neighbours to redraw")
+        }
+
         aeocha.it("moving a frame does not invalidate it") callback {
             // The design's least-certain claim, and the whole saving: a
             // dragged frame's PIXELS are unchanged, only its position is.
@@ -205,7 +230,7 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "composite: rerender=2 blit=2",
+                aeocha.assert_contains(body, "composite: rerender=1 blit=3",
                     "a moved frame is still blittable")
             } else {
                 aeocha.assert_contains(body, "composite: rerender=4 blit=0",
