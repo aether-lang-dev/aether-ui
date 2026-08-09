@@ -129,9 +129,21 @@ execute_trash(s: *AppState) {
     tstatus = 0
     terr = ""
     if string.equals(win, "Windows_NT") == 1 {
-        cmdline = "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('"
+        // DOUBLE quotes, not single. The single-quoted form reached
+        // PowerShell with the quotes STRIPPED -- it parsed
+        // DeleteFile(C:/path/mid.bin,OnlyErrorDialogs,...) and died with
+        // "Missing ')' in method call", so every Delete on Windows reported
+        // "Trash FAILED" and left the file on disk. Measured on winbaz: the
+        // identical command trashes the file with \" and fails with '.
+        q = "\""
+        cmdline = string.concat("Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(", q)
         cmdline = string.concat(cmdline, _win_native_path(e.path))
-        cmdline = string.concat(cmdline, "','OnlyErrorDialogs','SendToRecycleBin')")
+        cmdline = string.concat(cmdline, q)
+        cmdline = string.concat(cmdline, string.concat(",", q))
+        cmdline = string.concat(cmdline, "OnlyErrorDialogs")
+        cmdline = string.concat(cmdline, string.concat(q, string.concat(",", q)))
+        cmdline = string.concat(cmdline, "SendToRecycleBin")
+        cmdline = string.concat(cmdline, string.concat(q, ")"))
         _ = list.add(av, "-NoProfile")
         _ = list.add(av, "-Command")
         _ = list.add(av, cmdline)
