@@ -97,10 +97,12 @@ preserved across a re-sort because selection lives in model coordinates.
 `RowFilter.include(entry)` is likewise a *predicate over an entry*, not a
 mutation.
 
-**Where we are.** `table_bind`/`listbox` bind to list-state directly. There
-is no view/model index distinction, so sorting would mean reordering the
-underlying list — losing the user's data order — and filtering would mean
-rebuilding it.
+**Where we are.** `table_bind`/`listbox` bind to list-state directly, and
+`on_sort(t)` gives a header-click hook — but its contract is literally "the
+app sorts + updates": the app reorders its own data and calls
+`table_update`. That is the mutation Swing avoids. There is no view/model
+index distinction, so sorting loses the data's own order and filtering
+means rebuilding the list.
 
 **Worth stealing:** this one wholesale, and early. It is a small amount of
 machinery that makes sort, filter, selection-stability and
@@ -260,7 +262,8 @@ it.
 - **`Timer`** (Swing's, not util's) — fires on the UI thread. Ours already
   behaves this way; worth noting Swing had to say it explicitly.
 - **`ToolTipManager`** — centralised dismiss/reshow/initial delays, so
-  tooltips across an app feel consistent. Ours are per-widget.
+  tooltips across an app feel consistent. Ours carry per-widget text with no
+  delay policy anywhere, which is the sharper statement of the gap.
 - **`InputVerifier`** — focus-transfer validation: a field can refuse to
   yield focus. No equivalent.
 - **`JLayer`** / `LayerUI` — a decorator that can intercept paint and events
@@ -271,6 +274,12 @@ it.
   slow" pattern, which is a UX idea more than a widget.
 - **`ButtonGroup`** — mutual exclusion as a separate object rather than a
   container, so radio semantics do not depend on layout.
+- **`javax.swing.undo`** — examined and mostly NOT envied: we already have
+  `undoable(label, do, undo)` with `undo`/`redo`/depths/labels, which covers
+  `UndoManager`'s core. What Swing adds that we lack is `CompoundEdit`
+  (batch many edits into one undo step — a drag is one gesture, not thirty
+  moves) and the significant/insignificant distinction. Worth taking if an
+  editor needs gesture-level undo; maerkdown eventually will.
 
 ---
 
@@ -293,7 +302,7 @@ Worth stating, so this is not one-directional:
 - **The driver.** Every widget's geometry, style, a11y name and paint
   counters are readable over HTTP, which makes four-platform parity testable
   in a way Swing never made easy.
-- **No god-class.** `JComponent` is ~5000 lines that every widget inherits.
+- **No god-class.** `JComponent` is 5,692 lines that every widget inherits.
   Ours compose.
 
 ---
