@@ -5273,11 +5273,94 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
     if (cur_pen) DeleteObject(cur_pen);
 }
 
-// STEP 1 STUB: delegates to GDI, so the seam and the MAE harness can be
-// proven end to end (expect MAE 0.0 everywhere) before any GDI+ drawing
-// exists. Replaced case-by-case; each replacement is measurable on its own.
+// GDI+ replay, built case by case. Anything not yet ported falls through to
+// the GDI implementation for that command, so the two renderers stay
+// comparable at every step rather than only when the port is complete.
+//
+// The flat C API (gdiplus/gdiplus.h, GdipXxx) is used deliberately: GDI+'s
+// C++ surface is a thin wrapper over it, and Direct2D -- the other candidate
+// -- is COM, which is far heavier to consume from C. Probed on winbaz before
+// this landed: startup, graphics-from-HDC, an ARGB brush and a fill all work
+// under MinGW.
+//
+// Declared by hand, matching this file's existing idiom (see the
+// GdiplusStartup / GdipCreateBitmapFromFile blocks above): <gdiplus.h> is
+// C++-only, and its C sibling collides with those declarations. GDI+ is
+// ALREADY initialised here for image loading -- ensure_gdiplus() -- so this
+// reuses that rather than starting a second token.
+typedef void GpGraphics;
+typedef void GpBrush;
+typedef unsigned int ARGB;
+__declspec(dllimport) int __stdcall GdipCreateFromHDC(HDC hdc, GpGraphics** g);
+__declspec(dllimport) int __stdcall GdipDeleteGraphics(GpGraphics* g);
+__declspec(dllimport) int __stdcall GdipCreateSolidFill(ARGB color, GpBrush** brush);
+__declspec(dllimport) int __stdcall GdipDeleteBrush(GpBrush* brush);
+__declspec(dllimport) int __stdcall GdipFillRectangleI(GpGraphics* g, GpBrush* brush,
+                                                      int x, int y, int w, int h);
+
+/* 0xAARRGGBB from a command's float colour. THE POINT OF THE EXERCISE:
+   GDI's CreateSolidBrush(RGB(...)) has nowhere to put cmd->calpha -- the
+   command buffer HAS carried alpha all along, GDI just discards it at draw
+   time -- so every
+   translucent fill lands opaque -- which is why Stage 3 frame caching is
+   gated off on win32. GDI+ carries it. */
+static ARGB gdip_argb(const CanvasCmd* c) {
+    int a = (int)(c->calpha * 255.0 + 0.5);
+    int r = (int)(c->cr * 255.0 + 0.5);
+    int g = (int)(c->cg * 255.0 + 0.5);
+    int b = (int)(c->cb * 255.0 + 0.5);
+    if (a < 0) a = 0; if (a > 255) a = 255;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    return ((ARGB)a << 24) | ((ARGB)r << 16) | ((ARGB)g << 8) | (ARGB)b;
+}
+
 static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height) {
-    canvas_replay_to_dc_gdi(cv, mem, width, height);
+    if (!cv) return;
+    ensure_gdiplus();
+    GpGraphics* g = NULL;
+    if (GdipCreateFromHDC(mem, &g) != 0 || !g) {
+        canvas_replay_to_dc_gdi(cv, mem, width, height);
+        return;
+    }
+    /* Match GDI's opening white wash so a partially-ported renderer differs
+       only where a PORTED command draws -- otherwise every unported scene
+       would score a huge MAE for the background alone and the comparison
+       would say nothing. */
+    GpBrush* wash = NULL;
+    if (GdipCreateSolidFill(0xFFFFFFFF, &wash) == 0) {
+        GdipFillRectangleI(g, (GpBrush*)wash, 0, 0, width, height);
+        GdipDeleteBrush((GpBrush*)wash);
+    }
+
+    for (int i = 0; i < cv->cmd_count; i++) {
+        CanvasCmd* cmd = &cv->cmds[i];
+        switch (cmd->k) {
+            case CV_CLEAR: {
+                GpBrush* br = NULL;
+                if (GdipCreateSolidFill(0xFFFFFFFF, &br) == 0) {
+                    GdipFillRectangleI(g, (GpBrush*)br, 0, 0, width, height);
+                    GdipDeleteBrush((GpBrush*)br);
+                }
+                break;
+            }
+            case CV_FILL_RECT: {
+                GpBrush* br = NULL;
+                if (GdipCreateSolidFill(gdip_argb(cmd), &br) == 0 && br) {
+                    GdipFillRectangleI(g, (GpBrush*)br,
+                                       (INT)cmd->p0, (INT)cmd->p1,
+                                       (INT)cmd->p2, (INT)cmd->p3);
+                    GdipDeleteBrush((GpBrush*)br);
+                }
+                break;
+            }
+            default:
+                /* Not yet ported. */
+                break;
+        }
+    }
+    GdipDeleteGraphics(g);
 }
 
 static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {

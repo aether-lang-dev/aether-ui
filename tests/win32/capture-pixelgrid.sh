@@ -18,7 +18,7 @@
 export PATH=/mingw64/bin:/usr/bin:/usr/local/bin:$PATH
 cd /home/paul/aether-ui || exit 1
 APP="${1:-golden_gallery}"
-CID="${2:-5}"
+CID="${2:-1}"
 for R in legacy gdiplus; do
     taskkill //IM "$APP.exe" //F >/dev/null 2>&1; sleep 1
     AETHER_UI_TEST_PORT=9222 AETHER_UI_HEADLESS=1 AETHER_UI_NO_ANIMATION=1 \
