@@ -53,11 +53,24 @@ main() {
             // AETHER_UI_NO_ANIMATION and paint cadence varies by machine, so
             // a rate assertion would be flaky by construction. held is the
             // structural claim and holds on any box.
-            uidriver.click(880.0, 560.0)
-            sleep(400)
-            body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "held=", "hold counter published")
-            aeocha.assert_false(string.contains(body, "held=0 "),
+            // Drive SEVERAL paints and poll, rather than click-once-read-once.
+            // How many paints have landed by the time the driver answers
+            // varies by backend -- AppKit and GTK4 differ enough that a
+            // single click left held=0 on macOS while the mechanism was
+            // working perfectly (verified by hand: held=26). The claim is
+            // structural, so wait for it rather than assume one paint.
+            ok = 0
+            i = 0
+            while i < 12 {
+                uidriver.click(880.0, 560.0)
+                sleep(150)
+                b = uidriver.get_body("/widgets")
+                if string.contains(b, "held=") == 1 {
+                    if string.contains(b, "held=0 ") == 0 { ok = 1; i = 12 }
+                }
+                i = i + 1
+            }
+            aeocha.assert_eq(ok, 1,
                 "frames are held between presentations, not shown per paint")
         }
         aeocha.it("names the clock driving presentation") callback {

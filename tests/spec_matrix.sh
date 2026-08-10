@@ -258,6 +258,29 @@ for row in "${SUITES[@]}"; do
         fi
     fi
 
+    # video_frame needs a clip with an AUDIO track: without one it falls back
+    # to the scene clock and presents nothing, so its held/clock assertions
+    # fail. The suite must not depend on a file that happens to be lying
+    # around -- it did, and passed here while failing on macOS purely because
+    # /tmp/vidtest/clip.mp4 existed on one box. Generate it per run.
+    if [ "$name" = "video_frame" ]; then
+        # Find ffmpeg without depending on the login shell's PATH: Homebrew
+        # puts it in /usr/local/bin (Intel) or /opt/homebrew/bin (Apple
+        # silicon), and a non-login ssh session on macOS has neither. This
+        # is the same PATH trap that bites on winbaz.
+        _FFM=""
+        for _c in ffmpeg /usr/local/bin/ffmpeg /opt/homebrew/bin/ffmpeg; do
+            command -v "$_c" >/dev/null 2>&1 && { _FFM="$_c"; break; }
+        done
+        if [ -n "$_FFM" ] && [ ! -f /tmp/vidtest/clip.mp4 ]; then
+            mkdir -p /tmp/vidtest
+            "$_FFM" -y -f lavfi -i testsrc=size=320x240:rate=15:duration=6 \
+                   -f lavfi -i "sine=frequency=440:duration=6" \
+                   -pix_fmt yuv420p -c:v libx264 -c:a aac -shortest \
+                   /tmp/vidtest/clip.mp4 >/dev/null 2>&1 || true
+        fi
+    fi
+
     if [ "$REBUILD" = "1" ]; then rebuild_app "$appdir" "$base"; fi
     bin="target/build/$appdir/bin/$base"
     case "$(uname -s)" in
