@@ -307,6 +307,16 @@ for row in "${SUITES[@]}"; do
         FreeBSD)
             # No aeb on the box → prefer the fan-out artifact if present,
             # else build.sh into build/ on demand. Absolutized for safety.
+            #
+            # Under --rebuild, prefer build/ UNCONDITIONALLY: rebuild_app just
+            # wrote there, while target/build/ holds whatever an older aeb
+            # fan-out left behind. Without this the freshly built binary is
+            # ignored, the stale one fails the post-rebuild check, and every
+            # suite reports STALE AFTER REBUILD -- 51 of them, on a run where
+            # each rebuild had in fact succeeded ("Built: build/icons_demo").
+            if [ "$REBUILD" = "1" ] && [ -x "build/$base" ]; then
+                bin="build/$base"
+            fi
             if [ ! -x "$bin" ]; then
                 bin="build/$base"
                 [ -x "$bin" ] || ./build.sh "$appdir/$base.ae" "$base" \
