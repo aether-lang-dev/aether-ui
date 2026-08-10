@@ -16,6 +16,13 @@ main() {
         // archive and FFmpeg's own libraries.
         lib("${root}/../aether")
         link_flag("-L${root}/../../.local/lib/aether")
+        // FFmpeg's own libraries. On Linux they sit in a default search
+        // path; on macOS Homebrew keeps them under its prefix, so the -L is
+        // required there and harmless where the directory does not exist.
+        // aeb has no pkg-config helper (link_flag is the only lever), hence
+        // naming the conventional prefixes rather than querying.
+        link_flag("-L/usr/local/lib")
+        link_flag("-L/opt/homebrew/lib")
         link_flag("-laether_avcodec")
         link_flag("-lavcodec")
         link_flag("-lavformat")
