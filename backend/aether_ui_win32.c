@@ -5014,10 +5014,53 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
     return 0;
 }
 
+// ─── Renderer seam (branch-by-abstraction) ────────────────────────────
+//
+// canvas_replay_to_dc is the ONLY place win32 turns a command buffer into
+// pixels, and it has exactly two callers: the on-screen paint and the
+// headless readback. That makes it the natural seam for a second renderer.
+//
+// GDI cannot do alpha (this function opens by filling the surface white;
+// the CV_IMAGE case composites against white and stores a=255; read_pixel
+// returns 0xFF alpha unconditionally), which is why Stage 3 frame caching
+// is gated off on win32. A GDI+ implementation would fix that, but GDI+ is
+// in maintenance and has known bugs -- so the two live side by side and are
+// COMPARED, rather than one replacing the other on faith.
+//
+// Branch-by-abstraction, deliberately not branch-by-if: two whole
+// implementations you can read and run independently, instead of
+// conditionals threaded through one. The comparison in
+// docs/design/win32-gdiplus-renderer.md is only interpretable that way.
+//
+// Selected at RUN time so one binary produces both sides of that
+// comparison -- a compile flag would mean two builds, and any difference
+// could then be blamed on the build rather than the renderer.
+//
+//     AETHER_UI_WIN32_RENDERER=gdiplus   opt in
+//     AETHER_UI_WIN32_RENDERER=legacy    default, and what ships
+//
+// Read once and cached: this is called per paint.
+static int win32_use_gdiplus(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* v = getenv("AETHER_UI_WIN32_RENDERER");
+        cached = (v && strcmp(v, "gdiplus") == 0) ? 1 : 0;
+    }
+    return cached;
+}
+
+static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height);
+static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height);
+
+static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
+    if (win32_use_gdiplus()) canvas_replay_to_dc_gdiplus(cv, mem, width, height);
+    else                     canvas_replay_to_dc_gdi(cv, mem, width, height);
+}
+
 // The GDI replay core — shared by the on-screen paint and the headless
 // pixel readback below (canvas_read_pixel replays into its own memory DC,
 // exactly like the GTK4 backend replays into a cairo image surface).
-static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
+static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) {
     // Plain GDI replay — GDI+ bindings from C are clunky; for a first
     // pass this delivers lines + filled rects with correct pixels.
     // White background
@@ -5228,6 +5271,13 @@ static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
 
     SelectObject(mem, old_pen);
     if (cur_pen) DeleteObject(cur_pen);
+}
+
+// STEP 1 STUB: delegates to GDI, so the seam and the MAE harness can be
+// proven end to end (expect MAE 0.0 everywhere) before any GDI+ drawing
+// exists. Replaced case-by-case; each replacement is measurable on its own.
+static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height) {
+    canvas_replay_to_dc_gdi(cv, mem, width, height);
 }
 
 static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
