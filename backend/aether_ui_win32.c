@@ -5297,6 +5297,24 @@ __declspec(dllimport) int __stdcall GdipCreateSolidFill(ARGB color, GpBrush** br
 __declspec(dllimport) int __stdcall GdipDeleteBrush(GpBrush* brush);
 __declspec(dllimport) int __stdcall GdipFillRectangleI(GpGraphics* g, GpBrush* brush,
                                                       int x, int y, int w, int h);
+typedef void GpPen;
+__declspec(dllimport) int __stdcall GdipCreatePen1(ARGB color, float width, int unit,
+                                                   GpPen** pen);
+__declspec(dllimport) int __stdcall GdipDeletePen(GpPen* pen);
+__declspec(dllimport) int __stdcall GdipSetPenStartCap(GpPen* pen, int cap);
+__declspec(dllimport) int __stdcall GdipSetPenEndCap(GpPen* pen, int cap);
+__declspec(dllimport) int __stdcall GdipSetPenLineJoin(GpPen* pen, int join);
+__declspec(dllimport) int __stdcall GdipDrawLineI(GpGraphics* g, GpPen* pen,
+                                                  int x1, int y1, int x2, int y2);
+__declspec(dllimport) int __stdcall GdipSetSmoothingMode(GpGraphics* g, int mode);
+#define GDIP_UNIT_PIXEL       2
+#define GDIP_SMOOTHING_AA     4
+/* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
+   NOT the same numbering as our recorded cap/join (flat=0 round=1 square=2,
+   miter=0 round=1 bevel=2), so both need an explicit map -- a straight
+   pass-through would silently swap square for round. */
+static int gdip_cap(int our) { return our == 0 ? 0 : (our == 2 ? 1 : 2); }
+static int gdip_join(int our) { return our == 0 ? 0 : (our == 2 ? 1 : 2); }
 
 /* 0xAARRGGBB from a command's float colour. THE POINT OF THE EXERCISE:
    GDI's CreateSolidBrush(RGB(...)) has nowhere to put cmd->calpha -- the
@@ -5328,12 +5346,17 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
        only where a PORTED command draws -- otherwise every unported scene
        would score a huge MAE for the background alone and the comparison
        would say nothing. */
+    /* The reason this renderer exists, alongside alpha. GDI has no AA at
+       all, so every diagonal edge is a staircase. */
+    GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
+
     GpBrush* wash = NULL;
     if (GdipCreateSolidFill(0xFFFFFFFF, &wash) == 0) {
         GdipFillRectangleI(g, (GpBrush*)wash, 0, 0, width, height);
         GdipDeleteBrush((GpBrush*)wash);
     }
 
+    GpPen* cur_pen = NULL;
     for (int i = 0; i < cv->cmd_count; i++) {
         CanvasCmd* cmd = &cv->cmds[i];
         switch (cmd->k) {
@@ -5355,11 +5378,57 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 }
                 break;
             }
+            case CV_LINE: {
+                /* Legacy relies on a pen SELECTED into the DC; GDI+ takes the
+                   pen per call, so the "current pen" is explicit state here.
+                   Before any CV_STROKE names one, legacy draws with the DC's
+                   default black hairline -- matched exactly, or every
+                   pre-stroke segment would differ for a reason that has
+                   nothing to do with this port. */
+                GpPen* pen = cur_pen ? cur_pen : NULL;
+                int owned = 0;
+                if (!pen && GdipCreatePen1(0xFF000000, 1.0f,
+                                           GDIP_UNIT_PIXEL, &pen) == 0) owned = 1;
+                if (pen) {
+                    GdipDrawLineI(g, pen, (INT)cmd->p0, (INT)cmd->p1,
+                                  (INT)cmd->p2, (INT)cmd->p3);
+                    if (owned) GdipDeletePen(pen);
+                }
+                break;
+            }
+            case CV_STROKE: {
+                /* Same retroactive walk-back as legacy, and for the same
+                   reason: the stroke command arrives AFTER the path it
+                   applies to, so the CV_LINE segments have already drawn
+                   with the wrong pen. Rewind to CV_BEGIN and redraw. */
+                if (cur_pen) { GdipDeletePen(cur_pen); cur_pen = NULL; }
+                float w = (float)cmd->p0;
+                if (w <= 0.0f) w = 1.0f;
+                if (GdipCreatePen1(gdip_argb(cmd), w,
+                                   GDIP_UNIT_PIXEL, &cur_pen) != 0) {
+                    cur_pen = NULL;
+                    break;
+                }
+                GdipSetPenStartCap(cur_pen, gdip_cap(cmd->cap));
+                GdipSetPenEndCap(cur_pen, gdip_cap(cmd->cap));
+                GdipSetPenLineJoin(cur_pen, gdip_join(cmd->join));
+                for (int j = i - 1; j >= 0; j--) {
+                    CanvasCmdKind k = cv->cmds[j].k;
+                    if (k == CV_BEGIN) break;
+                    if (k == CV_LINE) {
+                        GdipDrawLineI(g, cur_pen,
+                                      (INT)cv->cmds[j].p0, (INT)cv->cmds[j].p1,
+                                      (INT)cv->cmds[j].p2, (INT)cv->cmds[j].p3);
+                    }
+                }
+                break;
+            }
             default:
                 /* Not yet ported. */
                 break;
         }
     }
+    if (cur_pen) GdipDeletePen(cur_pen);
     GdipDeleteGraphics(g);
 }
 
