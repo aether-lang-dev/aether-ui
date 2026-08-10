@@ -159,7 +159,12 @@ for a in "$@"; do
         *) ARGS+=("$a") ;;
     esac
 done
-WANT=("${ARGS[@]}")
+# ${ARGS[@]} on an EMPTY array is an unbound-variable error under `set -u`
+# in bash 3.2, which is what macOS ships (3.2.57). Bash 4+ tolerates it, so
+# this passed on Linux and killed the entire matrix on macOS at line 1 --
+# "ARGS[@]: unbound variable", zero suites run. The +x guard is the portable
+# form: expand only when the array is actually set.
+WANT=(${ARGS[@]+"${ARGS[@]}"})
 
 # rebuild_app <appdir> <base> — build one app with whatever this platform has.
 # Mirrors the per-OS fallbacks in the binary-resolution block below: aeb where
