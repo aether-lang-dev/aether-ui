@@ -263,6 +263,10 @@ for row in "${SUITES[@]}"; do
     # fail. The suite must not depend on a file that happens to be lying
     # around -- it did, and passed here while failing on macOS purely because
     # /tmp/vidtest/clip.mp4 existed on one box. Generate it per run.
+    #
+    # Under target/ rather than /tmp: gitignored, per-checkout, alongside the
+    # other build output, and NOT swept mid-session the way /tmp is on macOS
+    # (periodic cleaner) and FreeBSD (clear_tmp_enable).
     if [ "$name" = "video_frame" ]; then
         # Find ffmpeg without depending on the login shell's PATH: Homebrew
         # puts it in /usr/local/bin (Intel) or /opt/homebrew/bin (Apple
@@ -272,12 +276,13 @@ for row in "${SUITES[@]}"; do
         for _c in ffmpeg /usr/local/bin/ffmpeg /opt/homebrew/bin/ffmpeg; do
             command -v "$_c" >/dev/null 2>&1 && { _FFM="$_c"; break; }
         done
-        if [ -n "$_FFM" ] && [ ! -f /tmp/vidtest/clip.mp4 ]; then
-            mkdir -p /tmp/vidtest
+        export VF_CLIP="$ROOT/target/fixtures/clip.mp4"
+        if [ -n "$_FFM" ] && [ ! -f "$VF_CLIP" ]; then
+            mkdir -p "$ROOT/target/fixtures"
             "$_FFM" -y -f lavfi -i testsrc=size=320x240:rate=15:duration=6 \
                    -f lavfi -i "sine=frequency=440:duration=6" \
                    -pix_fmt yuv420p -c:v libx264 -c:a aac -shortest \
-                   /tmp/vidtest/clip.mp4 >/dev/null 2>&1 || true
+                   "$VF_CLIP" >/dev/null 2>&1 || true
         fi
     fi
 

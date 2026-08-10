@@ -221,7 +221,10 @@ publish(app: *App) {
 
 main() {
     src = os_getenv("VF_CLIP")
-    if string.length(src) == 0 { src = "/tmp/vidtest/clip.mp4" }
+    // target/fixtures/ rather than /tmp: the spec harness generates the
+    // clip there (gitignored, per-checkout, not swept mid-session the way
+    // /tmp is on macOS and FreeBSD). VF_CLIP overrides for a real film.
+    if string.length(src) == 0 { src = "target/fixtures/clip.mp4" }
     // A missing or unreadable clip is not a failure -- the app still opens
     // and draws its frames, just with an empty video rect. The spec asserts
     // only that pixels reach the screen, which the chrome alone satisfies.
