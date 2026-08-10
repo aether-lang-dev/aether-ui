@@ -573,6 +573,57 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
                 send_http(client_fd, 200, "OK", "application/json", body);
             }
         }
+    } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
+               && strstr(path, "/pixelgrid")) {
+        /* GET /canvas/{id}/pixelgrid?w=&h=&step=
+         *
+         * A coarse grid of RENDERED pixels, as packed 0xAARRGGBB hex, one
+         * per line. Exists so two renderings of the same command buffer can
+         * be compared numerically (per-pixel MAE) -- see
+         * docs/design/win32-gdiplus-renderer.md.
+         *
+         * Why not GET /screenshot: on win32 that is PrintWindow/BitBlt, which
+         * captures the WINDOW from the compositor and never goes through
+         * canvas_replay_to_dc. It therefore cannot see a renderer swap at all
+         * (measured: a red square painted into one renderer scored MAE 0.0),
+         * and under AETHER_UI_HEADLESS the window never maps anyway.
+         * canvas_read_pixel replays the command buffer through the same seam
+         * the painter uses, so it CAN.
+         *
+         * Coarse by default: a full 900x600 readback is 540k requests worth
+         * of pixels. step=8 over a 900x600 canvas is ~8,400 samples, plenty
+         * to localise a divergence, and each is a real replayed pixel. */
+        int id = extract_id_from_path(path, "/canvas/");
+        const char* ws = extract_query_param(path, "w");
+        const char* hs = extract_query_param(path, "h");
+        const char* ss = extract_query_param(path, "step");
+        int gw = ws ? atoi(ws) : 400;
+        int gh = hs ? atoi(hs) : 300;
+        int st = ss ? atoi(ss) : 8;
+        if (st < 1) st = 1;
+        if (gw < 1 || gh < 1 || id < 1) {
+            send_http(client_fd, 400, "Bad Request", "application/json",
+                      "{\"error\":\"bad pixelgrid params\"}");
+        } else {
+            size_t cap = (size_t)((gw / st) + 1) * ((gh / st) + 1) * 10 + 64;
+            char* body = (char*)malloc(cap);
+            if (!body) {
+                send_http(client_fd, 500, "Internal Server Error",
+                          "application/json", "{\"error\":\"oom\"}");
+            } else {
+                size_t n = 0;
+                for (int y = 0; y < gh && n + 12 < cap; y += st) {
+                    for (int x = 0; x < gw && n + 12 < cap; x += st) {
+                        int px = aether_ui_canvas_read_pixel_impl(id, x, y, gw, gh);
+                        n += (size_t)snprintf(body + n, cap - n, "%08X\n",
+                                              (unsigned)px);
+                    }
+                }
+                body[n < cap ? n : cap - 1] = '\0';
+                send_http(client_fd, 200, "OK", "text/plain", body);
+                free(body);
+            }
+        }
     } else if (method == 0 && strncmp(path, "/widget/", 8) == 0) {
         int id = extract_id_from_path(path, "/widget/");
         if (id > 0) {
