@@ -119,9 +119,10 @@ SUITES=(
   "golden|examples/golden_gallery|golden_gallery/spec_golden_gallery|"
   "frames|apps/frames_demo|frames_demo/spec_frames_demo|"
   "sketchpad|apps/sketchpad|sketchpad/spec_sketchpad|"
-  # video_frame needs ffmpeg to transcode its clip; the suite is SKIPPED
-  # where ffmpeg is absent rather than failing, since the app is a demo of
-  # the region path and not a portability claim.
+  # video_frame decodes in-process via contrib.avcodec, so it needs FFmpeg's
+  # dev libraries to LINK. The suite SKIPs where they are absent (see the
+  # optional-dependency check in the run loop) rather than failing, since the
+  # app demonstrates the region path and is not a portability claim.
   "video_frame|apps/video_frame|video_frame/spec_video_frame|"
   "maerkdown|apps/maerkdown|maerkdown/spec_maerkdown|"
   "falling_blocks|apps/falling_blocks|falling_blocks/spec_falling_blocks|"
@@ -236,6 +237,27 @@ for row in "${SUITES[@]}"; do
     want_suite "$name" || continue
 
     base="$(basename "$appdir")"
+
+    # OPTIONAL SYSTEM DEPENDENCIES. A suite whose app needs one that is not
+    # installed here SKIPs -- a provisioning gap is not a test failure, the
+    # same rule contrib_build.sh applies to the shim itself. Without this
+    # video_frame reports NO BINARY and goes RED on macOS and Windows (0/5
+    # FFmpeg dev libraries as of 2026-08-10) purely for lacking a package.
+    #
+    # Deliberately narrow: it skips only where the named pkg-config modules
+    # are absent, so a box that HAS them still runs the suite and a genuine
+    # build break is still red.
+    case "$name" in
+        video_frame) _need="libavcodec libavformat libavutil libswscale libswresample" ;;
+        *)           _need="" ;;
+    esac
+    if [ -n "$_need" ]; then
+        if ! pkg-config --exists $_need 2>/dev/null; then
+            printf "%-14s %6s %6s   %s\n" "$name" - - "SKIP (no ffmpeg dev libs)"
+            continue
+        fi
+    fi
+
     if [ "$REBUILD" = "1" ]; then rebuild_app "$appdir" "$base"; fi
     bin="target/build/$appdir/bin/$base"
     case "$(uname -s)" in
