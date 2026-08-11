@@ -5370,6 +5370,25 @@ __declspec(dllimport) int __stdcall GdipDrawString(GpGraphics* g,
 __declspec(dllimport) int __stdcall GdipSetTextRenderingHint(GpGraphics* g, int mode);
 #define GDIP_TEXT_ANTIALIAS      4   /* TextRenderingHintAntiAliasGridFit */
 #define GDIP_FONTSTYLE_REGULAR   0
+typedef void GpLineGradient;
+typedef void GpPathGradient;
+typedef void GpPath;
+typedef struct { float X, Y; } GpPointF;
+__declspec(dllimport) int __stdcall GdipCreateLineBrushI(const GpPointI* p1,
+    const GpPointI* p2, ARGB c1, ARGB c2, int wrapMode, GpLineGradient** brush);
+__declspec(dllimport) int __stdcall GdipSetLinePresetBlend(GpLineGradient* brush,
+    const ARGB* blend, const float* positions, int count);
+__declspec(dllimport) int __stdcall GdipCreatePath(int fillMode, GpPath** path);
+__declspec(dllimport) int __stdcall GdipDeletePath(GpPath* path);
+__declspec(dllimport) int __stdcall GdipAddPathEllipseI(GpPath* path,
+    int x, int y, int w, int h);
+__declspec(dllimport) int __stdcall GdipCreatePathGradientFromPath(
+    const GpPath* path, GpPathGradient** brush);
+__declspec(dllimport) int __stdcall GdipSetPathGradientCenterColor(
+    GpPathGradient* brush, ARGB color);
+__declspec(dllimport) int __stdcall GdipSetPathGradientPresetBlend(
+    GpPathGradient* brush, const ARGB* blend, const float* positions, int count);
+#define GDIP_WRAP_TILE 0
 #define GDIP_UNIT_PIXEL       2
 #define GDIP_SMOOTHING_AA     4
 /* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
@@ -5562,6 +5581,83 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 if (pen) {
                     GdipDrawEllipseI(g, pen, cx - rad, cy - rad, rad * 2, rad * 2);
                     if (owned) GdipDeletePen(pen);
+                }
+                break;
+            }
+            case CV_FILL_LINEAR:
+            case CV_FILL_RADIAL: {
+                /* THE CASE GDI CANNOT DO. Legacy's own comment concedes it:
+                   plain GDI has no multi-stop gradient, so it collapses N
+                   stops to the first and last, fills an axis-aligned
+                   GradientFill across the bounding box, and degrades RADIAL
+                   to that same horizontal ramp. GDI+ has both brushes and
+                   honours every stop. */
+                if (cmd->n_stops < 1) break;
+                int have = 0, mnx = 0, mny = 0, mxx = 0, mxy = 0;
+                for (int j = i - 1; j >= 0; j--) {
+                    CanvasCmdKind k = cv->cmds[j].k;
+                    if (k == CV_BEGIN) break;
+                    int qx, qy, ok = 0;
+                    if (k == CV_MOVE) { qx=(INT)cv->cmds[j].p0; qy=(INT)cv->cmds[j].p1; ok=1; }
+                    else if (k == CV_LINE) { qx=(INT)cv->cmds[j].p2; qy=(INT)cv->cmds[j].p3; ok=1; }
+                    else if (k == CV_ARC) {
+                        int ax=(INT)cv->cmds[j].p0, ay=(INT)cv->cmds[j].p1,
+                            ar=(INT)cv->cmds[j].p2;
+                        if (!have) { mnx=ax-ar; mxx=ax+ar; mny=ay-ar; mxy=ay+ar; have=1; }
+                        continue;
+                    }
+                    if (ok) {
+                        if (!have) { mnx=mxx=qx; mny=mxy=qy; have=1; }
+                        else { if(qx<mnx)mnx=qx; if(qx>mxx)mxx=qx;
+                               if(qy<mny)mny=qy; if(qy>mxy)mxy=qy; }
+                    }
+                }
+                if (!have || mxx <= mnx || mxy <= mny) break;
+
+                /* Every stop, in order, as a preset blend. */
+                int ns = cmd->n_stops;
+                if (ns > 16) ns = 16;
+                ARGB cols[16];
+                float pos[16];
+                for (int s = 0; s < ns; s++) {
+                    int a = (int)(cmd->stop_rgba[s*4+3] * 255.0f + 0.5f);
+                    int r = (int)(cmd->stop_rgba[s*4+0] * 255.0f + 0.5f);
+                    int gg= (int)(cmd->stop_rgba[s*4+1] * 255.0f + 0.5f);
+                    int b = (int)(cmd->stop_rgba[s*4+2] * 255.0f + 0.5f);
+                    if (a<0)a=0; if (a>255)a=255;
+                    cols[s] = ((ARGB)a<<24)|((ARGB)r<<16)|((ARGB)gg<<8)|(ARGB)b;
+                    pos[s]  = (ns == 1) ? 0.0f : (float)s / (float)(ns - 1);
+                }
+                pos[0] = 0.0f; pos[ns-1] = 1.0f;
+
+                if (cmd->k == CV_FILL_RADIAL) {
+                    /* A REAL radial: a path gradient over the bounding
+                       ellipse, centre colour = first stop, rim = last. */
+                    GpPath* path = NULL;
+                    if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &path) == 0 && path) {
+                        GdipAddPathEllipseI(path, mnx, mny, mxx-mnx, mxy-mny);
+                        GpPathGradient* pg = NULL;
+                        if (GdipCreatePathGradientFromPath(path, &pg) == 0 && pg) {
+                            GdipSetPathGradientCenterColor(pg, cols[0]);
+                            if (ns >= 2) GdipSetPathGradientPresetBlend(pg, cols, pos, ns);
+                            GdipFillEllipseI(g, (GpBrush*)pg, mnx, mny,
+                                             mxx-mnx, mxy-mny);
+                            GdipDeleteBrush((GpBrush*)pg);
+                        }
+                        GdipDeletePath(path);
+                    }
+                } else {
+                    GpPointI a, b;
+                    a.X = mnx; a.Y = mny;
+                    b.X = mxx; b.Y = mny;   /* horizontal, matching legacy's axis */
+                    GpLineGradient* lg = NULL;
+                    if (GdipCreateLineBrushI(&a, &b, cols[0], cols[ns-1],
+                                             GDIP_WRAP_TILE, &lg) == 0 && lg) {
+                        if (ns >= 2) GdipSetLinePresetBlend(lg, cols, pos, ns);
+                        GdipFillRectangleI(g, (GpBrush*)lg, mnx, mny,
+                                           mxx-mnx, mxy-mny);
+                        GdipDeleteBrush((GpBrush*)lg);
+                    }
                 }
                 break;
             }
