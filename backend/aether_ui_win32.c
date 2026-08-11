@@ -5134,8 +5134,16 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
                 // Outline the circle/arc. GDI's Arc takes a bounding box
                 // + two radial points; for a full circle (a0=0,a1=2π)
                 // we use Ellipse. Stroke colour comes from the current pen.
+                //
+                // Ellipse() also FILLS with the DC's selected brush, which
+                // by default is the stock WHITE one -- so an unfilled arc
+                // used to punch a white disc into the scene. Select the
+                // NULL brush so this draws an outline only; a genuine fill
+                // is CV_FILL's job (which handles arcs, just below).
                 int cx = (int)cmd->p0, cy = (int)cmd->p1, rad = (int)cmd->p2;
+                HGDIOBJ prev_br = SelectObject(mem, GetStockObject(NULL_BRUSH));
                 Ellipse(mem, cx - rad, cy - rad, cx + rad, cy + rad);
+                SelectObject(mem, prev_br);
                 break;
             }
             case CV_CLOSE:
@@ -5143,6 +5151,36 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
             case CV_FILL: {
                 // Accumulate the points from MOVE/LINE/ARC commands since
                 // the last BEGIN into a polygon, fill with the given color.
+                //
+                // A circle is recorded as ONE CV_ARC and contributes no
+                // MOVE/LINE points, so the polygon walk below yielded
+                // np == 0 and skipped the fill entirely. `fill(circle(...),
+                // "#d9a13c")` therefore painted nothing, and the disc that
+                // appeared was Ellipse()'s stock-white interior. Fill the
+                // ellipse directly with the requested colour instead.
+                {
+                    int arc_at = -1;
+                    for (int j = i - 1; j >= 0; j--) {
+                        CanvasCmdKind k = cv->cmds[j].k;
+                        if (k == CV_BEGIN) break;
+                        if (k == CV_ARC) { arc_at = j; break; }
+                    }
+                    if (arc_at >= 0) {
+                        int ri = (int)(cmd->cr * 255), gi = (int)(cmd->cg * 255),
+                            bi = (int)(cmd->cb * 255);
+                        int acx = (int)cv->cmds[arc_at].p0;
+                        int acy = (int)cv->cmds[arc_at].p1;
+                        int ar  = (int)cv->cmds[arc_at].p2;
+                        HBRUSH br = CreateSolidBrush(RGB(ri, gi, bi));
+                        HBRUSH oldbr = (HBRUSH)SelectObject(mem, br);
+                        HGDIOBJ oldpen = SelectObject(mem, GetStockObject(NULL_PEN));
+                        Ellipse(mem, acx - ar, acy - ar, acx + ar, acy + ar);
+                        SelectObject(mem, oldpen);
+                        SelectObject(mem, oldbr);
+                        DeleteObject(br);
+                        break;
+                    }
+                }
                 POINT pts[256];
                 int np = 0;
                 for (int j = i - 1; j >= 0 && np < 256; j--) {
