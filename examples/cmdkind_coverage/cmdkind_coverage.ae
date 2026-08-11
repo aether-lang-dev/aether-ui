@@ -1,0 +1,77 @@
+// cmdkind_coverage — a scene that emits the canvas command kinds nothing
+// else in the tree emits, so the win32 renderer comparison can measure
+// them instead of assuming them.
+//
+// WHY THIS EXISTS. The GDI+ branch-by-abstraction work (see
+// docs/design/win32-gdiplus-renderer.md) measures legacy GDI against GDI+
+// by scoring pixelgrids from golden_gallery. That app covers CLEAR,
+// FILL_RECT, LINE, STROKE, FILL, ARC — but NOT text, gradients or images:
+// it draws its type with text_path() (glyphs as vector paths) and uses no
+// gradient or image at all. Three ported command kinds therefore shipped
+// unmeasured.
+//
+// Nor could the gap be closed by picking a different app:
+//   trajans_column   references url(#linearGradient…) 40 times but never
+//                    REGISTERS those defs, and emit_gradient_for() returns
+//                    0 for an unknown id — so it emits no gradient at all.
+//   styled,
+//   aevg_video_png   use gradients but enable no test server.
+//   aevg_demo        has real defs, but no test server either.
+//
+// So: a purpose-built scene, driven through loader.load_svg (the same path
+// aevg_demo proves works end to end), with the driver enabled.
+
+import ui
+import vg.backend.gtk
+import vg.svg.loader
+import std.string
+import std.os (os_getenv)
+
+const CW: int = 240
+const CH: int = 160
+
+cat(a: string, b: string) -> string {
+    return string.concat(a, b)
+}
+
+main() {
+    root = ui.root_vstack(0) {
+        c = ui.canvas_create(CW, CH)
+        backend = gtk.gtk_backend_new(c)
+
+        svg = "<svg viewBox='0 0 240 160'>"
+        svg = cat(svg, "<defs>")
+        // Multi-stop, deliberately THREE stops: plain GDI collapses N stops
+        // to first+last, so a 2-stop gradient would hide the difference the
+        // GDI+ port exists to show.
+        svg = cat(svg, "<linearGradient id='lin' x1='0' y1='0' x2='1' y2='0'>")
+        svg = cat(svg, "<stop offset='0' stop-color='#2563eb'/>")
+        svg = cat(svg, "<stop offset='0.5' stop-color='#0e9f6e'/>")
+        svg = cat(svg, "<stop offset='1' stop-color='#db2777'/>")
+        svg = cat(svg, "</linearGradient>")
+        // Radial: legacy degrades this to a horizontal ramp entirely.
+        svg = cat(svg, "<radialGradient id='rad' cx='0.5' cy='0.5' r='0.5'>")
+        svg = cat(svg, "<stop offset='0' stop-color='#f2f5f8'/>")
+        svg = cat(svg, "<stop offset='1' stop-color='#101018'/>")
+        svg = cat(svg, "</radialGradient>")
+        svg = cat(svg, "</defs>")
+
+        svg = cat(svg, "<rect x='0' y='0' width='240' height='160' fill='#ffffff'/>")
+        // CV_FILL_LINEAR
+        svg = cat(svg, "<rect x='10' y='10' width='100' height='50' fill='url(#lin)'/>")
+        // CV_FILL_RADIAL
+        svg = cat(svg, "<circle cx='180' cy='40' r='30' fill='url(#rad)'/>")
+        // CV_FILL_TEXT — real text, NOT text_path: the glyphs must reach
+        // canvas_fill_text for the renderers' text paths to be compared.
+        svg = cat(svg, "<text x='12' y='100' font-size='26' fill='#101018'>Hamburgefons</text>")
+        svg = cat(svg, "<text x='12' y='134' font-size='20' fill='#2563eb'>AVWA 0123</text>")
+        svg = cat(svg, "</svg>")
+
+        _ctx = loader.load_svg(backend, svg, 240.0, 160.0)
+        ui.canvas_redraw(c)
+    }
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        ui.enable_test_server_root(9222, root)
+    }
+    ui.app_run("cmdkind coverage", 260, 200, root)
+}

@@ -6430,6 +6430,59 @@ static void handle_test_request(int client_fd) {
         return;
     }
 
+    // GET /canvas/{id}/pixelgrid?w=&h=&step= — the same readback as /pixel,
+    // but a whole coarse grid in one request, as packed 0xAARRGGBB hex one
+    // per line. Exists so two renderings of one command buffer can be scored
+    // numerically (per-pixel MAE); see docs/design/win32-gdiplus-renderer.md.
+    //
+    // MUST precede the /pixel arm below: that arm tests strstr(path,
+    // "/pixel"), which matches "/pixelgrid" too, so ordering it second would
+    // silently answer every grid request with a single {"pixel":-1}. This
+    // route already existed in aether_ui_test_server.c (win32); GTK4 carries
+    // its OWN server and so never had it — which is why the GDI+ comparison
+    // could only ever be measured on Windows.
+    if (method == 0 && strncmp(path, "/canvas/", 8) == 0
+        && strstr(path, "/pixelgrid")) {
+        int cid = atoi(path + 8);
+        const char* ws = extract_query_param(path, "w");
+        const char* hs = extract_query_param(path, "h");
+        const char* ss = extract_query_param(path, "step");
+        int gw = ws ? atoi(ws) : 400;
+        int gh = hs ? atoi(hs) : 300;
+        int st = ss ? atoi(ss) : 8;
+        if (gw <= 0 || gh <= 0 || st <= 0) {
+            send_response(client_fd, 400, "Bad Request", "application/json",
+                          "{\"error\":\"bad pixelgrid params\"}");
+            close(client_fd);
+            return;
+        }
+        size_t cap = (size_t)((gw / st) + 1) * ((gh / st) + 1) * 10 + 64;
+        char* body = (char*)malloc(cap);
+        if (!body) {
+            send_response(client_fd, 500, "Internal Server Error",
+                          "application/json", "{\"error\":\"oom\"}");
+            close(client_fd);
+            return;
+        }
+        size_t n = 0;
+        for (int y = 0; y < gh && n + 12 < cap; y += st) {
+            for (int x = 0; x < gw && n + 12 < cap; x += st) {
+                PixelReq gq = {0};
+                gq.canvas_id = cid;
+                gq.x = x; gq.y = y; gq.w = gw; gq.h = gh;
+                g_idle_add(pixel_req_idle, &gq);
+                while (!gq.done) usleep(200);
+                n += (size_t)snprintf(body + n, cap - n, "%08X\n",
+                                      (unsigned)gq.result);
+            }
+        }
+        body[n < cap ? n : cap - 1] = '\0';
+        send_response(client_fd, 200, "OK", "text/plain", body);
+        free(body);
+        close(client_fd);
+        return;
+    }
+
     // GET /canvas/{id}/pixel?x=&y=&w=&h= — read one rendered pixel (packed
     // 0xAARRGGBB, premultiplied) from an offscreen replay at w×h. The honest
     // pixel-assertion primitive (group opacity, shadows). GTK-thread-idled:
