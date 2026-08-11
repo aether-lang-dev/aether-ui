@@ -5307,6 +5307,15 @@ __declspec(dllimport) int __stdcall GdipSetPenLineJoin(GpPen* pen, int join);
 __declspec(dllimport) int __stdcall GdipDrawLineI(GpGraphics* g, GpPen* pen,
                                                   int x1, int y1, int x2, int y2);
 __declspec(dllimport) int __stdcall GdipSetSmoothingMode(GpGraphics* g, int mode);
+typedef struct { int X, Y; } GpPointI;
+__declspec(dllimport) int __stdcall GdipFillPolygonI(GpGraphics* g, GpBrush* brush,
+                                                     const GpPointI* points, int count,
+                                                     int fillMode);
+__declspec(dllimport) int __stdcall GdipFillEllipseI(GpGraphics* g, GpBrush* brush,
+                                                     int x, int y, int w, int h);
+__declspec(dllimport) int __stdcall GdipDrawEllipseI(GpGraphics* g, GpPen* pen,
+                                                     int x, int y, int w, int h);
+#define GDIP_FILLMODE_ALTERNATE 0
 #define GDIP_UNIT_PIXEL       2
 #define GDIP_SMOOTHING_AA     4
 /* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
@@ -5346,15 +5355,21 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
        only where a PORTED command draws -- otherwise every unported scene
        would score a huge MAE for the background alone and the comparison
        would say nothing. */
-    /* The reason this renderer exists, alongside alpha. GDI has no AA at
-       all, so every diagonal edge is a staircase. */
-    GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
-
+    /* Wash FIRST, with smoothing still off. An antialiased axis-aligned
+       fill blends its boundary against whatever the DC already held --
+       for a fresh memory DC that is the stock C0C0C0 grey -- so the top
+       scanline came out grey instead of white. Measured: exactly row y=0,
+       24 of 24 samples, while row 1 matched legacy. Fill opaque, then
+       enable AA for the drawing that follows. */
     GpBrush* wash = NULL;
     if (GdipCreateSolidFill(0xFFFFFFFF, &wash) == 0) {
         GdipFillRectangleI(g, (GpBrush*)wash, 0, 0, width, height);
         GdipDeleteBrush((GpBrush*)wash);
     }
+
+    /* The reason this renderer exists, alongside alpha. GDI has no AA at
+       all, so every diagonal edge is a staircase. */
+    GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
 
     GpPen* cur_pen = NULL;
     for (int i = 0; i < cv->cmd_count; i++) {
@@ -5423,6 +5438,55 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 }
                 break;
             }
+            case CV_FILL: {
+                /* Same reverse walk-back as legacy: accumulate MOVE/LINE
+                   points since CV_BEGIN into a polygon. Reverse order is
+                   harmless for a fill (winding is symmetric for a simple
+                   closed path) and is kept so both renderers see identical
+                   geometry -- the point of the comparison. */
+                GpPointI pts[256];
+                int np = 0;
+                for (int j = i - 1; j >= 0 && np < 256; j--) {
+                    CanvasCmdKind k = cv->cmds[j].k;
+                    if (k == CV_BEGIN) break;
+                    if (k == CV_MOVE) {
+                        pts[np].X = (INT)cv->cmds[j].p0;
+                        pts[np].Y = (INT)cv->cmds[j].p1;
+                        np++;
+                    } else if (k == CV_LINE) {
+                        pts[np].X = (INT)cv->cmds[j].p2;
+                        pts[np].Y = (INT)cv->cmds[j].p3;
+                        np++;
+                    }
+                }
+                if (np >= 3) {
+                    GpBrush* br = NULL;
+                    if (GdipCreateSolidFill(gdip_argb(cmd), &br) == 0 && br) {
+                        GdipFillPolygonI(g, br, pts, np, GDIP_FILLMODE_ALTERNATE);
+                        GdipDeleteBrush(br);
+                    }
+                }
+                break;
+            }
+            case CV_ARC: {
+                /* Legacy uses Ellipse(), which both FILLS with the current
+                   brush and OUTLINES with the current pen. GDI+ separates
+                   those, so to match we stroke with the current pen only --
+                   legacy's brush here is whatever was last selected, which
+                   for the vg dispatch is the stock brush, i.e. no fill. */
+                int cx = (INT)cmd->p0, cy = (INT)cmd->p1, rad = (INT)cmd->p2;
+                GpPen* pen = cur_pen;
+                int owned = 0;
+                if (!pen && GdipCreatePen1(0xFF000000, 1.0f,
+                                           GDIP_UNIT_PIXEL, &pen) == 0) owned = 1;
+                if (pen) {
+                    GdipDrawEllipseI(g, pen, cx - rad, cy - rad, rad * 2, rad * 2);
+                    if (owned) GdipDeletePen(pen);
+                }
+                break;
+            }
+            case CV_CLOSE:
+                break;  /* polygon close handled in CV_FILL accumulation */
             default:
                 /* Not yet ported. */
                 break;
