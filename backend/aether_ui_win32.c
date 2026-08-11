@@ -5444,6 +5444,32 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    harmless for a fill (winding is symmetric for a simple
                    closed path) and is kept so both renderers see identical
                    geometry -- the point of the comparison. */
+                /* A CV_ARC in the path means this fill is a circle, which
+                   has no MOVE/LINE points to accumulate. Legacy gets this
+                   WRONG: its polygon walk sees np < 3, skips the fill
+                   entirely, and the circle ends up white -- not from any
+                   fill, but from Ellipse() in CV_ARC painting with the
+                   stock WHITE brush. Measured on golden_gallery canvas 1:
+                   36 samples where legacy is FFFFFFFF inside a circle the
+                   app asked to fill "#d9a13c". Honour the requested colour
+                   instead; this is a place the two renderers SHOULD differ. */
+                int arc_at = -1;
+                for (int j = i - 1; j >= 0; j--) {
+                    CanvasCmdKind k = cv->cmds[j].k;
+                    if (k == CV_BEGIN) break;
+                    if (k == CV_ARC) { arc_at = j; break; }
+                }
+                if (arc_at >= 0) {
+                    GpBrush* br = NULL;
+                    if (GdipCreateSolidFill(gdip_argb(cmd), &br) == 0 && br) {
+                        int acx = (INT)cv->cmds[arc_at].p0;
+                        int acy = (INT)cv->cmds[arc_at].p1;
+                        int ar  = (INT)cv->cmds[arc_at].p2;
+                        GdipFillEllipseI(g, br, acx - ar, acy - ar, ar * 2, ar * 2);
+                        GdipDeleteBrush(br);
+                    }
+                    break;
+                }
                 GpPointI pts[256];
                 int np = 0;
                 for (int j = i - 1; j >= 0 && np < 256; j--) {
