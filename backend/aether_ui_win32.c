@@ -5354,6 +5354,22 @@ __declspec(dllimport) int __stdcall GdipFillEllipseI(GpGraphics* g, GpBrush* bru
 __declspec(dllimport) int __stdcall GdipDrawEllipseI(GpGraphics* g, GpPen* pen,
                                                      int x, int y, int w, int h);
 #define GDIP_FILLMODE_ALTERNATE 0
+typedef void GpFontFamily;
+typedef void GpFont;
+typedef void GpStringFormat;
+typedef struct { float X, Y, Width, Height; } GpRectF;
+__declspec(dllimport) int __stdcall GdipCreateFontFamilyFromName(
+    const unsigned short* name, void* collection, GpFontFamily** family);
+__declspec(dllimport) int __stdcall GdipDeleteFontFamily(GpFontFamily* family);
+__declspec(dllimport) int __stdcall GdipCreateFont(const GpFontFamily* family,
+    float emSize, int style, int unit, GpFont** font);
+__declspec(dllimport) int __stdcall GdipDeleteFont(GpFont* font);
+__declspec(dllimport) int __stdcall GdipDrawString(GpGraphics* g,
+    const unsigned short* str, int length, const GpFont* font,
+    const GpRectF* layoutRect, const GpStringFormat* format, const GpBrush* brush);
+__declspec(dllimport) int __stdcall GdipSetTextRenderingHint(GpGraphics* g, int mode);
+#define GDIP_TEXT_ANTIALIAS      4   /* TextRenderingHintAntiAliasGridFit */
+#define GDIP_FONTSTYLE_REGULAR   0
 #define GDIP_UNIT_PIXEL       2
 #define GDIP_SMOOTHING_AA     4
 /* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
@@ -5547,6 +5563,47 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     GdipDrawEllipseI(g, pen, cx - rad, cy - rad, rad * 2, rad * 2);
                     if (owned) GdipDeletePen(pen);
                 }
+                break;
+            }
+            case CV_FILL_TEXT: {
+                if (!cmd->text) break;
+                /* Same baseline fudge as legacy (cairo's origin is the
+                   baseline, GDI/GDI+ lay out from the top-left, ~0.8 of
+                   the em is the ascent). GDI+ has a real baseline via
+                   GdipGetFontHeight, but matching legacy's geometry EXACTLY
+                   is what keeps this comparison about RENDERING rather than
+                   about layout drift. */
+                wchar_t* w = utf8_to_wide(cmd->text);
+                if (!w) break;
+                GpFontFamily* fam = NULL;
+                if (GdipCreateFontFamilyFromName((const unsigned short*)L"Segoe UI",
+                                                 NULL, &fam) != 0 || !fam) {
+                    /* Family unavailable. Draw NOTHING rather than guess a
+                       substitute: a wrong font would read as a rendering
+                       difference in the MAE and send the comparison chasing
+                       a font-matching problem. Missing ink is at least
+                       unambiguous. */
+                    if (fam) GdipDeleteFontFamily(fam);
+                    break;
+                }
+                GpFont* font = NULL;
+                if (GdipCreateFont(fam, (float)cmd->p2, GDIP_FONTSTYLE_REGULAR,
+                                   GDIP_UNIT_PIXEL, &font) == 0 && font) {
+                    GpBrush* br = NULL;
+                    if (GdipCreateSolidFill(gdip_argb(cmd), &br) == 0 && br) {
+                        GdipSetTextRenderingHint(g, GDIP_TEXT_ANTIALIAS);
+                        GpRectF layout;
+                        layout.X = (float)cmd->p0;
+                        layout.Y = (float)(cmd->p1 - cmd->p2 * 0.8f);
+                        layout.Width = 0.0f;   /* 0 = no wrapping box */
+                        layout.Height = 0.0f;
+                        GdipDrawString(g, (const unsigned short*)w, -1, font,
+                                       &layout, NULL, br);
+                        GdipDeleteBrush(br);
+                    }
+                    GdipDeleteFont(font);
+                }
+                GdipDeleteFontFamily(fam);
                 break;
             }
             case CV_CLOSE:
