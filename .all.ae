@@ -8,7 +8,7 @@
 //   aeb apps/rubiks_cube builds just that one AeVG app
 //
 // Replaces the old 32-call single-node monolith (no caching/addressing/parallel).
-// The shared per-platform backend-link block lives in .aeb/lib/aetherui
+// The shared per-platform backend-link block lives in build_support/aetherui
 // (ui_backend); vg apps add `lib("${root}")` for the vg.* module tree.
 
 import build

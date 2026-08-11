@@ -1,7 +1,7 @@
 import build
 import aether
 import aether (source, output, no_closure_regen)
-import aetherui (ui_backend)
+import build_support.aetherui (ui_backend)
 main() {
     b = build.start()
     root = build._get(b, "root")
