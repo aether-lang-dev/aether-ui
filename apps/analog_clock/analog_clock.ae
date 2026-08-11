@@ -29,7 +29,10 @@ import std.os (os_getenv, now_local)
 
 // ─── Constants ───────────────────────────────────────────────
 
-const SIZE: float = 200.0
+// NB: no `SIZE` const here. Aether consts lower to `#define`, and the win32
+// backend includes <windows.h>, whose windef.h defines `struct tagSIZE`/`SIZE`.
+// A `const SIZE` therefore macro-clobbers the system type and the Windows build
+// dies in the headers. (This one was dead code, so it simply went.)
 const CENTER: float = 100.0
 const RADIUS: float = 90.0
 

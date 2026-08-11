@@ -23,8 +23,12 @@ import std.math
 import std.os
 import std.os (os_getenv)
 
-const CX: float = 50.0  // cube centre (viewBox space)
-const CY: float = 50.0
+// CENTRE_X/CENTRE_Y, not CX/CY: Aether consts lower to `#define`, and the win32
+// backend includes <windows.h>, whose wtypes.h defines `union tagCY`/`CY`. A
+// `const CY` macro-clobbers that system type and the Windows build dies inside
+// the headers, nowhere near this file.
+const CENTRE_X: float = 50.0  // cube centre (viewBox space)
+const CENTRE_Y: float = 50.0
 const SC: float = 22.0  // projected scale
 const DIST: float = 3.0  // perspective camera distance (in cube units)
 
@@ -108,7 +112,7 @@ proj_x(i: int, ax: float, ay: float) -> float {
     z2 = z1 * math.cos(ax) - y * math.sin(ax)
     // perspective
     f = SC / (DIST - z2)
-    return CX + x1 * f
+    return CENTRE_X + x1 * f
 }
 
 proj_y(i: int, ax: float, ay: float) -> float {
@@ -119,7 +123,7 @@ proj_y(i: int, ax: float, ay: float) -> float {
     y1 = y * math.cos(ax) + z1 * math.sin(ax)
     z2 = z1 * math.cos(ax) - y * math.sin(ax)
     f = SC / (DIST - z2)
-    return CY + y1 * f
+    return CENTRE_Y + y1 * f
 }
 
 // ─── plasma raster source ────────────────────────────────────────
