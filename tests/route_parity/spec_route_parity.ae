@@ -1,0 +1,119 @@
+// spec_route_parity.ae — AetherUIDriver exposes the SAME routes on every
+// backend.
+//
+// WHY THIS EXISTS. The driver is implemented TWICE:
+//
+//   backend/aether_ui_test_server.c   1,326 lines   win32, macOS
+//   backend/aether_ui_gtk4.c (woven)  ~1,160 lines  Linux, FreeBSD
+//
+// build_support/aetherui/module.ae compiles one or the other; linux/freebsd
+// never see aether_ui_test_server.c. Nothing keeps the two in step, and they
+// have drifted — measured, not supposed:
+//
+//   GET  /canvas/{id}/pixel     exists on GTK4 only
+//   POST /overlay/{id}/dismiss  exists on win32/macOS only
+//
+// and until 5d0c868, GET /canvas/{id}/pixelgrid was a third: added to the
+// standalone server for the GDI+ renderer comparison, which silently gave it
+// to win32 and macOS alone. Every measurement in that line could only have
+// been taken on Windows.
+//
+// THE FAILURE MODE THIS CATCHES is worse than a missing feature. On GTK4 a
+// /pixelgrid request fell through to the /pixel arm — whose
+// strstr(path, "/pixel") also matches "/pixelgrid" — and answered a
+// plausible {"pixel":-1}. A caller sees a well-formed response, not a 404,
+// and concludes the picture is blank rather than the route absent.
+//
+// So this spec asserts on STATUS, never on body: a body check cannot tell a
+// route that is missing from one that legitimately answers empty.
+//
+// It is a contract test, not a feature test. It should stay green through
+// the driver de-duplication (docs/design/one-driver-not-two.md) and is the
+// gate that makes that refactor safe.
+//
+// Run via tests/spec_matrix.sh routeparity, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/counter/bin/counter &
+//   UI_SPEC=route_parity/spec_route_parity tests/run_spec.sh
+
+import aeocha
+import uidriver
+import std.string
+
+// A route is PRESENT if it answers anything other than 404. 400 (bad params),
+// 403 (sealed), 501 (not wired on this backend) all mean the arm exists and
+// was reached — which is what parity is about. 0 means the transport failed
+// and the app is gone, which is a spec problem, not a parity result.
+present(path: string) -> int {
+    st = uidriver.get_status(path)
+    if st == 0 { return 0 }
+    if st == 404 { return 0 }
+    return 1
+}
+
+expect_route(fw: ptr, path: string) {
+    aeocha.assert_true(present(path), "GET ${path} must exist on every backend")
+}
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "AetherUIDriver route parity across backends") {
+
+        // The tree/introspection surface. Every backend's harness depends on
+        // these; a missing one turns into a mystery timeout in some other
+        // spec rather than an obvious 404 here.
+        aeocha.it("serves the widget-tree routes") callback {
+            expect_route(fw, "/widgets")
+            expect_route(fw, "/widget/1")
+            expect_route(fw, "/widget/1/children")
+            expect_route(fw, "/widget/1/a11y")
+        }
+
+        aeocha.it("serves the window routes") callback {
+            expect_route(fw, "/windows")
+            expect_route(fw, "/window/pick")
+        }
+
+        // THE CANVAS READBACK ROUTES — the ones that actually drifted.
+        //
+        // /pixel is the single-pixel primitive; /pixelgrid is the coarse grid
+        // the renderer comparison scores. Ordering matters as well as
+        // presence: /pixelgrid MUST be matched before /pixel, or
+        // strstr(path, "/pixel") swallows it. A backend that answers both
+        // with the same body has the ordering bug even though both "exist",
+        // so this checks the SHAPE differs, which is the cheapest available
+        // proxy for correct routing.
+        aeocha.it("serves both canvas readback routes, and routes them apart") callback {
+            expect_route(fw, "/canvas/1/pixel?x=0&y=0&w=8&h=8")
+            expect_route(fw, "/canvas/1/pixelgrid?w=8&h=8&step=4")
+            expect_route(fw, "/canvas/1/debug")
+
+            // /pixel answers JSON ({"pixel":N}); /pixelgrid answers hex lines.
+            // If the grid request is being eaten by the /pixel arm, the two
+            // bodies are identical — which is exactly what GTK4 did before
+            // 5d0c868.
+            one = uidriver.get_body("/canvas/1/pixel?x=0&y=0&w=8&h=8")
+            grid = uidriver.get_body("/canvas/1/pixelgrid?w=8&h=8&step=4")
+            aeocha.assert_false(string.equals(one, grid),
+                "/pixelgrid must not be answered by the /pixel arm")
+        }
+
+        aeocha.it("serves the overlay routes") callback {
+            expect_route(fw, "/overlays")
+        }
+
+        aeocha.it("serves the chrome routes") callback {
+            expect_route(fw, "/menus")
+            expect_route(fw, "/notifications")
+            expect_route(fw, "/tray")
+            expect_route(fw, "/undo_state")
+        }
+
+        aeocha.it("serves the metrics routes") callback {
+            expect_route(fw, "/text_extent?text=Hg&size=12")
+        }
+    }
+
+    aeocha.run_summary(fw)
+}

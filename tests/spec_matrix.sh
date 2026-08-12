@@ -117,6 +117,13 @@ SUITES=(
   "stroker|examples/stroker_demo|stroker_demo/spec_stroker_demo|"
   "vg3d|examples/vg3d_demo|vg3d_demo/spec_vg3d_demo|"
   "golden|examples/golden_gallery|golden_gallery/spec_golden_gallery|"
+  # Contract test, not a feature test: AetherUIDriver must expose the same
+  # routes on every backend. It is implemented TWICE (aether_ui_test_server.c
+  # on win32/macOS, woven into aether_ui_gtk4.c on linux/freebsd) and has
+  # drifted before — see docs/design/one-driver-not-two.md. Any app with a
+  # canvas and the driver enabled is a valid subject; cmdkind_coverage is used
+  # because it has both.
+  "routeparity|examples/cmdkind_coverage|route_parity/spec_route_parity|"
   "frames|apps/frames_demo|frames_demo/spec_frames_demo|"
   "sketchpad|apps/sketchpad|sketchpad/spec_sketchpad|"
   # video_frame decodes in-process via contrib.avcodec, so it needs FFmpeg's

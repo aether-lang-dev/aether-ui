@@ -14,7 +14,7 @@
 // platform path separator) — tests/run_spec.sh wires it.
 
 exports (
-    url_of, get_body, post_ok, post_status, post_body,
+    url_of, get_body, get_status, post_ok, post_status, post_body,
     text_width, font_ascent,
     click, click_widget, toggle_widget, key, move_to, resize_window,
     hover_widget, unhover, press_widget, release_widget,
@@ -49,6 +49,20 @@ get_body(path: string) -> string {
     body = string.concat(client.response_body(resp), "")   // own a copy
     client.response_free(resp)
     return body
+}
+
+// Non-asserting GET returning the HTTP status (0 = transport error). The
+// route-parity spec uses this to tell "this backend HAS this route" from
+// "404": a body check cannot distinguish a route that is missing from one
+// that legitimately answers empty.
+get_status(path: string) -> int {
+    req = client.request("GET", url_of(path))
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if string.length(cerr) > 0 { return 0 }
+    st = client.response_status(resp)
+    client.response_free(resp)
+    return st
 }
 
 // Asserting POST: any transport error or non-2xx fails the current `it`.
