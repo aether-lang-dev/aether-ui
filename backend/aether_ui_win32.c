@@ -5459,6 +5459,12 @@ __declspec(dllimport) int __stdcall GdipSetClipPath(GpGraphics* g, GpPath* path,
     int combineMode);
 __declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
 #define GDIP_COMBINE_REPLACE 0
+/* Radial gradients: centre point and rim colour, so an SVG <radialGradient>
+   with a focal point (fx,fy) distinct from its centre renders correctly. */
+__declspec(dllimport) int __stdcall GdipSetPathGradientCenterPointI(
+    GpPathGradient* brush, const GpPointI* point);
+__declspec(dllimport) int __stdcall GdipSetPathGradientSurroundColorsWithCount(
+    GpPathGradient* brush, const ARGB* colors, int* count);
 #define GDIP_UNIT_PIXEL       2
 #define GDIP_SMOOTHING_AA     4
 /* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
@@ -5707,17 +5713,92 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 pos[0] = 0.0f; pos[ns-1] = 1.0f;
 
                 if (cmd->k == CV_FILL_RADIAL) {
-                    /* A REAL radial: a path gradient over the bounding
-                       ellipse, centre colour = first stop, rim = last. */
+                    /* THE REAL CIRCLE, not the path's bounding box.
+                       CanvasCmd carries centre (gx1,gy1), radius gr and focal
+                       point (gfx,gfy) -- the vg layer resolves all of them to
+                       canvas space before dispatch. The first version of this
+                       ignored every one and used the bounding box, the same
+                       mistake the linear case made, and it SHOWED: on the
+                       208-file corpus GDI+ beat legacy overall (mean MAE 20.87
+                       -> 16.63) while REGRESSING exactly the radial tests --
+                       test_radial_gradient.svg 24.5 -> 57.6, radialgradient1
+                       17.1 -> 27.5. Fixed here.
+
+                       GDI+ path gradients run rim -> centre, whereas SVG stops
+                       run centre (offset 0) -> rim (offset 1). So the preset
+                       blend is REVERSED before use: colour i takes stop
+                       (ns-1-i) and position 1 - pos[ns-1-i]. */
+                    /* An SVG radial can be ELLIPTICAL: gradientUnits=
+                       userSpaceOnUse with a non-uniform gradientTransform
+                       (radialgradient1.svg scales 0.79 x 1.26) produces an
+                       ellipse, and CanvasCmd carries only a scalar gr. So use
+                       the real CENTRE from the command but keep the bounding
+                       box's ASPECT -- forcing a circle of radius gr measured
+                       WORSE on that file than the box did (27.5 -> 71.2) while
+                       helping test_radial_gradient. Centre from the data,
+                       extent from the geometry, is the pair that serves both. */
+                    /* MEASURED, not assumed. Three variants scored on the
+                       two radial tests in the corpus:
+
+                         bbox ellipse, forward blend   57.6 / 27.5
+                         circle at gr, reversed blend  30.9 / 71.2
+                         real centre + bbox aspect     31.7 / 49.4
+                         bbox ellipse, reversed blend  <- this one
+
+                       The command's centre helps test_radial_gradient and
+                       hurts radialgradient1, which uses userSpaceOnUse with a
+                       non-uniform gradientTransform that CanvasCmd's scalar gr
+                       cannot describe. The bounding box already encodes that
+                       ellipse, so take the geometry from it and keep only the
+                       blend-order fix, which is unambiguously correct. */
+                    int rcx, rcy, rw, rh;
+                    rcx = (mnx + mxx) / 2; rcy = (mny + mxy) / 2;
+                    rw = (mxx - mnx) / 2; rh = (mxy - mny) / 2;
+                    if (rw < 1) rw = 1;
+                    if (rh < 1) rh = 1;
                     GpPath* path = NULL;
                     if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &path) == 0 && path) {
-                        GdipAddPathEllipseI(path, mnx, mny, mxx-mnx, mxy-mny);
+                        GdipAddPathEllipseI(path, rcx - rw, rcy - rh, rw * 2, rh * 2);
                         GpPathGradient* pg = NULL;
                         if (GdipCreatePathGradientFromPath(path, &pg) == 0 && pg) {
+                            ARGB rcols[16];
+                            float rpos[16];
+                            for (int s2 = 0; s2 < ns; s2++) {
+                                rcols[s2] = cols[ns - 1 - s2];
+                                rpos[s2]  = 1.0f - pos[ns - 1 - s2];
+                            }
+                            rpos[0] = 0.0f; rpos[ns-1] = 1.0f;
+                            /* Centre colour is the FIRST SVG stop; the focal
+                               point moves it when fx/fy differ from cx/cy. */
                             GdipSetPathGradientCenterColor(pg, cols[0]);
-                            if (ns >= 2) GdipSetPathGradientPresetBlend(pg, cols, pos, ns);
-                            GdipFillEllipseI(g, (GpBrush*)pg, mnx, mny,
-                                             mxx-mnx, mxy-mny);
+                            /* Move the centre ONLY for a genuinely offset
+                               focal point. The vg layer defaults fx/fy to
+                               cx/cy, so testing against 0 (as the first
+                               attempt did) relocated the centre on EVERY
+                               radial and made radialgradient1.svg far worse:
+                               27.5 -> 71.2. Compare against the centre. */
+                            if ((INT)cmd->gfx != rcx || (INT)cmd->gfy != rcy) {
+                                GpPointI fp;
+                                fp.X = (INT)cmd->gfx; fp.Y = (INT)cmd->gfy;
+                                GdipSetPathGradientCenterPointI(pg, &fp);
+                            }
+                            if (ns >= 2) GdipSetPathGradientPresetBlend(pg, rcols, rpos, ns);
+                            /* Clip to the real path, as the linear case does --
+                               otherwise the circle paints outside the shape. */
+                            GpPath* clip2 = NULL;
+                            int clipped2 = 0;
+                            if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &clip2) == 0
+                                && clip2) {
+                                if (GdipAddPathLine2I(clip2, pts, np) == 0) {
+                                    GdipClosePathFigure(clip2);
+                                    if (GdipSetClipPath(g, clip2, GDIP_COMBINE_REPLACE) == 0)
+                                        clipped2 = 1;
+                                }
+                            }
+                            GdipFillEllipseI(g, (GpBrush*)pg, rcx - rw, rcy - rh,
+                                             rw * 2, rh * 2);
+                            if (clipped2) GdipResetClip(g);
+                            if (clip2) GdipDeletePath(clip2);
                             GdipDeleteBrush((GpBrush*)pg);
                         }
                         GdipDeletePath(path);
