@@ -5272,6 +5272,13 @@ void aether_ui_seal_widget_impl(int handle) {
         sealed_widgets = realloc(sealed_widgets, sizeof(int) * sealed_capacity);
     }
     sealed_widgets[sealed_count++] = handle;
+    // Mirror into the SHARED server's own sealed registry, which is what
+    // enforces the 403 once GTK4 runs on it (macOS does the same, and only
+    // this). Kept as a mirror rather than a replacement so the embedded
+    // server -- still reachable via AETHER_UI_GTK_SERVER=embedded -- keeps
+    // refusing the same widgets. A sealed widget that silently became
+    // clickable would be the worst possible regression from this migration.
+    aether_ui_test_server_seal_widget(handle);
 }
 
 // Walk GTK widget tree and seal every descendant.
@@ -7223,6 +7230,14 @@ static void inject_remote_control_banner(int root_handle) {
     g_object_unref(prov);
 
     banner_handle = aether_ui_register_widget(banner);
+    // Mirror into the SHARED server's banner slot, which is what stamps
+    // "banner":true in /widgets once GTK4 runs on it. The local
+    // banner_handle above still drives the embedded server (reachable via
+    // AETHER_UI_GTK_SERVER=embedded), so both agree. Same shape as the
+    // sealed-widget mirror in aether_ui_seal_widget_impl, and found the same
+    // way: the flip turned testable red because the banner widget existed but
+    // reported "banner":false.
+    aether_ui_test_server_set_banner(banner_handle);
     gtk_box_prepend(GTK_BOX(root), banner);
 }
 
@@ -7434,6 +7449,16 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_FOCUS:        ta.action = 8;  break;
         case AETHER_DRV_WIN_KEY:      ta.action = 9;  break;
         case AETHER_DRV_TAB_SELECT:   ta.action = 10; break;
+        /* Verified against test_action_idle's own switch, NOT against the
+           route strings -- reading the routes produced a wrong table the
+           first time (see 011dba1). NB double_click / drop / scroll are NOT
+           here: the shared server serves those directly via
+           aether_ui_fire_double_click / _fire_row_drop / _fire_scroll and
+           never calls dispatch_action for them, which is why they have no
+           AETHER_DRV_* kind at all. */
+        case AETHER_DRV_HOVER:        ta.action = 14; break;
+        case AETHER_DRV_PRESS:        ta.action = 15; break;
+        case AETHER_DRV_RELEASE:      ta.action = 16; break;
         default:
             /* Verbs the embedded server routes through paths OTHER than
                test_action_idle (canvas click/move/key/release, pick, hover,
@@ -7485,14 +7510,35 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     //                    real conversion, not a forwarder, so it is separate.
 };
 
+// THE FLIP (docs/design/one-driver-not-two.md).
+//
+// GTK4 now serves the driver from the SHARED aether_ui_test_server.c, as
+// win32 and macOS already do, instead of the ~1,160-line HTTP server embedded
+// in this file. Route parity stops being something to remember and becomes
+// structural: a route added to the shared server lands on all four backends.
+//
+// The embedded server is still compiled and reachable with
+//
+//     AETHER_UI_GTK_SERVER=embedded
+//
+// deliberately, for ONE release: it makes a regression bisectable without a
+// rebuild ("does it also fail on the old server?"), which matters because the
+// two answer some routes through different code paths. It comes out, with the
+// dead code, once the four-platform matrix has run green on the shared path.
 void aether_ui_enable_test_server_impl(int port, int root_handle) {
     test_server_port = port;
 
     inject_remote_control_banner(root_handle);
 
-    pthread_t tid;
-    pthread_create(&tid, NULL, test_server_thread, (void*)(intptr_t)port);
-    pthread_detach(tid);
+    const char* which = getenv("AETHER_UI_GTK_SERVER");
+    if (which && strcmp(which, "embedded") == 0) {
+        pthread_t tid;
+        pthread_create(&tid, NULL, test_server_thread, (void*)(intptr_t)port);
+        pthread_detach(tid);
+        return;
+    }
+
+    aether_ui_test_server_start(port, &gtk4_driver_hooks);
 }
 
 // ---------------------------------------------------------------------------

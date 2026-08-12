@@ -41,6 +41,10 @@ builder ui_backend(root: string) {
     // must be clang (no gcc in the base system). See docs/freebsd.md.
     if string.equals(os_name, "linux") == 1 {
         extra_source("${root}/backend/aether_ui_gtk4.c")
+        // The SHARED AetherUIDriver. GTK4 used to carry its own HTTP server
+        // and so never compiled this; it now fills AetherDriverHooks like
+        // win32 and macOS (docs/design/one-driver-not-two.md).
+        extra_source("${root}/backend/aether_ui_test_server.c")
         extra_source("${root}/backend/aether_ui_system_extras.c")
         extra_source("${root}/backend/aether_ui_sni.c")
         link_flag("$(pkg-config --cflags gtk4)")
@@ -48,6 +52,10 @@ builder ui_backend(root: string) {
     }
     if string.equals(os_name, "freebsd") == 1 {
         extra_source("${root}/backend/aether_ui_gtk4.c")
+        // The SHARED AetherUIDriver. GTK4 used to carry its own HTTP server
+        // and so never compiled this; it now fills AetherDriverHooks like
+        // win32 and macOS (docs/design/one-driver-not-two.md).
+        extra_source("${root}/backend/aether_ui_test_server.c")
         extra_source("${root}/backend/aether_ui_system_extras.c")
         extra_source("${root}/backend/aether_ui_sni.c")
         link_flag("$(pkg-config --cflags gtk4)")
