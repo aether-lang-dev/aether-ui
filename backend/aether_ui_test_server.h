@@ -132,6 +132,29 @@ typedef struct {
     // Stage 2). `commands` is the replay command count for that paint; w/h
     // are the paint allocation. NULL hook → /canvas/{id}/debug returns 501.
     int (*canvas_debug)(int canvas_id, int* area, int* commands, int* w, int* h);
+
+    // Optional: run `fn(arg)` on the UI thread and BLOCK until it returns.
+    //
+    // Leave NULL if the backend tolerates read-only introspection from the
+    // HTTP thread -- macOS and Win32 do, and are unaffected.
+    //
+    // GTK4 does not, and this hook exists for it. A server-thread widget walk
+    // races the UI thread's mutations and trips GTK's css-node global parent
+    // cache: the app aborts in gtkcssnode.c ("node->cache == NULL"). That was
+    // observed live (aether_ui_gtk4.c:6196), which is why GTK4's own embedded
+    // server marshalled its READS as well as its actions, and why it could not
+    // adopt these hooks until now.
+    //
+    // When set, the ENTIRE request is serviced on the UI thread -- one hop per
+    // request, rather than one per hook. That is deliberate: wrapping at the
+    // 23 individual hook call sites would mean every future route has to
+    // remember, and forgetting is a crash under load rather than a failing
+    // test.
+    //
+    // MUST block: the caller reads the response back immediately. GTK4
+    // implements it with g_idle_add + a spin on a done flag, the same pattern
+    // its dispatch_action already uses.
+    void (*run_on_ui_thread)(void (*fn)(void*), void* arg);
 } AetherDriverHooks;
 
 // Spawn the accept-loop thread. Returns immediately. The server stays up

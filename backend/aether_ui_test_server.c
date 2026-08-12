@@ -411,7 +411,52 @@ static void dispatch_and_reply(aether_sock_t client_fd,
     }
 }
 
+/* Payload for the optional UI-thread hop. See handle_request just below. */
+typedef struct {
+    aether_sock_t client_fd;
+    const AetherDriverHooks* h;
+} AeuiRequestCall;
+
+static void handle_request_inner(aether_sock_t client_fd,
+                                 const AetherDriverHooks* h);
+
+static void handle_request_trampoline(void* arg) {
+    AeuiRequestCall* c = (AeuiRequestCall*)arg;
+    handle_request_inner(c->client_fd, c->h);
+}
+
+/* THE THREADING SPLIT, and why this wrapper exists.
+ *
+ * This server's original contract was: MUTATIONS marshal onto the UI thread
+ * via dispatch_action; INTROSPECTION runs right here on the HTTP thread.
+ * AppKit tolerates that for read-only queries and macOS adopted it as-is.
+ *
+ * GTK DOES NOT. A server-thread widget walk races the UI thread's mutations
+ * and trips GTK's css-node global parent cache -- the app aborts in
+ * gtkcssnode.c ("node->cache == NULL"), observed live rather than feared
+ * (aether_ui_gtk4.c:6196). That is why GTK4's own server marshals its READS
+ * too, and why it could not simply fill in these hooks.
+ *
+ * So: a backend that cannot be introspected off-thread supplies
+ * run_on_ui_thread, and the WHOLE request is serviced over there -- one hop
+ * per request rather than one per hook. Wrapping here rather than at each of
+ * the 23 hook call sites means a future route cannot forget to do it, which
+ * matters because forgetting is a crash under load, not a red test.
+ *
+ * NULL hook = today's behaviour exactly. macOS and win32 leave it unset and
+ * are not affected by this change.
+ */
 static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) {
+    if (h && h->run_on_ui_thread) {
+        AeuiRequestCall call = { client_fd, h };
+        h->run_on_ui_thread(handle_request_trampoline, &call);
+        return;
+    }
+    handle_request_inner(client_fd, h);
+}
+
+static void handle_request_inner(aether_sock_t client_fd,
+                                 const AetherDriverHooks* h) {
     char req[4096];
     int n = (int)aether_socket_recv(client_fd, req, sizeof(req) - 1);
     if (n <= 0) { aether_close_socket(client_fd); return; }
