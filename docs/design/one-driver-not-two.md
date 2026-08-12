@@ -76,7 +76,44 @@ Because we cannot set the symbol. Checked at all three layers:
 Filed upstream as aether-lang-dev/aether#1527. **This design does not wait on
 it.**
 
-## Shape: one file, and exclusion by source omission
+## CORRECTION (2026-08-12): this is not an extraction. Two of three already migrated.
+
+The note below was written assuming the shared file had to be created. It does
+not: `backend/aether_ui_test_server.h` **already defines the seam**, and its
+opening paragraph already names GTK4 as an intended consumer —
+
+> Each backend (GTK4, AppKit, Win32) fills in a small set of hooks that
+> describe how to introspect and mutate widgets, and then calls
+> `aether_ui_test_server_start()`. The HTTP parsing, URL routing, JSON
+> formatting, sealed-widget bookkeeping, and cross-platform socket setup live
+> once in `aether_ui_test_server.c`.
+
+**macOS already did this migration**, and left the rationale in
+`aether_ui_macos.m:4918`:
+
+> This backend used to carry its own hand-rolled HTTP server (~370 lines...).
+> It had drifted badly from the GTK4 one: no enabled/geometry/classes fields,
+> no /focus, /window/key, /window/resize, no tray or notification routes, no
+> URL-decoding — and it read NSView state straight off the server thread.
+>
+> It is gone. macOS now fills in AetherDriverHooks and lets
+> aether_ui_test_server.c do the HTTP work, exactly as Win32 does. **Route
+> parity is now structural instead of a thing to remember.**
+
+So the work is not "design a seam and extract a file". It is **finish a
+migration that is two-thirds done**: GTK4 is the last backend still carrying
+its own server, and the drift we measured is the same drift macOS had.
+
+Two measurements that make this cheap:
+
+- Of the 76 `aether_ui_*` symbols the shared server calls, **GTK4 already
+  provides 71**. The 5 it does not (`test_server_start`, `_seal_widget`,
+  `_set_banner`, `_banner_handle`, `_is_sealed`) are the server's OWN
+  internals and travel with it.
+- The hooks table is small — macOS fills **19 fields**, mostly one-line
+  forwarders.
+
+The remaining sections stand, with "extract" read as "adopt".
 
 The mechanism we already have is aeb's `extra_source`. A file that is not
 listed is not compiled — that is a perfectly good "ifdef-equivalent", and it
