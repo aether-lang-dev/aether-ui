@@ -1,0 +1,49 @@
+// blit_probe — the smallest thing that answers one question.
+//
+// cmdkind_coverage renders on Linux but on win32 loses BOTH its late dark
+// rect and its translucent blit, while the gradient rect and text from the
+// same SVG survive. Two candidates: something about load_svg's interaction,
+// or CV_DRAW_IMAGE simply not working on win32.
+//
+// This app has NO SVG and NO vg layer. Just: fill a dark rect, blit a
+// translucent square over it. If the blit appears here, load_svg is
+// implicated. If it does not, CV_DRAW_IMAGE on win32 is broken on its own.
+
+import ui
+import vg.region
+import std.os (os_getenv)
+
+const CW: int = 240
+const CH: int = 160
+
+main() {
+    root = ui.root_vstack(0) {
+        c = ui.canvas_create(CW, CH)
+
+        // White page, then a dark patch to composite against.
+        ui.canvas_fill_rect(c, 0.0, 0.0, 240.0, 160.0, 1.0, 1.0, 1.0, 1.0)
+        ui.canvas_fill_rect(c, 40.0, 40.0, 120.0, 80.0, 0.063, 0.063, 0.094, 1.0)
+
+        // 40x40 amber at 50% alpha, centred on the dark patch.
+        IW = 40
+        IH = 40
+        buf = region.new_frame_buffer(IW, IH)
+        py = 0
+        while py < IH {
+            px = 0
+            while px < IW {
+                region.buf_set_px(buf, py * IW + px, 217, 161, 60, 128)
+                px = px + 1
+            }
+            py = py + 1
+        }
+        rgba = region.frame_finish(buf, IW, IH)
+        ui.canvas_draw_image(c, 60.0, 60.0, IW, IH, rgba, IW * IH * 4)
+
+        ui.canvas_redraw(c)
+    }
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        ui.enable_test_server_root(9222, root)
+    }
+    ui.app_run("blit probe", 260, 200, root)
+}
