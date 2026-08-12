@@ -5004,14 +5004,68 @@ void aether_ui_canvas_redraw_impl(int canvas_id) {
     InvalidateRect(canvases[canvas_id - 1].hwnd, NULL, TRUE);
 }
 
-// canvas_write_png — off-screen PNG render. NOT YET IMPLEMENTED on Win32:
-// would replay the command buffer into a memory DC / GDI+ Bitmap and
-// Bitmap::Save with the PNG encoder CLSID. Returns 0 (failure) so callers
-// detect the gap. Tracked follow-up; the GTK4 backend has the working impl.
+// canvas_write_png — off-screen PNG render, no window required.
+//
+// Was a stub returning 0, which is why the SVG conformance harness
+// (vg/test/svg-compare-aevg.py) could never run on Windows: all 208 renders
+// failed with "PNG write failed". The stub's own comment prescribed this
+// implementation -- replay into a memory DC, wrap as a GDI+ bitmap, save with
+// the PNG encoder CLSID -- and every piece it needs was already in the file
+// for hook_screenshot_png.
+//
+// Goes through canvas_replay_to_dc, i.e. THE RENDERER SEAM, so it renders with
+// whichever of GDI / GDI+ is selected. That is deliberate: it makes the whole
+// SVG corpus scoreable against both renderers, not just the one hand-built
+// scene the BbA line has been measuring.
+__declspec(dllimport) int __stdcall GdipSaveImageToFile(
+    void* image, const unsigned short* filename, const GUID* clsid,
+    const void* params);
+/* Both declared further down (the renderer seam, and the screenshot hook's
+   GDI+ bindings); forward-declared here because this function sits above
+   them and C has no forward reference. */
+static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height);
+__declspec(dllimport) int __stdcall GdipCreateBitmapFromHBITMAP(
+    HBITMAP hbm, HPALETTE pal, void** bitmap);
+
 int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
                                      int width, int height) {
-    (void)canvas_id; (void)path; (void)width; (void)height;
-    return 0;
+    if (canvas_id < 1 || canvas_id > canvas_count) return 0;
+    if (!path || width <= 0 || height <= 0) return 0;
+    Canvas* cv = &canvases[canvas_id - 1];
+
+    ensure_gdiplus();
+
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, width, height);
+    ReleaseDC(NULL, screen);
+    if (!mem || !bmp) {
+        if (bmp) DeleteObject(bmp);
+        if (mem) DeleteDC(mem);
+        return 0;
+    }
+    HGDIOBJ old = SelectObject(mem, bmp);
+
+    canvas_replay_to_dc(cv, mem, width, height);
+
+    int ok = 0;
+    void* gbmp = NULL;
+    if (GdipCreateBitmapFromHBITMAP(bmp, NULL, &gbmp) == 0 && gbmp) {
+        /* Same PNG encoder CLSID hook_screenshot_png uses. */
+        GUID png_clsid = {0x557cf406, 0x1a04, 0x11d3,
+                          {0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e}};
+        wchar_t* wpath = utf8_to_wide(path);
+        if (wpath && GdipSaveImageToFile(gbmp, (const unsigned short*)wpath,
+                                         &png_clsid, NULL) == 0) {
+            ok = 1;
+        }
+        GdipDisposeImage(gbmp);
+    }
+
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    return ok;
 }
 
 // ─── Renderer seam (branch-by-abstraction) ────────────────────────────
@@ -5396,6 +5450,15 @@ __declspec(dllimport) int __stdcall GdipCreateBitmapFromScan0(int width, int hei
 __declspec(dllimport) int __stdcall GdipDrawImageRectI(GpGraphics* g, void* image,
     int x, int y, int width, int height);
 #define GDIP_FMT_32BPP_ARGB 0x0026200A
+/* Path construction + clipping: what turns a gradient from "fill the bounding
+   box" into "fill the actual shape". */
+__declspec(dllimport) int __stdcall GdipAddPathLine2I(GpPath* path,
+    const GpPointI* points, int count);
+__declspec(dllimport) int __stdcall GdipClosePathFigure(GpPath* path);
+__declspec(dllimport) int __stdcall GdipSetClipPath(GpGraphics* g, GpPath* path,
+    int combineMode);
+__declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
+#define GDIP_COMBINE_REPLACE 0
 #define GDIP_UNIT_PIXEL       2
 #define GDIP_SMOOTHING_AA     4
 /* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
@@ -5601,6 +5664,11 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    honours every stop. */
                 if (cmd->n_stops < 1) break;
                 int have = 0, mnx = 0, mny = 0, mxx = 0, mxy = 0;
+                /* The path's own points, for clipping the fill to the shape
+                   rather than to its bounding box. Same reverse walk-back the
+                   CV_FILL case uses. */
+                GpPointI pts[256];
+                int np = 0;
                 for (int j = i - 1; j >= 0; j--) {
                     CanvasCmdKind k = cv->cmds[j].k;
                     if (k == CV_BEGIN) break;
@@ -5614,6 +5682,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                         continue;
                     }
                     if (ok) {
+                        if (np < 256) { pts[np].X = qx; pts[np].Y = qy; np++; }
                         if (!have) { mnx=mxx=qx; mny=mxy=qy; have=1; }
                         else { if(qx<mnx)mnx=qx; if(qx>mxx)mxx=qx;
                                if(qy<mny)mny=qy; if(qy>mxy)mxy=qy; }
@@ -5654,9 +5723,40 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                         GdipDeletePath(path);
                     }
                 } else {
+                    /* THE REAL GRADIENT VECTOR, not the bounding box.
+                       CanvasCmd carries gx1,gy1 -> gx2,gy2, and the vg layer
+                       has ALREADY baked gradientTransform into it (defs.ae
+                       applies the transform to x1/y1/x2/y2 before dispatch).
+                       Step 8 deliberately used a horizontal box-edge axis "to
+                       match legacy" -- but legacy only does that because GDI's
+                       GradientFill cannot express an arbitrary axis. Copying
+                       that here threw away data we were being handed, and is
+                       why python.svg's rotate(45) gradients came out as flat
+                       horizontal ramps. Fall back to the box only when the
+                       command carries no usable vector. */
                     GpPointI a, b;
-                    a.X = mnx; a.Y = mny;
-                    b.X = mxx; b.Y = mny;   /* horizontal, matching legacy's axis */
+                    if (cmd->gx1 != cmd->gx2 || cmd->gy1 != cmd->gy2) {
+                        a.X = (INT)cmd->gx1; a.Y = (INT)cmd->gy1;
+                        b.X = (INT)cmd->gx2; b.Y = (INT)cmd->gy2;
+                    } else {
+                        a.X = mnx; a.Y = mny;
+                        b.X = mxx; b.Y = mny;
+                    }
+                    /* CLIP TO THE PATH. Legacy fills the whole bounding box,
+                       so a gradient-filled outline paints over everything
+                       around it -- measured on python.svg: 25,251 white pixels
+                       against librsvg's 64,749, i.e. the background eaten by
+                       two rectangles. Build the accumulated path and clip. */
+                    GpPath* clip = NULL;
+                    int clipped = 0;
+                    if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &clip) == 0
+                        && clip) {
+                        if (GdipAddPathLine2I(clip, pts, np) == 0) {
+                            GdipClosePathFigure(clip);
+                            if (GdipSetClipPath(g, clip, GDIP_COMBINE_REPLACE) == 0)
+                                clipped = 1;
+                        }
+                    }
                     GpLineGradient* lg = NULL;
                     if (GdipCreateLineBrushI(&a, &b, cols[0], cols[ns-1],
                                              GDIP_WRAP_TILE, &lg) == 0 && lg) {
@@ -5665,6 +5765,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                            mxx-mnx, mxy-mny);
                         GdipDeleteBrush((GpBrush*)lg);
                     }
+                    if (clipped) GdipResetClip(g);
+                    if (clip) GdipDeletePath(clip);
                 }
                 break;
             }
