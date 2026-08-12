@@ -293,3 +293,18 @@ The routes are the contract; 273/0 across four platforms is the gate. So:
 4. A route-parity spec that would have caught the `/pixelgrid` divergence,
    green on four platforms.
 5. Matrix still 273/0.
+
+## Verification status (2026-08-12)
+
+| platform | driver path | gates | note |
+| --- | --- | --- | --- |
+| Linux (chromebook) | **shared** | full matrix **285/0** | the flip |
+| winbaz (win32) | shared (unchanged) | driveractions 6/0, routeparity 6/0, testable 7/0 | proves the shared-server edits did not disturb the backend that already used it |
+| FreeBSD (.204) | — | **NOT RUN** | checkout is on a local WIP commit from 2026-08-10, predating the `build_support/` layout move (7bc699f). `build_support/aetherui/module.ae` is not known to git there, so the flip cannot even be applied. Needs a pull first; the build failure observed there is that staleness, NOT this work. |
+| macvm (AppKit) | shared (unchanged) | **NOT RUN** | same argument as winbaz — it links the shared server and the edits are NULL-hook-guarded — but argument is not measurement. |
+
+So the flip is verified on the platform it changed, and the shared-server edits
+are verified on one of the two platforms that already used it. **Two of four
+boxes are unmeasured**, and the escape hatch stays until they are — deleting
+the embedded server now would remove the bisect tool while half the fleet is
+unverified.
