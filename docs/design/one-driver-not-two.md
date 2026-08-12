@@ -144,6 +144,55 @@ So `dispatch_action` must be written **by verb, never by number**, and the
 effect (the toggle actually toggled, the hover actually set PRELIGHT) rather
 than the status code.
 
+### THREADING: GTK cannot do what the shared server's contract assumes
+
+Checked before starting, because it decides whether the hooks are one-line
+forwarders or a marshalling layer. **It is a marshalling layer**, and this is
+the single biggest thing separating GTK4 from the macOS precedent.
+
+The shared server's contract (`aether_ui_test_server.h`) splits the two:
+
+> The hooks are intentionally tiny and synchronous: each action struct is
+> filled by the HTTP thread, handed to `dispatch_action()` which must marshal
+> it onto the UI thread... GTK uses `g_idle_add`, AppKit uses `dispatch_async`,
+> Win32 uses `SendMessage`.
+
+i.e. **mutations marshal; introspection runs on the HTTP thread.** macOS
+adopted exactly that — "introspection hooks are called on the HTTP thread
+(read-only queries AppKit tolerates)".
+
+**GTK does not tolerate it**, and the reason is recorded in
+`aether_ui_gtk4.c:6196` from a real crash, not from caution:
+
+> a server-thread walk races the mutation and trips GTK's css-node global
+> parent cache — the app aborts with `gtkcssnode.c:321 "node->cache == NULL"`
+> (seen live in gp's fileops spec once the list pane became widgets)
+
+Which is why GTK4 marshals its READS too — `widgets_json_idle`,
+`focus_query_idle`, `canvas_debug_req_idle`, `pixel_req_idle` all bounce to the
+UI thread. That is 22 `g_idle_add` sites in the server region, and roughly half
+of them are introspection rather than action.
+
+**Consequence for the migration.** The 19 hooks cannot be naive forwarders on
+GTK4: each introspection hook must marshal internally, spin for `done`, and
+return. That is mechanical but not free, and it is per-hook rather than
+per-verb — so commit 1 is bigger than "19 one-liners" and needs its own care.
+
+Two ways to take it, and this is a decision for whoever does the work:
+
+- **Marshal inside each GTK hook.** No change to the shared server. Simple,
+  but 19 near-identical request-struct/idle/spin blocks, and every future hook
+  must remember. A missed one is a crash under load, not a test failure.
+- **Give the shared server an optional `run_on_ui_thread` hook** it wraps
+  introspection in when present. macOS and win32 leave it NULL and are
+  unaffected; GTK4 supplies `g_idle_add`+spin once. This is the design the
+  original note guessed at, and the threading evidence now argues for it
+  properly rather than aesthetically.
+
+The second is better and touches a file two shipped backends depend on, so it
+wants the route-parity and driver-actions gates green on all four platforms
+before and after — which is what they were built for.
+
 That makes the migration two commits, not one:
 
 1. **Hooks + introspection routes** — the mechanical 19. Low risk; parity
