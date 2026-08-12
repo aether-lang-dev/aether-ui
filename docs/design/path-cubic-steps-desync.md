@@ -1,3 +1,56 @@
+# `PATH_CUBIC_STEPS` — RESOLVED: it was a desynced pair, not a fuse
+
+**Status: fixed.** The title of this note used to say the constant was
+load-bearing. That was wrong, and the wrong conclusion is left visible below
+because it shaped two commits.
+
+## Root cause
+
+```aether
+const PATH_CUBIC_STEPS: int = 16
+const steps_f: float = 16.0      // a SECOND, independent literal
+```
+
+The sampling loop runs `s = 1..PATH_CUBIC_STEPS` and evaluates the curve at
+`t = s / steps_f`. `t` therefore reaches 1.0 — the curve's endpoint — only
+when the two agree. Raising just the one whose name says "steps" sent `t` to
+`64/16.0 = 4.0`: `cubic_at` extrapolates far past the curve, points fly off
+the shape, and a gradient-filled path floods the canvas.
+
+Measured on `vg/test/svg/gradient_flood_repro.svg` against librsvg:
+
+| steps | steps_f | MAE |
+| --- | --- | --- |
+| 16 | 16 | 0.12 |
+| 64 | 16 | **36.47** |
+| 64 | 64 | **0.00** |
+
+Pixel-perfect when they agree. **The flattening density was always tunable;
+16 was never the constraint — the desync was.**
+
+## The fix
+
+`steps_f` is derived (`steps * 1.0`) rather than restated, so the pair cannot
+drift again. A comment would not have been enough: the trap is that the two
+names look unrelated and only one of them reads like a knob.
+
+## Is it worth raising?
+
+No, on this corpus. Full 208-file suite, Linux/GTK4:
+
+| PATH_CUBIC_STEPS | result |
+| --- | --- |
+| 16 (shipped) | 198 good / 8 ok / 2 diff |
+| 48 | 198 good / 8 ok / 2 diff |
+
+Identical. 16 already samples finely enough for every SVG in the W3C/CVG set,
+so the constant stays at 16 and this fix is purely defensive — it changes no
+pixel today and stops the next person walking into the same hole.
+
+---
+
+## ORIGINAL NOTE (wrong conclusion, kept for the reasoning)
+
 # `PATH_CUBIC_STEPS` is load-bearing, not a quality dial
 
 **Status: investigation, unresolved.** Recorded so the next person does not

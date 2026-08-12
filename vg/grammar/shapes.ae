@@ -742,6 +742,9 @@ shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
                 ex   = floatarr_get_unchecked(args, 4)
                 ey   = floatarr_get_unchecked(args, 5)
                 steps = PATH_CUBIC_STEPS
+                // DERIVED, never a second literal: t must reach exactly 1.0
+                // at s == steps, or the curve is extrapolated past its end.
+                steps_f = steps * 1.0
                 s = 1
                 while s <= steps {
                     t = s / steps_f
@@ -827,8 +830,24 @@ shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
 // Number of line segments per cubic Bézier. 16 is plenty for typical
 // on-screen paths; matches the density most SVG renderers use at
 // moderate zoom.
+//
+// THESE TWO MUST AGREE. The sampling loop runs s = 1..PATH_CUBIC_STEPS and
+// evaluates the curve at t = s / steps_f, so t only reaches 1.0 (the curve's
+// endpoint) when steps_f == PATH_CUBIC_STEPS. They used to be independent
+// literals, and raising just the first — the one whose name says "steps" —
+// sent t to PATH_CUBIC_STEPS/16.0 instead of 1.0. At 64 that is t = 4.0:
+// cubic_at extrapolates far beyond the curve, points fly off the shape, and a
+// gradient-filled path floods the canvas. Measured on
+// vg/test/svg/gradient_flood_repro.svg against librsvg:
+//
+//     steps=16, steps_f=16   MAE  0.12   correct
+//     steps=64, steps_f=16   MAE 36.47   flooded
+//     steps=64, steps_f=64   MAE  0.00   pixel-perfect
+//
+// So the flattening density is genuinely tunable and 16 was never the
+// constraint — the desync was. Derive the float from the int so the pair
+// cannot drift again.
 const PATH_CUBIC_STEPS: int = 16
-const steps_f: float = 16.0
 
 // One axis of a cubic Bézier at parameter t (de Casteljau, expanded).
 cubic_at(p0: float, p1: float, p2: float, p3: float, t: float) -> float {
