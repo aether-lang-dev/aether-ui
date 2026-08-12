@@ -76,11 +76,18 @@ typedef struct {
 } AetherDriverActionCtx;
 
 typedef struct {
-    // Introspection — called on the HTTP server thread.
-    // These must be thread-safe against the UI thread. In practice, GTK,
-    // AppKit, and Win32 all tolerate read-only queries about widget state
-    // from off-thread; the only true races would be widget registry
-    // growth under concurrent creation, which test harnesses don't do.
+    // Introspection — called on the HTTP server thread UNLESS the backend
+    // supplies run_on_ui_thread (below), in which case the whole request is
+    // serviced on the UI thread and these are called from there.
+    //
+    // CORRECTION: this block used to claim "GTK, AppKit, and Win32 all
+    // tolerate read-only queries about widget state from off-thread". That is
+    // true of AppKit and Win32 and FALSE of GTK: a server-thread widget walk
+    // races the UI thread and trips GTK's css-node global parent cache,
+    // aborting in gtkcssnode.c with "node->cache == NULL" (observed live, see
+    // aether_ui_gtk4.c). It is why GTK4 could not adopt these hooks until
+    // run_on_ui_thread existed, and why the claim is worth correcting rather
+    // than leaving for the next backend to trust.
     int         (*widget_count)(void);
     const char* (*widget_type)(int handle);
     void        (*widget_text_into)(int handle, char* buf, int bufsize);

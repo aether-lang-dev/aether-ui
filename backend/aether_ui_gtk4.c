@@ -7381,6 +7381,77 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// dispatch_action — BY VERB, never by number
+// ---------------------------------------------------------------------------
+//
+// THE HAZARD, stated plainly because it is the whole reason this function is
+// written out longhand instead of casting one enum to the other:
+//
+//   n   GTK4 TestAction     shared AETHER_DRV_*   verdict
+//   0   click               CLICK                 agree
+//   1   set_text            SET_TEXT              agree
+//   2   toggle              TOGGLE                agree
+//   3   set_value           SET_VALUE             agree
+//   4   set_state           SET_STATE             agree
+//   5   ctx_open            FOCUS                 COLLIDE
+//   6   ctx_activate        WIN_RESIZE            COLLIDE
+//   7   split_position      WIN_KEY               COLLIDE
+//   8   focus               SPLIT_POS             COLLIDE
+//   9   window_key          CANVAS_CLICK          COLLIDE
+//  10   tab_select          CANVAS_MOVE           COLLIDE
+//
+// 0-4 agree by luck. EVERY number from 5 up means something different in each
+// scheme, and both readings are valid integers, so a mis-map answers 200 and
+// silently does the wrong thing. tests/driver_actions exists to catch exactly
+// that and is the gate for this function.
+//
+// The authoritative source is TestAction's own comment ("5=ctx_open
+// 6=ctx_activate"), NOT the route strings: my first pass read the mapping off
+// grep of the route arms and got 5, 11, 12, 13, 15, 16 wrong.
+//
+// Runs on the GTK thread already (the shared server hopped there via
+// run_on_ui_thread), so this calls test_action_idle's body directly rather
+// than marshalling a second time.
+static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
+    TestAction ta;
+    memset(&ta, 0, sizeof(ta));
+    ta.handle = ctx->handle;
+    ta.dval   = ctx->dval;
+    ta.ival   = ctx->ival;
+    strncpy(ta.sval, ctx->sval, sizeof(ta.sval) - 1);
+
+    int supported = 1;
+    switch (ctx->action) {
+        case AETHER_DRV_CLICK:        ta.action = 0;  break;
+        case AETHER_DRV_SET_TEXT:     ta.action = 1;  break;
+        case AETHER_DRV_TOGGLE:       ta.action = 2;  break;
+        case AETHER_DRV_SET_VALUE:    ta.action = 3;  break;
+        case AETHER_DRV_SET_STATE:    ta.action = 4;  break;
+        case AETHER_DRV_CTX_MENU:     ta.action = 5;  break;
+        case AETHER_DRV_CTX_ACTIVATE: ta.action = 6;  break;
+        case AETHER_DRV_SPLIT_POS:    ta.action = 7;  break;
+        case AETHER_DRV_FOCUS:        ta.action = 8;  break;
+        case AETHER_DRV_WIN_KEY:      ta.action = 9;  break;
+        case AETHER_DRV_TAB_SELECT:   ta.action = 10; break;
+        default:
+            /* Verbs the embedded server routes through paths OTHER than
+               test_action_idle (canvas click/move/key/release, pick, hover,
+               press, release, resize, shutdown) are not mapped here yet.
+               result 3 -> 404 is the honest answer; inventing a number would
+               fire the wrong handler and still answer 200. */
+            supported = 0;
+            break;
+    }
+    if (!supported) { ctx->result = 3; ctx->done = 1; return; }
+
+    ta.done = 0;
+    test_action_idle(&ta);        /* already on the GTK thread */
+    ctx->retval = ta.retval;
+    ctx->result = ta.result;
+    ctx->done   = 1;
+}
+
 static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -7399,6 +7470,7 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_classes_into  = hook_widget_classes_into,
     .widget_a11y          = hook_widget_a11y,
     .canvas_debug         = hook_canvas_debug,
+    .dispatch_action      = hook_dispatch_action,
     // The GTK-specific one macOS and win32 leave NULL.
     .run_on_ui_thread     = hook_run_on_ui_thread,
     // Still NULL, each for its own reason:
