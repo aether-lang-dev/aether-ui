@@ -5389,6 +5389,13 @@ __declspec(dllimport) int __stdcall GdipSetPathGradientCenterColor(
 __declspec(dllimport) int __stdcall GdipSetPathGradientPresetBlend(
     GpPathGradient* brush, const ARGB* blend, const float* positions, int count);
 #define GDIP_WRAP_TILE 0
+/* Alpha blit. PixelFormat32bppARGB is 0x26200A: 32bpp, alpha, BGRA order in
+   memory on little-endian, which is why the source RGBA needs swizzling. */
+__declspec(dllimport) int __stdcall GdipCreateBitmapFromScan0(int width, int height,
+    int stride, int format, unsigned char* scan0, void** bitmap);
+__declspec(dllimport) int __stdcall GdipDrawImageRectI(GpGraphics* g, void* image,
+    int x, int y, int width, int height);
+#define GDIP_FMT_32BPP_ARGB 0x0026200A
 #define GDIP_UNIT_PIXEL       2
 #define GDIP_SMOOTHING_AA     4
 /* LineCap: Flat=0 Square=1 Round=2. LineJoin: Miter=0 Bevel=1 Round=2.
@@ -5700,6 +5707,47 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     GdipDeleteFont(font);
                 }
                 GdipDeleteFontFamily(fam);
+                break;
+            }
+            case CV_DRAW_IMAGE: {
+                /* THE CASE GDI GETS WRONG. Legacy cannot blit alpha at all:
+                   it flattens every pixel against WHITE before StretchDIBits
+                   ("(approximately) composite onto the white backing", per
+                   its own comment) and forces a=255. Over a white page that
+                   looks right; over anything else it is the wrong colour.
+                   Measured with examples/blit_probe -- amber D9A13C at a=128
+                   over #101018:
+
+                       GTK4 (correct)   74582A
+                       legacy GDI       EBCF9D   <- flattened against white
+                       GDI+ (this)      must match GTK4
+
+                   GDI+ composites properly, so the source needs NO
+                   premultiplication against the backdrop -- just the channel
+                   swizzle, because PixelFormat32bppARGB is BGRA in memory
+                   while the canvas hands us RGBA. */
+                if (!cmd->pixels || cmd->iw <= 0 || cmd->ih <= 0) break;
+                int n = cmd->iw * cmd->ih;
+                unsigned char* bgra = (unsigned char*)malloc((size_t)n * 4);
+                if (!bgra) break;
+                for (int px = 0; px < n; px++) {
+                    bgra[px*4+0] = cmd->pixels[px*4+2];  /* B */
+                    bgra[px*4+1] = cmd->pixels[px*4+1];  /* G */
+                    bgra[px*4+2] = cmd->pixels[px*4+0];  /* R */
+                    bgra[px*4+3] = cmd->pixels[px*4+3];  /* A -- KEPT */
+                }
+                void* bmp = NULL;
+                if (GdipCreateBitmapFromScan0(cmd->iw, cmd->ih, cmd->iw * 4,
+                                              GDIP_FMT_32BPP_ARGB, bgra, &bmp) == 0
+                    && bmp) {
+                    GdipDrawImageRectI(g, bmp, (INT)cmd->p0, (INT)cmd->p1,
+                                       cmd->iw, cmd->ih);
+                    GdipDisposeImage(bmp);
+                }
+                /* Freed AFTER the draw: GdipCreateBitmapFromScan0 does not
+                   copy, it borrows scan0, so releasing it earlier would blit
+                   freed memory. */
+                free(bgra);
                 break;
             }
             case CV_CLOSE:
