@@ -7477,6 +7477,31 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
     ctx->done   = 1;
 }
 
+// Capture the top-level to PNG bytes. The hook's contract is "set *out_data
+// (caller frees with free()) and *out_len, return 0".
+//
+// I expected this to be the one hook needing a real conversion -- GTK4
+// captures through a paintable snapshot and I assumed a GBytes the caller
+// could not free(). It does not: screenshot_idle_cb already memcpy's into a
+// plain malloc'd ss_result_data, and the embedded route already free()s it.
+// So this is a wrapper after all, and the ownership transfer is exactly what
+// the hook wants.
+//
+// Runs on the GTK thread (run_on_ui_thread got us here), so it calls the idle
+// body directly instead of g_idle_add-ing a second time.
+static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
+    ss_result_done = 0;
+    screenshot_idle_cb(NULL);
+    if (!ss_result_data || ss_result_len == 0) return 1;
+    *out_data = ss_result_data;
+    *out_len  = ss_result_len;
+    // Hand ownership to the caller; do not free here and do not leave a
+    // dangling pointer for the embedded route to double-free.
+    ss_result_data = NULL;
+    ss_result_len  = 0;
+    return 0;
+}
+
 static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -7496,6 +7521,7 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_a11y          = hook_widget_a11y,
     .canvas_debug         = hook_canvas_debug,
     .dispatch_action      = hook_dispatch_action,
+    .screenshot_png       = hook_screenshot_png,
     // The GTK-specific one macOS and win32 leave NULL.
     .run_on_ui_thread     = hook_run_on_ui_thread,
     // Still NULL, each for its own reason:
@@ -7504,10 +7530,6 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     //                    number: GTK4's private action ids collide with the
     //                    shared enum while meaning different things, and both
     //                    spellings answer 200 (see tests/driver_actions).
-    //   screenshot_png   GTK4 captures via a paintable snapshot that must run
-    //                    on the UI thread and hands back a GBytes; the hook
-    //                    wants a malloc'd buffer the caller frees. That is a
-    //                    real conversion, not a forwarder, so it is separate.
 };
 
 // THE FLIP (docs/design/one-driver-not-two.md).
