@@ -124,6 +124,11 @@ SUITES=(
   # canvas and the driver enabled is a valid subject; cmdkind_coverage is used
   # because it has both.
   "routeparity|examples/cmdkind_coverage|route_parity/spec_route_parity|"
+  # Behavioural twin of routeparity: asserts each action verb has its NAMED
+  # effect, not merely that its route answers 200. Guards the GTK4 driver
+  # migration, where private action numbers collide with the shared enum
+  # (docs/design/one-driver-not-two.md).
+  "driveractions|examples/testable|driver_actions/spec_driver_actions|"
   "frames|apps/frames_demo|frames_demo/spec_frames_demo|"
   "sketchpad|apps/sketchpad|sketchpad/spec_sketchpad|"
   # video_frame decodes in-process via contrib.avcodec, so it needs FFmpeg's

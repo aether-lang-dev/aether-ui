@@ -115,6 +115,42 @@ Two measurements that make this cheap:
 
 The remaining sections stand, with "extract" read as "adopt".
 
+### The one genuine hazard: GTK4's action numbering is its own
+
+Everything else in the migration is mechanical — the 19 hooks are one-line
+forwarders onto functions GTK4 already has (`widget_type_name`,
+`gtk_widget_get_visible`, `parent_handle_for`, `gtk_widget_get_sensitive`,
+all already used by its `widget_to_json`).
+
+`dispatch_action` is not. GTK4's `TestAction` carries a **private action
+numbering that collides with the shared enum's while meaning different
+things**:
+
+| number | GTK4 `TestAction` | shared `AETHER_DRV_*` |
+| --- | --- | --- |
+| 4 | state set | `SET_STATE` ✓ coincides |
+| 9 | window key | `CANVAS_CLICK` ✗ |
+| 14 | hover | `CTX_MENU` ✗ |
+
+Only `4` happens to agree. A mechanical port that preserved the integers
+would route `/window/key` to the canvas-click handler and `/hover` to the
+context-menu handler — and both would answer **200**, because each number is
+valid in both schemes. The route-parity spec would stay green: the routes all
+still exist. It is precisely the failure mode this whole line of work exists
+to prevent, and presence-testing cannot catch it.
+
+So `dispatch_action` must be written **by verb, never by number**, and the
+28-case switch wants a spec that drives each verb and asserts the observable
+effect (the toggle actually toggled, the hover actually set PRELIGHT) rather
+than the status code.
+
+That makes the migration two commits, not one:
+
+1. **Hooks + introspection routes** — the mechanical 19. Low risk; parity
+   spec plus the existing suites cover it.
+2. **`dispatch_action`, verb by verb**, behind a behavioural spec written
+   first. This is where a silent mis-wire would hide.
+
 The mechanism we already have is aeb's `extra_source`. A file that is not
 listed is not compiled — that is a perfectly good "ifdef-equivalent", and it
 is stronger than a preprocessor symbol in one respect: a production app that

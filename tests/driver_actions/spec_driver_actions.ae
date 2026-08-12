@@ -1,0 +1,128 @@
+// spec_driver_actions.ae — every driver ACTION verb does what its name says.
+//
+// WHY THIS EXISTS, and why it is separate from route parity.
+//
+// tests/route_parity asserts that a route EXISTS on every backend. That is
+// necessary and not sufficient: it cannot tell a correctly wired verb from a
+// mis-wired one, because both answer 200.
+//
+// The concrete hazard is in front of us. AetherUIDriver is being migrated so
+// GTK4 stops carrying its own HTTP server and fills AetherDriverHooks like
+// win32 and macOS already do (docs/design/one-driver-not-two.md). GTK4's
+// internal TestAction struct numbers its actions PRIVATELY, and those numbers
+// collide with the shared AETHER_DRV_* enum while meaning different things:
+//
+//     number   GTK4 TestAction     shared enum
+//     4        state set           SET_STATE       (coincides)
+//     9        window key          CANVAS_CLICK    (does NOT)
+//     14       hover               CTX_MENU        (does NOT)
+//
+// A mechanical port that preserved the integers would route /window/key into
+// the canvas-click handler and /hover into the context-menu handler. Both
+// would answer 200. Route parity would stay green. Every existing suite that
+// only checks status codes would stay green.
+//
+// So this spec asserts the OBSERVABLE EFFECT of each verb — the toggle
+// actually flipped, the text actually changed, the focus actually moved —
+// which is the only thing that catches a verb wired to the wrong handler.
+//
+// Run via tests/spec_matrix.sh driveractions, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/testable/bin/testable &
+//   UI_SPEC=driver_actions/spec_driver_actions tests/run_spec.sh
+
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "driver action verbs have their named effect") {
+
+        // CLICK — the counter must actually move. A click routed to any
+        // other handler leaves the label unchanged while still answering 200.
+        aeocha.it("click actually fires the button's callback") callback {
+            plus = uidriver.widget_id_of("button", "+1")
+            aeocha.assert_gt(plus, 0, "found the +1 button")
+
+            before = uidriver.get_body("/widgets")
+            uidriver.click_widget(plus)
+            after = uidriver.get_body("/widgets")
+
+            aeocha.assert_false(string.equals(before, after),
+                "clicking +1 must change the widget tree (counter label)")
+        }
+
+        // SET_TEXT — the field's own text must come back changed. This is the
+        // verb most likely to look fine when mis-wired: a no-op still 200s.
+        aeocha.it("set_text actually changes the field's text") callback {
+            fld = uidriver.widget_id_of("textfield", "")
+            if fld > 0 {
+                uidriver.post_ok("/widget/${fld}/set_text?v=verb-check", "POST set_text")
+                body = uidriver.get_body("/widget/${fld}")
+                aeocha.assert_contains(body, "verb-check",
+                    "set_text must be readable back from the widget")
+            }
+        }
+
+        // TOGGLE — flips, and flips BACK. Asserting one direction only would
+        // pass against a handler that sets rather than toggles.
+        aeocha.it("toggle actually inverts, twice") callback {
+            tg = uidriver.widget_id_of("toggle", "Accept terms")
+            if tg > 0 {
+                a = uidriver.get_body("/widget/${tg}")
+                uidriver.toggle_widget(tg)
+                b = uidriver.get_body("/widget/${tg}")
+                aeocha.assert_false(string.equals(a, b),
+                    "toggle must change the widget's reported state")
+                uidriver.toggle_widget(tg)
+                c = uidriver.get_body("/widget/${tg}")
+                aeocha.assert_true(string.equals(a, c),
+                    "toggling twice must return to the original state")
+            }
+        }
+
+        // FOCUS — the driver's own focused_widget readback must agree. This
+        // pair (act, then read the effect through a DIFFERENT route) is the
+        // shape that catches a mis-wire; a single route can lie to itself.
+        aeocha.it("focus actually moves keyboard focus") callback {
+            plus = uidriver.widget_id_of("button", "+1")
+            if plus > 0 {
+                uidriver.focus_widget(plus)
+                got = uidriver.focused_widget()
+                aeocha.assert_true(got == plus,
+                    "focused_widget must report the widget we focused")
+            }
+        }
+
+        // HOVER — number 14 in GTK4's private scheme, CTX_MENU in the shared
+        // enum. If these are ever conflated this is the assertion that fails.
+        aeocha.it("hover actually marks the widget hovered") callback {
+            plus = uidriver.widget_id_of("button", "+1")
+            if plus > 0 {
+                uidriver.hover_widget(plus)
+                body = uidriver.get_body("/widget/${plus}")
+                aeocha.assert_contains(body, "hovered",
+                    "hover must set the widget's hovered state")
+                uidriver.unhover()
+                cleared = uidriver.get_body("/widget/${plus}")
+                aeocha.assert_false(string.contains(cleared, "\"hovered\":true"),
+                    "unhover must clear it again")
+            }
+        }
+
+        // SEALED — a refusal is also a behaviour, and it must survive the
+        // migration. 403, not 200-and-do-nothing.
+        aeocha.it("a sealed widget refuses, rather than silently ignoring") callback {
+            danger = uidriver.widget_id_of("button", "Delete Everything")
+            if danger > 0 {
+                st = uidriver.post_status("/widget/${danger}/click")
+                aeocha.assert_true(st == 403,
+                    "sealed widget must answer 403, got ${st}")
+            }
+        }
+    }
+
+    aeocha.run_summary(fw)
+}
