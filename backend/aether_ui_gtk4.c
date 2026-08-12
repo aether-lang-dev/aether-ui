@@ -5443,6 +5443,18 @@ static gboolean canvas_debug_req_idle(gpointer data) {
 typedef struct { int done; int handle; char type[32]; } FocusQuery;
 
 // Close a window on the GTK thread (window ops must not run off it).
+// Overlay dismissal from the driver. Closing an overlay touches widgets, so
+// it must run on the GTK main thread like every other mutating route.
+// win32/macOS answered POST /overlay/{id}/dismiss long before GTK4 did — the
+// route-parity spec exists because that gap was invisible.
+typedef struct { int overlay_handle; int done; } OverlayDismissReq;
+static gboolean overlay_dismiss_idle(gpointer data) {
+    OverlayDismissReq* od = (OverlayDismissReq*)data;
+    aether_ui_overlay_close_impl(od->overlay_handle);
+    od->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 typedef struct { int win_handle; int done; } WindowCloseReq;
 static gboolean window_close_idle(gpointer data) {
     WindowCloseReq* wc = (WindowCloseReq*)data;
@@ -6404,6 +6416,21 @@ static void handle_test_request(int client_fd) {
             send_response(client_fd, 500, "Error", "application/json",
                           "{\"error\":\"screenshot failed\"}");
         }
+        close(client_fd);
+        return;
+    }
+
+    // POST /overlay/{id}/dismiss — close one overlay by handle. The twin of
+    // GET /overlays below; win32/macOS has had it since the overlay layer
+    // landed and GTK4 did not, which is exactly the silent drift the
+    // route-parity spec now guards (docs/design/one-driver-not-two.md).
+    if (method == 1 && strncmp(path, "/overlay/", 9) == 0
+        && strstr(path, "/dismiss")) {
+        OverlayDismissReq od = {0};
+        od.overlay_handle = atoi(path + 9);
+        g_idle_add(overlay_dismiss_idle, &od);
+        while (!od.done) usleep(1000);
+        send_response(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
         close(client_fd);
         return;
     }

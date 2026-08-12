@@ -574,6 +574,32 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
             }
         }
     } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
+               && strstr(path, "/pixel") && !strstr(path, "/pixelgrid")) {
+        /* GET /canvas/{id}/pixel?x=&y=&w=&h= — one rendered pixel, packed
+         * 0xAARRGGBB, replayed through the same seam the painter uses. GTK4
+         * has had this since the overlay/shadow work; win32 and macOS never
+         * did, so a spec asserting one pixel could only run on Linux.
+         *
+         * The !strstr(path, "/pixelgrid") guard is load-bearing: "/pixelgrid"
+         * contains "/pixel", so without it this arm swallows every grid
+         * request and answers a plausible {"pixel":-1} instead of a grid --
+         * which is precisely the bug that hid the missing pixelgrid route on
+         * GTK4 for a whole line of measurements. Ordering alone is not enough
+         * when one route name is a prefix of another; say so explicitly. */
+        int id = extract_id_from_path(path, "/canvas/");
+        const char* xs = extract_query_param(path, "x");
+        const char* ys = extract_query_param(path, "y");
+        const char* ws = extract_query_param(path, "w");
+        const char* hs = extract_query_param(path, "h");
+        int px = xs ? atoi(xs) : 0;
+        int py = ys ? atoi(ys) : 0;
+        int pw = ws ? atoi(ws) : 400;
+        int ph = hs ? atoi(hs) : 300;
+        int val = aether_ui_canvas_read_pixel_impl(id, px, py, pw, ph);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"pixel\":%d}", val);
+        send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
                && strstr(path, "/pixelgrid")) {
         /* GET /canvas/{id}/pixelgrid?w=&h=&step=
          *

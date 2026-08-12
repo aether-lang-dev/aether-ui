@@ -99,8 +99,15 @@ main() {
                 "/pixelgrid must not be answered by the /pixel arm")
         }
 
-        aeocha.it("serves the overlay routes") callback {
+        // Both halves of the overlay surface. GTK4 had the GET and not the
+        // POST; win32/macOS had both. A driver that can list overlays but not
+        // dismiss one is half a feature, and no spec noticed for months.
+        // POST, so this uses post_status rather than the GET helper.
+        aeocha.it("serves the overlay routes, list AND dismiss") callback {
             expect_route(fw, "/overlays")
+            st = uidriver.post_status("/overlay/1/dismiss")
+            aeocha.assert_false(st == 404,
+                "POST /overlay/{id}/dismiss must exist on every backend")
         }
 
         aeocha.it("serves the chrome routes") callback {
