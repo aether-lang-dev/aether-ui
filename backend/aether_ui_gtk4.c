@@ -7342,6 +7342,45 @@ static int hook_widget_children(int handle, int* out_handles, int max) {
     return n;
 }
 
+// Window-local geometry. 0 = success, per the hook contract.
+static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
+    GtkWidget* wd = aether_ui_get_widget(handle);
+    if (!wd) return 1;
+    graphene_rect_t r;
+    GtkWidget* root = GTK_WIDGET(gtk_widget_get_root(wd));
+    if (!root || !gtk_widget_compute_bounds(wd, root, &r)) return 1;
+    *x = (int)r.origin.x; *y = (int)r.origin.y;
+    *w = (int)r.size.width; *hgt = (int)r.size.height;
+    return 0;
+}
+
+// Space-separated CSS class list, "" when none. Read from the gobject data
+// widget_to_json already uses, so the shared server reports what the embedded
+// one did.
+static void hook_widget_classes_into(int handle, char* buf, int bufsize) {
+    buf[0] = '\0';
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    const char* cur = (const char*)g_object_get_data(G_OBJECT(w), "aeui-classes");
+    if (cur) { strncpy(buf, cur, (size_t)bufsize - 1); buf[bufsize - 1] = '\0'; }
+}
+
+static void hook_widget_a11y(int handle, char* role, int rolesz,
+                             char* name, int namesz, char* desc, int descsz) {
+    aether_ui_a11y_get_impl(handle, role, rolesz, name, namesz, desc, descsz);
+}
+
+static int hook_canvas_debug(int canvas_id, int* area, int* commands,
+                             int* w, int* h) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    *area = cs->last_paint_area;
+    *commands = cs->last_paint_count;
+    *w = cs->last_paint_w;
+    *h = cs->last_paint_h;
+    return 0;
+}
+
 static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -7356,13 +7395,22 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     .focused_widget       = hook_focused_widget,
     .widget_hovered       = hook_widget_hovered,
     .widget_pressed       = hook_widget_pressed,
+    .widget_rect          = hook_widget_rect,
+    .widget_classes_into  = hook_widget_classes_into,
+    .widget_a11y          = hook_widget_a11y,
+    .canvas_debug         = hook_canvas_debug,
     // The GTK-specific one macOS and win32 leave NULL.
     .run_on_ui_thread     = hook_run_on_ui_thread,
-    // dispatch_action, widget_rect, widget_classes_into, widget_a11y,
-    // screenshot_png and canvas_debug are deliberately still NULL: each is a
-    // separate commit, and dispatch_action in particular must be written BY
-    // VERB rather than by number (GTK4's private action ids collide with the
-    // shared enum -- see tests/driver_actions).
+    // Still NULL, each for its own reason:
+    //
+    //   dispatch_action  its own commit. Must be written BY VERB, never by
+    //                    number: GTK4's private action ids collide with the
+    //                    shared enum while meaning different things, and both
+    //                    spellings answer 200 (see tests/driver_actions).
+    //   screenshot_png   GTK4 captures via a paintable snapshot that must run
+    //                    on the UI thread and hands back a GBytes; the hook
+    //                    wants a malloc'd buffer the caller frees. That is a
+    //                    real conversion, not a forwarder, so it is separate.
 };
 
 void aether_ui_enable_test_server_impl(int port, int root_handle) {
