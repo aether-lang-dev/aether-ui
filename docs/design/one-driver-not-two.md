@@ -294,17 +294,22 @@ The routes are the contract; 273/0 across four platforms is the gate. So:
    green on four platforms.
 5. Matrix still 273/0.
 
-## Verification status (2026-08-12)
+## Verification status (2026-08-12) — ALL FOUR GREEN
 
-| platform | driver path | gates | note |
-| --- | --- | --- | --- |
-| Linux (chromebook) | **shared** | full matrix **285/0** | the flip |
-| winbaz (win32) | shared (unchanged) | driveractions 6/0, routeparity 6/0, testable 7/0 | proves the shared-server edits did not disturb the backend that already used it |
-| FreeBSD (.204) | — | **NOT RUN** | checkout is on a local WIP commit from 2026-08-10, predating the `build_support/` layout move (7bc699f). `build_support/aetherui/module.ae` is not known to git there, so the flip cannot even be applied. Needs a pull first; the build failure observed there is that staleness, NOT this work. |
-| macvm (AppKit) | shared (unchanged) | **NOT RUN** | same argument as winbaz — it links the shared server and the edits are NULL-hook-guarded — but argument is not measurement. |
+| platform | driver path | routeparity | driveractions | testable |
+| --- | --- | --- | --- | --- |
+| Linux (chromebook) | **shared** (flipped) | 6/0 | 6/0 | 7/0 — full matrix **285/0** |
+| winbaz (win32) | shared (unchanged) | 6/0 | 6/0 | 7/0 |
+| **FreeBSD (.204)** | **shared** (flipped) | **6/0** | **6/0** | **7/0** |
+| **macvm (AppKit)** | shared (unchanged) | **6/0** | **6/0** | **7/0** |
 
-So the flip is verified on the platform it changed, and the shared-server edits
-are verified on one of the two platforms that already used it. **Two of four
-boxes are unmeasured**, and the escape hatch stays until they are — deleting
-the embedded server now would remove the bisect tool while half the fleet is
-unverified.
+Both backends the flip CHANGED (Linux, FreeBSD) and both it merely touched via
+the shared server's edits (win32, macOS) are green on all three gates.
+
+FreeBSD was blocked on a stale checkout, not on anything platform-specific:
+`~/aether-ui` sat on a local WIP commit from 2026-08-10, and separately the 18
+driver/GDI+ commits had never been PUSHED from the chromebook. Once pushed and
+pulled it built first time and passed first time.
+
+The `AETHER_UI_GTK_SERVER=embedded` escape hatch and the ~1,160 dead lines in
+`aether_ui_gtk4.c` can now come out — that was the condition, and it is met.
