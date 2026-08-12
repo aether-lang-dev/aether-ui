@@ -69,6 +69,37 @@ Any SVG whose paths already produce many points would hit it today, on every
 backend. That makes this worth chasing rather than pinning the constant and
 moving on.
 
+## MINIMAL REPRODUCTION (2026-08-12)
+
+Narrowed from python.svg to ONE closed cubic path with a gradient fill —
+`vg/test/svg/gradient_flood_repro.svg`, 4 lines of SVG, no sub-paths, no
+degenerate stubs, no second shape:
+
+```
+steps=16  white=125,281  MAE vs librsvg = 0.1    correct
+steps=64  white= 65,283  MAE vs librsvg = 36.5   gradient floods
+```
+
+So it is not specific to python.svg, not the interlocking shapes, and not the
+`M88,50v1` trailing stubs (removing those changes nothing — tested).
+
+Also ruled out with a direct measurement: **nothing is being dropped.** The
+canvas command count goes 228 -> 804 between the two settings, so every extra
+point reaches the buffer intact. The geometry is complete and the FILL is
+wrong.
+
+And the GTK4 replay path is innocent on inspection: `CANVAS_MOVE_TO` /
+`CANVAS_LINE_TO` are one-line `cairo_move_to` / `cairo_line_to`, and
+`CANVAS_FILL_LINEAR` does `cairo_set_source(pat)` then `cairo_fill(cr)` on the
+current path. No caps, no rebuilding.
+
+That leaves the cairo path state itself: with ~800 commands the path being
+filled is evidently not the one being built. Next place to look is whether
+anything between the last `line_to` and the `cairo_fill` disturbs the path —
+notably that `apply_gradient` is called AFTER `replay_path` in
+`vg/backend/gtk.ae:canvas_path`, and each of the fill/stroke branches calls
+`replay_path` again.
+
 ## Reproduction
 
 ```bash
