@@ -5579,6 +5579,22 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 for (int j = i - 1; j >= 0; j--) {
                     CanvasCmdKind k = cv->cmds[j].k;
                     if (k == CV_BEGIN) break;
+                    if (k == CV_ARC) {
+                        /* A STROKED CIRCLE emits CV_ARC + CV_STROKE, with no
+                           CV_LINE at all. Walking only CV_LINE therefore drew
+                           NOTHING: copyright.svg's 10-unit ring was simply
+                           absent (sampled at y=200, librsvg black at x=26/30/
+                           370/374, GDI+ white at every one), and the file sat
+                           at MAE 98.7 with 72% white against librsvg's 57%.
+                           Legacy gets the ring by accident -- its CV_ARC calls
+                           Ellipse(), which strokes with whatever pen is
+                           current -- so this gap is GDI+-only. */
+                        int acx = (INT)cv->cmds[j].p0;
+                        int acy = (INT)cv->cmds[j].p1;
+                        int ar  = (INT)cv->cmds[j].p2;
+                        GdipDrawEllipseI(g, cur_pen, acx - ar, acy - ar,
+                                         ar * 2, ar * 2);
+                    }
                     if (k == CV_LINE) {
                         GdipDrawLineI(g, cur_pen,
                                       (INT)cv->cmds[j].p0, (INT)cv->cmds[j].p1,
