@@ -41,11 +41,38 @@ SCRIPT_DIR = Path(__file__).resolve().parent           # vg/test
 AEVG_ROOT = SCRIPT_DIR.parent.parent                   # repo root (aether-ui)
 # Post-re-namespace (2026-07): the loader binary is the aeb-built
 # svg_render_png app, not the old build.sh `build/svg_render`.
-RENDER_BIN = AEVG_ROOT / 'target' / 'build' / 'apps' / 'svg_render_png' / 'bin' / 'svg_render_png'
+# Probe for the .exe rather than testing os.name: under MSYS2 python reports
+# os.name == 'posix' while aeb still emits svg_render_png.exe, so a platform
+# test picks the wrong name on exactly the box that needs the suffix.
+_RENDER_DIR = AEVG_ROOT / 'target' / 'build' / 'apps' / 'svg_render_png' / 'bin'
+RENDER_BIN = (_RENDER_DIR / 'svg_render_png.exe') if (_RENDER_DIR / 'svg_render_png.exe').exists() \
+             else (_RENDER_DIR / 'svg_render_png')
 BUILD_SH = AEVG_ROOT / 'build.sh'      # only used by the --transpile path (removed; that path is stale)
 
 # Default corpus: the cosyne 208-file W3C/CVG set. Override with --svg-dir.
-DEFAULT_SVG_DIR = Path.home() / 'scm' / 'tsyne' / 'tsyne' / 'cosyne' / 'test' / 'svg'
+# MSYS2's python defaults stdout to cp1252, which cannot encode the U+2713
+# tick this harness prints per file. The run then dies with UnicodeEncodeError
+# on the FIRST SUCCESSFUL render -- i.e. it crashes precisely because things
+# started working. Force UTF-8 rather than make every Windows caller remember
+# PYTHONIOENCODING.
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
+def _default_svg_dir():
+    # Path.home() raises RuntimeError when HOME/USERPROFILE are unset, which is
+    # exactly the case in a non-interactive `ssh box 'cmd'` shell on MSYS2. It
+    # used to be evaluated at import time, so the harness died before argparse
+    # could even see a --svg-dir that made it irrelevant.
+    try:
+        base = Path.home()
+    except RuntimeError:
+        base = Path(os.environ.get('HOME') or os.environ.get('USERPROFILE') or '.')
+    return base / 'scm' / 'tsyne' / 'tsyne' / 'cosyne' / 'test' / 'svg'
+
+DEFAULT_SVG_DIR = _default_svg_dir()
 DEFAULT_OUTPUT = SCRIPT_DIR / 'screenshots' / 'svg-compare-aevg'
 
 SIZE = 400
