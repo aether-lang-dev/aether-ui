@@ -5256,6 +5256,10 @@ void aether_ui_clear_children_impl(int handle) {
 #include <pthread.h>
 #include <signal.h>
 #include <errno.h>
+// The SHARED driver's hook contract. GTK4 fills AetherDriverHooks below;
+// aether_ui_test_server.c is not yet compiled into this backend, so only the
+// type declarations are used for now (docs/design/one-driver-not-two.md).
+#include "aether_ui_test_server.h"
 
 // Sealed widgets — test server refuses to interact with these.
 static int* sealed_widgets = NULL;
@@ -7226,6 +7230,140 @@ static int test_server_port = 0;
 
 // Nonzero once the driver's test server is armed (see on_canvas_move).
 static int aeui_remote_controlled(void) { return test_server_port != 0; }
+
+// ---------------------------------------------------------------------------
+// AetherDriverHooks — GTK4's side of the SHARED driver
+// ---------------------------------------------------------------------------
+//
+// Added ahead of the switch-over, so the table can be compiled and reviewed
+// while the embedded server still runs. Nothing calls these yet; the flip is a
+// separate commit (docs/design/one-driver-not-two.md).
+//
+// THE ONE THING THAT IS NOT LIKE macOS. macOS fills these and lets the shared
+// server call the read-only ones straight from the HTTP thread, because AppKit
+// tolerates that. GTK does not: a server-thread widget walk races the UI
+// thread and trips GTK's css-node global parent cache, aborting in
+// gtkcssnode.c with "node->cache == NULL" (observed live -- see the comment
+// above widgets_json_idle). So GTK4 supplies run_on_ui_thread and the shared
+// server services the WHOLE request over there. These hooks are therefore
+// written as if already on the GTK thread, and MUST NOT be called otherwise.
+
+typedef struct { void (*fn)(void*); void* arg; volatile int done; } AeuiUiCall;
+
+static gboolean aeui_ui_call_idle(gpointer data) {
+    AeuiUiCall* c = (AeuiUiCall*)data;
+    c->fn(c->arg);
+    c->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
+// Blocking hop onto the GTK thread. Same fill/g_idle_add/spin discipline as
+// test_action_idle and widgets_json_idle, which is what the shared server's
+// contract requires ("MUST block: the caller reads the response back
+// immediately").
+static void hook_run_on_ui_thread(void (*fn)(void*), void* arg) {
+    AeuiUiCall c = { fn, arg, 0 };
+    g_idle_add(aeui_ui_call_idle, &c);
+    while (!c.done) g_usleep(200);
+}
+
+static int hook_widget_count(void) { return aether_ui_widget_count_impl(); }
+
+static const char* hook_widget_type(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return "null";
+    return widget_type_name(w);
+}
+
+static void hook_widget_text_into(int handle, char* buf, int bufsize) {
+    buf[0] = '\0';
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    const char* t = widget_text_content(w);
+    if (t) { strncpy(buf, t, (size_t)bufsize - 1); buf[bufsize - 1] = '\0'; }
+}
+
+static int hook_widget_visible(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    return (w && gtk_widget_get_visible(w)) ? 1 : 0;
+}
+
+static int hook_widget_parent(int handle) { return parent_handle_for(handle); }
+
+static int hook_widget_enabled(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    return (w && gtk_widget_get_sensitive(w)) ? 1 : 0;
+}
+
+static int hook_toggle_active(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_CHECK_BUTTON(w)) return 0;
+    return gtk_check_button_get_active(GTK_CHECK_BUTTON(w)) ? 1 : 0;
+}
+
+static double hook_slider_value(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_RANGE(w)) return 0.0;
+    return gtk_range_get_value(GTK_RANGE(w));
+}
+
+static double hook_progressbar_fraction(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_PROGRESS_BAR(w)) return 0.0;
+    return gtk_progress_bar_get_fraction(GTK_PROGRESS_BAR(w));
+}
+
+static int hook_widget_hovered(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return 0;
+    return (gtk_widget_get_state_flags(w) & GTK_STATE_FLAG_PRELIGHT) ? 1 : 0;
+}
+
+static int hook_widget_pressed(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return 0;
+    return (gtk_widget_get_state_flags(w) & GTK_STATE_FLAG_ACTIVE) ? 1 : 0;
+}
+
+static int hook_focused_widget(void) { return aether_ui_focused_widget(); }
+
+static int hook_widget_children(int handle, int* out_handles, int max) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return 0;
+    int n = 0;
+    for (GtkWidget* child = gtk_widget_get_first_child(w);
+         child; child = gtk_widget_get_next_sibling(child)) {
+        int ch = handle_for_widget(child);
+        if (ch > 0) {
+            if (out_handles && n < max) out_handles[n] = ch;
+            n++;
+        }
+    }
+    return n;
+}
+
+static const AetherDriverHooks gtk4_driver_hooks = {
+    .widget_count         = hook_widget_count,
+    .widget_type          = hook_widget_type,
+    .widget_text_into     = hook_widget_text_into,
+    .widget_visible       = hook_widget_visible,
+    .widget_parent        = hook_widget_parent,
+    .toggle_active        = hook_toggle_active,
+    .slider_value         = hook_slider_value,
+    .progressbar_fraction = hook_progressbar_fraction,
+    .widget_children      = hook_widget_children,
+    .widget_enabled       = hook_widget_enabled,
+    .focused_widget       = hook_focused_widget,
+    .widget_hovered       = hook_widget_hovered,
+    .widget_pressed       = hook_widget_pressed,
+    // The GTK-specific one macOS and win32 leave NULL.
+    .run_on_ui_thread     = hook_run_on_ui_thread,
+    // dispatch_action, widget_rect, widget_classes_into, widget_a11y,
+    // screenshot_png and canvas_debug are deliberately still NULL: each is a
+    // separate commit, and dispatch_action in particular must be written BY
+    // VERB rather than by number (GTK4's private action ids collide with the
+    // shared enum -- see tests/driver_actions).
+};
 
 void aether_ui_enable_test_server_impl(int port, int root_handle) {
     test_server_port = port;

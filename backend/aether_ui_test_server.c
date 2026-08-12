@@ -387,6 +387,18 @@ static void dispatch_and_reply(aether_sock_t client_fd,
                                 AetherDriverActionCtx* ctx,
                                 const char* ok_msg) {
     (void)ok_msg;  // responses are now a uniform JSON envelope (see below)
+    // Every OTHER optional hook is NULL-guarded at its call site; this one was
+    // dereferenced unconditionally because both existing backends fill it. A
+    // backend adopting the hooks INCREMENTALLY (GTK4, mid-migration) would
+    // crash here rather than degrade, so treat an absent dispatcher the same
+    // way an unsupported action is treated: result 3 -> 404, which the routes
+    // already know how to answer honestly.
+    if (!h->dispatch_action) {
+        ctx->result = 3;
+        send_http(client_fd, 404, "Not Found", "application/json",
+                  "{\"error\":\"no action dispatcher on this backend\"}");
+        return;
+    }
     h->dispatch_action(ctx);
     // Reply in the same JSON shape as the GTK driver (gtk4.c) so the shared
     // AetherUIDriver harness (test_automation.sh) passes identically on both
