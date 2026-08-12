@@ -24,6 +24,7 @@
 import ui
 import vg.backend.gtk
 import vg.svg.loader
+import vg.region
 import std.string
 import std.os (os_getenv)
 
@@ -65,9 +66,40 @@ main() {
         // canvas_fill_text for the renderers' text paths to be compared.
         svg = cat(svg, "<text x='12' y='100' font-size='26' fill='#101018'>Hamburgefons</text>")
         svg = cat(svg, "<text x='12' y='134' font-size='20' fill='#2563eb'>AVWA 0123</text>")
+        // A DARK patch, so the translucent blit below has something other
+        // than white underneath. This is the whole point: legacy GDI cannot
+        // blit alpha, so CV_DRAW_IMAGE flattens each pixel against WHITE
+        // before StretchDIBits -- "(approximately) composite onto the white
+        // backing", per its own comment. Over white that looks right; over
+        // this rectangle it is visibly wrong, and GDI+ should differ here
+        // structurally rather than by a pixel of antialiasing.
+        svg = cat(svg, "<rect x='140' y='96' width='90' height='56' fill='#101018'/>")
         svg = cat(svg, "</svg>")
 
         _ctx = loader.load_svg(backend, svg, 240.0, 160.0)
+
+        // CV_DRAW_IMAGE — a 40x40 RGBA square at 50% alpha, blitted over the
+        // dark rectangle above. Built in-process rather than loaded from a
+        // file so the scene stays self-contained and byte-exact.
+        IW = 40
+        IH = 40
+        buf = region.new_frame_buffer(IW, IH)
+        py = 0
+        while py < IH {
+            px = 0
+            while px < IW {
+                // Amber at half alpha. Correct compositing over #101018
+                // gives roughly #6F5626; flattening against white gives
+                // roughly #ECD09E. Those are far apart -- deliberately, so
+                // the difference cannot be mistaken for antialiasing.
+                region.buf_set_px(buf, py * IW + px, 217, 161, 60, 128)
+                px = px + 1
+            }
+            py = py + 1
+        }
+        rgba = region.frame_finish(buf, IW, IH)
+        ui.canvas_draw_image(c, 150.0, 104.0, IW, IH, rgba, IW * IH * 4)
+
         ui.canvas_redraw(c)
     }
     if os_getenv("AETHER_UI_TEST_PORT") != null {
