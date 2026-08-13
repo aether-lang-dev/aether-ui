@@ -320,7 +320,22 @@ geometry and paint state, the backend only draws it. Concretely:
         (librsvg gives 400x200). GTK4 scores it only because its shape still
         fills the canvas. Worth fixing in the harness, separately.
 
-      Remaining: macOS, then rotation on win32/macOS.
+      **macOS DONE 2026-08-13**, built and verified on the real Mac KVM
+      (`ssh macvm`). CoreGraphics draws only circular radial gradients, but
+      the CTM is ours to bend inside the existing SaveGState/RestoreGState
+      pair: translate, rotate, scale, then draw a UNIT circle. That makes
+      macOS the ONLY backend doing the full ellipse INCLUDING rotation, and
+      it scores **4/4** on the oracle (2.01 / 0.50 / 0.99 / 2.02) -- the
+      only backend to score the objectBoundingBox case, which GDI+ cannot
+      measure and which needed the CTM to get right.
+
+      First macOS corpus baseline against librsvg, while we were there:
+      **1.82** on the 167 viewBox files (155 good / 8 ok / 4 diff), 3.55
+      all-files -- level with GTK4's 1.77 and ahead of GDI+'s 3.00.
+
+      Remaining: rotation on win32 (needs GdipSetWorldTransform, not yet
+      declared there; no corpus file exercises it, so the test's third
+      EXPECTED-FAIL is the only thing that will catch it).
 
    4. Only once all three consume it: remove the scalar radius from the
       three loss sites, flip `STRICT` to 1, and narrow the ABI if the two

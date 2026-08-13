@@ -3564,6 +3564,10 @@ typedef struct {
     int iw, ih;     // DRAW_IMAGE pixel dims
     double gx1, gy1, gx2, gy2, gr, gfx, gfy;  // gradient geometry
     double grad_line_width;  // 0 → fill; >0 → stroke at this width
+    /* The ELLIPSE a gradientTransform (or a non-square objectBoundingBox)
+       produces: semi-axes and tilt. gr keeps the old scalar answer, so a
+       command with grx == 0 renders exactly as it always did. */
+    double grx, gry, grot;
     int n_stops;
     double* stop_off;   // owned: offsets
     double* stop_rgba;  // owned: n_stops*4 colour comps
@@ -3812,6 +3816,40 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                             CGContextDrawLinearGradient(cg, grad,
                                 CGPointMake(c->gx1, c->gy1),
                                 CGPointMake(c->gx2, c->gy2),
+                                kCGGradientDrawsBeforeStartLocation |
+                                kCGGradientDrawsAfterEndLocation);
+                        } else if (c->grx > 0 && c->gry > 0 &&
+                                   (fabs(c->grx - c->gry) > 0.01 ||
+                                    fabs(c->grot) > 0.01)) {
+                            /* A TRUE ELLIPSE. CGContextDrawRadialGradient
+                               only draws circles, but the CTM is ours to
+                               bend: translate to the centre, rotate by the
+                               tilt, scale the axes, then draw a UNIT circle
+                               in that space. Already inside a
+                               SaveGState/RestoreGState pair, so the CTM
+                               change cannot leak.
+
+                               The focal point is transformed the same way --
+                               per axis, de-rotated first -- because it lives
+                               in the same space. Collapsing it to one
+                               distance is only right for a circle and cost
+                               intertwingly.svg +2.90 when GTK4 landed. */
+                            double fdx = c->gfx - c->gx1;
+                            double fdy = c->gfy - c->gy1;
+                            if (fabs(c->grot) > 0.01) {
+                                double a = -c->grot * M_PI / 180.0;
+                                double ca = cos(a), sa = sin(a);
+                                double tx = fdx * ca - fdy * sa;
+                                double ty = fdx * sa + fdy * ca;
+                                fdx = tx; fdy = ty;
+                            }
+                            CGContextTranslateCTM(cg, c->gx1, c->gy1);
+                            if (fabs(c->grot) > 0.01)
+                                CGContextRotateCTM(cg, c->grot * M_PI / 180.0);
+                            CGContextScaleCTM(cg, c->grx, c->gry);
+                            CGContextDrawRadialGradient(cg, grad,
+                                CGPointMake(fdx / c->grx, fdy / c->gry), 0,
+                                CGPointMake(0, 0), 1.0,
                                 kCGGradientDrawsBeforeStartLocation |
                                 kCGGradientDrawsAfterEndLocation);
                         } else {
@@ -4332,14 +4370,11 @@ void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join, double rx, double ry, double rot_deg) {
-    /* Not consumed yet -- this backend still reads the scalar `radius`, which
-       the vg layer keeps populated. Step 3 of the ratchet converts one
-       backend at a time; see TODO.md. */
-    (void)rx; (void)ry; (void)rot_deg;
     (void)extend; // spreadMethod not yet honored on the CoreGraphics backend
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
-                      .grad_line_width = line_width, .iw = cap, .ih = join };
+                      .grad_line_width = line_width, .iw = cap, .ih = join,
+                      .grx = rx, .gry = ry, .grot = rot_deg };
     macos_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }
