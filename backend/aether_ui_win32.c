@@ -4525,7 +4525,7 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
 // ---------------------------------------------------------------------------
 typedef enum {
     CV_BEGIN, CV_MOVE, CV_LINE, CV_STROKE, CV_FILL_RECT, CV_CLEAR,
-    CV_ARC, CV_CLOSE, CV_FILL, CV_FILL_TEXT, CV_DRAW_IMAGE,
+    CV_ARC, CV_CLOSE, CV_FILL, CV_FILL_TEXT, CV_STROKE_TEXT, CV_DRAW_IMAGE,
     CV_FILL_LINEAR, CV_FILL_RADIAL,
     /* True group opacity: composite everything between BEGIN and END into an
        offscreen layer, then paint that layer ONCE at the group alpha, so
@@ -4884,8 +4884,12 @@ void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
                                         double line_width, int font_flags,
                                         double r, double g, double b, double a) {
-    (void)canvas_id; (void)text; (void)x; (void)y; (void)font_size;
-    (void)line_width; (void)font_flags; (void)r; (void)g; (void)b; (void)a;
+    (void)font_flags;
+    CanvasCmd c = {0};
+    c.k = CV_STROKE_TEXT; c.p0 = x; c.p1 = y; c.p2 = font_size; c.p3 = line_width;
+    c.cr = r; c.cg = g; c.cb = b; c.calpha = a;
+    c.text = text ? _strdup(text) : NULL;
+    canvas_add_cmd(canvas_id, c);
 }
 
 // Text metrics — REAL via GDI (2026-07-20). A screen-DC scratch font at the
@@ -5001,7 +5005,7 @@ static void canvas_free_text(int canvas_id) {
     Canvas* cv = &canvases[canvas_id - 1];
     for (int i = 0; i < cv->cmd_count; i++) {
         CanvasCmd* c = &cv->cmds[i];
-        if (c->k == CV_FILL_TEXT && c->text) {
+        if ((c->k == CV_FILL_TEXT || c->k == CV_STROKE_TEXT) && c->text) {
             free(c->text); c->text = NULL;
         }
         if (c->k == CV_DRAW_IMAGE && c->pixels) {
@@ -6563,6 +6567,27 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     GdipDeleteFont(font);
                 }
                 GdipDeleteFontFamily(fam);
+                break;
+            }
+            case CV_STROKE_TEXT: {
+                /* SVG stroke on <text> -- NOT DRAWN, deliberately.
+                   aether_ui_canvas_stroke_text_impl now records the command
+                   (it used to discard it), but there is no correct way to
+                   paint it here yet: GdipDrawString can only FILL, and a
+                   filled second pass in the stroke colour OVERPAINTS the fill
+                   instead of outlining it. Measured -- that approximation
+                   moved Steps.svg from 38.66 to 42.80, i.e. AWAY from GTK4's
+                   33.58, so it is wrong rather than merely coarse.
+
+                   The right implementation takes glyph outlines as strokable
+                   geometry via GdipAddPathString/I. Those are declared
+                   nowhere here on purpose: getting them working needs the
+                   marshalling verified against a probe (an isolated one calls
+                   both variants fine), which is a task of its own.
+
+                   Minimal repro kept at vg/test/svg/text_stroke_repro.svg:
+                   librsvg and GTK4 draw a red B with a blue outline, GDI+ a
+                   plain red one. */
                 break;
             }
             case CV_DRAW_IMAGE: {
