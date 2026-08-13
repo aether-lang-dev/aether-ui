@@ -5932,6 +5932,31 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    legacy's brush here is whatever was last selected, which
                    for the vg dispatch is the stock brush, i.e. no fill. */
                 int cx = (INT)cmd->p0, cy = (INT)cmd->p1, rad = (INT)cmd->p2;
+                /* DON'T DRAW WITH A STALE PEN. cur_pen is whatever the LAST
+                   CV_STROKE set, and it persists across commands -- so a
+                   circle that carries its own stroke got outlined here with
+                   the PREVIOUS element's pen, before its own CV_STROKE
+                   arrived. Traced: caution.svg's r=24 dot stroked at width 36
+                   (the `!` stem's stroke-width 9 x scale 4), giving an outer
+                   radius of 42 against librsvg's 26 -- the oversized dot that
+                   touches the stem. basura.svg's r=24 head stroked at width 48
+                   (the ring's stroke-width 12), which is the "green halo"
+                   eating the ring's inner edge.
+
+                   Same look-ahead the CV_LINE case uses: if a consumer is
+                   coming for this path, leave it to them. CV_STROKE's
+                   walk-back already redraws CV_ARC with the correct pen, so
+                   drawing here was redundant as well as wrong. */
+                int arc_consumer = 0;
+                for (int j = i + 1; j < cv->cmd_count; j++) {
+                    CanvasCmdKind k2 = cv->cmds[j].k;
+                    if (k2 == CV_BEGIN) break;
+                    if (k2 == CV_STROKE || k2 == CV_FILL ||
+                        k2 == CV_FILL_LINEAR || k2 == CV_FILL_RADIAL) {
+                        arc_consumer = 1; break;
+                    }
+                }
+                if (arc_consumer) break;
                 GpPen* pen = cur_pen;
                 int owned = 0;
                 if (!pen && GdipCreatePen1(0xFF000000, 1.0f,
