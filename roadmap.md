@@ -437,10 +437,13 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
 - **Widget Inspector (Flutter DevTools)** — a live tree browser over the
   existing AetherUIDriver; itself an aether-ui app. The protocol already
   exists; the inspector is a client.
-- **Golden-image tests (Flutter)** — /screenshot + per-platform golden
-  PNGs + MAE gate (the librsvg-parity philosophy applied to widgets).
-  Would have caught the win32 h:0 era, when everything rendered 0-tall
-  for weeks while click-specs stayed green.
+- ~~**Golden-image tests (Flutter)**~~ **DONE 2026-08-01** (67d3cb6) —
+  shipped as `examples/golden_gallery` + `tests/goldens/<backend>/*.sig`,
+  blessed on gtk4/win32/macOS and driven by the `golden` suite in every
+  spec_matrix run. Landed as per-cell SIGNATURE files rather than PNG
+  diffing: text, git-diffable, and no image decoder needed on any
+  platform. PNGs still land in `target/golden_out/` for human eyes.
+  See TODO.md for the original sketch.
 - **NavigationStack × swiby sweb pages** — real push/pop navigation with
   back chrome (the navstack ABI exists as an unexercised stub) + swiby's
   multi-page app shape ($context.goto + session).
