@@ -396,7 +396,7 @@ extern aether_ui_canvas_fill_linear_gradient_impl(canvas_id: int,
 extern aether_ui_canvas_fill_radial_gradient_impl(canvas_id: int,
         cx: float, cy: float, radius: float, fx: float, fy: float,
         n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
-        cap: int, join: int)
+        cap: int, join: int, rx: float, ry: float, rot_deg: float)
 extern aether_ui_canvas_fill_rect_impl(canvas_id: int, x: float, y: float,
                                   w: float, h: float,
                                   r: float, g: float, b: float, a: float)
@@ -3161,11 +3161,14 @@ canvas_fill_linear_gradient(cid: int, x1: float, y1: float, x2: float, y2: float
 // Paint the current path with a radial gradient: center (cx,cy),
 // radius, focal point (fx,fy). Stops as for the linear variant.
 // line_width = 0 fills; > 0 strokes. extend = SVG spreadMethod.
+// rx/ry/rot_deg: the ELLIPSE. `radius` keeps the old scalar answer, so a
+// backend that ignores rx/ry behaves exactly as before.
 canvas_fill_radial_gradient(cid: int, cx: float, cy: float, radius: float,
                             fx: float, fy: float,
                             n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
-                            cap: int, join: int) {
-    aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, radius, fx, fy, n_stops, offsets, rgba, line_width, extend, cap, join)
+                            cap: int, join: int,
+                            rx: float, ry: float, rot_deg: float) {
+    aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, radius, fx, fy, n_stops, offsets, rgba, line_width, extend, cap, join, rx, ry, rot_deg)
 }
 
 canvas_clear(cid: int) {

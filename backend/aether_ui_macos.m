@@ -4331,7 +4331,11 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
-        int cap, int join) {
+        int cap, int join, double rx, double ry, double rot_deg) {
+    /* Not consumed yet -- this backend still reads the scalar `radius`, which
+       the vg layer keeps populated. Step 3 of the ratchet converts one
+       backend at a time; see TODO.md. */
+    (void)rx; (void)ry; (void)rot_deg;
     (void)extend; // spreadMethod not yet honored on the CoreGraphics backend
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,

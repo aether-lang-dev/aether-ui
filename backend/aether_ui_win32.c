@@ -4989,7 +4989,11 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
-        int cap, int join) {
+        int cap, int join, double rx, double ry, double rot_deg) {
+    /* Not consumed yet -- this backend still reads the scalar `radius`, which
+       the vg layer keeps populated. Step 3 of the ratchet converts one
+       backend at a time; see TODO.md. */
+    (void)rx; (void)ry; (void)rot_deg;
     CanvasCmd c = {0};
     c.k = CV_FILL_RADIAL; c.grad_extend = extend; c.gx1 = cx; c.gy1 = cy; c.gr = radius;
     c.gfx = fx; c.gfy = fy; c.grad_line_width = line_width;

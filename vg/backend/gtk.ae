@@ -374,7 +374,10 @@ apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_widt
         r  = opt_f(opts, string.concat(prefix, "R"),  0.0)
         fx = opt_f(opts, string.concat(prefix, "FX"), cx)
         fy = opt_f(opts, string.concat(prefix, "FY"), cy)
-        ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend, cap, join)
+        rx = opt_f(opts, string.concat(prefix, "RX"), 0.0)
+        ry = opt_f(opts, string.concat(prefix, "RY"), 0.0)
+        rot = opt_f(opts, string.concat(prefix, "ROT"), 0.0)
+        ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend, cap, join, rx, ry, rot)
     } else {
         x1 = opt_f(opts, string.concat(prefix, "X1"), 0.0)
         y1 = opt_f(opts, string.concat(prefix, "Y1"), 0.0)

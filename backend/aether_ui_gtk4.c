@@ -3676,6 +3676,10 @@ typedef struct {
     double gx1, gy1, gx2, gy2, gr, gfx, gfy, grad_line_width;
     int n_stops;
     int grad_extend;         // 0=pad, 1=reflect, 2=repeat (SVG spreadMethod)
+    /* The ELLIPSE a gradientTransform (or a non-square objectBoundingBox)
+       produces: semi-axes and tilt. gr keeps the old scalar answer, so a
+       command with grx == 0 renders exactly as it always did. */
+    double grx, gry, grot;
     double* stop_off;        // owned: n_stops offsets (0..1)
     double* stop_rgba;       // owned: n_stops*4 colour comps (0..1)
 } CanvasCmd;
@@ -3982,6 +3986,45 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 cairo_pattern_t* pat;
                 if (c->type == CANVAS_FILL_LINEAR) {
                     pat = cairo_pattern_create_linear(c->gx1, c->gy1, c->gx2, c->gy2);
+                } else if (c->grx > 0.0 && c->gry > 0.0 &&
+                           (fabs(c->grx - c->gry) > 0.01 || fabs(c->grot) > 0.01)) {
+                    /* A TRUE ELLIPSE. cairo only makes circular radial
+                       patterns, but a pattern carries its own matrix, so
+                       build a unit circle and map it onto the ellipse:
+                       translate to the centre, rotate by the tilt, scale the
+                       axes. The pattern matrix runs USER -> PATTERN space, so
+                       it is the INVERSE of that composition.
+
+                       Without this the ellipse was flattened to a circle of
+                       the average radius before any backend saw it -- see
+                       vg/test/svg/radial_ellipse_repro.svg (axis ratio 2.00
+                       required, a circle reads 1.00). */
+                    /* The focal point lives in PATTERN space too, so scale
+                       its offset PER AXIS rather than collapsing it to one
+                       distance -- dividing |f-c| by grx alone is only right
+                       for a circle, and it moved intertwingly.svg (an
+                       objectBoundingBox radial with fx/fy on a non-square
+                       shape) by +2.90. Undo the tilt first so the offset is
+                       expressed along the ellipse's own axes. */
+                    double fdx = c->gfx - c->gx1, fdy = c->gfy - c->gy1;
+                    if (fabs(c->grot) > 0.01) {
+                        double a = -c->grot * G_PI / 180.0;
+                        double ca = cos(a), sa = sin(a);
+                        double tx = fdx * ca - fdy * sa;
+                        double ty = fdx * sa + fdy * ca;
+                        fdx = tx; fdy = ty;
+                    }
+                    double fpx = (c->grx > 0.0) ? fdx / c->grx : 0.0;
+                    double fpy = (c->gry > 0.0) ? fdy / c->gry : 0.0;
+                    pat = cairo_pattern_create_radial(fpx, fpy, 0.0, 0.0, 0.0, 1.0);
+                    cairo_matrix_t m;
+                    cairo_matrix_init_identity(&m);
+                    cairo_matrix_translate(&m, c->gx1, c->gy1);
+                    if (fabs(c->grot) > 0.01)
+                        cairo_matrix_rotate(&m, c->grot * G_PI / 180.0);
+                    cairo_matrix_scale(&m, c->grx, c->gry);
+                    cairo_matrix_invert(&m);
+                    cairo_pattern_set_matrix(pat, &m);
                 } else {
                     // Radial: inner circle at the focal point (radius 0),
                     // outer circle at the center with radius gr.
@@ -4853,11 +4896,12 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
-        int cap, int join) {
+        int cap, int join, double rx, double ry, double rot_deg) {
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
                       .grad_line_width = line_width, .grad_extend = extend,
-                      .iw = cap, .ih = join };
+                      .iw = cap, .ih = join,
+                      .grx = rx, .gry = ry, .grot = rot_deg };
     canvas_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }

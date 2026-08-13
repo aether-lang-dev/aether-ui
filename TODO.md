@@ -285,11 +285,24 @@ geometry and paint state, the backend only draws it. Concretely:
       floats.
 
    3. Per backend, one at a time: consume the new key, keep the old as the
-      fallback when it is absent. GTK4 first (cairo takes a matrix on the
-      pattern, so it is the smallest step and the reference backend), then
-      win32, then macOS. Each lands independently, each verified against
-      the repro's axis ratio, with the corpus watched only for regressions
-      on the ~16 currently-good files.
+      fallback when it is absent. **GTK4 DONE 2026-08-13** — cairo patterns
+      carry their own matrix, so a unit-circle radial mapped by
+      translate/rotate/scale expresses the ellipse exactly. Scores **4/4**
+      on the axis-ratio oracle (1.98 / 0.51 / 1.00 / 2.02, matching
+      librsvg), and the corpus improved with **nothing regressing**:
+      mean 3.44 -> 3.27, radialgradient1 15.54 -> 0.89,
+      rg1024_Ufo_in_metalic_style 15.99 -> 3.15, intertwingly 2.43 -> 0.98.
+      win32 and macOS accept the widened ABI and explicitly ignore the new
+      arguments, still reading the scalar `radius` — so they are unchanged
+      and the step was not a cliff.
+
+      Gotcha worth keeping: the focal point lives in PATTERN space, so its
+      offset must be scaled PER AXIS (and de-rotated first). Collapsing it
+      to `|f-c| / rx` is only correct for a circle and cost intertwingly
+      +2.90 before it was fixed.
+
+      Remaining: win32, then macOS.
+
    4. Only once all three consume it: remove the scalar radius from the
       three loss sites, flip `STRICT` to 1, and narrow the ABI if the two
       gradient calls can now converge.

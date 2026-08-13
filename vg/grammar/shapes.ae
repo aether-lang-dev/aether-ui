@@ -216,6 +216,14 @@ emit_gradient_for(ctx: ptr, style: ptr, opts: ptr, source_key: string, prefix: s
         gr  = defs.gradient_r(gdef)
         gfx = defs.gradient_fx(gdef)
         gfy = defs.gradient_fy(gdef)
+        // Ellipse geometry carried ALONGSIDE the scalar R (step 2 of the
+        // ratchet in TODO.md). ${prefix}RX/${prefix}RY/${prefix}ROT describe
+        // what the gradient actually is; R keeps the old average-scale
+        // answer so a backend that has not been converted still works.
+        // A backend reads RX/RY when present and falls back to R.
+        grx = defs.gradient_rx(gdef)
+        gry = defs.gradient_ry(gdef)
+        grot = defs.gradient_rot_deg(gdef)
         if user_space == 1 {
             pc = rendering.map_point(ctx, gcx, gcy)
             pf = rendering.map_point(ctx, gfx, gfy)
@@ -225,6 +233,15 @@ emit_gradient_for(ctx: ptr, style: ptr, opts: ptr, source_key: string, prefix: s
             opt_set_f(opts, string.concat(prefix, "R"),  rendering.map_length(ctx, gr) * avg)
             opt_set_f(opts, string.concat(prefix, "FX"), transform.pt_x(pf))
             opt_set_f(opts, string.concat(prefix, "FY"), transform.pt_y(pf))
+            // The current transform is applied to each semi-axis the same
+            // way R gets it. This is the SECOND loss site: a non-uniform
+            // CURRENT transform would flatten the ellipse again even after
+            // defs.ae preserved it, so both axes travel through map_length.
+            opt_set_f(opts, string.concat(prefix, "RX"),
+                      rendering.map_length(ctx, grx) * avg)
+            opt_set_f(opts, string.concat(prefix, "RY"),
+                      rendering.map_length(ctx, gry) * avg)
+            opt_set_f(opts, string.concat(prefix, "ROT"), grot)
         } else {
             // objectBoundingBox: 0..1 over the shape bbox.
             opt_set_f(opts, string.concat(prefix, "CX"), bx + gcx * bw)
@@ -236,6 +253,13 @@ emit_gradient_for(ctx: ptr, style: ptr, opts: ptr, source_key: string, prefix: s
             opt_set_f(opts, string.concat(prefix, "R"),  gr * rext)
             opt_set_f(opts, string.concat(prefix, "FX"), bx + gfx * bw)
             opt_set_f(opts, string.concat(prefix, "FY"), by + gfy * bh)
+            // THE THIRD LOSS SITE, and the one `max(bw,bh)` above embodies:
+            // objectBoundingBox maps the unit gradient circle THROUGH the
+            // bbox, so a non-square shape gives an ellipse. Each axis scales
+            // by its own extent -- no max(), no approximation.
+            opt_set_f(opts, string.concat(prefix, "RX"), grx * bw)
+            opt_set_f(opts, string.concat(prefix, "RY"), gry * bh)
+            opt_set_f(opts, string.concat(prefix, "ROT"), grot)
         }
     } else {
         opt_set_s(opts, string.concat(prefix, "Type"), "linear")

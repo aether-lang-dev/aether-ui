@@ -395,10 +395,14 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join);
+/* rx/ry/rot_deg describe the ELLIPSE a gradientTransform (or a non-square
+   objectBoundingBox) actually produces; `radius` keeps the old scalar
+   average-scale answer so a backend that has not been converted still works.
+   Read rx/ry when rx > 0, else fall back to radius. */
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
-        int cap, int join);
+        int cap, int join, double rx, double ry, double rot_deg);
 void aether_ui_canvas_clear_impl(int canvas_id);
 void aether_ui_canvas_redraw_impl(int canvas_id);
 // Off-screen render of the canvas command buffer to a PNG. Headless-capable
