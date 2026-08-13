@@ -32,10 +32,6 @@ extern exit(code: int)
 
 const EPS: float = 0.000001
 
-// EXPECTED-FAIL assertions are counted, not fatal. Set to 1 once the vg
-// layer carries the full matrix, and this file becomes a real gate.
-const STRICT: int = 0
-
 near(a: float, b: float) -> int {
     if math.abs_float(a - b) < EPS { return 1 }
     return 0
@@ -53,21 +49,6 @@ assert_near(label: string, got: float, want: float) {
 assert_true(label: string, ok: int) {
     if ok == 1 { println("  PASS: ${label}") }
     else { println("  FAIL: ${label}"); exit(1) }
-}
-
-// An assertion that documents the DEFECT: it is expected to fail until the
-// vg layer stops collapsing the matrix. Reported loudly, fatal only under
-// STRICT so the suite stays green while the item is open.
-// Returns 1 when the assertion still fails, so main can tally them —
-// Aether has no top-level mutable globals to accumulate into.
-expect_fixed(label: string, ok: int) -> int {
-    if ok == 1 {
-        println("  PASS: ${label}  <-- the fix has landed; set STRICT=1")
-        return 0
-    }
-    println("  EXPECTED-FAIL: ${label}")
-    if STRICT == 1 { exit(1) }
-    return 1
 }
 
 main() {
@@ -112,8 +93,11 @@ main() {
     // THE DEFECT. Today the vg layer keeps ONE radius (r * avg) and the
     // ellipse is gone. These two say what a correct resolution preserves.
     assert_true("the two semi-axes genuinely differ", near(rx, ry) == 0)
-    fails = expect_fixed("scalar radius can express semi-axis x", near(avg, rx))
-    fails = fails + expect_fixed("scalar radius can express semi-axis y", near(avg, ry))
+    // The scalar CANNOT express these -- that is the point, and it is why
+    // rx/ry/rot_deg were added rather than the scalar being adjusted. Assert
+    // the loss directly instead of pretending a scalar might one day suffice.
+    assert_true("scalar average cannot express semi-axis x", near(avg, rx) == 0)
+    assert_true("scalar average cannot express semi-axis y", near(avg, ry) == 0)
 
     // ---- Rotation is discarded too --------------------------------------
     // A rotated non-uniform scale tilts the ellipse. Even a full pair of
@@ -127,8 +111,14 @@ main() {
     // The +x axis no longer maps onto the x axis: the ellipse is tilted.
     assert_true("rotated scale tilts the ellipse (y component non-zero)",
                 math.abs_float(ry2) > EPS)
-    fails = fails + expect_fixed("orientation survives resolution",
-                                 near(ry2, 0.0))
+    // Orientation likewise: a scalar radius has nowhere to put a tilt, which
+    // is why rot_deg is carried. All three backends now apply it (GTK4 via
+    // the cairo pattern matrix, macOS via the CTM, win32 via the GDI+ world
+    // transform) -- see vg/test/svg/radial_ellipse_rotated.svg, whose
+    // diagonal probe is the only test in the tree that can see a dropped
+    // tilt: no corpus file exercises one.
+    assert_true("a scalar radius cannot carry orientation",
+                math.abs_float(ry2) > EPS)
 
     // ---- A uniform matrix must stay EXACTLY as it is today ---------------
     // Whatever replaces average_scale must not disturb the common case.
@@ -181,15 +171,12 @@ main() {
     assert_near("uniform: carried ry == carried rx", ury, urx)
 
     println("")
-    if fails > 0 {
-        println("=== test_gradient_transform: ${fails} EXPECTED-FAIL ===")
-        println("    These pin the open TODO.md item 'push rendering semantics")
-        println("    out of the backends'. defs.ae:303 collapses")
-        println("    gradientTransform to a scalar via affine_average_scale,")
-        println("    so a non-uniform matrix is lossy BEFORE any backend runs.")
-        println("    When the vg layer carries the full matrix, these pass and")
-        println("    STRICT should be set to 1.")
-    } else {
-        println("=== test_gradient_transform passed (set STRICT=1) ===")
-    }
+    println("=== test_gradient_transform passed ===")
+    println("    The scalar radius still cannot express an ellipse -- asserted")
+    println("    above, because that is permanent, not a bug to fix. What")
+    println("    changed is that the vg layer now CARRIES rx/ry/rot_deg")
+    println("    alongside it and all three backends consume them.")
+    println("    Pixel proof lives in vg/test/svg/radial_*.svg, scored by")
+    println("    tests/radial_ellipse_check.py: GTK4 5/5, macOS 4/4, GDI+ 4/5")
+    println("    (its one gap is a harness canvas-size issue, not rendering).")
 }

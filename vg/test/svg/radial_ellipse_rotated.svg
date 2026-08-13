@@ -1,0 +1,29 @@
+<!-- A radial gradient under a ROTATED non-uniform gradientTransform.
+     matrix from rotate(45) * scale(2,1): the ellipse is 2:1 but tilted 45
+     degrees, so neither semi-axis lies on the x or y axis.
+
+     Why this file exists: no corpus file exercises a rotated non-uniform
+     radial, so a backend that carries the semi-axes but DROPS the tilt
+     scores perfectly on the whole 208-file corpus while being visibly
+     wrong.
+
+     Measured, not predicted: librsvg reads axis-ratio 1.00 and DIAGONAL
+     ratio 2.02 here. The 45-degree tilt puts the long axis on a diagonal,
+     so a horizontal/vertical probe sees a perfectly round 1.00 and cannot
+     tell this apart from a circle — the diagonal probe is the whole test.
+     A backend that drops the tilt paints the ellipse axis-aligned and its
+     diagonals come out equal, reading ~1.0.
+
+     NB cx/cy are pre-transform: the matrix applies to the centre too, so
+     cx=70.711 cy=0 is what lands the centre at (100,100). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <radialGradient id="rot" gradientUnits="userSpaceOnUse"
+                    cx="70.711" cy="0" r="25"
+                    gradientTransform="matrix(1.41421,1.41421,-0.70711,0.70711,0,0)">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="200" height="200" fill="url(#rot)"/>
+</svg>

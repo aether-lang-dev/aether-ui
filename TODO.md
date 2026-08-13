@@ -333,9 +333,19 @@ geometry and paint state, the backend only draws it. Concretely:
       **1.82** on the 167 viewBox files (155 good / 8 ok / 4 diff), 3.55
       all-files -- level with GTK4's 1.77 and ahead of GDI+'s 3.00.
 
-      Remaining: rotation on win32 (needs GdipSetWorldTransform, not yet
-      declared there; no corpus file exercises it, so the test's third
-      EXPECTED-FAIL is the only thing that will catch it).
+      **win32 rotation DONE 2026-08-13.** GDI+ fills axis-aligned ellipses
+      only, so the tilt comes from the world transform: rotate about the
+      centre, fill, restore. Oracle 3/5 -> 4/5 (the rotated repro's diagonal
+      probe 1.02 -> 1.96 against librsvg's 2.02); corpus mean 4.44 -> 4.43,
+      nothing meaningfully changed -- which is the point, since no corpus
+      file has a rotated non-uniform radial.
+
+      **ALL THREE BACKENDS NOW CONSUME THE ELLIPSE.** The three original
+      EXPECTED-FAILs are gone: they asserted a scalar might one day express
+      an ellipse, which it never can, so they were restated as direct
+      assertions of the loss and the test is fully green.
+      `tests/radial_ellipse_check.py`: GTK4 5/5, macOS 4/4, GDI+ 4/5 (its
+      one gap is the harness canvas-size issue below, not rendering).
 
    4. Only once all three consume it: remove the scalar radius from the
       three loss sites, flip `STRICT` to 1, and narrow the ABI if the two

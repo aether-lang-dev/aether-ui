@@ -5559,6 +5559,20 @@ __declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
 __declspec(dllimport) int __stdcall GdipStartPathFigure(GpPath* path);
 __declspec(dllimport) int __stdcall GdipFillPath(GpGraphics* g, GpBrush* brush,
                                                  GpPath* path);
+/* World transform, for a ROTATED gradient ellipse. GDI+ fills an
+   axis-aligned ellipse only, so the tilt has to come from the CTM. */
+typedef void GpMatrix;
+__declspec(dllimport) int __stdcall GdipCreateMatrix(GpMatrix** matrix);
+__declspec(dllimport) int __stdcall GdipDeleteMatrix(GpMatrix* matrix);
+__declspec(dllimport) int __stdcall GdipTranslateMatrix(GpMatrix* matrix,
+    float offsetX, float offsetY, int order);
+__declspec(dllimport) int __stdcall GdipRotateMatrix(GpMatrix* matrix,
+    float angle, int order);
+__declspec(dllimport) int __stdcall GdipGetWorldTransform(GpGraphics* g,
+    GpMatrix* matrix);
+__declspec(dllimport) int __stdcall GdipSetWorldTransform(GpGraphics* g,
+    GpMatrix* matrix);
+#define GDIP_MATRIX_PREPEND 0
 /* Stroke a path with a pen -- the gradient-stroke case. Declared here rather
    than with the other pen functions because GpPath is only typedef'd above. */
 __declspec(dllimport) int __stdcall GdipDrawPath(GpGraphics* g, GpPen* pen,
@@ -6313,9 +6327,9 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                            anyway. Now the vg layer carries both semi-axes.
                            GTK4 landed this first and went 1/4 -> 4/4 on the
                            axis-ratio oracle with nothing regressing.
-                           NB cmd->grot (the tilt) is carried but NOT applied:
-                           that needs a world transform around the fill, which
-                           is a separate step. */
+                           The tilt (cmd->grot) is applied below via the
+                           world transform, since GDI+ fills axis-aligned
+                           ellipses only. */
                         rcx = (INT)cmd->gx1; rcy = (INT)cmd->gy1;
                         rw = (INT)cmd->grx; rh = (INT)cmd->gry;
                     } else if (cmd->gr > 0.0f) {
@@ -6389,8 +6403,41 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                     GdipDeleteBrush(padbr);
                                 }
                             }
+                            /* THE TILT. GDI+ fills axis-aligned ellipses
+                               only, so a rotated gradient needs the world
+                               transform: rotate about the centre, fill, then
+                               put the CTM back. No corpus file exercises
+                               this -- vg/test/svg/radial_ellipse_rotated.svg
+                               exists precisely because a backend that drops
+                               the tilt scores perfectly on all 208 corpus
+                               files while being visibly wrong. Its diagonal
+                               probe read 1.02 here against librsvg's 2.02
+                               before this. */
+                            GpMatrix* saved = NULL;
+                            GpMatrix* rotm = NULL;
+                            int rotated = 0;
+                            if (cmd->grot > 0.01f || cmd->grot < -0.01f) {
+                                if (GdipCreateMatrix(&saved) == 0 && saved &&
+                                    GdipGetWorldTransform(g, saved) == 0 &&
+                                    GdipCreateMatrix(&rotm) == 0 && rotm &&
+                                    GdipGetWorldTransform(g, rotm) == 0) {
+                                    GdipTranslateMatrix(rotm, (float)rcx,
+                                                        (float)rcy,
+                                                        GDIP_MATRIX_PREPEND);
+                                    GdipRotateMatrix(rotm, cmd->grot,
+                                                     GDIP_MATRIX_PREPEND);
+                                    GdipTranslateMatrix(rotm, (float)(-rcx),
+                                                        (float)(-rcy),
+                                                        GDIP_MATRIX_PREPEND);
+                                    if (GdipSetWorldTransform(g, rotm) == 0)
+                                        rotated = 1;
+                                }
+                            }
                             GdipFillEllipseI(g, (GpBrush*)pg, rcx - rw, rcy - rh,
                                              rw * 2, rh * 2);
+                            if (rotated) GdipSetWorldTransform(g, saved);
+                            if (rotm) GdipDeleteMatrix(rotm);
+                            if (saved) GdipDeleteMatrix(saved);
                             if (clipped2) GdipResetClip(g);
                             if (clip2) GdipDeletePath(clip2);
                             GdipDeleteBrush((GpBrush*)pg);
