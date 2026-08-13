@@ -340,6 +340,20 @@ geometry and paint state, the backend only draws it. Concretely:
       nothing meaningfully changed -- which is the point, since no corpus
       file has a rotated non-uniform radial.
 
+      **VERIFIED ON ALL THREE, 2026-08-13**, after the canvas-aspect fix in
+      `svg_render_png` (which was what blocked GDI+'s fifth repro):
+
+      | backend | oracle | corpus, viewBox-only |
+      |---|---|---|
+      | GTK4 | **5/5** | 1.75 -> **1.47** |
+      | macOS | **5/5** | 1.82 -> **1.55** |
+      | GDI+ | **5/5** | 2.73 -> **2.49** |
+
+      The corpus improvement is the canvas-aspect fix, not the ellipse work;
+      both are folded in here because the arms had to be re-rendered to be
+      comparable. NB the baselines quoted earlier in this file (GTK4 1.77,
+      GDI+ 3.00) were measured on square canvases and are superseded.
+
       **ALL THREE BACKENDS NOW CONSUME THE ELLIPSE.** The three original
       EXPECTED-FAILs are gone: they asserted a scalar might one day express
       an ellipse, which it never can, so they were restated as direct
