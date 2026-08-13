@@ -396,6 +396,44 @@ geometry and paint state, the backend only draws it. Concretely:
    understands. Doing it the other way -- fix vg, then chase three backends
    -- leaves every affected file broken in between, which is the cliff this
    sequence exists to avoid.
+   **AUDIT, 2026-08-13.** Read the 31 canvas externs (the largest group, and
+   where all four known leaks lived) looking for anything a backend has to
+   *interpret* rather than translate. Findings, worst first:
+
+   * **FONT FAMILY — the big one, and the same shape as gradientTransform.**
+     `canvas_fill_text` / `canvas_stroke_text` carry `font_flags: int`, which
+     is THREE BITS: mono, bold, italic (`vg/backend/gtk.ae:499-502`). The
+     actual `font-family` IS read upstream — `shapes.ae:999` does
+     `ff = style_get(style, "font-family")` — and then immediately reduced to
+     `is_monospace(ff)`, discarding the name. So every backend substitutes
+     its own family from the same three bits:
+
+     | backend | what it draws with |
+     |---|---|
+     | GTK4 | `cairo_select_font_face` from the flags |
+     | win32 | hardcoded **"Segoe UI"** |
+     | macOS | `systemFontOfSize` (the system font) |
+
+     Three backends, three different fonts, one input. 21 of 208 corpus
+     files contain `<text>`. Exactly the "data read upstream then thrown
+     away" pattern, and the fix is the same shape: carry the family string
+     and let each backend map it to a face.
+
+   * **Reviewed and CLEAN** (they translate, they do not interpret):
+     `arc` carries centre/radius/start/end with no sweep ambiguity;
+     `clip_rect` / `set_clip_rects` / `reset_clip` are pure geometry;
+     `fill` now carries `even_odd`; `stroke` carries cap/join; both gradient
+     calls now carry spread plus the full ellipse. The path primitives
+     (`begin_path`/`move_to`/`line_to`/`close_path`) are as dumb as they
+     should be.
+
+   So the canvas surface is in good shape apart from text. The remaining
+   groups (overlay 10, widget 8, tray 6, surface 5) are UNAUDITED — they are
+   widget-level rather than rendering, so a leak there looks different
+   (platform convention rather than discarded geometry) and deserves its own
+   pass.
+
+
 2. **Target: the ABI width trends DOWN, not up.** 241 functions is the
    number to watch. A wider surface with dumber backends is fine; a wider
    surface with *smarter* backends is the failure mode.
