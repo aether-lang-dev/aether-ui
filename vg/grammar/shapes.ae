@@ -1000,6 +1000,18 @@ shape_text(ctx: ptr, backend: ptr, node_h: ptr) -> ptr {
     fs = style.style_get(style, "font-style")
     italic = is_italic(fs)
     ff = style.style_get(style, "font-family")
+    // SVG/CSS leave the INITIAL font-family up to the user agent, so this is
+    // a policy choice and it belongs HERE -- once -- rather than as a
+    // fallback baked into each backend, which is how it got three different
+    // answers (cairo's sans-serif, "Segoe UI", systemFontOfSize).
+    //
+    // SERIF, matching librsvg and browsers generally. Measured: with no
+    // font-family, librsvg inks 5617 to our 7095 on the same string (ratio
+    // 1.26) because it picks a serif face and we picked sans; state
+    // font-family="sans-serif" explicitly and the two agree at 7022 vs 7095,
+    // ratio 1.01. So the whole discrepancy was this default, not rendering.
+    // Five of the corpus's 21 text files declare no font-family at all.
+    if string.length(ff) == 0 { ff = "serif" }
     monospace = is_monospace(ff)
 
     // Resolved fill (with effective alpha baked in).
