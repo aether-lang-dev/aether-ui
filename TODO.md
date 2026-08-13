@@ -115,3 +115,62 @@ Whether `video_frame` belongs in `apps/` long-term or becomes a
 `ui.video_frame` widget that any app can drop in. The latter is the point
 of the exercise, but the API should follow a second real consumer rather
 than be guessed at from one demo.
+
+## Push rendering semantics out of the backends and into the vg layer
+
+**The balance of C to Aether is roughly right; the boundary is wrong in one
+place.** aether-ui is 64% Aether / 36% C (44k / 24.5k lines), and 86% of the
+C is three implementations of one surface — gtk4 7.0k, win32 7.9k, macOS
+6.0k — behind a 241-function ABI in `ui/module.ae`. That much C is not the
+problem: GTK4 and AppKit bindings cannot be written in anything else, and
+the vg layer already goes through `ui.*` rather than touching externs.
+
+The problem is **what** the C decides. A backend should *translate* ("here
+is a path, here is a paint, draw it"), not *interpret*. Where SVG/canvas
+semantics leak below the ABI, the same decision gets re-made three times —
+which costs 3x to fix and can be silently wrong in two of the three.
+
+The 2026-08-13 GDI+ session is the evidence. Of ten bugs fixed:
+
+  * Five were genuinely win32-local — a stale pen, a 256-point clip cap, a
+    hardcoded wrap mode. Fixed once each. This is what a platform backend
+    is *for*.
+  * Two were semantics that had leaked: `fill-rule` and
+    stroke-linecap/linejoin on gradients. Each had to be threaded through
+    the C ABI and implemented in **all three backends**.
+
+`fill-rule` is the cautionary one. No backend was told the rule; each
+hardcoded one. GTK4 looked correct purely because cairo's default (winding)
+happens to match SVG's default (nonzero) — so it had been **silently wrong
+on every `fill-rule="evenodd"` file** for as long as the feature existed,
+and nothing caught it because the reference backend agreed with librsvg on
+the common case. Fixing it moved GTK4 too: accessible.svg 17.87 -> 0.39,
+ruby 4.95 -> 0.05, paths-data-09-t 13.54 -> 6.51.
+
+The same fault runs the other way as well: `vg/grammar/defs.ae` collapses
+`gradientTransform` to `affine_average_scale`, so a non-uniform matrix is
+lossy *before any backend sees it*. All three are equally crippled by one
+Aether-side decision. That is the top remaining GDI+ gap (`python.svg`,
+`car.svg`'s grille, `compuserver_msn_Ford_Focus`) and it is not a win32 bug.
+
+### What to do
+
+Make the backend switch policy-free — the vg layer emits fully resolved
+geometry and paint state, the backend only draws it. Concretely:
+
+1. **Audit the 241 externs for policy.** Anything a backend has to
+   *interpret* (fill rules, spread methods, cap/join defaults, units,
+   transform resolution) either travels with the command or is resolved
+   upstream. Start from the ones already known: `gradientTransform` (lossy
+   upstream — carry the full matrix to the brush), radial gradient geometry
+   (`CanvasCmd` carries a scalar `gr` that cannot describe an ellipse).
+2. **Target: the ABI width trends DOWN, not up.** 241 functions is the
+   number to watch. A wider surface with dumber backends is fine; a wider
+   surface with *smarter* backends is the failure mode.
+3. **Make the third backend cheap.** The test of success is that adding a
+   platform costs work proportional to its *surface* (how do I draw a path
+   here?) and not to its *semantics* (what does even-odd mean?).
+
+Worth doing before any fourth backend, and before the remaining
+gradientTransform work — that fix belongs in the vg layer and would improve
+GTK4, win32 and macOS at once.
