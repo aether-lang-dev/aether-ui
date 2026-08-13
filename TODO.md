@@ -434,6 +434,36 @@ geometry and paint state, the backend only draws it. Concretely:
    pass.
 
 
+   **FONT FAMILY: DONE on all three backends, 2026-08-13.** The raw CSS
+   stack now travels as a `fontFamily` opt and through
+   `canvas_fill_text`/`canvas_stroke_text`; each backend resolves it with its
+   own matcher (cairo/fontconfig, GDI+ walking the stack, AppKit
+   `fontWithName:`), per the design call that resolving a prioritised list
+   against installed fonts is a platform question, not policy. Step 2 was
+   verified inert (208 files byte-identical) before any backend consumed it.
+
+   * GTK4: viewBox-only 1.47 -> **1.33**. `decimal` 15.45 -> 0.44 — the
+     largest single-file win of the session — plus three W3C conformance
+     files.
+   * win32: 2.49 -> 2.61, i.e. the score got WORSE while the code got more
+     correct. `decimal` asks for `serif`; librsvg on the Linux reference box
+     resolves that to Noto Serif (confirmed with `fc-match`), Windows has no
+     Noto Serif and maps it to Times New Roman. Both right on their own
+     platform. Kept on the evidence of what the code does, not the number.
+   * macOS: **no change, and honestly so** — see the bug below.
+
+   **FOUND, NOT FIXED: macOS renders TEXT-ONLY SVGs completely blank.**
+   `decimal`, `Steps` and `blocks_game` produce ZERO ink on macOS while GTK4
+   and librsvg draw them (decimal: librsvg 25115, GTK4 25125, macOS 0);
+   `helloworld`, which has other content alongside its text, renders fine.
+   Ink was 0 both before and after the font-family change, so it is
+   pre-existing and unrelated. That is why macOS's corpus mean did not move:
+   the resolver is correct but the path it feeds never runs for exactly the
+   files that would show it off. 21 of 208 corpus files contain `<text>`.
+   Worth its own investigation — start by checking whether the AppKit
+   drawing context is even flushed for a canvas with no path commands.
+
+
 2. **Target: the ABI width trends DOWN, not up.** 241 functions is the
    number to watch. A wider surface with dumber backends is fine; a wider
    surface with *smarter* backends is the failure mode.
