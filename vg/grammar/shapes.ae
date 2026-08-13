@@ -1041,7 +1041,7 @@ shape_text(ctx: ptr, backend: ptr, node_h: ptr) -> ptr {
         emit_tspans(ctx, backend, node_h, attrs,
                     text_size, baseline_offset,
                     fill_color, alignment, bold, italic, monospace,
-                    base_font_size, text_stroke, text_sw)
+                    base_font_size, text_stroke, text_sw, ff)
         maybe_pop_transform(ctx, did_push)
         el = element.element_new(null)
         return el
@@ -1073,7 +1073,7 @@ shape_text(ctx: ptr, backend: ptr, node_h: ptr) -> ptr {
 
     opts = mk_text_opts(content, dx, my - baseline_offset, fill_color,
                        text_size, alignment, bold, italic, monospace,
-                       text_stroke, text_sw)
+                       text_stroke, text_sw, ff)
     underlying = dispatch.dispatch_text(backend, opts)
 
     maybe_pop_transform(ctx, did_push)
@@ -1090,7 +1090,8 @@ shape_text(ctx: ptr, backend: ptr, node_h: ptr) -> ptr {
 mk_text_opts(content: string, x: float, y: float, color: string,
              text_size: float, alignment: string,
              bold: int, italic: int, monospace: int,
-             stroke_color: string, stroke_width: float) -> ptr {
+             stroke_color: string, stroke_width: float,
+             font_family: string) -> ptr {
     opts = map.new()
     opt_set_s(opts, "text",      content)
     opt_set_f(opts, "x",         x)
@@ -1101,6 +1102,18 @@ mk_text_opts(content: string, x: float, y: float, color: string,
     opt_set_s(opts, "bold",      int_to_str(bold))
     opt_set_s(opts, "italic",    int_to_str(italic))
     opt_set_s(opts, "monospace", int_to_str(monospace))
+    // The RAW font-family stack, carried ALONGSIDE the flags above rather
+    // than replacing them: a backend that ignores it behaves exactly as
+    // before. font-family is a PRIORITISED LIST ("Helvetica, Arial,
+    // sans-serif"), and resolving it is a platform question -- fontconfig,
+    // GDI's font mapper and CoreText all exist to answer "best available
+    // face for this list". So the string travels and each backend's native
+    // matcher decides, which is translation rather than policy.
+    //
+    // The one bit it replaces cannot express a stack at all: today
+    // is_monospace("Helvetica, Courier") is 1, so a monospace entry
+    // anywhere wins regardless of priority. See vg/test/test_font_family.ae.
+    opt_set_s(opts, "fontFamily", font_family)
     // Stroked text (SVG stroke on <text>): the backend paints a stroke pass
     // over the fill when strokeWidth > 0. Absent for the common no-stroke
     // case, so the fill-only fast path is unchanged.
@@ -1132,7 +1145,8 @@ emit_tspans(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr,
             text_size: float, baseline_offset: float,
             color: string, alignment: string,
             bold: int, italic: int, monospace: int,
-            base_font_size: float, stroke_color: string, stroke_width: float) {
+            base_font_size: float, stroke_color: string, stroke_width: float,
+            font_family: string) {
     base_x = rendering.parse_len_x(ctx, attr_str_or(attrs, "x", "0"))
     base_y = rendering.parse_len_y(ctx, attr_str_or(attrs, "y", "0"))
     cur_x = base_x
@@ -1166,7 +1180,7 @@ emit_tspans(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr,
 
                 opts = mk_text_opts(t_text, mx, my - baseline_offset, color,
                                    text_size, alignment, bold, italic, monospace,
-                                   stroke_color, stroke_width)
+                                   stroke_color, stroke_width, font_family)
                 _ = dispatch.dispatch_text(backend, opts)
             }
         }

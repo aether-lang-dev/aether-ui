@@ -370,13 +370,20 @@ void aether_ui_canvas_close_path_impl(int canvas_id);
    paths-data-0*-t conformance files need even-odd. */
 void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a,
                                 int even_odd);
+/* font_family is the RAW CSS stack ("Helvetica, Arial, sans-serif"), or ""
+   when the SVG declared none. Each backend hands it to its own font matcher
+   (fontconfig / GDI's mapper / CoreText) -- resolving a prioritised list
+   against what is actually installed is a platform question, so it is
+   translation rather than policy. font_flags keeps mono/bold/italic, so a
+   backend that ignores font_family behaves exactly as before. */
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
-                                      int font_flags,
+                                      int font_flags, const char* font_family,
                                       double r, double g, double b, double a);
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
                                         double line_width, int font_flags,
+                                        const char* font_family,
                                         double r, double g, double b, double a);
 void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
                                        int iw, int ih,

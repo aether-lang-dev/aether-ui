@@ -4871,8 +4871,11 @@ void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, dou
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
-                                      int font_flags,
+                                      int font_flags, const char* font_family,
                                       double r, double g, double b, double a) {
+    /* Not consumed yet -- this backend still picks a face from font_flags
+       alone. One backend at a time; see TODO.md. */
+    (void)font_family;
     (void)font_flags;   // font-family selection not yet wired on Win32
     CanvasCmd c = {0};
     c.k = CV_FILL_TEXT; c.p0 = x; c.p1 = y; c.p2 = font_size;
@@ -4887,7 +4890,9 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
                                         double line_width, int font_flags,
+                                        const char* font_family,
                                         double r, double g, double b, double a) {
+    (void)font_family;
     (void)font_flags;
     CanvasCmd c = {0};
     c.k = CV_STROKE_TEXT; c.p0 = x; c.p1 = y; c.p2 = font_size; c.p3 = line_width;

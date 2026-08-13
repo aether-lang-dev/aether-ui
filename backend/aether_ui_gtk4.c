@@ -3680,6 +3680,7 @@ typedef struct {
        produces: semi-axes and tilt. gr keeps the old scalar answer, so a
        command with grx == 0 renders exactly as it always did. */
     double grx, gry, grot;
+    char* font_family;       /* owned; raw CSS stack, NULL when unset */
     double* stop_off;        // owned: n_stops offsets (0..1)
     double* stop_rgba;       // owned: n_stops*4 colour comps (0..1)
 } CanvasCmd;
@@ -3824,6 +3825,26 @@ static void canvas_clear_current_clip(cairo_t* cr) {
 // ("monospace"/"serif"/"sans-serif") — enough for the corpus's courier/serif/
 // sans without a full font-name database. Called before every text draw so
 // each run uses its own family/slant/weight (a prior run's face doesn't leak).
+/* fam: the RAW CSS stack from the SVG, or NULL/"" when none was declared.
+   cairo_select_font_face hands it to fontconfig, which is exactly the
+   platform matcher we want: resolving "Helvetica, Arial, sans-serif"
+   against what is installed is its job, not ours. The flags remain the
+   fallback, and are still the source of slant/weight.
+
+   Before this the family was DISCARDED upstream -- shapes.ae reduced
+   font-family to a single is_monospace() bit -- so every backend invented
+   its own face: cairo's generic "sans-serif" here, hardcoded "Segoe UI" on
+   win32, systemFontOfSize on macOS. See vg/test/test_font_family.ae. */
+static void canvas_select_font_family(cairo_t* cr, int flags, const char* fam) {
+    const char* family = (fam && fam[0]) ? fam
+                       : ((flags & 1) ? "monospace" : "sans-serif");
+    cairo_font_slant_t slant = (flags & 4) ? CAIRO_FONT_SLANT_ITALIC
+                                           : CAIRO_FONT_SLANT_NORMAL;
+    cairo_font_weight_t weight = (flags & 2) ? CAIRO_FONT_WEIGHT_BOLD
+                                             : CAIRO_FONT_WEIGHT_NORMAL;
+    cairo_select_font_face(cr, family, slant, weight);
+}
+
 static void canvas_select_font(cairo_t* cr, int flags) {
     const char* family = (flags & 1) ? "monospace" : "sans-serif";
     cairo_font_slant_t slant = (flags & 4) ? CAIRO_FONT_SLANT_ITALIC
@@ -3903,7 +3924,7 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
                 break;
             case CANVAS_FILL_TEXT:
-                canvas_select_font(cr, c->iw);   // iw packs mono|bold<<1|italic<<2
+                canvas_select_font_family(cr, c->iw, c->font_family);
                 cairo_set_source_rgba(cr, c->r, c->g, c->b, c->a);
                 cairo_set_font_size(cr, c->w);
                 cairo_move_to(cr, c->x, c->y);
@@ -4764,12 +4785,13 @@ void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, dou
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
-                                      int font_flags,
+                                      int font_flags, const char* font_family,
                                       double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
         .iw = font_flags,   // mono|bold<<1|italic<<2 (see canvas_select_font)
         .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
         .text = text ? strdup(text) : NULL
     });
 }
@@ -4779,11 +4801,13 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
                                         double line_width, int font_flags,
+                                        const char* font_family,
                                         double r, double g, double b, double a) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_STROKE_TEXT, .x = x, .y = y, .w = font_size, .h = line_width,
         .iw = font_flags,
         .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
         .text = text ? strdup(text) : NULL
     });
 }
@@ -4912,6 +4936,7 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
         // Free any owned text strings / image buffers / gradient stops.
         for (int i = 0; i < cs->count; i++) {
             CanvasCmd* c = &cs->cmds[i];
+            if (c->font_family) { free(c->font_family); c->font_family = NULL; }
             if (c->type == CANVAS_FILL_TEXT && c->text) {
                 free(c->text); c->text = NULL;
             }

@@ -377,11 +377,12 @@ extern aether_ui_canvas_close_path_impl(canvas_id: int)
 extern aether_ui_canvas_fill_impl(canvas_id: int, r: float, g: float, b: float, a: float, even_odd: int)
 extern aether_ui_canvas_fill_text_impl(canvas_id: int, text: string,
                                        x: float, y: float, font_size: float,
-                                       font_flags: int,
+                                       font_flags: int, font_family: string,
                                        r: float, g: float, b: float, a: float)
 extern aether_ui_canvas_stroke_text_impl(canvas_id: int, text: string,
                                          x: float, y: float, font_size: float,
                                          line_width: float, font_flags: int,
+                                         font_family: string,
                                          r: float, g: float, b: float, a: float)
 extern aether_ui_canvas_draw_image_impl(canvas_id: int, x: float, y: float,
                                         iw: int, ih: int,
@@ -3116,16 +3117,21 @@ canvas_fill(cid: int, r: float, g: float, b: float, a: float, even_odd: int) {
 // font size and color.
 // font_flags packs the toy-font selection: bit0 monospace, bit1 bold,
 // bit2 italic (see the backend's canvas_select_font).
+// font_family: the raw CSS stack; "" when the SVG declared none. Each
+// backend resolves it with its own font matcher. font_flags still carries
+// mono/bold/italic, so a backend ignoring font_family is unchanged.
 canvas_fill_text(cid: int, text: string, x: float, y: float, font_size: float,
-                 font_flags: int, r: float, g: float, b: float, a: float) {
-    aether_ui_canvas_fill_text_impl(cid, text, x, y, font_size, font_flags, r, g, b, a)
+                 font_flags: int, font_family: string,
+                 r: float, g: float, b: float, a: float) {
+    aether_ui_canvas_fill_text_impl(cid, text, x, y, font_size, font_flags, font_family, r, g, b, a)
 }
 
 // Stroke (outline) text at (x, y). Queue after canvas_fill_text for the same
 // run so the outline paints over the fill (SVG stroke-on-<text>).
 canvas_stroke_text(cid: int, text: string, x: float, y: float, font_size: float,
-                   line_width: float, font_flags: int, r: float, g: float, b: float, a: float) {
-    aether_ui_canvas_stroke_text_impl(cid, text, x, y, font_size, line_width, font_flags, r, g, b, a)
+                   line_width: float, font_flags: int, font_family: string,
+                   r: float, g: float, b: float, a: float) {
+    aether_ui_canvas_stroke_text_impl(cid, text, x, y, font_size, line_width, font_flags, font_family, r, g, b, a)
 }
 
 // Blit an RGBA8888 pixel buffer (iw×ih, byte_len = iw*ih*4) at canvas

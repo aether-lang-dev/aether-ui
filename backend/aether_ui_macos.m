@@ -4244,8 +4244,11 @@ void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, dou
 
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
-                                      int font_flags,
+                                      int font_flags, const char* font_family,
                                       double r, double g, double b, double a) {
+    /* Not consumed yet -- this backend still picks a face from font_flags
+       alone. One backend at a time; see TODO.md. */
+    (void)font_family;
     (void)font_flags;   // font-family selection not yet wired on AppKit
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
@@ -4260,7 +4263,9 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
 void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double x, double y, double font_size,
                                         double line_width, int font_flags,
+                                        const char* font_family,
                                         double r, double g, double b, double a) {
+    (void)font_family;
     (void)canvas_id; (void)text; (void)x; (void)y; (void)font_size;
     (void)line_width; (void)font_flags; (void)r; (void)g; (void)b; (void)a;
 }
