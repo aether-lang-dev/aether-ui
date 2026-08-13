@@ -176,6 +176,35 @@ geometry and paint state, the backend only draws it. Concretely:
    `1` once the fix lands, which turns it into a real gate. The rotation
    assertion is the argument against the cheap fix: carrying a second
    radius would still lose the tilt, so the matrix itself has to travel.
+
+   **Next step — scoped 2026-08-13, not yet started.** Tracing the radial
+   path end to end found the loss happens in THREE independent places, not
+   one:
+
+   | # | site | what it does |
+   |---|------|--------------|
+   | 1 | `defs.ae:303` | `r *= average_scale(gradientTransform)` |
+   | 2 | `shapes.ae:222` | `r *= average_scale(current_transform)` — userSpaceOnUse |
+   | 3 | `shapes.ae:236` | `r = gr * max(bw, bh)` — objectBoundingBox |
+
+   (3) is not even a matrix collapse: it picks the LARGER bbox extent, an
+   explicit circle-in-bbox approximation that its own comment admits to. So
+   a fix at `defs.ae` alone would be defeated twice over downstream.
+
+   The **linear** path is the proof that this is a design choice rather
+   than a constraint. It has none of these: it maps both endpoints through
+   the transform (`shapes.ae:249-252`, `defs.ae:311+`) and loses nothing.
+   That is exactly why linear gradients could be fixed per-backend during
+   the GDI+ session and radial could not.
+
+   The shape of the fix follows: give a radial the same treatment as a
+   linear — carry enough resolved geometry to describe an ellipse (two
+   conjugate axes, or the matrix itself), through all three sites, and
+   widen `canvas_fill_radial_gradient` once. Then each backend maps it to
+   its native call (cairo takes a matrix on the pattern; GDI+ needs a
+   transformed path gradient; CoreGraphics has one too) and no backend
+   decides anything. Sequence: fix the vg layer first with the test's
+   EXPECTED-FAILs as the gate, then the three backends, then flip STRICT.
 2. **Target: the ABI width trends DOWN, not up.** 241 functions is the
    number to watch. A wider surface with dumber backends is fine; a wider
    surface with *smarter* backends is the failure mode.
