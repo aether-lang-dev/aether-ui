@@ -4081,10 +4081,8 @@ void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     else if (pos > w->classes && pos[-1] == ' ') pos--;
     memmove(pos, from, strlen(from) + 1);
 }
-void aether_ui_canvas_group_begin_impl(int canvas_id) { (void)canvas_id; }
-void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
-    (void)canvas_id; (void)alpha;
-}
+/* Group opacity lives with the other canvas command builders, below the
+   CanvasCmd definition — see aether_ui_canvas_group_begin_impl there. */
 // Drawn vg tooltip — one overlay per SHOW (a hide flips it dead; the next
 // hover opens a fresh one, matching the macOS/GTK observable contract:
 // specs assert live:1 on hover, live:0 after moving off, live:1 again).
@@ -4528,7 +4526,14 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
 typedef enum {
     CV_BEGIN, CV_MOVE, CV_LINE, CV_STROKE, CV_FILL_RECT, CV_CLEAR,
     CV_ARC, CV_CLOSE, CV_FILL, CV_FILL_TEXT, CV_DRAW_IMAGE,
-    CV_FILL_LINEAR, CV_FILL_RADIAL
+    CV_FILL_LINEAR, CV_FILL_RADIAL,
+    /* True group opacity: composite everything between BEGIN and END into an
+       offscreen layer, then paint that layer ONCE at the group alpha, so
+       overlapping children don't double-darken. GTK4 has had this via
+       cairo_push_group since the feature landed; win32's pair were empty
+       stubs, which is why mememe.svg (a <g opacity="0.5"> of three
+       overlapping strokes) rendered fully opaque here. */
+    CV_GROUP_BEGIN, CV_GROUP_END
 } CanvasCmdKind;
 
 typedef struct {
@@ -4771,6 +4776,20 @@ void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
     c.p0 = cv->cur_x; c.p1 = cv->cur_y; c.p2 = x; c.p3 = y;
     canvas_add_cmd(canvas_id, c);
     cv->cur_x = x; cv->cur_y = y;
+}
+
+/* True group opacity. These were empty stubs, so <g opacity="0.5"> painted
+   fully opaque on win32 (mememe.svg); GTK4 has had the real thing via
+   cairo_push_group all along. See CV_GROUP_BEGIN/END in the GDI+ replay. */
+void aether_ui_canvas_group_begin_impl(int canvas_id) {
+    CanvasCmd c = {0};
+    c.k = CV_GROUP_BEGIN;
+    canvas_add_cmd(canvas_id, c);
+}
+void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
+    CanvasCmd c = {0};
+    c.k = CV_GROUP_END; c.calpha = alpha;
+    canvas_add_cmd(canvas_id, c);
 }
 
 void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b,
@@ -5468,6 +5487,21 @@ __declspec(dllimport) int __stdcall GdipCreateBitmapFromScan0(int width, int hei
 __declspec(dllimport) int __stdcall GdipDrawImageRectI(GpGraphics* g, void* image,
     int x, int y, int width, int height);
 #define GDIP_FMT_32BPP_ARGB 0x0026200A
+/* Offscreen group layers (CV_GROUP_BEGIN/END). A bitmap gets its own
+   GpGraphics to draw into, then is composited back through an ImageAttributes
+   colour matrix whose alpha row scales by the group alpha -- GDI+'s
+   equivalent of cairo_paint_with_alpha. */
+__declspec(dllimport) int __stdcall GdipGetImageGraphicsContext(void* image,
+    GpGraphics** graphics);
+__declspec(dllimport) int __stdcall GdipCreateImageAttributes(void** imageattr);
+__declspec(dllimport) int __stdcall GdipDisposeImageAttributes(void* imageattr);
+__declspec(dllimport) int __stdcall GdipSetImageAttributesColorMatrix(
+    void* imageattr, int type, int enableFlag, const void* colorMatrix,
+    const void* grayMatrix, int flags);
+__declspec(dllimport) int __stdcall GdipDrawImageRectRectI(GpGraphics* g,
+    void* image, int dstx, int dsty, int dstw, int dsth,
+    int srcx, int srcy, int srcw, int srch, int srcUnit,
+    const void* imageAttributes, void* callback, void* callbackData);
 /* Path construction + clipping: what turns a gradient from "fill the bounding
    box" into "fill the actual shape". */
 __declspec(dllimport) int __stdcall GdipAddPathLine2I(GpPath* path,
@@ -5546,9 +5580,69 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
     GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
 
     GpPen* cur_pen = NULL;
+    /* Group-layer stack. `g` is redirected at CV_GROUP_BEGIN to draw into an
+       offscreen ARGB bitmap and restored at CV_GROUP_END, so every drawing
+       case below stays untouched -- they just draw into whatever `g` currently
+       points at. Depth is bounded; a deeper nest degrades to drawing inline
+       (visually the old behaviour) rather than corrupting the stack. */
+    #define GRP_MAX 8
+    GpGraphics* grp_saved[GRP_MAX];
+    void*       grp_bmp[GRP_MAX];
+    int grp_depth = 0;
     for (int i = 0; i < cv->cmd_count; i++) {
         CanvasCmd* cmd = &cv->cmds[i];
         switch (cmd->k) {
+            case CV_GROUP_BEGIN: {
+                if (grp_depth >= GRP_MAX) break;
+                void* bmp = NULL;
+                if (GdipCreateBitmapFromScan0(width, height, 0,
+                                              GDIP_FMT_32BPP_ARGB, NULL,
+                                              &bmp) != 0 || !bmp) break;
+                GpGraphics* lg = NULL;
+                if (GdipGetImageGraphicsContext(bmp, &lg) != 0 || !lg) {
+                    GdipDisposeImage(bmp);
+                    break;
+                }
+                /* The layer starts fully TRANSPARENT -- no white wash. That is
+                   the whole point: only what the group actually draws carries
+                   alpha into the composite, so the backdrop shows through
+                   where the group is empty. */
+                GdipSetSmoothingMode(lg, GDIP_SMOOTHING_AA);
+                grp_saved[grp_depth] = g;
+                grp_bmp[grp_depth] = bmp;
+                grp_depth++;
+                g = lg;
+                break;
+            }
+            case CV_GROUP_END: {
+                if (grp_depth <= 0) break;
+                grp_depth--;
+                GpGraphics* lg = g;
+                g = grp_saved[grp_depth];
+                void* bmp = grp_bmp[grp_depth];
+                float a = (float)cmd->calpha;
+                if (a < 0.0f) a = 0.0f;
+                if (a > 1.0f) a = 1.0f;
+                /* Identity colour matrix with the alpha row scaled -- the
+                   GDI+ spelling of cairo_paint_with_alpha. */
+                float cm[5][5] = {
+                    {1,0,0,0,0},{0,1,0,0,0},{0,0,1,0,0},{0,0,0,a,0},{0,0,0,0,1}
+                };
+                void* ia = NULL;
+                if (GdipCreateImageAttributes(&ia) == 0 && ia) {
+                    /* type 0 = ColorAdjustTypeDefault, flags 0 = ColorMatrixFlagsDefault */
+                    GdipSetImageAttributesColorMatrix(ia, 0, 1, cm, NULL, 0);
+                    GdipDrawImageRectRectI(g, bmp, 0, 0, width, height,
+                                           0, 0, width, height,
+                                           GDIP_UNIT_PIXEL, ia, NULL, NULL);
+                    GdipDisposeImageAttributes(ia);
+                } else {
+                    GdipDrawImageRectI(g, bmp, 0, 0, width, height);
+                }
+                GdipDeleteGraphics(lg);
+                GdipDisposeImage(bmp);
+                break;
+            }
             case CV_CLEAR: {
                 GpBrush* br = NULL;
                 if (GdipCreateSolidFill(0xFFFFFFFF, &br) == 0) {
@@ -5636,6 +5730,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    librsvg draws black the whole way from px (4,120) to
                    (120,4); GDI+ had white at every interior sample. Find the
                    sub-path's first and last points and stroke the join. */
+                int close_lx = 0, close_ly = 0, close_fx = 0, close_fy = 0;
+                int want_close = 0;
                 {
                     int has_close = 0;
                     int fx = 0, fy = 0, lx = 0, ly = 0, seen = 0;
@@ -5650,9 +5746,12 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                             fx = (INT)cv->cmds[j].p0; fy = (INT)cv->cmds[j].p1;
                         }
                     }
-                    if (has_close && seen && (fx != lx || fy != ly)) {
-                        GdipDrawLineI(g, cur_pen, lx, ly, fx, fy);
-                    }
+                    /* Folded into the assembled path below rather than drawn
+                       here: a separate GdipDrawLineI would re-composite the
+                       pen alpha over both joints it meets. */
+                    close_lx = lx; close_ly = ly;
+                    close_fx = fx; close_fy = fy;
+                    want_close = (has_close && seen && (fx != lx || fy != ly));
                 }
                 for (int j = i - 1; j >= 0; j--) {
                     CanvasCmdKind k = cv->cmds[j].k;
@@ -5673,10 +5772,50 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                         GdipDrawEllipseI(g, cur_pen, acx - ar, acy - ar,
                                          ar * 2, ar * 2);
                     }
-                    if (k == CV_LINE) {
-                        GdipDrawLineI(g, cur_pen,
-                                      (INT)cv->cmds[j].p0, (INT)cv->cmds[j].p1,
-                                      (INT)cv->cmds[j].p2, (INT)cv->cmds[j].p3);
+                }
+                /* ONE path, ONE stroke -- not a GdipDrawLineI per segment.
+                   With a translucent pen, per-segment drawing composites the
+                   pen alpha AGAIN at every joint where consecutive segments
+                   overlap, and a wide round-capped pen overlaps a lot. The
+                   arithmetic is exact: #F00 at alpha 0.502 over white gives
+                   G/B 127 for one draw, 63 for two, 31 for three, 9 for four.
+                   mememe.svg (six strokes at 0.502) measured (255,31,31) and
+                   (233,9,31) against librsvg's clean (255,127,127) -- three
+                   and four compositings of the same segment.
+                   Stroking an assembled path applies the alpha ONCE over the
+                   whole figure, which is what cairo does and why GTK4 was
+                   right without special-casing anything. Opaque strokes are
+                   unaffected (compositing black over black is black), which
+                   is why this went unnoticed until a translucent file. */
+                {
+                    int start = 0;
+                    for (int j = i - 1; j >= 0; j--) {
+                        if (cv->cmds[j].k == CV_BEGIN) { start = j; break; }
+                    }
+                    GpPath* sp = NULL;
+                    if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &sp) == 0 && sp) {
+                        int segs = 0;
+                        for (int j = start; j < i; j++) {
+                            CanvasCmdKind k = cv->cmds[j].k;
+                            if (k == CV_MOVE) {
+                                GdipStartPathFigure(sp);
+                            } else if (k == CV_LINE) {
+                                GpPointI seg[2];
+                                seg[0].X = (INT)cv->cmds[j].p0;
+                                seg[0].Y = (INT)cv->cmds[j].p1;
+                                seg[1].X = (INT)cv->cmds[j].p2;
+                                seg[1].Y = (INT)cv->cmds[j].p3;
+                                if (GdipAddPathLine2I(sp, seg, 2) == 0) segs++;
+                            }
+                        }
+                        if (want_close) {
+                            GpPointI cseg[2];
+                            cseg[0].X = close_lx; cseg[0].Y = close_ly;
+                            cseg[1].X = close_fx; cseg[1].Y = close_fy;
+                            if (GdipAddPathLine2I(sp, cseg, 2) == 0) segs++;
+                        }
+                        if (segs > 0) GdipDrawPath(g, cur_pen, sp);
+                        GdipDeletePath(sp);
                     }
                 }
                 break;
@@ -6185,6 +6324,19 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
         }
     }
     if (cur_pen) GdipDeletePen(cur_pen);
+    /* A group left open by a malformed command stream would otherwise leak
+       its layer AND silently swallow everything drawn inside it (the layer is
+       never composited back). Unwind: paint each pending layer at full alpha,
+       innermost first, so the drawing still lands. */
+    while (grp_depth > 0) {
+        grp_depth--;
+        GpGraphics* lg = g;
+        g = grp_saved[grp_depth];
+        GdipDrawImageRectI(g, grp_bmp[grp_depth], 0, 0, width, height);
+        GdipDeleteGraphics(lg);
+        GdipDisposeImage(grp_bmp[grp_depth]);
+    }
+    #undef GRP_MAX
     GdipDeleteGraphics(g);
 }
 

@@ -20,8 +20,7 @@ main() {
     println("=== test_group_pixels ===")
 
     // Grouped: opaque black rects at 0.5 group alpha.
-    c1 = 1
-    ui.canvas_create(0, 200, 100)
+    c1 = ui.canvas_create(0, 200, 100)
     ui.canvas_group_begin(c1)
     ui.canvas_fill_rect(c1, 10.0, 10.0, 80.0, 80.0, 0.0, 0.0, 0.0, 1.0)
     ui.canvas_fill_rect(c1, 50.0, 10.0, 80.0, 80.0, 0.0, 0.0, 0.0, 1.0)
@@ -31,10 +30,32 @@ main() {
     println("  grouped: single=${single} overlap=${overlap}")
     assert_true("grouped overlap == single (no double-darken)", single == overlap)
 
+    // ...AND the group alpha was actually APPLIED. The equality above is
+    // necessary but NOT sufficient: a backend that ignores group_end's alpha
+    // entirely paints both pixels fully opaque, so single == overlap holds
+    // VACUOUSLY and the assertion passes on a no-op stub. That is exactly
+    // what win32 did -- both group stubs empty, both pixels solid black --
+    // while the suite reported green (it only ever ran GTK-linked).
+    //
+    // Assert RELATIVE to an opaque control drawn on the SAME backend, which
+    // is the only portable formulation. Absolute checks don't travel: GTK4
+    // composites onto a TRANSPARENT surface (50% black reads 0x80000000 --
+    // alpha 128, RGB 0), while win32 composites over WHITE and its DDB
+    // read_pixel has no alpha channel at all, hardcoding A=255. So an alpha
+    // assertion is unsatisfiable on win32 by construction, and a "grey
+    // channel" assertion is unsatisfiable on GTK4 -- each would fail against
+    // a CORRECT implementation on the other backend. What both agree on:
+    // a 50% group must not read identical to a fully opaque draw.
+    c3 = ui.canvas_create(0, 200, 100)
+    ui.canvas_fill_rect(c3, 10.0, 10.0, 80.0, 80.0, 0.0, 0.0, 0.0, 1.0)
+    opaque = ui.canvas_read_pixel(c3, 20, 50, 200, 100)
+    assert_true("opaque control canvas is readable", opaque != -1)
+    println("  opaque control=${opaque} vs grouped=${single}")
+    assert_true("group alpha applied (differs from opaque)", single != opaque)
+
     // Control: the same two rects each drawn at 0.5 alpha, NO group —
     // the overlap must be darker (higher premultiplied alpha byte).
-    c2 = 2
-    ui.canvas_create(0, 200, 100)
+    c2 = ui.canvas_create(0, 200, 100)
     ui.canvas_fill_rect(c2, 10.0, 10.0, 80.0, 80.0, 0.0, 0.0, 0.0, 0.5)
     ui.canvas_fill_rect(c2, 50.0, 10.0, 80.0, 80.0, 0.0, 0.0, 0.0, 0.5)
     s2 = ui.canvas_read_pixel(c2, 20, 50, 200, 100)
