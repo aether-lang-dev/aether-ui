@@ -4527,7 +4527,27 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
     CGContextTranslateCTM(cg, 0, height);
     CGContextScaleCTM(cg, 1.0, -1.0);
 
+    /* CANVAS_FILL_TEXT draws with -[NSString drawAtPoint:withAttributes:],
+       which is AppKit and renders into +[NSGraphicsContext currentContext]
+       -- NOT into whatever CGContextRef it is handed. Headless there is no
+       focused view, so currentContext was nil and every glyph silently went
+       nowhere: text-only SVGs came out completely blank while shapes in the
+       same file drew fine (measured on a rect+text repro -- rect 19200 ink
+       on both backends, text 776 on GTK4 and 0 here).
+
+       Push a context backed by this bitmap for the duration of the replay.
+       `flipped:YES` because the CTM above is already flipped to canvas
+       coordinates; without it AppKit would draw the glyphs upside down. */
+    NSGraphicsContext* prev = [NSGraphicsContext currentContext];
+    NSGraphicsContext* nsctx =
+        [NSGraphicsContext graphicsContextWithCGContext:cg flipped:YES];
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:nsctx];
+
     canvas_replay(cg, cs);
+
+    [NSGraphicsContext restoreGraphicsState];
+    [NSGraphicsContext setCurrentContext:prev];
 
     CGImageRef img = CGBitmapContextCreateImage(cg);
     CGContextRelease(cg);
