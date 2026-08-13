@@ -205,6 +205,77 @@ geometry and paint state, the backend only draws it. Concretely:
    transformed path gradient; CoreGraphics has one too) and no backend
    decides anything. Sequence: fix the vg layer first with the test's
    EXPECTED-FAILs as the gate, then the three backends, then flip STRICT.
+
+   **Is the SVG corpus enough to verify this? NO — and it can argue for
+   the wrong code.** Measured 2026-08-13, before starting:
+
+   * 20 corpus files carry a non-uniform `gradientTransform` on a radial
+     (268 such gradients). But only **4 have meaningful headroom**, and
+     **3 of those 4 have no `viewBox`** (`AJ_Digital_Camera`, `car`,
+     `juanmontoya_lingerie`), so their MAE is dominated by the scale
+     artefact rather than by gradient geometry. Exactly ONE file --
+     `gallardo` (gtk4 6.18 / gdi+ 8.06) -- is both affected and fairly
+     measurable. One usable signal is not a safety net for a change that
+     touches three loss sites, the ABI and three backends.
+   * The rest (`AC`, `JC`, `KC`, `QC`, `KS`, `AD`, `AH`, Trajan) score
+     **0.8–3.2 today WITH the wrong geometry**. A correct ellipse moves
+     their pixels; MAE may rise on files that have become more correct, or
+     fall on files that got luckier. Neither outcome is evidence.
+   * Precedent from the same session: `php.svg` scores 4.15 with a RADIAL
+     stroke painted by a LINEAR brush. Three more-correct radial geometries
+     were measured and **all scored worse**. The corpus actively argued for
+     the wrong code, and was right to be overruled.
+
+   So the corpus is a **regression tripwire, not an oracle**: it answers
+   "did I break something that used to work", never "is this correct".
+   Correctness has to come from `test_gradient_transform.ae`'s assertions
+   (derived through the transform, not from any renderer's output) plus a
+   purpose-built SVG whose expected geometry is known by construction --
+   a circle under `matrix(2,0,0,1,...)` must render as an ellipse with a
+   2:1 axis ratio, measurable directly from the pixels without reference
+   to librsvg at all.
+
+   **Ratcheting sequence — each step ships green, no step is a cliff:**
+
+   1. ~~Add the purpose-built repro SVGs and pixel-measure the axis ratio.~~
+      **DONE 2026-08-13.** Four repros in `vg/test/svg/` plus the oracle
+      `tests/radial_ellipse_check.py`, which measures the half-maximum
+      extent through the gradient's own peak — expected ratio known BY
+      CONSTRUCTION, so no reference renderer is involved:
+
+      | repro | want | pins |
+      |---|---|---|
+      | `radial_ellipse_repro` | 2.00 | `matrix(2,0,0,1)` — wide ellipse |
+      | `radial_ellipse_tall` | 0.50 | `matrix(1,0,0,2)` — axis-swap guard |
+      | `radial_uniform_control` | 1.00 | CONTROL: correct today, must stay |
+      | `radial_ellipse_bbox` | 2.00 | objectBoundingBox — the third loss site |
+
+      GTK4 today scores **1/4**: the control passes, the three real cases
+      all read 1.00 (a circle). librsvg reads 1.98 / 0.51 / 1.00 / 2.02,
+      confirming the expectations independently. No production code
+      changed. Complements `gallardo.svg`, the corpus's only affected AND
+      fairly-measurable file.
+
+
+   2. Carry the ellipse geometry through the vg layer *alongside* the
+      existing scalar radius — a NEW opt key, old key still emitted and
+      still authoritative. Nothing changes for any backend; the corpus must
+      be byte-identical. This is the safe half of the change.
+   3. Per backend, one at a time: consume the new key, keep the old as the
+      fallback when it is absent. GTK4 first (cairo takes a matrix on the
+      pattern, so it is the smallest step and the reference backend), then
+      win32, then macOS. Each lands independently, each verified against
+      the repro's axis ratio, with the corpus watched only for regressions
+      on the ~16 currently-good files.
+   4. Only once all three consume it: remove the scalar radius from the
+      three loss sites, flip `STRICT` to 1, and narrow the ABI if the two
+      gradient calls can now converge.
+
+   Step 2 is the important one: it makes the change **additive**, so there
+   is never a window where the vg layer emits geometry no backend
+   understands. Doing it the other way -- fix vg, then chase three backends
+   -- leaves every affected file broken in between, which is the cliff this
+   sequence exists to avoid.
 2. **Target: the ABI width trends DOWN, not up.** 241 functions is the
    number to watch. A wider surface with dumber backends is fine; a wider
    surface with *smarter* backends is the failure mode.

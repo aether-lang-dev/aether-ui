@@ -1,0 +1,14 @@
+<!-- The INVERSE of radial_ellipse_repro: matrix(1,0,0,2,...) stretches y,
+     so the falloff is twice as TALL as wide — axis ratio 0.50. Catches a
+     fix that hardcodes "wider than tall" or swaps the axes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <radialGradient id="tall" gradientUnits="userSpaceOnUse"
+                    cx="100" cy="50" r="40"
+                    gradientTransform="matrix(1,0,0,2,0,-50)">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="200" height="200" fill="url(#tall)"/>
+</svg>

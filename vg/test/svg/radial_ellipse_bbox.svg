@@ -1,0 +1,20 @@
+<!-- objectBoundingBox units on a NON-SQUARE shape, and no gradientTransform
+     at all. SVG maps the 0..1 gradient circle through the bbox, so a rect
+     twice as wide as it is tall paints a 2:1 ellipse.
+
+     This is the THIRD loss site (shapes.ae's `r = gr * max(bw,bh)`
+     circle-in-bbox approximation), which a fix aimed only at
+     gradientTransform would miss entirely.
+
+     The rect fills the whole viewBox on purpose: the axis-ratio check finds
+     the brightest pixel, and any background left visible outside the shape
+     would be brighter than the gradient and break the measurement. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <defs>
+    <radialGradient id="bb" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="200" height="100" fill="url(#bb)"/>
+</svg>

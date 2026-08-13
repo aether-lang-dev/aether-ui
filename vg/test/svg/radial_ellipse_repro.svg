@@ -1,0 +1,20 @@
+<!-- A radial gradient under a NON-UNIFORM gradientTransform is an ELLIPSE.
+     matrix(2,0,0,1,...) stretches x by 2 and leaves y alone, so the painted
+     falloff must be twice as wide as it is tall: a 2:1 axis ratio.
+
+     Verified WITHOUT a reference renderer: measure the extent of the light
+     centre along the horizontal and vertical mid-lines and divide. Any
+     renderer that collapses the matrix to a scalar radius paints a CIRCLE
+     and measures 1:1. See vg/test/test_gradient_transform.ae and the
+     "push rendering semantics out of the backends" item in TODO.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <radialGradient id="ell" gradientUnits="userSpaceOnUse"
+                    cx="50" cy="100" r="40"
+                    gradientTransform="matrix(2,0,0,1,-50,0)">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="200" height="200" fill="url(#ell)"/>
+</svg>

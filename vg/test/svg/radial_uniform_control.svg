@@ -1,0 +1,16 @@
+<!-- CONTROL: a UNIFORM gradientTransform, matrix(2,0,0,2,...). This one the
+     average-scale collapse gets RIGHT, and it must STAY right — ratio 1.00
+     because a scaled circle is still a circle. The regression guard for the
+     fix: whatever replaces average_scale must not disturb the common case,
+     which is the very reason this defect stayed hidden. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <radialGradient id="uni" gradientUnits="userSpaceOnUse"
+                    cx="50" cy="50" r="30"
+                    gradientTransform="matrix(2,0,0,2,0,0)">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="200" height="200" fill="url(#uni)"/>
+</svg>
