@@ -6282,9 +6282,31 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        cannot describe. The bounding box already encodes that
                        ellipse, so take the geometry from it and keep only the
                        blend-order fix, which is unambiguously correct. */
+                    /* THE COMMAND'S OWN CENTRE AND RADIUS, not the path's
+                       bounding box. The vg layer resolves cx/cy/r to canvas
+                       space and CanvasCmd has carried them all along; this
+                       used the bbox instead, so a gradient was sized by the
+                       SHAPE it fills rather than by its own geometry. For a
+                       canvas-filling rect that means the whole canvas.
+
+                       Measured on radial_uniform_control.svg (r=30 at scale
+                       4 -> the falloff should reach 120px): the command says
+                       r=120.0, matching librsvg's and GTK4's 122px
+                       half-maximum span exactly, while the bbox said 200.
+                       The painted profile moves from a wrong shallow ramp
+                       (75,30,59,89,118,148,...) onto librsvg's shape
+                       (39,89,138,187,237 against its 44,97,150,203,253).
+
+                       Falls back to the bbox when the command carries no
+                       radius, which is the objectBoundingBox path. */
                     int rcx, rcy, rw, rh;
-                    rcx = (mnx + mxx) / 2; rcy = (mny + mxy) / 2;
-                    rw = (mxx - mnx) / 2; rh = (mxy - mny) / 2;
+                    if (cmd->gr > 0.0f) {
+                        rcx = (INT)cmd->gx1; rcy = (INT)cmd->gy1;
+                        rw = rh = (INT)cmd->gr;
+                    } else {
+                        rcx = (mnx + mxx) / 2; rcy = (mny + mxy) / 2;
+                        rw = (mxx - mnx) / 2; rh = (mxy - mny) / 2;
+                    }
                     if (rw < 1) rw = 1;
                     if (rh < 1) rh = 1;
                     GpPath* path = NULL;
