@@ -41,14 +41,26 @@ def axis_ratio(path):
     Robust to where the peak lands and to brightness differences between
     backends. The shape must fill the canvas -- a visible background would
     be brighter than the gradient and become the 'peak'.
+
+    Returns None when either extent touches the image EDGE. A gradient
+    drawn too large runs off the canvas, the half-maximum span is clipped
+    by the frame rather than by the falloff, and the ratio becomes a
+    measure of the canvas instead of the geometry. Measured: GDI+ paints
+    the uniform control far larger than it should and read 0.67 -- which
+    looks like an axis error but is a CIRCLE, correctly round, merely
+    oversized. Refusing to answer is right; a wrong number would have sent
+    the ellipse work chasing a size bug.
     """
     a = np.asarray(Image.open(path).convert("RGB"), dtype=int)[:, :, 0]
     py, px = np.unravel_index(a.argmax(), a.shape)
     half = a[py, px] // 2
-    hx = [x for x in range(a.shape[1]) if a[py, x] >= half]
-    vy = [y for y in range(a.shape[0]) if a[y, px] >= half]
+    h, w = a.shape
+    hx = [x for x in range(w) if a[py, x] >= half]
+    vy = [y for y in range(h) if a[y, px] >= half]
     if not hx or not vy:
         return None
+    if hx[0] == 0 or hx[-1] == w - 1 or vy[0] == 0 or vy[-1] == h - 1:
+        return None      # clipped by the frame: unmeasurable, not wrong
     return (hx[-1] - hx[0] + 1) / (vy[-1] - vy[0] + 1)
 
 
@@ -56,7 +68,8 @@ def check(stem, path):
     want, why = EXPECT[stem]
     got = axis_ratio(path)
     if got is None:
-        print(f"  {stem:24} NO GRADIENT FOUND in {path}")
+        print(f"  {stem:24} UNMEASURABLE (gradient clipped by the canvas "
+              f"edge, or none found) -- {os.path.basename(path)}")
         return False
     ok = abs(got - want) <= TOL
     note = "" if ok else ("  <-- a circle reads 1.00" if abs(got - 1.0) < TOL else "  <-- WRONG")

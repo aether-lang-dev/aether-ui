@@ -256,6 +256,19 @@ geometry and paint state, the backend only draws it. Concretely:
       changed. Complements `gallardo.svg`, the corpus's only affected AND
       fairly-measurable file.
 
+      **Also found, and separate:** GDI+ fails even the UNIFORM control --
+      not by getting the axes wrong (it draws a correct circle) but by
+      drawing it far too LARGE and off-centre. Half-maximum span 202px
+      where librsvg and GTK4 both measure 122px, peak at (215,200) against
+      their (199,199). That is the bounding-box approximation in the radial
+      fill: it sizes the gradient from the SHAPE's bbox, which for a
+      canvas-filling rect is the whole canvas. Distinct from the ellipse
+      work and worth its own fix. The checker now returns UNMEASURABLE when
+      the half-maximum extent touches the canvas edge, rather than
+      reporting a ratio that is really measuring the frame -- GDI+ read
+      0.67 on a perfectly round circle before that guard, which would have
+      sent the ellipse work chasing a size bug.
+
 
    2. Carry the ellipse geometry through the vg layer *alongside* the
       existing scalar radius — a NEW opt key, old key still emitted and
