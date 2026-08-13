@@ -5990,9 +5990,40 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     int b = (int)(cmd->stop_rgba[s*4+2] * 255.0f + 0.5f);
                     if (a<0)a=0; if (a>255)a=255;
                     cols[s] = ((ARGB)a<<24)|((ARGB)r<<16)|((ARGB)gg<<8)|(ARGB)b;
-                    pos[s]  = (ns == 1) ? 0.0f : (float)s / (float)(ns - 1);
+                    /* THE STOP'S OWN OFFSET. This spaced stops EVENLY --
+                       s/(ns-1) -- discarding cmd->stop_off, which
+                       win32_copy_stops has always filled in faithfully. Same
+                       class of bug as grad_line_width and grad_extend: data
+                       carried all the way here and then ignored.
+
+                       Only 3+-stop gradients can notice (2 stops land on 0,1
+                       either way), so the corpus barely moves -- but car.svg
+                       has five, including alpha ramps whose middle stop sits
+                       at 0.819 and 0.507. Forcing those to 0.5 misplaces the
+                       whole opacity transition. Correct on its own terms
+                       whether or not it shows up in a score. */
+                    pos[s] = (ns == 1) ? 0.0f : (float)cmd->stop_off[s];
+                    if (pos[s] < 0.0f) pos[s] = 0.0f;
+                    if (pos[s] > 1.0f) pos[s] = 1.0f;
                 }
+                /* GDI+ requires a preset blend to start at 0 and end at 1 and
+                   to increase MONOTONICALLY; SVG guarantees neither, and a
+                   violation makes GdipSetLinePresetBlend fail outright (which
+                   would silently drop every stop but the two endpoints). */
                 pos[0] = 0.0f; pos[ns-1] = 1.0f;
+                for (int s = 1; s < ns; s++) {
+                    if (pos[s] < pos[s-1]) pos[s] = pos[s-1];
+                }
+                /* Strictly increasing: coincident stops are legal SVG (a hard
+                   colour break) but GDI+ rejects the blend outright. Nudge by
+                   the smallest step that still reads as a break at 400px. */
+                for (int s = 1; s < ns; s++) {
+                    if (pos[s] <= pos[s-1]) {
+                        pos[s] = pos[s-1] + 0.0005f;
+                        if (pos[s] > 1.0f) pos[s] = 1.0f;
+                    }
+                }
+                if (pos[ns-1] < 1.0f) pos[ns-1] = 1.0f;
 
                 /* A GRADIENT STROKE IS NOT A GRADIENT FILL.
                    CanvasCmd.grad_line_width has said "> 0 -> stroke" since the
