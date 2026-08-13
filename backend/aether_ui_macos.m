@@ -3568,6 +3568,7 @@ typedef struct {
        produces: semi-axes and tilt. gr keeps the old scalar answer, so a
        command with grx == 0 renders exactly as it always did. */
     double grx, gry, grot;
+    char* font_family;       /* owned; raw CSS stack, NULL when unset */
     int n_stops;
     double* stop_off;   // owned: offsets
     double* stop_rgba;  // owned: n_stops*4 colour comps
@@ -3676,6 +3677,9 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
 // that slice alone offscreen is what lets an unchanged frame be blitted
 // instead of re-drawn. canvas_replay below is this with the full range, so
 // every existing caller is unaffected.
+/* Defined below, next to aeui_metrics_font so the drawing and measuring
+   fonts stay one resolver. */
+static NSFont* aeui_resolve_font(double size, const char* stack);
 static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                                 int start, int end) {
     if (!cg || !cs) return;
@@ -3745,7 +3749,7 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                     NSString* s = [NSString stringWithUTF8String:c->text];
                     NSColor* col = [NSColor colorWithRed:c->r green:c->g
                                                     blue:c->b alpha:c->a];
-                    NSFont* font = [NSFont systemFontOfSize:c->w];
+                    NSFont* font = aeui_resolve_font(c->w, c->font_family);
                     NSDictionary* attrs = @{
                         NSFontAttributeName: font,
                         NSForegroundColorAttributeName: col
@@ -4246,13 +4250,11 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
                                       int font_flags, const char* font_family,
                                       double r, double g, double b, double a) {
-    /* Not consumed yet -- this backend still picks a face from font_flags
-       alone. One backend at a time; see TODO.md. */
-    (void)font_family;
-    (void)font_flags;   // font-family selection not yet wired on AppKit
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
+        .iw = font_flags,
         .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
         .text = text ? strdup(text) : NULL
     });
 }
@@ -4283,6 +4285,52 @@ void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
 // and no display — which is the whole reason GTK4 measures with a 1x1 scratch
 // cairo surface rather than through a widget.
 // ---------------------------------------------------------------------------
+/* Resolve a CSS font stack with CoreText/AppKit's own matcher -- the point of
+   carrying the raw string rather than a pre-resolved face: answering "best
+   available for this list" is a platform question.
+
+   font-family is a PRIORITISED LIST, so walk it in order and take the first
+   entry AppKit can instantiate. Generic CSS families map to the system's
+   equivalents. Falls back to systemFontOfSize:, which is what this backend
+   used for every glyph before the stack was carried at all.
+
+   Used by BOTH the drawing path and aeui_metrics_font below, deliberately:
+   the comment there warns that if the measuring font and the drawing font
+   diverge, every centred label drifts by a few pixels and nothing in the
+   code says why. One resolver, both callers. */
+static NSFont* aeui_resolve_font(double size, const char* stack) {
+    CGFloat sz = (size > 0 ? size : 16.0);
+    if (stack && stack[0]) {
+        NSString* all = [NSString stringWithUTF8String:stack];
+        for (NSString* raw in [all componentsSeparatedByString:@","]) {
+            NSString* name = [raw stringByTrimmingCharactersInSet:
+                [NSCharacterSet characterSetWithCharactersInString:@" \t'\""]];
+            if ([name length] == 0) continue;
+            NSString* lower = [name lowercaseString];
+            if ([lower isEqualToString:@"serif"])
+                return [NSFont fontWithName:@"Times New Roman" size:sz]
+                       ?: [NSFont fontWithName:@"Times" size:sz]
+                       ?: [NSFont systemFontOfSize:sz];
+            if ([lower isEqualToString:@"sans-serif"])
+                return [NSFont fontWithName:@"Helvetica" size:sz]
+                       ?: [NSFont systemFontOfSize:sz];
+            if ([lower isEqualToString:@"monospace"])
+                return [NSFont fontWithName:@"Menlo" size:sz]
+                       ?: [NSFont fontWithName:@"Courier" size:sz]
+                       ?: [NSFont userFixedPitchFontOfSize:sz];
+            if ([lower isEqualToString:@"cursive"])
+                return [NSFont fontWithName:@"Apple Chancery" size:sz]
+                       ?: [NSFont systemFontOfSize:sz];
+            if ([lower isEqualToString:@"fantasy"])
+                return [NSFont fontWithName:@"Papyrus" size:sz]
+                       ?: [NSFont systemFontOfSize:sz];
+            NSFont* f = [NSFont fontWithName:name size:sz];
+            if (f) return f;
+        }
+    }
+    return [NSFont systemFontOfSize:sz];
+}
+
 static NSFont* aeui_metrics_font(double size) {
     return [NSFont systemFontOfSize:(size > 0 ? size : 16.0)];
 }
