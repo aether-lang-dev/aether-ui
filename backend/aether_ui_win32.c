@@ -5467,6 +5467,9 @@ __declspec(dllimport) int __stdcall GdipClosePathFigure(GpPath* path);
 __declspec(dllimport) int __stdcall GdipSetClipPath(GpGraphics* g, GpPath* path,
     int combineMode);
 __declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
+__declspec(dllimport) int __stdcall GdipStartPathFigure(GpPath* path);
+__declspec(dllimport) int __stdcall GdipFillPath(GpGraphics* g, GpBrush* brush,
+                                                 GpPath* path);
 #define GDIP_COMBINE_REPLACE 0
 /* Radial gradients: centre point and rim colour, so an SVG <radialGradient>
    with a focal point (fx,fy) distinct from its centre renders correctly. */
@@ -5697,27 +5700,53 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     }
                     break;
                 }
-                GpPointI pts[256];
-                int np = 0;
-                for (int j = i - 1; j >= 0 && np < 256; j--) {
-                    CanvasCmdKind k = cv->cmds[j].k;
-                    if (k == CV_BEGIN) break;
-                    if (k == CV_MOVE) {
-                        pts[np].X = (INT)cv->cmds[j].p0;
-                        pts[np].Y = (INT)cv->cmds[j].p1;
-                        np++;
-                    } else if (k == CV_LINE) {
-                        pts[np].X = (INT)cv->cmds[j].p2;
-                        pts[np].Y = (INT)cv->cmds[j].p3;
-                        np++;
-                    }
+                /* SUB-PATHS ARE SEPARATE FIGURES. The old code flattened
+                   every CV_MOVE/CV_LINE back to CV_BEGIN into ONE point array
+                   and filled it as a single polygon, so a path made of several
+                   disjoint runs came out joined. git.svg is the clean case: its
+                   green path is six sub-paths (three horizontal runs, three
+                   verticals) with no fill attribute, so SVG's default black
+                   fill applies -- but filling six OPEN figures yields almost no
+                   area, which is why librsvg and GTK4 show none. Merging them
+                   produced a large bogus polygon: at y=195 librsvg has three
+                   spans (90,109) (173,193) (256,276) and GDI+ had one
+                   continuous (90,276).
+
+                   cairo gets this right for free because CANVAS_FILL fills its
+                   own retained path, which already knows about move_to. Build
+                   the equivalent GpPath, starting a new figure at each
+                   CV_MOVE. Walk FORWARD here -- figure order matters. */
+                int start = 0;
+                for (int j = i - 1; j >= 0; j--) {
+                    if (cv->cmds[j].k == CV_BEGIN) { start = j + 1; break; }
+                    if (j == 0) start = 0;
                 }
-                if (np >= 3) {
-                    GpBrush* br = NULL;
-                    if (GdipCreateSolidFill(gdip_argb(cmd), &br) == 0 && br) {
-                        GdipFillPolygonI(g, br, pts, np, GDIP_FILLMODE_ALTERNATE);
-                        GdipDeleteBrush(br);
+                GpPath* fp = NULL;
+                if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &fp) == 0 && fp) {
+                    int fig_open = 0, segs = 0;
+                    for (int j = start; j < i; j++) {
+                        CanvasCmdKind k = cv->cmds[j].k;
+                        if (k == CV_MOVE) {
+                            if (fig_open) GdipClosePathFigure(fp);
+                            GdipStartPathFigure(fp);
+                            fig_open = 1;
+                        } else if (k == CV_LINE) {
+                            GpPointI seg[2];
+                            seg[0].X = (INT)cv->cmds[j].p0; seg[0].Y = (INT)cv->cmds[j].p1;
+                            seg[1].X = (INT)cv->cmds[j].p2; seg[1].Y = (INT)cv->cmds[j].p3;
+                            if (!fig_open) { GdipStartPathFigure(fp); fig_open = 1; }
+                            GdipAddPathLine2I(fp, seg, 2);
+                            segs++;
+                        }
                     }
+                    if (segs >= 2) {
+                        GpBrush* br = NULL;
+                        if (GdipCreateSolidFill(gdip_argb(cmd), &br) == 0 && br) {
+                            GdipFillPath(g, br, fp);
+                            GdipDeleteBrush(br);
+                        }
+                    }
+                    GdipDeletePath(fp);
                 }
                 break;
             }
