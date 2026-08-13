@@ -53,15 +53,35 @@ support impossible to interpret.
 ### Selection: env var, not compile flag
 
 ```
-AETHER_UI_WIN32_RENDERER=gdiplus      # opt in
-AETHER_UI_WIN32_RENDERER=legacy       # default, and what ships
+AETHER_UI_WIN32_RENDERER=gdiplus      # the default, and what ships
+AETHER_UI_WIN32_RENDERER=legacy       # opt OUT, back to plain GDI
 ```
 
 One binary, two renderers, chosen at run time. A compile flag would mean
 two builds and a far weaker comparison — you could never be sure a
 difference came from the renderer rather than the build.
 
-**GDI stays the default** until the numbers argue otherwise.
+**GDI+ is now the default.** The original wording here was "GDI stays the
+default until the numbers argue otherwise" — they now do, decisively:
+
+|                | good (<5) | ok (5–15) | diff (≥15) | mean |
+|----------------|-----------|-----------|------------|------|
+| legacy GDI     | 131       | 40        | 37         | 20.87 |
+| GDI+           | 172       | 18        | 17         | **4.71** |
+
+Scored over the 208-file SVG corpus against librsvg. On the 167 files that
+carry a real `viewBox`, GDI+ means **3.00** against the GTK4 reference
+backend's 1.77, with 104 of 167 within 1.0 of it. (The other 40 files have
+no `viewBox`, so `rsvg-convert` and our renderer infer different canvas
+extents and the diff scores a scale mismatch rather than rendering. See
+"Files the corpus cannot fairly score" below.)
+
+Legacy is **kept, not deleted**. It is the second arm of
+`tests/win32/capture-pixelgrid.sh`, it is the fallback when
+`GdipCreateFromHDC` fails, and it makes this flip revertible with one
+environment variable if a real application regresses in a way 208 static
+SVGs did not catch. Deleting it is a later commit, once GDI+ has run as the
+default for a while.
 
 ### The trap to avoid
 
@@ -176,3 +196,52 @@ with the GDI+ path stubbed to call the GDI one. That produces MAE 0.0
 everywhere, which proves the measurement works end to end before any
 drawing code exists, and gives an honest baseline to move away from. Same
 discipline as Stage 3's counters landing before the caching did.
+
+## Files the corpus cannot fairly score
+
+**40 of the 207 scored files have no `viewBox`.** With no viewBox, the
+canvas extent is *inferred*, and `rsvg-convert -w 400 -h 400
+--keep-aspect-ratio` infers it differently from our renderer. The diff then
+measures a scale-and-position mismatch, not rendering.
+
+`tiger.svg` is the clearest demonstration: it renders beautifully on both
+backends, yet scores 59.4 (GTK4) / 59.2 (GDI+). Normalise for scale by
+cropping both to their ink bounding box and resampling, and it drops to
+**7.7 / 10.6** — roughly 85% of that score was the artefact. `bloglines.svg`
+is worse still: its attribute is spelled `viewbox`, lowercase, which is not
+valid SVG at all, and the file is one every browser paints differently.
+
+So there are two means worth quoting, and the narrower one is the honest
+measure of the renderer:
+
+| set | GTK4 | GDI+ |
+|-----|------|------|
+| 167 files with a real `viewBox` | 1.77 | **3.00** |
+| all 207 | 3.44 | 4.71 |
+
+## What is still wrong on GDI+
+
+Nine of the 167 fairly-scored files are more than 3 MAE worse than GTK4.
+They are four causes, not nine problems:
+
+1. **Radial gradient geometry** — `json` 27.2, `jsonatom` 26.5. GDI+ has no
+   radial brush; the fill approximates one with a path gradient over the
+   shape's bounding ellipse. Where the gradient is centred outside its
+   shape, that approximation breaks down.
+2. **Non-uniform `gradientTransform`** — `python` 11.5,
+   `compuserver_msn_Ford_Focus` 10.7, `car` 8.6 (its grille patch). This is
+   **not a backend bug**: `defs.ae` collapses the matrix to
+   `affine_average_scale` before any backend sees it, so the information is
+   already gone. Fixing it is a vg-layer change that would benefit all three
+   backends.
+3. **Radial gradient STROKES use a linear brush** — `php` 4.2. The stroke
+   branch is entered for both gradient kinds. php currently scores *well* by
+   accident; three corrected geometries were measured and all scored worse,
+   because they trade php against the dedicated radial tests.
+4. **Stroked text is not painted** — `aether_ui_canvas_stroke_text_impl`
+   records its command but the replay does not draw it. `GdipDrawString` can
+   only fill, and a filled second pass overpaints rather than outlines
+   (measured: moved `Steps.svg` *away* from GTK4). Needs glyph outlines via
+   `GdipAddPathString`. Minimal repro: `vg/test/svg/text_stroke_repro.svg`.
+
+104 of the 167 are within 1.0 of GTK4.

@@ -5118,15 +5118,33 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
 // comparison -- a compile flag would mean two builds, and any difference
 // could then be blamed on the build rather than the renderer.
 //
-//     AETHER_UI_WIN32_RENDERER=gdiplus   opt in
-//     AETHER_UI_WIN32_RENDERER=legacy    default, and what ships
+//     AETHER_UI_WIN32_RENDERER=legacy    opt OUT, back to plain GDI
+//     AETHER_UI_WIN32_RENDERER=gdiplus   the default, and what ships
+//
+// GDI+ IS NOW THE DEFAULT. The comparison it was built for is what decided
+// that, over the 208-file SVG corpus scored against librsvg:
+//
+//                good(<5)  ok(5-15)  diff(>=15)   mean
+//   legacy GDI     131       40         37        20.87
+//   GDI+           172       18         17         4.71
+//
+// and on the 167 of those files that carry a real viewBox (the other 40 have
+// none, so their score measures canvas-size inference rather than rendering)
+// GDI+ means 3.00 against the GTK4 reference backend's 1.77, with 104 of 167
+// within 1.0 of it.
+//
+// Legacy is KEPT, not deleted: it is the second arm of
+// tests/win32/capture-pixelgrid.sh, it is the fallback when
+// GdipCreateFromHDC fails (see canvas_replay_to_dc_gdiplus), and it makes
+// this flip revertible by one environment variable if a real application
+// regresses in a way 208 static SVGs did not catch.
 //
 // Read once and cached: this is called per paint.
 static int win32_use_gdiplus(void) {
     static int cached = -1;
     if (cached < 0) {
         const char* v = getenv("AETHER_UI_WIN32_RENDERER");
-        cached = (v && strcmp(v, "gdiplus") == 0) ? 1 : 0;
+        cached = (v && strcmp(v, "legacy") == 0) ? 0 : 1;
     }
     return cached;
 }
