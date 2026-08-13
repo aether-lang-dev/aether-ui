@@ -3845,15 +3845,6 @@ static void canvas_select_font_family(cairo_t* cr, int flags, const char* fam) {
     cairo_select_font_face(cr, family, slant, weight);
 }
 
-static void canvas_select_font(cairo_t* cr, int flags) {
-    const char* family = (flags & 1) ? "monospace" : "sans-serif";
-    cairo_font_slant_t slant = (flags & 4) ? CAIRO_FONT_SLANT_ITALIC
-                                           : CAIRO_FONT_SLANT_NORMAL;
-    cairo_font_weight_t weight = (flags & 2) ? CAIRO_FONT_WEIGHT_BOLD
-                                             : CAIRO_FONT_WEIGHT_NORMAL;
-    cairo_select_font_face(cr, family, slant, weight);
-}
-
 // Replay a RANGE [start, end) of the command buffer. Stage 3 (per-frame
 // surfaces) needs this: frames emit their commands sequentially into the
 // shared buffer, so one frame's drawing is a contiguous slice, and rendering
@@ -3937,7 +3928,10 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 // Round join/cap so a wide stroke fills without miter spikes.
                 cairo_line_join_t pj = cairo_get_line_join(cr);
                 cairo_line_cap_t  pc = cairo_get_line_cap(cr);
-                canvas_select_font(cr, c->iw);
+                /* The family, not just the flags -- the FILL pass above uses
+                   it, and a stroke drawn in a different face than the fill it
+                   outlines would ghost. */
+                canvas_select_font_family(cr, c->iw, c->font_family);
                 cairo_set_source_rgba(cr, c->r, c->g, c->b, c->a);
                 cairo_set_font_size(cr, c->w);
                 cairo_set_line_width(cr, c->h);

@@ -3547,6 +3547,7 @@ typedef enum {
     CANVAS_CLOSE_PATH,
     CANVAS_FILL,
     CANVAS_FILL_TEXT,
+    CANVAS_STROKE_TEXT,   /* SVG stroke on <text>: outline over the fill */
     CANVAS_DRAW_IMAGE,
     CANVAS_FILL_LINEAR,
     CANVAS_FILL_RADIAL,
@@ -3744,6 +3745,39 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                 if (c->iw) CGContextEOFillPath(cg);
                 else       CGContextFillPath(cg);
                 break;
+            case CANVAS_STROKE_TEXT: {
+                /* SVG stroke on <text>. Was a no-op here, so a glyph whose
+                   visible colour comes from its STROKE rendered as the bare
+                   fill -- bloglines.svg is <text stroke="white"> with no
+                   fill, which takes SVG's default BLACK and came out a solid
+                   black B where librsvg draws a white one.
+
+                   AppKit has no "stroke this string" call, but the text
+                   attributes do: a POSITIVE NSStrokeWidthAttributeName means
+                   stroke-only (negative would mean fill AND stroke). It is
+                   expressed as a PERCENTAGE OF FONT SIZE, not points, hence
+                   the conversion. Emitted after the fill for the same run, so
+                   the outline sits on top -- matching GTK4's
+                   cairo_text_path + stroke. */
+                if (c->text && c->w > 0) {
+                    NSString* s2 = [NSString stringWithUTF8String:c->text];
+                    NSColor* col = [NSColor colorWithRed:c->r green:c->g
+                                                    blue:c->b alpha:c->a];
+                    NSFont* font = aeui_resolve_font(c->w, c->font_family);
+                    double pct = (c->h / c->w) * 100.0;
+                    if (pct <= 0.0) pct = 1.0;
+                    NSDictionary* attrs = @{
+                        NSFontAttributeName: font,
+                        NSStrokeColorAttributeName: col,
+                        NSForegroundColorAttributeName: [NSColor clearColor],
+                        NSStrokeWidthAttributeName: @(pct)
+                    };
+                    CGFloat ascent = [font ascender];
+                    [s2 drawAtPoint:NSMakePoint(c->x, c->y - ascent)
+                        withAttributes:attrs];
+                }
+                break;
+            }
             case CANVAS_FILL_TEXT: {
                 if (c->text) {
                     NSString* s = [NSString stringWithUTF8String:c->text];
@@ -4267,9 +4301,13 @@ void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double line_width, int font_flags,
                                         const char* font_family,
                                         double r, double g, double b, double a) {
-    (void)font_family;
-    (void)canvas_id; (void)text; (void)x; (void)y; (void)font_size;
-    (void)line_width; (void)font_flags; (void)r; (void)g; (void)b; (void)a;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_STROKE_TEXT, .x = x, .y = y, .w = font_size,
+        .h = line_width, .iw = font_flags,
+        .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
+        .text = text ? strdup(text) : NULL
+    });
 }
 
 // ---------------------------------------------------------------------------
