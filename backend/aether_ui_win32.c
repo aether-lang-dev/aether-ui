@@ -4551,6 +4551,7 @@ typedef struct {
     // Gradient: linear (gx1,gy1)→(gx2,gy2); radial center (gx1,gy1) r gr.
     float gx1, gy1, gx2, gy2, gr, gfx, gfy;
     float grad_line_width;  // 0 → fill; >0 → stroke (GDI approximates as fill)
+    int grad_extend;       // SVG spreadMethod: 0=pad (default), 1=reflect, 2=repeat
     int n_stops;
     double* stop_off;      // owned
     double* stop_rgba;     // owned: n_stops*4
@@ -4971,9 +4972,8 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join) {
-    (void)extend; // spreadMethod not yet honored on the GDI+ backend
     CanvasCmd c = {0};
-    c.k = CV_FILL_LINEAR; c.gx1 = x1; c.gy1 = y1; c.gx2 = x2; c.gy2 = y2;
+    c.k = CV_FILL_LINEAR; c.grad_extend = extend; c.gx1 = x1; c.gy1 = y1; c.gx2 = x2; c.gy2 = y2;
     c.grad_line_width = line_width; c.cap = cap; c.join = join;
     win32_copy_stops(&c, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, c);
@@ -4983,9 +4983,8 @@ void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join) {
-    (void)extend; // spreadMethod not yet honored on the GDI+ backend
     CanvasCmd c = {0};
-    c.k = CV_FILL_RADIAL; c.gx1 = cx; c.gy1 = cy; c.gr = radius;
+    c.k = CV_FILL_RADIAL; c.grad_extend = extend; c.gx1 = cx; c.gy1 = cy; c.gr = radius;
     c.gfx = fx; c.gfy = fy; c.grad_line_width = line_width;
     c.cap = cap; c.join = join;
     win32_copy_stops(&c, n_stops, offsets, rgba);
@@ -5469,6 +5468,17 @@ __declspec(dllimport) int __stdcall GdipCreateLineBrushI(const GpPointI* p1,
     const GpPointI* p2, ARGB c1, ARGB c2, int wrapMode, GpLineGradient** brush);
 __declspec(dllimport) int __stdcall GdipSetLinePresetBlend(GpLineGradient* brush,
     const ARGB* blend, const float* positions, int count);
+/* SVG spreadMethod. WrapModeClamp(4) is NOT usable for pad: on a
+   LinearGradientBrush it renders everything outside the vector as
+   transparent rather than holding the end colours, which is a different
+   bug, not a fix. GdipSetLineGammaCorrection is unrelated. The reliable
+   spelling of "pad" is TileFlipXY-free clamping via the preset blend, so
+   pad is implemented by EXTENDING the brush's own vector instead -- see
+   the CV_FILL_LINEAR case. This setter is still needed for reflect/repeat. */
+__declspec(dllimport) int __stdcall GdipSetLineWrapMode(GpLineGradient* brush,
+    int wrapMode);
+#define GDIP_WRAP_TILE_FLIPX 1
+#define GDIP_WRAP_CLAMP      4
 __declspec(dllimport) int __stdcall GdipCreatePath(int fillMode, GpPath** path);
 __declspec(dllimport) int __stdcall GdipDeletePath(GpPath* path);
 __declspec(dllimport) int __stdcall GdipAddPathEllipseI(GpPath* path,
@@ -6029,13 +6039,84 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                 ga.X = mnx; ga.Y = mny;
                                 gb.X = mxx; gb.Y = mny;
                             }
+                            /* Same spreadMethod handling as the fill case
+                               below -- pad by extending the vector. */
+                            ARGB scols[18]; float spos[18]; int sns = ns;
+                            /* Pad only a genuinely LINEAR stroke gradient.
+                               A radial one reaches this branch too (the test
+                               is grad_line_width>0) and is painted with a
+                               linear brush as a stand-in; that stand-in is
+                               calibrated by accident, and reshaping its vector
+                               moved php.svg 4.60 -> 6.31. Leave it alone. */
+                            if (cmd->grad_extend == 0 && cmd->k == CV_FILL_LINEAR) {
+                                float dx = (float)(gb.X - ga.X), dy = (float)(gb.Y - ga.Y);
+                                float len = (float)sqrt(dx*dx + dy*dy);
+                                /* Pad by the shape's own projection onto the
+                                   axis -- see the fill case for why a blanket
+                                   constant costs blend precision. Widen by the
+                                   stroke width too: a stroke paints up to
+                                   half a pen either side of the path. */
+                                float pad = 0.0f;
+                                if (len > 0.01f) {
+                                    float ux = dx / len, uy = dy / len;
+                                    int cx4[4] = { mnx, mxx, mnx, mxx };
+                                    int cy4[4] = { mny, mny, mxy, mxy };
+                                    for (int q = 0; q < 4; q++) {
+                                        float t = ((float)cx4[q] - (float)ga.X) * ux +
+                                                  ((float)cy4[q] - (float)ga.Y) * uy;
+                                        if (t < -pad) pad = -t;
+                                        if (t - len > pad) pad = t - len;
+                                    }
+                                    pad += cmd->grad_line_width * 0.5f + 2.0f;
+                                }
+                                float diag = pad;
+                                if (len > 0.01f) {
+                                    float ex = dx / len * diag, ey = dy / len * diag;
+                                    GpPointI na, nb;
+                                    na.X = (INT)(ga.X - ex); na.Y = (INT)(ga.Y - ey);
+                                    nb.X = (INT)(gb.X + ex); nb.Y = (INT)(gb.Y + ey);
+                                    float total = len + 2.0f * diag;
+                                    float lo = diag / total, span = len / total;
+                                    sns = 0;
+                                    scols[sns] = cols[0];    spos[sns] = 0.0f; sns++;
+                                    for (int s = 0; s < ns && sns < 17; s++) {
+                                        scols[sns] = cols[s];
+                                        spos[sns] = lo + pos[s] * span;
+                                        sns++;
+                                    }
+                                    scols[sns] = cols[ns-1]; spos[sns] = 1.0f; sns++;
+                                    ga = na; gb = nb;
+                                }
+                            } else {
+                                for (int s = 0; s < ns; s++) { scols[s] = cols[s]; spos[s] = pos[s]; }
+                            }
+                            /* NB a RADIAL gradient stroke is still painted
+                               with a LINEAR brush here: this branch is entered
+                               for both kinds (the test is grad_line_width>0).
+                               php.svg's ellipse stroke="url(#phpg)" is radial
+                               and lands near the reference by accident. The
+                               obvious fix -- a path-gradient brush built from
+                               the shape's bounding ellipse -- measures WORSE
+                               (6.31 -> 7.29), because phpg is userSpaceOnUse
+                               centred at (250,0) r=300, far outside the shape,
+                               so the bounding ellipse is the wrong geometry
+                               entirely. CanvasCmd carries the real centre and
+                               radius; using them needs the same care the
+                               radial FILL case documents. Left as-is
+                               deliberately rather than made confidently wrong. */
+                            GpBrush* sbr = NULL;
                             GpLineGradient* slg = NULL;
-                            if (GdipCreateLineBrushI(&ga, &gb, cols[0], cols[ns-1],
+                            if (GdipCreateLineBrushI(&ga, &gb, scols[0], scols[sns-1],
                                                      GDIP_WRAP_TILE, &slg) == 0 && slg) {
-                                if (ns >= 2)
-                                    GdipSetLinePresetBlend(slg, cols, pos, ns);
+                                if (cmd->grad_extend == 1)
+                                    GdipSetLineWrapMode(slg, GDIP_WRAP_TILE_FLIPX);
+                                if (sns >= 2)
+                                    GdipSetLinePresetBlend(slg, scols, spos, sns);
+                                sbr = (GpBrush*)slg;
+                            }
+                            if (sbr) {
                                 GpPen* gp = NULL;
-                                if (GdipCreatePen2((GpBrush*)slg,
+                                if (GdipCreatePen2(sbr,
                                                    cmd->grad_line_width,
                                                    GDIP_UNIT_PIXEL, &gp) == 0 && gp) {
                                     /* The command's OWN cap/join, through the
@@ -6054,7 +6135,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                     GdipDrawPath(g, gp, sp);
                                     GdipDeletePen(gp);
                                 }
-                                GdipDeleteBrush((GpBrush*)slg);
+                                GdipDeleteBrush(sbr);
                             }
                         }
                         GdipDeletePath(sp);
@@ -6190,10 +6271,83 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                 clipped = 1;
                         }
                     }
+                    /* SVG spreadMethod, which this backend hardcoded to
+                       GDIP_WRAP_TILE -- i.e. "repeat" -- while SVG's DEFAULT
+                       is PAD. Any gradient whose vector is shorter than the
+                       shape therefore TILED, and the sawtooth is visible in
+                       the pixels: car.svg's rear window ramps 195->95 then
+                       jumps back to 195 every 8px, rendering a smooth dark
+                       pane as diagonal grey stripes. GTK4 has always mapped
+                       this properly (CAIRO_EXTEND_PAD/REFLECT/REPEAT).
+
+                       Pad is implemented by EXTENDING the vector rather than
+                       by WrapModeClamp: on a LinearGradientBrush, Clamp paints
+                       everything outside the vector TRANSPARENT instead of
+                       holding the end colours, which trades one artifact for
+                       another. Stretch the axis far beyond the shape and remap
+                       the stops into the middle, so the first/last stop colour
+                       occupies everything past each end -- the definition of
+                       pad -- and no tile boundary is ever inside the shape. */
+                    ARGB ucols[18];
+                    float upos[18];
+                    int uns = ns;
+                    GpPointI ua = a, ub = b;
+                    if (cmd->grad_extend == 0) {
+                        float dx = (float)(b.X - a.X), dy = (float)(b.Y - a.Y);
+                        float len = (float)sqrt(dx*dx + dy*dy);
+                        /* Extend by exactly what the SHAPE needs along this
+                           axis, never a blanket constant. GDI+ interpolates
+                           the preset blend across the WHOLE brush, so slack
+                           costs precision: padding a 5px vector by a 300px
+                           diagonal squeezes the real ramp into 0.8% of the
+                           blend, where it quantises to one flat colour. That
+                           regressed php.svg (4.60 -> 6.31, its gradient going
+                           solid #CCF) on the first attempt. Project the
+                           bounding box's corners onto the axis and pad to the
+                           furthest, so the hold regions are as small as they
+                           can be while still covering the shape. */
+                        float pad = 0.0f;
+                        if (len > 0.01f) {
+                            float ux = dx / len, uy = dy / len;
+                            int cx4[4] = { mnx, mxx, mnx, mxx };
+                            int cy4[4] = { mny, mny, mxy, mxy };
+                            for (int q = 0; q < 4; q++) {
+                                float t = ((float)cx4[q] - (float)a.X) * ux +
+                                          ((float)cy4[q] - (float)a.Y) * uy;
+                                if (t < -pad) pad = -t;
+                                if (t - len > pad) pad = t - len;
+                            }
+                            pad += 2.0f;
+                        }
+                        float diag = pad;
+                        if (len > 0.01f) {
+                            float ex = dx / len * diag, ey = dy / len * diag;
+                            ua.X = (INT)(a.X - ex); ua.Y = (INT)(a.Y - ey);
+                            ub.X = (INT)(b.X + ex); ub.Y = (INT)(b.Y + ey);
+                            float total = len + 2.0f * diag;
+                            float lo = diag / total, span = len / total;
+                            /* Duplicate the end stops at 0 and 1 so the pad
+                               region is a flat hold, not a ramp to the edge. */
+                            uns = 0;
+                            ucols[uns] = cols[0];      upos[uns] = 0.0f;      uns++;
+                            for (int s = 0; s < ns && uns < 17; s++) {
+                                ucols[uns] = cols[s];
+                                upos[uns] = lo + pos[s] * span;
+                                uns++;
+                            }
+                            ucols[uns] = cols[ns-1];   upos[uns] = 1.0f;      uns++;
+                        }
+                    } else {
+                        for (int s = 0; s < ns; s++) { ucols[s] = cols[s]; upos[s] = pos[s]; }
+                    }
                     GpLineGradient* lg = NULL;
-                    if (GdipCreateLineBrushI(&a, &b, cols[0], cols[ns-1],
+                    if (GdipCreateLineBrushI(&ua, &ub, ucols[0], ucols[uns-1],
                                              GDIP_WRAP_TILE, &lg) == 0 && lg) {
-                        if (ns >= 2) GdipSetLinePresetBlend(lg, cols, pos, ns);
+                        /* reflect -> TileFlipX (mirror each repeat);
+                           repeat -> plain Tile; pad handled by the vector. */
+                        if (cmd->grad_extend == 1)
+                            GdipSetLineWrapMode(lg, GDIP_WRAP_TILE_FLIPX);
+                        if (uns >= 2) GdipSetLinePresetBlend(lg, ucols, upos, uns);
                         GdipFillRectangleI(g, (GpBrush*)lg, mnx, mny,
                                            mxx-mnx, mxy-mny);
                         GdipDeleteBrush((GpBrush*)lg);
