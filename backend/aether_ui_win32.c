@@ -6261,15 +6261,52 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        around it -- measured on python.svg: 25,251 white pixels
                        against librsvg's 64,749, i.e. the background eaten by
                        two rectangles. Build the accumulated path and clip. */
+                    /* SUB-PATHS ARE SEPARATE FIGURES. pts[] above is a flat
+                       list in which CV_MOVE is just another vertex, so feeding
+                       it to one GdipAddPathLine2I welds every sub-path into a
+                       single polyline -- and the weld is VISIBLE: python.svg's
+                       two paths each end with a degenerate stub (M88,50v1 and
+                       M140,50v1, the latter outside the 0..100 viewBox
+                       entirely), so the clip ran a hairline from the body's
+                       last point out to the stub. That is the blue slash
+                       across the upper body and the yellow one trailing off
+                       the bottom-right corner, each 2px wide over ~110 rows.
+                       Walk forward and start a new figure at every CV_MOVE,
+                       exactly as the gradient STROKE case does. */
                     GpPath* clip = NULL;
                     int clipped = 0;
                     if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &clip) == 0
                         && clip) {
-                        if (GdipAddPathLine2I(clip, pts, np) == 0) {
-                            GdipClosePathFigure(clip);
-                            if (GdipSetClipPath(g, clip, GDIP_COMBINE_REPLACE) == 0)
-                                clipped = 1;
+                        int cstart = 0;
+                        for (int j = i - 1; j >= 0; j--) {
+                            if (cv->cmds[j].k == CV_BEGIN) { cstart = j; break; }
                         }
+                        int figs = 0, fpts = 0;
+                        GpPointI fig[256];
+                        for (int j = cstart; j <= i; j++) {
+                            CanvasCmdKind k = (j < i) ? cv->cmds[j].k : CV_BEGIN;
+                            int isend = (j == i);
+                            if (k == CV_MOVE || isend) {
+                                if (fpts >= 2 &&
+                                    GdipAddPathLine2I(clip, fig, fpts) == 0) {
+                                    GdipClosePathFigure(clip);
+                                    figs++;
+                                }
+                                fpts = 0;
+                                if (!isend) {
+                                    fig[fpts].X = (INT)cv->cmds[j].p0;
+                                    fig[fpts].Y = (INT)cv->cmds[j].p1;
+                                    fpts++;
+                                }
+                            } else if (k == CV_LINE && fpts < 256) {
+                                fig[fpts].X = (INT)cv->cmds[j].p2;
+                                fig[fpts].Y = (INT)cv->cmds[j].p3;
+                                fpts++;
+                            }
+                        }
+                        if (figs > 0 &&
+                            GdipSetClipPath(g, clip, GDIP_COMBINE_REPLACE) == 0)
+                            clipped = 1;
                     }
                     /* SVG spreadMethod, which this backend hardcoded to
                        GDIP_WRAP_TILE -- i.e. "repeat" -- while SVG's DEFAULT
