@@ -35,7 +35,10 @@
 exports (
     AevgOptions, opts_new, opts_set_view_box, opts_set_width,
     opts_set_height, opts_set_preserve_aspect_ratio, opts_set_viewport,
-    create_aevg_context, aevg
+    create_aevg_context, aevg,
+    // Exported so a renderer can ask an SVG for its aspect ratio without
+    // re-implementing viewBox parsing (see loader.svg_aspect_ratio).
+    parse_view_box, vb4_width, vb4_height
 )
 
 import std.string

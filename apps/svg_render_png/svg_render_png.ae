@@ -53,12 +53,33 @@ main() {
         exit(2)
     }
 
-    // Headless canvas + GTK backend; loader dispatches the whole scene.
-    cid = canvas_create(size, size)
-    backend = gtk.gtk_backend_new(cid)
-    _ctx = loader.load_svg(backend, svg, int_to_f(size), int_to_f(size))
+    // Canvas takes the SVG's own ASPECT, fitting the longer side to `size` --
+    // what `rsvg-convert -w N -h N --keep-aspect-ratio` does, and therefore
+    // what the parity harness compares against. Rendering every SVG onto a
+    // SQUARE canvas left background showing around a non-square drawing,
+    // which scores as a rendering difference when it is really a canvas-size
+    // one (vg/test/svg/radial_ellipse_bbox.svg is 2:1 and could not be
+    // measured at all because of it). Falls back to square when the SVG
+    // declares no usable aspect, which is the old behaviour.
+    cw = size
+    ch = size
+    ar = loader.svg_aspect_ratio(svg)
+    if ar > 0.0 {
+        if ar > 1.0 {
+            ch = f_to_int(int_to_f(size) / ar)
+        } else {
+            cw = f_to_int(int_to_f(size) * ar)
+        }
+        if cw < 1 { cw = 1 }
+        if ch < 1 { ch = 1 }
+    }
 
-    ok2 = canvas_write_png(cid, out_path, size, size)
+    // Headless canvas + GTK backend; loader dispatches the whole scene.
+    cid = canvas_create(cw, ch)
+    backend = gtk.gtk_backend_new(cid)
+    _ctx = loader.load_svg(backend, svg, int_to_f(cw), int_to_f(ch))
+
+    ok2 = canvas_write_png(cid, out_path, cw, ch)
     if ok2 == 1 {
         println("svg_render: wrote ${out_path}")
     } else {
@@ -68,3 +89,4 @@ main() {
 }
 
 int_to_f(i: int) -> float { return i / 1.0 }
+f_to_int(f: float) -> int { return (f + 0.5) as int }

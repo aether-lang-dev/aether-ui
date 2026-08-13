@@ -28,7 +28,8 @@
 //   load_svg_default(backend, svg_string) -> *AevgContext
 //     (canvas defaults: 400×400)
 
-exports ( load_svg, load_svg_default, register_defs_into )
+exports ( load_svg, load_svg_default, register_defs_into,
+          svg_aspect_ratio )
 
 import std.string
 import std.map
@@ -380,6 +381,62 @@ copy_if_present(dst: ptr, src: ptr, key: string) {
 
 // ─── load_svg ────────────────────────────────────────────────────
 //
+// The SVG's intrinsic ASPECT RATIO (width / height), or 0.0 when it cannot
+// be determined.
+//
+// WIDTH/HEIGHT WINS over viewBox. That is not load_svg's precedence (it
+// wants a viewBox to map coordinates through) but it is what determines the
+// rendered SHAPE, and it is what librsvg does. Measured: gump-bench.svg
+// declares width=200 height=100 AND viewBox="190 40 10 200"; librsvg renders
+// it 400x200 from the width/height, while trusting the viewBox gives 20x400
+// and scores MAE 26. Ford_Focus and faux-art fail the same way.
+//
+// Deliberately does NOT fall back to intrinsic content bounds: a caller
+// wanting "fit the drawing" should let load_svg do that on a square canvas,
+// which is the existing behaviour.
+//
+// Exists so a renderer can size its canvas the way `rsvg-convert
+// --keep-aspect-ratio` does. Without it a 2:1 SVG is drawn onto a square
+// canvas with background showing, which is a measurement artefact rather
+// than a rendering one -- see vg/test/svg/radial_ellipse_bbox.svg.
+svg_aspect_ratio(svg_string: string) -> float {
+    root = parser.parse_svg(svg_string)
+    if attr_has(root, "width") == 1 {
+        if attr_has(root, "height") == 1 {
+            ws = attr_get(root, "width")
+            hs = attr_get(root, "height")
+            // Percentage sizes mean "fill the container", not an intrinsic
+            // aspect -- fall through to the viewBox for those.
+            if string.ends_with(ws, "%") == 0 {
+                if string.ends_with(hs, "%") == 0 {
+                    w = utils.parse_length_to_px(ws)
+                    h = utils.parse_length_to_px(hs)
+                    if w > 0.0 {
+                        if h > 0.0 { return w / h }
+                    }
+                }
+            }
+        }
+    }
+    vb = ""
+    if attr_has(root, "viewBox") == 1 {
+        vb = attr_get(root, "viewBox")
+    } else {
+        if attr_has(root, "viewbox") == 1 { vb = attr_get(root, "viewbox") }
+    }
+    if string.length(vb) > 0 {
+        vb4 = factories.parse_view_box(vb)
+        if vb4 != null {
+            vw = factories.vb4_width(vb4)
+            vh = factories.vb4_height(vb4)
+            if vw > 0.0 {
+                if vh > 0.0 { return vw / vh }
+            }
+        }
+    }
+    return 0.0
+}
+
 // Parse the SVG, derive viewBox + canvas dimensions from the root
 // element's attrs, build a context, then walk each top-level child
 // node into the shape factories. Returns the populated
