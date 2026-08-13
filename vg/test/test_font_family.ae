@@ -1,0 +1,98 @@
+// test_font_family.ae — the vg layer must not reduce font-family to a bit.
+//
+// Second instance of the "push rendering semantics out of the backends"
+// item in TODO.md, and the same shape as the gradientTransform one:
+// `shapes.ae` reads the real `font-family` and then immediately collapses it
+// to `is_monospace(ff)`, a single bit. The name never reaches a backend, so
+// each invents its own face from the same three flag bits:
+//
+//   GTK4    cairo_select_font_face from the flags
+//   win32   hardcoded "Segoe UI"
+//   macOS   systemFontOfSize (the system font)
+//
+// Three backends, three different fonts, one input. 21 of the 208 corpus
+// files contain <text>, so this is not a corner case.
+//
+// A vg-layer test on purpose: it links no backend, because the loss happens
+// upstream of all three and a backend-linked test would misattribute it.
+//
+// Headless, pure Aether — no backend, no display.
+
+import vg.grammar.shapes
+import std.string
+
+extern exit(code: int)
+
+assert_true(label: string, ok: int) {
+    if ok == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label}"); exit(1) }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+main() {
+    println("=== test_font_family ===")
+
+    // ---- What the ONE BIT gets right -------------------------------------
+    // is_monospace is not broken; it is being asked a question far narrower
+    // than the attribute it is given. These cases it answers correctly, and
+    // any replacement must keep answering them the same way.
+    assert_eq_int("courier is monospace",
+                  shapes.is_monospace("courier"), 1)
+    assert_eq_int("Courier New is monospace (case-insensitive)",
+                  shapes.is_monospace("Courier New"), 1)
+    assert_eq_int("monospace is monospace",
+                  shapes.is_monospace("monospace"), 1)
+    assert_eq_int("Consolas is monospace",
+                  shapes.is_monospace("Consolas"), 1)
+    assert_eq_int("Helvetica is NOT monospace",
+                  shapes.is_monospace("Helvetica"), 0)
+    assert_eq_int("empty family is NOT monospace",
+                  shapes.is_monospace(""), 0)
+
+    // ---- What the ONE BIT cannot express ---------------------------------
+    // Distinct families that collapse to the SAME bit. A backend handed only
+    // that bit cannot tell them apart, so it substitutes -- and each of the
+    // three substitutes differently.
+    a = shapes.is_monospace("Helvetica")
+    b = shapes.is_monospace("Times New Roman")
+    c = shapes.is_monospace("Comic Sans MS")
+    assert_true("Helvetica and Times collapse to the same bit", a == b)
+    assert_true("Helvetica and Comic Sans collapse to the same bit", a == c)
+
+    d = shapes.is_monospace("Courier")
+    e = shapes.is_monospace("Consolas")
+    assert_true("Courier and Consolas collapse to the same bit", d == e)
+
+    // Serif vs sans is invisible to it, which is the most visible difference
+    // a reader would notice.
+    assert_true("serif and sans-serif are indistinguishable",
+                shapes.is_monospace("serif") == shapes.is_monospace("sans-serif"))
+
+    // ---- The CSS font stack, which is the real shape of the attribute ----
+    // font-family is a PRIORITISED LIST, not a name. Carrying the string is
+    // necessary but not sufficient: something has to decide which entry a
+    // given platform can honour. That decision belongs in the vg layer, not
+    // replicated three times -- it is the whole point of the TODO item.
+    stack = "Helvetica, Arial, sans-serif"
+    assert_true("a font stack is a list, not a name",
+                string.contains(stack, ",") == 1)
+    // Today the entire stack reduces to one bit, and a monospace entry
+    // anywhere in it wins regardless of priority:
+    assert_eq_int("a stack with courier LAST still reads monospace",
+                  shapes.is_monospace("Helvetica, Courier"), 1)
+    assert_eq_int("...even though Helvetica has priority",
+                  shapes.is_monospace("Helvetica"), 0)
+
+    println("")
+    println("=== test_font_family passed ===")
+    println("    These assert the LOSS, not a bug awaiting a fix: one bit")
+    println("    genuinely cannot carry a font stack. The fix is to carry the")
+    println("    family string to the backends alongside the flags, and to")
+    println("    resolve the stack ONCE in the vg layer rather than three")
+    println("    times. See TODO.md, 'push rendering semantics out of the")
+    println("    backends'.")
+}

@@ -36,7 +36,10 @@
 
 exports (
     shape_circle, shape_rectangle, shape_line, shape_path,
-    shape_group, shape_text
+    shape_group, shape_text,
+    // Exported for vg/test/test_font_family.ae, which pins what a single
+    // mono/not-mono bit cannot carry about a CSS font stack.
+    is_monospace
 )
 
 import std.string
