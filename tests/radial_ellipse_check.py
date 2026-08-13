@@ -42,26 +42,39 @@ def axis_ratio(path):
     backends. The shape must fill the canvas -- a visible background would
     be brighter than the gradient and become the 'peak'.
 
-    Returns None when either extent touches the image EDGE. A gradient
-    drawn too large runs off the canvas, the half-maximum span is clipped
-    by the frame rather than by the falloff, and the ratio becomes a
-    measure of the canvas instead of the geometry. Measured: GDI+ paints
-    the uniform control far larger than it should and read 0.67 -- which
-    looks like an axis error but is a CIRCLE, correctly round, merely
-    oversized. Refusing to answer is right; a wrong number would have sent
-    the ellipse work chasing a size bug.
+    Measures the CONTIGUOUS run through the peak, not every pixel above the
+    threshold anywhere on the line. A backend can leave bright artefacts at
+    the canvas edge -- GDI+'s pad-past-rim fill leaves a single stray value
+    at x=0 -- and a global scan turns one such pixel into a span reaching
+    the frame, which then reads as "clipped" and refuses to score a
+    perfectly good gradient. Walking outward from the peak ignores anything
+    not connected to it.
+
+    Still returns None when the contiguous run genuinely reaches the edge:
+    the falloff is then bounded by the frame rather than by the gradient,
+    and the ratio would measure the canvas.
     """
     a = np.asarray(Image.open(path).convert("RGB"), dtype=int)[:, :, 0]
     py, px = np.unravel_index(a.argmax(), a.shape)
     half = a[py, px] // 2
     h, w = a.shape
-    hx = [x for x in range(w) if a[py, x] >= half]
-    vy = [y for y in range(h) if a[y, px] >= half]
-    if not hx or not vy:
-        return None
-    if hx[0] == 0 or hx[-1] == w - 1 or vy[0] == 0 or vy[-1] == h - 1:
+
+    x0 = px
+    while x0 > 0 and a[py, x0 - 1] >= half:
+        x0 -= 1
+    x1 = px
+    while x1 < w - 1 and a[py, x1 + 1] >= half:
+        x1 += 1
+    y0 = py
+    while y0 > 0 and a[y0 - 1, px] >= half:
+        y0 -= 1
+    y1 = py
+    while y1 < h - 1 and a[y1 + 1, px] >= half:
+        y1 += 1
+
+    if x0 == 0 or x1 == w - 1 or y0 == 0 or y1 == h - 1:
         return None      # clipped by the frame: unmeasurable, not wrong
-    return (hx[-1] - hx[0] + 1) / (vy[-1] - vy[0] + 1)
+    return (x1 - x0 + 1) / (y1 - y0 + 1)
 
 
 def check(stem, path):
