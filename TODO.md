@@ -301,7 +301,26 @@ geometry and paint state, the backend only draws it. Concretely:
       to `|f-c| / rx` is only correct for a circle and cost intertwingly
       +2.90 before it was fixed.
 
-      Remaining: win32, then macOS.
+      **win32 DONE 2026-08-13** (semi-axes only). That branch already drew
+      with separate rw/rh -- it just set both to the scalar radius, so the
+      eccentricity had been discarded upstream and could not have been
+      honoured anyway. Oracle **1/4 -> 3/4** (1.99 / 0.50 / 1.00);
+      corpus mean 4.51 -> 4.44, rg1024_Ufo_in_metalic_style 16.17 -> 5.68,
+      intertwingly 3.12 -> 1.77, one +0.07 regression.
+
+      Two things deliberately NOT done on win32 yet:
+      * **Rotation.** `grot` is carried but not applied -- GDI+ needs a world
+        transform around the fill (GdipSetWorldTransform et al are not even
+        declared in this file). No corpus file has a rotated non-uniform
+        radial, so this is unmeasurable today; the test's third
+        EXPECTED-FAIL is the thing that will catch it.
+      * **The bbox repro reads UNMEASURABLE on GDI+**, but that is a HARNESS
+        difference, not a rendering one: svg_render_png renders
+        `viewBox="0 0 200 100"` onto a 400x400 canvas on BOTH backends
+        (librsvg gives 400x200). GTK4 scores it only because its shape still
+        fills the canvas. Worth fixing in the harness, separately.
+
+      Remaining: macOS, then rotation on win32/macOS.
 
    4. Only once all three consume it: remove the scalar radius from the
       three loss sites, flip `STRICT` to 1, and narrow the ABI if the two

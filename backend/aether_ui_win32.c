@@ -4550,6 +4550,10 @@ typedef struct {
     int iw, ih;            // DRAW_IMAGE pixel dims
     // Gradient: linear (gx1,gy1)→(gx2,gy2); radial center (gx1,gy1) r gr.
     float gx1, gy1, gx2, gy2, gr, gfx, gfy;
+    /* The ELLIPSE a gradientTransform (or a non-square objectBoundingBox)
+       produces. gr keeps the old scalar answer, so grx == 0 renders exactly
+       as before. grot is carried but NOT yet applied -- see the replay. */
+    float grx, gry, grot;
     float grad_line_width;  // 0 → fill; >0 → stroke (GDI approximates as fill)
     int grad_extend;       // SVG spreadMethod: 0=pad (default), 1=reflect, 2=repeat
     int even_odd;          // FILL: SVG fill-rule -- 1=evenodd, 0=nonzero (default)
@@ -4990,12 +4994,9 @@ void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join, double rx, double ry, double rot_deg) {
-    /* Not consumed yet -- this backend still reads the scalar `radius`, which
-       the vg layer keeps populated. Step 3 of the ratchet converts one
-       backend at a time; see TODO.md. */
-    (void)rx; (void)ry; (void)rot_deg;
     CanvasCmd c = {0};
     c.k = CV_FILL_RADIAL; c.grad_extend = extend; c.gx1 = cx; c.gy1 = cy; c.gr = radius;
+    c.grx = (float)rx; c.gry = (float)ry; c.grot = (float)rot_deg;
     c.gfx = fx; c.gfy = fy; c.grad_line_width = line_width;
     c.cap = cap; c.join = join;
     win32_copy_stops(&c, n_stops, offsets, rgba);
@@ -6304,7 +6305,20 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        Falls back to the bbox when the command carries no
                        radius, which is the objectBoundingBox path. */
                     int rcx, rcy, rw, rh;
-                    if (cmd->gr > 0.0f) {
+                    if (cmd->grx > 0.0f && cmd->gry > 0.0f) {
+                        /* THE ELLIPSE. This branch already drew with separate
+                           rw/rh -- it just set both to the scalar radius, so
+                           a gradientTransform's eccentricity was thrown away
+                           upstream and could not have been honoured here
+                           anyway. Now the vg layer carries both semi-axes.
+                           GTK4 landed this first and went 1/4 -> 4/4 on the
+                           axis-ratio oracle with nothing regressing.
+                           NB cmd->grot (the tilt) is carried but NOT applied:
+                           that needs a world transform around the fill, which
+                           is a separate step. */
+                        rcx = (INT)cmd->gx1; rcy = (INT)cmd->gy1;
+                        rw = (INT)cmd->grx; rh = (INT)cmd->gry;
+                    } else if (cmd->gr > 0.0f) {
                         rcx = (INT)cmd->gx1; rcy = (INT)cmd->gy1;
                         rw = rh = (INT)cmd->gr;
                     } else {
