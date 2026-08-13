@@ -5429,6 +5429,10 @@ __declspec(dllimport) int __stdcall GdipGetCellAscent(const GpFontFamily* fam,
 __declspec(dllimport) int __stdcall GdipGetEmHeight(const GpFontFamily* fam,
     int style, unsigned short* emHeight);
 #define GDIP_FONTSTYLE_REGULAR   0
+/* StringFormat: GdipDrawString pads the origin with the font's leading unless
+   told otherwise. GenericTypographic has no padding. */
+__declspec(dllimport) int __stdcall GdipStringFormatGetGenericTypographic(
+    GpStringFormat** format);
 typedef void GpLineGradient;
 typedef void GpPathGradient;
 typedef void GpPath;
@@ -5978,8 +5982,18 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                         layout.Y = (float)(cmd->p1 - up);
                         layout.Width = 0.0f;   /* 0 = no wrapping box */
                         layout.Height = 0.0f;
+                        /* NO ORIGIN PADDING. With a NULL format,
+                           GdipDrawString insets the string by the font's
+                           leading, so the run starts right of the x it was
+                           handed. Measured on 410.svg: the vg layer centres
+                           text-anchor="middle" itself (dx = x - advance/2 =
+                           39.5px here) but the glyphs began at x=75 -- 35.5px
+                           adrift, which read as the whole label sitting ~7%
+                           too far right. GenericTypographic has no padding. */
+                        GpStringFormat* fmt = NULL;
+                        GdipStringFormatGetGenericTypographic(&fmt);
                         GdipDrawString(g, (const unsigned short*)w, -1, font,
-                                       &layout, NULL, br);
+                                       &layout, fmt, br);
                         GdipDeleteBrush(br);
                     }
                     GdipDeleteFont(font);
