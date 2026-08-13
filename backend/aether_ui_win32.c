@@ -5980,7 +5980,14 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 /* The path's own points, for clipping the fill to the shape
                    rather than to its bounding box. Same reverse walk-back the
                    CV_FILL case uses. */
-                GpPointI pts[256];
+                /* 2048, not 256. The cap silently TRUNCATED the clip polygon
+                   for detailed paths, and the corpus hits it: rg1024_eggs.svg
+                   traced np=256 on three of the cracked-shell commands, whose
+                   bbox is exactly where the left shell's interior rendered
+                   pure white instead of shaded. A truncated polygon is a
+                   wrong-shaped clip, so the gradient landed outside the shape
+                   it was meant to fill. */
+                GpPointI pts[2048];
                 int np = 0;
                 for (int j = i - 1; j >= 0; j--) {
                     CanvasCmdKind k = cv->cmds[j].k;
@@ -5995,7 +6002,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                         continue;
                     }
                     if (ok) {
-                        if (np < 256) { pts[np].X = qx; pts[np].Y = qy; np++; }
+                        if (np < 2048) { pts[np].X = qx; pts[np].Y = qy; np++; }
                         if (!have) { mnx=mxx=qx; mny=mxy=qy; have=1; }
                         else { if(qx<mnx)mnx=qx; if(qx>mxx)mxx=qx;
                                if(qy<mny)mny=qy; if(qy>mxy)mxy=qy; }
