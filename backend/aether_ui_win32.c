@@ -4557,6 +4557,7 @@ typedef struct {
     float grad_line_width;  // 0 → fill; >0 → stroke (GDI approximates as fill)
     int grad_extend;       // SVG spreadMethod: 0=pad (default), 1=reflect, 2=repeat
     int even_odd;          // FILL: SVG fill-rule -- 1=evenodd, 0=nonzero (default)
+    char* font_family;     // owned; raw CSS stack, NULL when unset
     int n_stops;
     double* stop_off;      // owned
     double* stop_rgba;     // owned: n_stops*4
@@ -4873,14 +4874,12 @@ void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
                                       int font_flags, const char* font_family,
                                       double r, double g, double b, double a) {
-    /* Not consumed yet -- this backend still picks a face from font_flags
-       alone. One backend at a time; see TODO.md. */
-    (void)font_family;
     (void)font_flags;   // font-family selection not yet wired on Win32
     CanvasCmd c = {0};
     c.k = CV_FILL_TEXT; c.p0 = x; c.p1 = y; c.p2 = font_size;
     c.cr = r; c.cg = g; c.cb = b; c.calpha = a;
     c.text = text ? _strdup(text) : NULL;
+    c.font_family = (font_family && font_family[0]) ? _strdup(font_family) : NULL;
     canvas_add_cmd(canvas_id, c);
 }
 
@@ -5018,6 +5017,7 @@ static void canvas_free_text(int canvas_id) {
         if ((c->k == CV_FILL_TEXT || c->k == CV_STROKE_TEXT) && c->text) {
             free(c->text); c->text = NULL;
         }
+        if (c->font_family) { free(c->font_family); c->font_family = NULL; }
         if (c->k == CV_DRAW_IMAGE && c->pixels) {
             free(c->pixels); c->pixels = NULL;
         }
@@ -5614,6 +5614,69 @@ static ARGB gdip_argb(const CanvasCmd* c) {
     if (g < 0) g = 0; if (g > 255) g = 255;
     if (b < 0) b = 0; if (b > 255) b = 255;
     return ((ARGB)a << 24) | ((ARGB)r << 16) | ((ARGB)g << 8) | (ARGB)b;
+}
+
+/* Resolve a CSS font stack to a GDI+ family, using GDI+'s own matcher --
+   which is the point: "best available face for this list" is a platform
+   question, so the vg layer ships the raw string and each backend answers it
+   natively (fontconfig on GTK4, CoreText on macOS, this here).
+
+   font-family is a PRIORITISED LIST, so walk it in order and take the first
+   entry GDI+ can actually create. Generic CSS names are mapped to concrete
+   Windows faces, because GdipCreateFontFamilyFromName does not know them.
+   Falls back to Segoe UI, which is what this backend hardcoded for every
+   glyph before the stack was carried at all.
+
+   NB THE CORPUS SCORES THIS WORSE, and that is expected rather than a
+   regression to chase. decimal.svg asks for font-family="serif"; librsvg on
+   the Linux reference box resolves that through fontconfig to Noto Serif,
+   while Windows has no Noto Serif and this maps it to Times New Roman.
+   Both are correct answers to "a serif face" on their own platform, but the
+   glyphs differ, so the diff against a Linux-rendered reference rises
+   (20.22 -> 46.36) while the family CHOICE became more correct. The old
+   hardcoded Segoe UI happened to have a cap-height near librsvg's default,
+   which flattered the score. Same failure mode as php.svg earlier: MAE is a
+   regression tripwire, not an oracle, and a cross-platform font reference
+   is one of the things it cannot judge. */
+static GpFontFamily* gdip_resolve_family(const char* stack) {
+    GpFontFamily* fam = NULL;
+    if (stack && stack[0]) {
+        const char* p = stack;
+        while (*p) {
+            /* One comma-separated entry, trimmed of spaces and quotes. */
+            while (*p == ' ' || *p == '\t' || *p == ',') p++;
+            char name[128];
+            int n = 0;
+            while (*p && *p != ',' && n < (int)sizeof(name) - 1) {
+                if (*p != '\'' && *p != '"') name[n++] = *p;
+                p++;
+            }
+            while (n > 0 && (name[n-1] == ' ' || name[n-1] == '\t')) n--;
+            name[n] = 0;
+            if (n > 0) {
+                /* Generic CSS families -> concrete Windows faces. */
+                const char* concrete = name;
+                if (_stricmp(name, "serif") == 0)           concrete = "Times New Roman";
+                else if (_stricmp(name, "sans-serif") == 0) concrete = "Arial";
+                else if (_stricmp(name, "monospace") == 0)  concrete = "Consolas";
+                else if (_stricmp(name, "cursive") == 0)    concrete = "Comic Sans MS";
+                else if (_stricmp(name, "fantasy") == 0)    concrete = "Impact";
+                wchar_t* wname = utf8_to_wide(concrete);
+                if (wname &&
+                    GdipCreateFontFamilyFromName((const unsigned short*)wname,
+                                                 NULL, &fam) == 0 && fam) {
+                    return fam;
+                }
+                fam = NULL;
+            }
+            if (*p == ',') p++;
+        }
+    }
+    if (GdipCreateFontFamilyFromName((const unsigned short*)L"Segoe UI",
+                                     NULL, &fam) == 0 && fam) {
+        return fam;
+    }
+    return NULL;
 }
 
 static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height) {
@@ -6617,9 +6680,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    about layout drift. */
                 wchar_t* w = utf8_to_wide(cmd->text);
                 if (!w) break;
-                GpFontFamily* fam = NULL;
-                if (GdipCreateFontFamilyFromName((const unsigned short*)L"Segoe UI",
-                                                 NULL, &fam) != 0 || !fam) {
+                GpFontFamily* fam = gdip_resolve_family(cmd->font_family);
+                if (!fam) {
                     /* Family unavailable. Draw NOTHING rather than guess a
                        substitute: a wrong font would read as a rendering
                        difference in the MAE and send the comparison chasing
