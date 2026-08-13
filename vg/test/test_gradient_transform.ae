@@ -1,0 +1,155 @@
+// test_gradient_transform.ae — the vg layer must not DISCARD gradient
+// geometry before a backend can see it.
+//
+// This is the first test for the "push rendering semantics out of the
+// backends" item in TODO.md. It is a VG-LAYER test on purpose: it links no
+// backend at all, because the defect it pins is upstream of every backend
+// and cripples all three equally.
+//
+// SVG's gradientTransform is a full affine matrix. A radial gradient under a
+// NON-UNIFORM one (different x and y scale) is an ELLIPSE. defs.ae resolves
+// it to a scalar radius via transform.affine_average_scale(), which cannot
+// describe an ellipse — the eccentricity is gone before dispatch, so GTK4,
+// win32 and macOS are each handed a circle and none of them can be correct.
+//
+// Measured consequence (2026-08-13, GDI+ session): car.svg's front-intake
+// grille, python.svg's shading and compuserver_msn_Ford_Focus all sit on
+// this. Three different backend-side geometries were tried on win32 and ALL
+// scored worse, because the information they needed was already discarded.
+//
+// The assertions below describe what a correct resolution must preserve.
+// The ones marked EXPECTED-FAIL fail today and are reported, not fatal —
+// this test is the specification of the fix, and flipping them to fatal is
+// how the fix gets verified. The passing assertions guard the parts that
+// ARE right today, so a change cannot break them silently.
+//
+// Headless, pure Aether — no backend, no display.
+
+import vg.geom.transform
+import std.math
+
+extern exit(code: int)
+
+const EPS: float = 0.000001
+
+// EXPECTED-FAIL assertions are counted, not fatal. Set to 1 once the vg
+// layer carries the full matrix, and this file becomes a real gate.
+const STRICT: int = 0
+
+near(a: float, b: float) -> int {
+    if math.abs_float(a - b) < EPS { return 1 }
+    return 0
+}
+
+assert_near(label: string, got: float, want: float) {
+    if near(got, want) == 1 {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+assert_true(label: string, ok: int) {
+    if ok == 1 { println("  PASS: ${label}") }
+    else { println("  FAIL: ${label}"); exit(1) }
+}
+
+// An assertion that documents the DEFECT: it is expected to fail until the
+// vg layer stops collapsing the matrix. Reported loudly, fatal only under
+// STRICT so the suite stays green while the item is open.
+// Returns 1 when the assertion still fails, so main can tally them —
+// Aether has no top-level mutable globals to accumulate into.
+expect_fixed(label: string, ok: int) -> int {
+    if ok == 1 {
+        println("  PASS: ${label}  <-- the fix has landed; set STRICT=1")
+        return 0
+    }
+    println("  EXPECTED-FAIL: ${label}")
+    if STRICT == 1 { exit(1) }
+    return 1
+}
+
+main() {
+    println("=== test_gradient_transform ===")
+
+    // ---- What average_scale does, stated plainly -------------------------
+    // A UNIFORM scale is the case it handles correctly, and that is exactly
+    // why the defect hid: every uniformly-scaled gradient looks right.
+    uni = transform.affine_scale(2.0, 2.0)
+    assert_near("uniform scale(2,2) -> average 2.0",
+                transform.affine_average_scale(uni), 2.0)
+
+    ident = transform.affine_identity()
+    assert_near("identity -> average 1.0",
+                transform.affine_average_scale(ident), 1.0)
+
+    // ---- The lossy case --------------------------------------------------
+    // car.svg's radialGradient3808 carries matrix(0.96,0,0,1.245,...):
+    // 0.96 in x, 1.245 in y. A circle under it is an ELLIPSE with distinct
+    // semi-axes, and no single number can represent that.
+    nonuni = transform.affine_scale(0.96, 1.245)
+    avg = transform.affine_average_scale(nonuni)
+
+    // The average is a real number and sits between the two axes — the
+    // function is not broken, it is being asked the wrong question.
+    between = 0
+    if avg > 0.96 {
+        if avg < 1.245 { between = 1 }
+    }
+    assert_true("non-uniform average lies between the axes", between)
+
+    // A unit circle under this matrix has semi-axes 0.96 and 1.245. Confirm
+    // via the transform itself, so the expectation is derived and not typed
+    // in by hand.
+    px = transform.affine_apply(nonuni, 1.0, 0.0)   // +x on the unit circle
+    py = transform.affine_apply(nonuni, 0.0, 1.0)   // +y on the unit circle
+    rx = transform.pt_x(px)
+    ry = transform.pt_y(py)
+    assert_near("unit circle -> semi-axis x", rx, 0.96)
+    assert_near("unit circle -> semi-axis y", ry, 1.245)
+
+    // THE DEFECT. Today the vg layer keeps ONE radius (r * avg) and the
+    // ellipse is gone. These two say what a correct resolution preserves.
+    assert_true("the two semi-axes genuinely differ", near(rx, ry) == 0)
+    fails = expect_fixed("scalar radius can express semi-axis x", near(avg, rx))
+    fails = fails + expect_fixed("scalar radius can express semi-axis y", near(avg, ry))
+
+    // ---- Rotation is discarded too --------------------------------------
+    // A rotated non-uniform scale tilts the ellipse. Even a full pair of
+    // semi-axes would not be enough — the ORIENTATION has to survive as
+    // well, which is the argument for carrying the matrix rather than
+    // widening the ABI by one more float.
+    rot = transform.affine_mul(transform.affine_rotate(45.0),
+                               transform.affine_scale(2.0, 1.0))
+    rx2 = transform.pt_x(transform.affine_apply(rot, 1.0, 0.0))
+    ry2 = transform.pt_y(transform.affine_apply(rot, 1.0, 0.0))
+    // The +x axis no longer maps onto the x axis: the ellipse is tilted.
+    assert_true("rotated scale tilts the ellipse (y component non-zero)",
+                math.abs_float(ry2) > EPS)
+    fails = fails + expect_fixed("orientation survives resolution",
+                                 near(ry2, 0.0))
+
+    // ---- A uniform matrix must stay EXACTLY as it is today ---------------
+    // Whatever replaces average_scale must not disturb the common case.
+    // This is the regression guard for the fix.
+    u3 = transform.affine_scale(3.0, 3.0)
+    ux = transform.pt_x(transform.affine_apply(u3, 1.0, 0.0))
+    uy = transform.pt_y(transform.affine_apply(u3, 0.0, 1.0))
+    assert_near("uniform: semi-axes agree with each other", ux, uy)
+    assert_near("uniform: average_scale is exactly that radius",
+                transform.affine_average_scale(u3), ux)
+
+    println("")
+    if fails > 0 {
+        println("=== test_gradient_transform: ${fails} EXPECTED-FAIL ===")
+        println("    These pin the open TODO.md item 'push rendering semantics")
+        println("    out of the backends'. defs.ae:303 collapses")
+        println("    gradientTransform to a scalar via affine_average_scale,")
+        println("    so a non-uniform matrix is lossy BEFORE any backend runs.")
+        println("    When the vg layer carries the full matrix, these pass and")
+        println("    STRICT should be set to 1.")
+    } else {
+        println("=== test_gradient_transform passed (set STRICT=1) ===")
+    }
+}

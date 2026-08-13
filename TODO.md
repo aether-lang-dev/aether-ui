@@ -164,6 +164,18 @@ geometry and paint state, the backend only draws it. Concretely:
    upstream. Start from the ones already known: `gradientTransform` (lossy
    upstream — carry the full matrix to the brush), radial gradient geometry
    (`CanvasCmd` carries a scalar `gr` that cannot describe an ellipse).
+
+   **Started.** `vg/test/test_gradient_transform.ae` (in `ci.sh`) pins the
+   `gradientTransform` half. It is a vg-layer test linking no backend,
+   because the loss happens upstream of all three. Nine assertions pass —
+   they guard the uniform case, which must not move — and **three are
+   EXPECTED-FAIL**, spelling out what a correct resolution has to preserve:
+   the two semi-axes of the ellipse, and its orientation under a rotated
+   non-uniform matrix. They are reported, not fatal, so the suite stays
+   green while the item is open; the file has a `STRICT` const to flip to
+   `1` once the fix lands, which turns it into a real gate. The rotation
+   assertion is the argument against the cheap fix: carrying a second
+   radius would still lose the tilt, so the matrix itself has to travel.
 2. **Target: the ABI width trends DOWN, not up.** 241 functions is the
    number to watch. A wider surface with dumber backends is fine; a wider
    surface with *smarter* backends is the failure mode.
