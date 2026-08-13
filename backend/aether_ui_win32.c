@@ -5549,6 +5549,34 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    default black hairline -- matched exactly, or every
                    pre-stroke segment would differ for a reason that has
                    nothing to do with this port. */
+                /* DOUBLE-STROKE FIX. A CV_STROKE later in this sub-path
+                   walks back and redraws every CV_LINE with the real pen, so
+                   drawing here as well paints the outline TWICE. Legacy gets
+                   away with it because both passes use the same DC pen and no
+                   antialiasing, landing exactly on top of each other. GDI+
+                   does not: the first pass is a 1px black hairline, the second
+                   the real pen, and with AA on they smear into a doubled edge.
+                   Measured on 410.svg at x=200: librsvg has one black band at
+                   y=2..5, GDI+ had that PLUS a second at y=10..11 and darkened
+                   the maroon beneath it.
+
+                   So look ahead: if a CV_STROKE is coming before this
+                   sub-path ends, leave the drawing to it. */
+                int consumer_pending = 0;
+                for (int j = i + 1; j < cv->cmd_count; j++) {
+                    CanvasCmdKind k2 = cv->cmds[j].k;
+                    if (k2 == CV_BEGIN) break;
+                    /* CV_FILL and the gradient fills consume the path too --
+                       410.svg's second path is fill-ONLY with no stroke, and
+                       its hairline still showed as a black band just above the
+                       maroon (px y=10..11 where librsvg is white). Any of
+                       these four means "someone else will paint this path". */
+                    if (k2 == CV_STROKE || k2 == CV_FILL ||
+                        k2 == CV_FILL_LINEAR || k2 == CV_FILL_RADIAL) {
+                        consumer_pending = 1; break;
+                    }
+                }
+                if (consumer_pending) break;
                 GpPen* pen = cur_pen ? cur_pen : NULL;
                 int owned = 0;
                 if (!pen && GdipCreatePen1(0xFF000000, 1.0f,
