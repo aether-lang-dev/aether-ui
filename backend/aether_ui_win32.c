@@ -5423,6 +5423,11 @@ __declspec(dllimport) int __stdcall GdipDrawString(GpGraphics* g,
     const GpRectF* layoutRect, const GpStringFormat* format, const GpBrush* brush);
 __declspec(dllimport) int __stdcall GdipSetTextRenderingHint(GpGraphics* g, int mode);
 #define GDIP_TEXT_ANTIALIAS      4   /* TextRenderingHintAntiAliasGridFit */
+/* Font metrics, in design units, for a real baseline rather than a fudge. */
+__declspec(dllimport) int __stdcall GdipGetCellAscent(const GpFontFamily* fam,
+    int style, unsigned short* ascent);
+__declspec(dllimport) int __stdcall GdipGetEmHeight(const GpFontFamily* fam,
+    int style, unsigned short* emHeight);
 #define GDIP_FONTSTYLE_REGULAR   0
 typedef void GpLineGradient;
 typedef void GpPathGradient;
@@ -5604,6 +5609,31 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 GdipSetPenStartCap(cur_pen, gdip_cap(cmd->cap));
                 GdipSetPenEndCap(cur_pen, gdip_cap(cmd->cap));
                 GdipSetPenLineJoin(cur_pen, gdip_join(cmd->join));
+                /* THE CLOSING SEGMENT. `z` emits CV_CLOSE, not a CV_LINE, so
+                   a walk-back that only redraws CV_LINE never strokes the edge
+                   from the sub-path's last point back to its first. On
+                   410.svg's octagon that is the ENTIRE top-left diagonal:
+                   librsvg draws black the whole way from px (4,120) to
+                   (120,4); GDI+ had white at every interior sample. Find the
+                   sub-path's first and last points and stroke the join. */
+                {
+                    int has_close = 0;
+                    int fx = 0, fy = 0, lx = 0, ly = 0, seen = 0;
+                    for (int j = i - 1; j >= 0; j--) {
+                        CanvasCmdKind k = cv->cmds[j].k;
+                        if (k == CV_BEGIN) break;
+                        if (k == CV_CLOSE) { has_close = 1; continue; }
+                        if (k == CV_MOVE) { fx = (INT)cv->cmds[j].p0; fy = (INT)cv->cmds[j].p1;
+                                            if (!seen) { lx = fx; ly = fy; seen = 1; } }
+                        else if (k == CV_LINE) {
+                            if (!seen) { lx = (INT)cv->cmds[j].p2; ly = (INT)cv->cmds[j].p3; seen = 1; }
+                            fx = (INT)cv->cmds[j].p0; fy = (INT)cv->cmds[j].p1;
+                        }
+                    }
+                    if (has_close && seen && (fx != lx || fy != ly)) {
+                        GdipDrawLineI(g, cur_pen, lx, ly, fx, fy);
+                    }
+                }
                 for (int j = i - 1; j >= 0; j--) {
                     CanvasCmdKind k = cv->cmds[j].k;
                     if (k == CV_BEGIN) break;
@@ -5924,7 +5954,28 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                         GdipSetTextRenderingHint(g, GDIP_TEXT_ANTIALIAS);
                         GpRectF layout;
                         layout.X = (float)cmd->p0;
-                        layout.Y = (float)(cmd->p1 - cmd->p2 * 0.8f);
+                        /* THE BASELINE, from the font's own metrics.
+                           GdipDrawString's layoutRect.Y is the TOP of the line
+                           box, while SVG's y is the BASELINE, so the ascent has
+                           to come off. The old code subtracted a flat 0.8 em
+                           "to match legacy" -- measured on 410.svg
+                           (font-size 48 in a 0..100 viewBox at scale 4, so the
+                           baseline belongs at px y=272) that put the glyph
+                           bottom at 319, i.e. 47px LOW, because GDI+ also adds
+                           internal leading above the ascent. librsvg and GTK4
+                           both land at 272/273.
+
+                           Ask the family for cell-ascent and em-height in
+                           design units and scale: offset = size * asc/em. That
+                           is correct for any face rather than tuned for one. */
+                        unsigned short asc = 0, emh = 0;
+                        float up = cmd->p2 * 0.8f;   /* fallback: the old fudge */
+                        if (GdipGetCellAscent(fam, GDIP_FONTSTYLE_REGULAR, &asc) == 0
+                            && GdipGetEmHeight(fam, GDIP_FONTSTYLE_REGULAR, &emh) == 0
+                            && emh > 0) {
+                            up = cmd->p2 * ((float)asc / (float)emh);
+                        }
+                        layout.Y = (float)(cmd->p1 - up);
                         layout.Width = 0.0f;   /* 0 = no wrapping box */
                         layout.Height = 0.0f;
                         GdipDrawString(g, (const unsigned short*)w, -1, font,
