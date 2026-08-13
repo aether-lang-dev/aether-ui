@@ -4539,7 +4539,7 @@ typedef struct {
     float p0, p1, p2, p3;
     float a0, a1;          // ARC start/end angle (radians)
     float cr, cg, cb, calpha;
-    int cap, join;         // STROKE: 0=butt/miter 1=round 2=square/bevel
+    int cap, join;         // STROKE and gradient STROKE: 0=butt/miter 1=round 2=square/bevel
     char* text;            // FILL_TEXT string (owned)
     unsigned char* pixels; // DRAW_IMAGE RGBA8888 buffer (owned)
     int iw, ih;            // DRAW_IMAGE pixel dims
@@ -4950,22 +4950,25 @@ static void win32_copy_stops(CanvasCmd* c, int n_stops,
 
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
-        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join) {
     (void)extend; // spreadMethod not yet honored on the GDI+ backend
     CanvasCmd c = {0};
     c.k = CV_FILL_LINEAR; c.gx1 = x1; c.gy1 = y1; c.gx2 = x2; c.gy2 = y2;
-    c.grad_line_width = line_width;
+    c.grad_line_width = line_width; c.cap = cap; c.join = join;
     win32_copy_stops(&c, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, c);
 }
 
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
-        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join) {
     (void)extend; // spreadMethod not yet honored on the GDI+ backend
     CanvasCmd c = {0};
     c.k = CV_FILL_RADIAL; c.gx1 = cx; c.gy1 = cy; c.gr = radius;
     c.gfx = fx; c.gfy = fy; c.grad_line_width = line_width;
+    c.cap = cap; c.join = join;
     win32_copy_stops(&c, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, c);
 }
@@ -5898,11 +5901,14 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                                    GDIP_UNIT_PIXEL, &gp) == 0 && gp) {
                                     /* The command's OWN cap/join, through the
                                        same helpers CV_STROKE uses -- not a
-                                       hardcoded round. stroke-linecap reaches
-                                       us in cmd->cap either way, and twitter's
-                                       round cap is worth ~2 MAE on its own
-                                       (g_grad_butt scored 3.2 against
-                                       c_grad_line's 4.2). */
+                                       hardcoded round.
+                                       NB these only became real when the
+                                       gradient primitive was widened to carry
+                                       cap/join: before that the field was
+                                       simply never populated for a gradient,
+                                       so this read a default butt cap and
+                                       twitter.svg's round-capped bar stopped
+                                       at x=292 against librsvg's x=323. */
                                     GdipSetPenStartCap(gp, gdip_cap(cmd->cap));
                                     GdipSetPenEndCap(gp, gdip_cap(cmd->cap));
                                     GdipSetPenLineJoin(gp, gdip_join(cmd->join));

@@ -382,12 +382,18 @@ void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len);
 // extend: SVG spreadMethod → 0=pad, 1=reflect, 2=repeat.
+// cap/join apply to the STROKE case (line_width > 0) and are ignored for a
+// fill: 0=butt/miter, 1=round, 2=square/bevel. They have to ride along on the
+// gradient command because it is the ONLY thing dispatched for a gradient
+// stroke — there is no accompanying canvas_stroke_cj to carry them.
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
-        int n_stops, void* offsets, void* rgba, double line_width, int extend);
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join);
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
-        int n_stops, void* offsets, void* rgba, double line_width, int extend);
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join);
 void aether_ui_canvas_clear_impl(int canvas_id);
 void aether_ui_canvas_redraw_impl(int canvas_id);
 // Off-screen render of the canvas command buffer to a PNG. Headless-capable

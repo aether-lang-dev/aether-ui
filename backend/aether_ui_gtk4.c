@@ -4833,20 +4833,24 @@ static void canvas_copy_stops(CanvasCmd* c, int n_stops,
 
 void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
-        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join) {
     CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR,
                       .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
-                      .grad_line_width = line_width, .grad_extend = extend };
+                      .grad_line_width = line_width, .grad_extend = extend,
+                      .iw = cap, .ih = join };
     canvas_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }
 
 void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
-        int n_stops, void* offsets, void* rgba, double line_width, int extend) {
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join) {
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
-                      .grad_line_width = line_width, .grad_extend = extend };
+                      .grad_line_width = line_width, .grad_extend = extend,
+                      .iw = cap, .ih = join };
     canvas_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }

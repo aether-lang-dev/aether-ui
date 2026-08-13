@@ -325,6 +325,12 @@ canvas_path(p: ptr, opts: ptr) -> ptr {
 // rgba in 0..255; built into floatarrs of offsets + colours (0..1).
 // line_width = 0 fills the path; > 0 strokes it at that width.
 apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_width: float) {
+    // Cap/join matter only for the stroke case, but they have to travel with
+    // the gradient command: unlike stroke_path() below, the gradient
+    // primitive is the ONLY thing dispatched, so there is no canvas_stroke_cj
+    // carrying them. Dropping them meant every gradient stroke got a butt cap.
+    cap = linecap_code(opts)
+    join = linejoin_code(opts)
     stops_s = opt_s(opts, string.concat(prefix, "Stops"))
     if string.length(stops_s) == 0 { return }
     toks = string_split(stops_s, " ")
@@ -365,13 +371,13 @@ apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_widt
         r  = opt_f(opts, string.concat(prefix, "R"),  0.0)
         fx = opt_f(opts, string.concat(prefix, "FX"), cx)
         fy = opt_f(opts, string.concat(prefix, "FY"), cy)
-        ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend)
+        ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend, cap, join)
     } else {
         x1 = opt_f(opts, string.concat(prefix, "X1"), 0.0)
         y1 = opt_f(opts, string.concat(prefix, "Y1"), 0.0)
         x2 = opt_f(opts, string.concat(prefix, "X2"), 0.0)
         y2 = opt_f(opts, string.concat(prefix, "Y2"), 0.0)
-        ui.canvas_fill_linear_gradient(cid, x1, y1, x2, y2, valid, offsets, rgba, line_width, extend)
+        ui.canvas_fill_linear_gradient(cid, x1, y1, x2, y2, valid, offsets, rgba, line_width, extend, cap, join)
     }
 }
 

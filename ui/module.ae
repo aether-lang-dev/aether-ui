@@ -391,10 +391,12 @@ extern aether_ui_canvas_draw_image_scaled_impl(canvas_id: int, x: float, y: floa
                                         rgba: string, byte_len: int)
 extern aether_ui_canvas_fill_linear_gradient_impl(canvas_id: int,
         x1: float, y1: float, x2: float, y2: float,
-        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int)
+        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
+        cap: int, join: int)
 extern aether_ui_canvas_fill_radial_gradient_impl(canvas_id: int,
         cx: float, cy: float, radius: float, fx: float, fy: float,
-        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int)
+        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
+        cap: int, join: int)
 extern aether_ui_canvas_fill_rect_impl(canvas_id: int, x: float, y: float,
                                   w: float, h: float,
                                   r: float, g: float, b: float, a: float)
@@ -3145,9 +3147,14 @@ canvas_draw_image_scaled(cid: int, x: float, y: float, dw: float, dh: float,
 // `rgba` is a floatarr of n_stops*4 colour components (0..1, RGBA).
 // line_width = 0 fills the path; > 0 strokes it at that width.
 // extend = SVG spreadMethod: 0=pad, 1=reflect, 2=repeat.
+// cap/join describe the STROKE case (line_width > 0) and are ignored for
+// a fill. Without them a gradient stroke silently took the backend's
+// default butt cap -- measured on twitter.svg, whose stroke-linecap='round'
+// bar ended at x=292 instead of librsvg's x=323.
 canvas_fill_linear_gradient(cid: int, x1: float, y1: float, x2: float, y2: float,
-                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int) {
-    aether_ui_canvas_fill_linear_gradient_impl(cid, x1, y1, x2, y2, n_stops, offsets, rgba, line_width, extend)
+                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
+                            cap: int, join: int) {
+    aether_ui_canvas_fill_linear_gradient_impl(cid, x1, y1, x2, y2, n_stops, offsets, rgba, line_width, extend, cap, join)
 }
 
 // Paint the current path with a radial gradient: center (cx,cy),
@@ -3155,8 +3162,9 @@ canvas_fill_linear_gradient(cid: int, x1: float, y1: float, x2: float, y2: float
 // line_width = 0 fills; > 0 strokes. extend = SVG spreadMethod.
 canvas_fill_radial_gradient(cid: int, cx: float, cy: float, radius: float,
                             fx: float, fy: float,
-                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int) {
-    aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, radius, fx, fy, n_stops, offsets, rgba, line_width, extend)
+                            n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
+                            cap: int, join: int) {
+    aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, radius, fx, fy, n_stops, offsets, rgba, line_width, extend, cap, join)
 }
 
 canvas_clear(cid: int) {
