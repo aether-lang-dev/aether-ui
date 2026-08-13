@@ -270,10 +270,20 @@ geometry and paint state, the backend only draws it. Concretely:
       sent the ellipse work chasing a size bug.
 
 
-   2. Carry the ellipse geometry through the vg layer *alongside* the
-      existing scalar radius — a NEW opt key, old key still emitted and
-      still authoritative. Nothing changes for any backend; the corpus must
-      be byte-identical. This is the safe half of the change.
+   2. ~~Carry the ellipse geometry through the vg layer alongside the
+      existing scalar radius.~~ **DONE 2026-08-13.** `GradientDef` gains
+      `rx`, `ry`, `rot_deg` (semi-axes and tilt), populated in `defs.ae`
+      from the gradientTransform's transformed basis vectors; the scalar
+      `r` is untouched and still authoritative, and nothing consumes the
+      new fields yet. Verified INERT: all **212** rendered files (corpus +
+      repros) byte-identical on GTK4. Five new assertions in
+      `test_gradient_transform.ae` check the carried values are right
+      before any backend is pointed at them -- including that a UNIFORM
+      matrix collapses back onto the old scalar exactly (120 == 120), which
+      is what keeps `radial_uniform_control.svg` passing. NB `mk_gradient_def`
+      hand-computes its malloc size; it grew 128 -> 192 for the three new
+      floats.
+
    3. Per backend, one at a time: consume the new key, keep the old as the
       fallback when it is absent. GTK4 first (cairo takes a matrix on the
       pattern, so it is the smallest step and the reference backend), then

@@ -33,6 +33,7 @@ exports (
     gradient_type, gradient_units, gradient_spread_method,
     gradient_x1, gradient_y1, gradient_x2, gradient_y2,
     gradient_cx, gradient_cy, gradient_r, gradient_fx, gradient_fy,
+    gradient_rx, gradient_ry, gradient_rot_deg,
     gradient_stops, gradient_stop_count,
     stop_offset, stop_color,
 
@@ -57,6 +58,7 @@ import vg.svg.parser
 import vg.grammar.context
 import vg.grammar.utils
 import vg.geom.transform
+import std.math
 
 extern malloc(size: int) -> ptr
 
@@ -100,11 +102,24 @@ struct GradientDef {
     fy: float
     units: string                   // "userSpaceOnUse" | "objectBoundingBox" | ""
     spread_method: string           // "pad" | "reflect" | "repeat" | ""
+    // ELLIPSE geometry, carried ALONGSIDE the scalar `r` above.
+    //
+    // SVG's gradientTransform is a full affine, so a radial under a
+    // non-uniform one is an ellipse with two distinct semi-axes and an
+    // orientation. `r` keeps the old average-scale answer and stays
+    // authoritative until every backend consumes these, so nothing changes
+    // yet -- see the ratchet in TODO.md. rx/ry are the semi-axes and
+    // rot_deg the tilt; rx == ry with rot_deg 0 is the uniform case and is
+    // exactly what `r` already describes.
+    rx: float
+    ry: float
+    rot_deg: float
 }
 
 mk_gradient_def() -> *GradientDef {
-    // 1 int + 1 ptr + 9 float + 2 string ≈ 12 + 8 + 72 + 16 = 108 → 128 safe.
-    g = malloc(128) as *GradientDef
+    // 1 int + 1 ptr + 12 float + 2 string ≈ 12 + 8 + 96 + 16 = 132 → 192 safe.
+    // (was 9 float / 128 before rx, ry, rot_deg were added)
+    g = malloc(192) as *GradientDef
     g.type_code = GRADIENT_LINEAR
     g.stops = list.new()
     g.x1 = 0.0
@@ -118,6 +133,9 @@ mk_gradient_def() -> *GradientDef {
     g.fy = 0.5
     g.units = ""
     g.spread_method = ""
+    g.rx = 0.5
+    g.ry = 0.5
+    g.rot_deg = 0.0
     return g
 }
 
@@ -131,6 +149,11 @@ gradient_y2(p: ptr) -> float           { g = p as *GradientDef; return g.y2 }
 gradient_cx(p: ptr) -> float           { g = p as *GradientDef; return g.cx }
 gradient_cy(p: ptr) -> float           { g = p as *GradientDef; return g.cy }
 gradient_r(p: ptr) -> float            { g = p as *GradientDef; return g.r }
+// Ellipse geometry (see the struct comment). Additive: `r` remains the
+// authoritative radius until every backend reads these.
+gradient_rx(p: ptr) -> float           { g = p as *GradientDef; return g.rx }
+gradient_ry(p: ptr) -> float           { g = p as *GradientDef; return g.ry }
+gradient_rot_deg(p: ptr) -> float      { g = p as *GradientDef; return g.rot_deg }
 gradient_fx(p: ptr) -> float           { g = p as *GradientDef; return g.fx }
 gradient_fy(p: ptr) -> float           { g = p as *GradientDef; return g.fy }
 gradient_stops(p: ptr) -> ptr          { g = p as *GradientDef; return g.stops }
@@ -279,6 +302,11 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
         g.cx = parse_coord(attr_or(node, "cx", "0.5"), 0.5)
         g.cy = parse_coord(attr_or(node, "cy", "0.5"), 0.5)
         g.r  = parse_coord(attr_or(node, "r",  "0.5"), 0.5)
+        // Default the ellipse to the circle; the gradientTransform branch
+        // below overwrites it when there is a matrix.
+        g.rx = g.r
+        g.ry = g.r
+        g.rot_deg = 0.0
         // Focal point defaults to (cx, cy)
         if parser.node_has_attr(node, "fx") == 1 {
             g.fx = parse_coord(parser.node_attr(node, "fx"), g.cx)
@@ -294,6 +322,7 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
         // by the matrix's averageScale.
         if parser.node_has_attr(node, "gradientTransform") == 1 {
             m = transform.parse_transform(parser.node_attr(node, "gradientTransform"))
+            g0r = g.r          // radius BEFORE the scalar collapse below
             c = transform.affine_apply(m, g.cx, g.cy)
             g.cx = transform.pt_x(c)
             g.cy = transform.pt_y(c)
@@ -301,6 +330,26 @@ parse_gradient(ctx: ptr, node: ptr) -> ptr {
             g.fx = transform.pt_x(f)
             g.fy = transform.pt_y(f)
             g.r = g.r * transform.affine_average_scale(m)
+            // ALONGSIDE the scalar above, and not yet consumed by anyone:
+            // the true ellipse the matrix produces. A circle of radius r
+            // maps to an ellipse whose semi-axes are the lengths of the
+            // transformed basis vectors, and whose tilt is the angle of the
+            // transformed +x axis. For a uniform matrix both lengths equal
+            // r * average_scale and the tilt is 0, so this agrees exactly
+            // with `r` in the common case -- which is the regression the
+            // control repro guards.
+            ax = transform.affine_apply(m, g0r, 0.0)
+            ay = transform.affine_apply(m, 0.0, g0r)
+            o  = transform.affine_apply(m, 0.0, 0.0)
+            ox = transform.pt_x(o)
+            oy = transform.pt_y(o)
+            axx = transform.pt_x(ax) - ox
+            axy = transform.pt_y(ax) - oy
+            ayx = transform.pt_x(ay) - ox
+            ayy = transform.pt_y(ay) - oy
+            g.rx = math.sqrt(axx * axx + axy * axy)
+            g.ry = math.sqrt(ayx * ayx + ayy * ayy)
+            g.rot_deg = math.atan2(axy, axx) * 180.0 / math.pi()
         }
     } else {
         // Linear: x1/y1/x2/y2 default 0,0,1,0.

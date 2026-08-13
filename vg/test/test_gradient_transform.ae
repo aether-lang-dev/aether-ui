@@ -140,6 +140,46 @@ main() {
     assert_near("uniform: average_scale is exactly that radius",
                 transform.affine_average_scale(u3), ux)
 
+    // ---- What the vg layer now CARRIES (step 2 of the ratchet) -----------
+    // defs.ae keeps rx/ry/rot_deg alongside the scalar r. Nothing consumes
+    // them yet, so behaviour is unchanged -- but they must be RIGHT before
+    // any backend is pointed at them. Same maths defs.ae uses, on the same
+    // matrix, so a drift between the two shows up here.
+    println("")
+    println("  -- carried ellipse geometry (defs.ae rx/ry/rot_deg) --")
+    r0 = 40.0
+    axp = transform.affine_apply(nonuni, r0, 0.0)
+    ayp = transform.affine_apply(nonuni, 0.0, r0)
+    op  = transform.affine_apply(nonuni, 0.0, 0.0)
+    oxx = transform.pt_x(op)
+    oyy = transform.pt_y(op)
+    cx1 = transform.pt_x(axp) - oxx
+    cy1 = transform.pt_y(axp) - oyy
+    cx2 = transform.pt_x(ayp) - oxx
+    cy2 = transform.pt_y(ayp) - oyy
+    erx = math.sqrt(cx1 * cx1 + cy1 * cy1)
+    ery = math.sqrt(cx2 * cx2 + cy2 * cy2)
+    assert_near("carried rx = r * x-scale", erx, r0 * 0.96)
+    assert_near("carried ry = r * y-scale", ery, r0 * 1.245)
+    assert_true("carried rx and ry DIFFER (the ellipse survives)",
+                near(erx, ery) == 0)
+
+    // The uniform case must collapse back onto the old scalar exactly --
+    // this is what keeps radial_uniform_control.svg passing.
+    ux1 = transform.affine_apply(u3, r0, 0.0)
+    uy1 = transform.affine_apply(u3, 0.0, r0)
+    uox = transform.pt_x(transform.affine_apply(u3, 0.0, 0.0))
+    uoy = transform.pt_y(transform.affine_apply(u3, 0.0, 0.0))
+    ux1x = transform.pt_x(ux1) - uox
+    ux1y = transform.pt_y(ux1) - uoy
+    uy1x = transform.pt_x(uy1) - uox
+    uy1y = transform.pt_y(uy1) - uoy
+    urx = math.sqrt(ux1x * ux1x + ux1y * ux1y)
+    ury = math.sqrt(uy1x * uy1x + uy1y * uy1y)
+    assert_near("uniform: carried rx == old scalar r*avg", urx,
+                r0 * transform.affine_average_scale(u3))
+    assert_near("uniform: carried ry == carried rx", ury, urx)
+
     println("")
     if fails > 0 {
         println("=== test_gradient_transform: ${fails} EXPECTED-FAIL ===")
