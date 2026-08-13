@@ -108,6 +108,11 @@ emit_stroke_caps(opts: ptr, style: ptr) {
     if string.length(lc) > 0 { _ = map.put(opts, "strokeLinecap", lc) }
     lj = style.style_get(style, "stroke-linejoin")
     if string.length(lj) > 0 { _ = map.put(opts, "strokeLinejoin", lj) }
+    // fill-rule too: the backends used to hardcode one, and no single choice
+    // works -- no.svg's crossing X needs nonzero (the SVG default), while
+    // accessible.svg and the paths-data-0*-t conformance files need evenodd.
+    fr = style.style_get(style, "fill-rule")
+    if string.length(fr) > 0 { _ = map.put(opts, "fillRule", fr) }
 }
 
 // ─── Transform-push helper (push only if attrs has transform) ────

@@ -195,8 +195,10 @@ canvas_circle(p: ptr, opts: ptr) -> ptr {
     if string.length(fill) > 0 {
         ui.canvas_begin_path(cid)
         ui.canvas_arc(cid, cx, cy, r, 0.0, two_pi)
+        // A lone circle has no self-overlap, so the rule cannot matter; pass
+        // nonzero (the SVG default).
         ui.canvas_fill(cid, color_r01(fill), color_g01(fill),
-                                   color_b01(fill), color_a01(fill))
+                                   color_b01(fill), color_a01(fill), 0)
     }
     // Stroke: rebuild the path, stroke it.
     if string.length(stroke) > 0 {
@@ -303,7 +305,8 @@ canvas_path(p: ptr, opts: ptr) -> ptr {
         if string.length(fill) > 0 {
             replay_path(cid, pts)
             ui.canvas_fill(cid, color_r01(fill), color_g01(fill),
-                                       color_b01(fill), color_a01(fill))
+                                       color_b01(fill), color_a01(fill),
+                                       fillrule_evenodd(opts))
         }
     }
     // Stroke: gradient stroke takes precedence over a solid stroke.
@@ -385,6 +388,14 @@ apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_widt
 spread_to_extend(spread: string) -> int {
     if string.equals(spread, "reflect") == 1 { return 1 }
     if string.equals(spread, "repeat") == 1 { return 2 }
+    return 0
+}
+
+// fill-rule → 1 for evenodd, 0 for nonzero (the SVG default). Both backends
+// used to hardcode a rule; neither choice is right for the whole corpus.
+fillrule_evenodd(opts: ptr) -> int {
+    v = opt_s(opts, "fillRule")
+    if string.equals(v, "evenodd") == 1 { return 1 }
     return 0
 }
 

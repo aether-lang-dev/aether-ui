@@ -4552,6 +4552,7 @@ typedef struct {
     float gx1, gy1, gx2, gy2, gr, gfx, gfy;
     float grad_line_width;  // 0 → fill; >0 → stroke (GDI approximates as fill)
     int grad_extend;       // SVG spreadMethod: 0=pad (default), 1=reflect, 2=repeat
+    int even_odd;          // FILL: SVG fill-rule -- 1=evenodd, 0=nonzero (default)
     int n_stops;
     double* stop_off;      // owned
     double* stop_rgba;     // owned: n_stops*4
@@ -4856,9 +4857,11 @@ void aether_ui_canvas_close_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, c);
 }
 
-void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a) {
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a,
+                                int even_odd) {
     CanvasCmd c = {0};
     c.k = CV_FILL; c.cr = r; c.cg = g; c.cb = b; c.calpha = a;
+    c.even_odd = even_odd;
     canvas_add_cmd(canvas_id, c);
 }
 
@@ -5435,6 +5438,12 @@ __declspec(dllimport) int __stdcall GdipFillEllipseI(GpGraphics* g, GpBrush* bru
 __declspec(dllimport) int __stdcall GdipDrawEllipseI(GpGraphics* g, GpPen* pen,
                                                      int x, int y, int w, int h);
 #define GDIP_FILLMODE_ALTERNATE 0
+/* SVG's DEFAULT fill-rule is nonzero, which is GDI+'s FillModeWinding -- and
+   also cairo's default, which is why GTK4 matches librsvg without ever
+   setting a rule. Every path here was built FillModeAlternate (even-odd), so
+   any shape whose sub-paths OVERLAP got a hole punched through the overlap:
+   no.svg's X, two crossing arms, showed a white diamond dead centre. */
+#define GDIP_FILLMODE_WINDING   1
 typedef void GpFontFamily;
 typedef void GpFont;
 typedef void GpStringFormat;
@@ -5738,31 +5747,12 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    from the sub-path's last point back to its first. On
                    410.svg's octagon that is the ENTIRE top-left diagonal:
                    librsvg draws black the whole way from px (4,120) to
-                   (120,4); GDI+ had white at every interior sample. Find the
-                   sub-path's first and last points and stroke the join. */
-                int close_lx = 0, close_ly = 0, close_fx = 0, close_fy = 0;
-                int want_close = 0;
-                {
-                    int has_close = 0;
-                    int fx = 0, fy = 0, lx = 0, ly = 0, seen = 0;
-                    for (int j = i - 1; j >= 0; j--) {
-                        CanvasCmdKind k = cv->cmds[j].k;
-                        if (k == CV_BEGIN) break;
-                        if (k == CV_CLOSE) { has_close = 1; continue; }
-                        if (k == CV_MOVE) { fx = (INT)cv->cmds[j].p0; fy = (INT)cv->cmds[j].p1;
-                                            if (!seen) { lx = fx; ly = fy; seen = 1; } }
-                        else if (k == CV_LINE) {
-                            if (!seen) { lx = (INT)cv->cmds[j].p2; ly = (INT)cv->cmds[j].p3; seen = 1; }
-                            fx = (INT)cv->cmds[j].p0; fy = (INT)cv->cmds[j].p1;
-                        }
-                    }
-                    /* Folded into the assembled path below rather than drawn
-                       here: a separate GdipDrawLineI would re-composite the
-                       pen alpha over both joints it meets. */
-                    close_lx = lx; close_ly = ly;
-                    close_fx = fx; close_fy = fy;
-                    want_close = (has_close && seen && (fx != lx || fy != ly));
-                }
+                   (120,4); GDI+ had white at every interior sample.
+                   Handled in the path assembly below by GdipClosePathFigure
+                   at each CV_CLOSE, which closes the CURRENT figure -- the
+                   per-sub-path semantics `z` actually has. Computing one
+                   closing segment for the whole command, as an earlier cut
+                   did, welds the last sub-path back to the first. */
                 for (int j = i - 1; j >= 0; j--) {
                     CanvasCmdKind k = cv->cmds[j].k;
                     if (k == CV_BEGIN) break;
@@ -5804,25 +5794,46 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     }
                     GpPath* sp = NULL;
                     if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &sp) == 0 && sp) {
-                        int segs = 0;
+                        /* EVERY sub-path closes ITSELF. The first cut of this
+                           computed a single closing segment by walking back to
+                           the first CV_BEGIN, then appended it to whichever
+                           figure happened to be open -- with two sub-paths
+                           that draws a line from the LAST one's end back to
+                           the FIRST one's start. no.svg is the demonstration:
+                           its X is one path of two closed sub-paths, and the
+                           result was a red web down the left side joining the
+                           top-left arm to the bottom-left, a ragged instead of
+                           square-cut lower-left arm, and a white diamond in
+                           the middle where the two arms failed to meet.
+                           GdipClosePathFigure closes the CURRENT figure, which
+                           is exactly the per-sub-path semantics `z` has. */
+                        int segs = 0, fig_open = 0;
                         for (int j = start; j < i; j++) {
                             CanvasCmdKind k = cv->cmds[j].k;
                             if (k == CV_MOVE) {
+                                /* START a new figure, do NOT close the old
+                                   one: an unclosed sub-path must STAY open.
+                                   Closing here adds a phantom segment back to
+                                   its start -- mememe.svg's two open `m`
+                                   sub-paths carry no `z` at all, and closing
+                                   them cost 1.27 -> 6.04. Only CV_CLOSE
+                                   (i.e. a real `z`) closes a figure. */
                                 GdipStartPathFigure(sp);
+                                fig_open = 1;
+                            } else if (k == CV_CLOSE) {
+                                if (fig_open) {
+                                    GdipClosePathFigure(sp);
+                                    fig_open = 0;
+                                }
                             } else if (k == CV_LINE) {
                                 GpPointI seg[2];
                                 seg[0].X = (INT)cv->cmds[j].p0;
                                 seg[0].Y = (INT)cv->cmds[j].p1;
                                 seg[1].X = (INT)cv->cmds[j].p2;
                                 seg[1].Y = (INT)cv->cmds[j].p3;
+                                if (!fig_open) { GdipStartPathFigure(sp); fig_open = 1; }
                                 if (GdipAddPathLine2I(sp, seg, 2) == 0) segs++;
                             }
-                        }
-                        if (want_close) {
-                            GpPointI cseg[2];
-                            cseg[0].X = close_lx; cseg[0].Y = close_ly;
-                            cseg[1].X = close_fx; cseg[1].Y = close_fy;
-                            if (GdipAddPathLine2I(sp, cseg, 2) == 0) segs++;
                         }
                         if (segs > 0) GdipDrawPath(g, cur_pen, sp);
                         GdipDeletePath(sp);
@@ -5884,7 +5895,9 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     if (j == 0) start = 0;
                 }
                 GpPath* fp = NULL;
-                if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &fp) == 0 && fp) {
+                if (GdipCreatePath(cmd->even_odd ? GDIP_FILLMODE_ALTERNATE
+                                                    : GDIP_FILLMODE_WINDING,
+                                       &fp) == 0 && fp) {
                     int fig_open = 0, segs = 0;
                     for (int j = start; j < i; j++) {
                         CanvasCmdKind k = cv->cmds[j].k;
@@ -6220,7 +6233,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                otherwise the circle paints outside the shape. */
                             GpPath* clip2 = NULL;
                             int clipped2 = 0;
-                            if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &clip2) == 0
+                            if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_WINDING, &clip2) == 0
                                 && clip2) {
                                 if (GdipAddPathLine2I(clip2, pts, np) == 0) {
                                     GdipClosePathFigure(clip2);
@@ -6275,7 +6288,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        exactly as the gradient STROKE case does. */
                     GpPath* clip = NULL;
                     int clipped = 0;
-                    if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &clip) == 0
+                    if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_WINDING, &clip) == 0
                         && clip) {
                         int cstart = 0;
                         for (int j = i - 1; j >= 0; j--) {

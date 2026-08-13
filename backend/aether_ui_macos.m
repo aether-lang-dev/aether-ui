@@ -3731,7 +3731,10 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                 break;
             case CANVAS_FILL:
                 CGContextSetRGBFillColor(cg, c->r, c->g, c->b, c->a);
-                CGContextFillPath(cg);
+                /* SVG fill-rule; iw carries 1 for evenodd. CoreGraphics has
+                   a separate entry point rather than a mode flag. */
+                if (c->iw) CGContextEOFillPath(cg);
+                else       CGContextFillPath(cg);
                 break;
             case CANVAS_FILL_TEXT: {
                 if (c->text) {
@@ -4194,9 +4197,10 @@ void aether_ui_canvas_close_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLOSE_PATH });
 }
 
-void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a) {
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a,
+                                int even_odd) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
-        .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a
+        .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a, .iw = even_odd
     });
 }
 

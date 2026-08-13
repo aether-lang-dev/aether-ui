@@ -3890,7 +3890,13 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 break;
             case CANVAS_FILL:
                 cairo_set_source_rgba(cr, c->r, c->g, c->b, c->a);
+                /* SVG fill-rule. cairo's default is WINDING, which matches
+                   SVG's nonzero default, so this was right by accident until
+                   a file asked for evenodd. iw carries the flag. */
+                cairo_set_fill_rule(cr, c->iw ? CAIRO_FILL_RULE_EVEN_ODD
+                                              : CAIRO_FILL_RULE_WINDING);
                 cairo_fill(cr);
+                cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
                 break;
             case CANVAS_FILL_TEXT:
                 canvas_select_font(cr, c->iw);   // iw packs mono|bold<<1|italic<<2
@@ -4706,9 +4712,10 @@ void aether_ui_canvas_close_path_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLOSE_PATH });
 }
 
-void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a) {
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a,
+                                int even_odd) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
-        .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a
+        .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a, .iw = even_odd
     });
 }
 

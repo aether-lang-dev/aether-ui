@@ -364,7 +364,12 @@ void aether_ui_canvas_reset_clip_impl(int canvas_id);
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
                                 double start_angle, double end_angle);
 void aether_ui_canvas_close_path_impl(int canvas_id);
-void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a);
+/* even_odd: 1 = SVG fill-rule="evenodd", 0 = nonzero (the SVG DEFAULT).
+   Hardcoding either is wrong: no.svg's crossing X needs nonzero (even-odd
+   punches a hole through the centre) while accessible.svg and the
+   paths-data-0*-t conformance files need even-odd. */
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a,
+                                int even_odd);
 void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
                                       double x, double y, double font_size,
                                       int font_flags,

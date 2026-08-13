@@ -374,7 +374,7 @@ extern aether_ui_canvas_stroke_impl(canvas_id: int, r: float, g: float, b: float
 extern aether_ui_canvas_arc_impl(canvas_id: int, cx: float, cy: float,
                                  radius: float, start_angle: float, end_angle: float)
 extern aether_ui_canvas_close_path_impl(canvas_id: int)
-extern aether_ui_canvas_fill_impl(canvas_id: int, r: float, g: float, b: float, a: float)
+extern aether_ui_canvas_fill_impl(canvas_id: int, r: float, g: float, b: float, a: float, even_odd: int)
 extern aether_ui_canvas_fill_text_impl(canvas_id: int, text: string,
                                        x: float, y: float, font_size: float,
                                        font_flags: int,
@@ -3107,8 +3107,9 @@ canvas_close_path(cid: int) {
 }
 
 // Fill the current path with a solid color.
-canvas_fill(cid: int, r: float, g: float, b: float, a: float) {
-    aether_ui_canvas_fill_impl(cid, r, g, b, a)
+// even_odd = 1 for SVG fill-rule="evenodd"; 0 for nonzero (the default).
+canvas_fill(cid: int, r: float, g: float, b: float, a: float, even_odd: int) {
+    aether_ui_canvas_fill_impl(cid, r, g, b, a, even_odd)
 }
 
 // Draw text at (x, y) — the text baseline origin — with the given
