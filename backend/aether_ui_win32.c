@@ -6272,6 +6272,29 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                         clipped2 = 1;
                                 }
                             }
+                            /* PAD PAST THE RIM. A GDI+ path gradient paints
+                               ONLY inside its path, so filling just the
+                               ellipse leaves everything outside it unpainted
+                               -- for a <rect> that is the four corners, and
+                               test_radial_gradient.svg rendered as a CIRCLE on
+                               white where librsvg and GTK4 both draw a square
+                               (GTK4 0.0, GDI+ 30.8).
+
+                               SVG's default spreadMethod is pad, so beyond the
+                               rim the gradient is a flat hold of the LAST
+                               stop. Lay that colour over the clipped region
+                               first, then paint the ellipse on top. Where the
+                               shape is no bigger than the ellipse this is
+                               entirely covered and costs only a fill. */
+                            {
+                                GpBrush* padbr = NULL;
+                                if (GdipCreateSolidFill(cols[ns-1], &padbr) == 0
+                                    && padbr) {
+                                    GdipFillRectangleI(g, padbr, mnx, mny,
+                                                       mxx - mnx, mxy - mny);
+                                    GdipDeleteBrush(padbr);
+                                }
+                            }
                             GdipFillEllipseI(g, (GpBrush*)pg, rcx - rw, rcy - rh,
                                              rw * 2, rh * 2);
                             if (clipped2) GdipResetClip(g);
