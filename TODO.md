@@ -347,9 +347,35 @@ geometry and paint state, the backend only draws it. Concretely:
       `tests/radial_ellipse_check.py`: GTK4 5/5, macOS 4/4, GDI+ 4/5 (its
       one gap is the harness canvas-size issue below, not rendering).
 
-   4. Only once all three consume it: remove the scalar radius from the
-      three loss sites, flip `STRICT` to 1, and narrow the ABI if the two
-      gradient calls can now converge.
+   4. ~~Remove the scalar radius, flip STRICT, narrow the ABI.~~
+      **ASSESSED 2026-08-13, and deliberately NOT done wholesale** — each
+      part judged on merit rather than executed because the plan said so:
+
+      * **Remove the scalar from the three loss sites — NO.** The vg layer
+        now always emits RX/RY, so the scalar is dead *there*; but
+        `canvas_fill_radial_gradient` is a PUBLIC export with no in-tree
+        callers, and dropping `radius` would break any external one for no
+        gain. The fallback costs one float compare per gradient. Removing
+        it is API churn, not simplification.
+      * **Flip STRICT — already resolved, differently.** The flag and its
+        machinery are deleted: the assertions it guarded claimed a scalar
+        might one day express an ellipse, which is permanently false. They
+        are now direct assertions OF the loss, and the test is green.
+      * **Converge the two gradient calls — NO.** A merged call needs the
+        union of both geometries (8 floats + a kind flag, against 4 and 8
+        today), so every linear caller would pass four dead arguments.
+        Net 241 -> 240 externs: one line saved, clarity lost. Linear and
+        radial are genuinely different GEOMETRY, not policy leaking into
+        the backend — which is what this item is about.
+
+      **On the ABI-width target:** this work ADDED three parameters, against
+      a stated goal of trending down. That is the right trade and worth
+      being explicit about: the three carry *data the renderer needs*
+      (semi-axes and tilt) so the backend can stop *deciding* what a
+      gradient's shape is. The number to watch is decisions-per-backend,
+      not parameters; a wider surface with dumber backends is the stated
+      success condition.
+
 
    Step 2 is the important one: it makes the change **additive**, so there
    is never a window where the vg layer emits geometry no backend
