@@ -5393,6 +5393,12 @@ typedef void GpPen;
 __declspec(dllimport) int __stdcall GdipCreatePen1(ARGB color, float width, int unit,
                                                    GpPen** pen);
 __declspec(dllimport) int __stdcall GdipDeletePen(GpPen* pen);
+/* A pen carrying a BRUSH rather than a flat colour -- the whole reason a
+   gradient stroke is expressible at all. Plain GDI has no equivalent, which
+   is why legacy had to approximate gradient strokes as fills. */
+__declspec(dllimport) int __stdcall GdipCreatePen2(GpBrush* brush, float width,
+                                                   int unit, GpPen** pen);
+/* GdipDrawPath is declared alongside GdipFillPath below, once GpPath exists. */
 __declspec(dllimport) int __stdcall GdipSetPenStartCap(GpPen* pen, int cap);
 __declspec(dllimport) int __stdcall GdipSetPenEndCap(GpPen* pen, int cap);
 __declspec(dllimport) int __stdcall GdipSetPenLineJoin(GpPen* pen, int join);
@@ -5469,6 +5475,10 @@ __declspec(dllimport) int __stdcall GdipSetClipPath(GpGraphics* g, GpPath* path,
 __declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
 __declspec(dllimport) int __stdcall GdipStartPathFigure(GpPath* path);
 __declspec(dllimport) int __stdcall GdipFillPath(GpGraphics* g, GpBrush* brush,
+                                                 GpPath* path);
+/* Stroke a path with a pen -- the gradient-stroke case. Declared here rather
+   than with the other pen functions because GpPath is only typedef'd above. */
+__declspec(dllimport) int __stdcall GdipDrawPath(GpGraphics* g, GpPen* pen,
                                                  GpPath* path);
 #define GDIP_COMBINE_REPLACE 0
 /* Radial gradients: centre point and rim colour, so an SVG <radialGradient>
@@ -5801,7 +5811,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                if(qy<mny)mny=qy; if(qy>mxy)mxy=qy; }
                     }
                 }
-                if (!have || mxx <= mnx || mxy <= mny) break;
+                if (!have) break;
 
                 /* Every stop, in order, as a preset blend. */
                 int ns = cmd->n_stops;
@@ -5818,6 +5828,96 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     pos[s]  = (ns == 1) ? 0.0f : (float)s / (float)(ns - 1);
                 }
                 pos[0] = 0.0f; pos[ns-1] = 1.0f;
+
+                /* A GRADIENT STROKE IS NOT A GRADIENT FILL.
+                   CanvasCmd.grad_line_width has said "> 0 -> stroke" since the
+                   struct was written, and this branch never read it -- it
+                   treated every gradient command as a fill: build a polygon
+                   from the path points, clip to it, fill the bounding box.
+                   For a stroke that is wrong twice over, and a width sweep
+                   measured both failures on the same two paths:
+
+                     stroke, straight line   ink 0 at EVERY width (1..32)
+                     stroke, curve           ink 0.48x ref at w1, 0.33x at w32
+
+                   The line drew NOTHING because a horizontal line's bbox has
+                   mxy == mny, which tripped the fill's degenerate-box guard
+                   and broke out. The curve drew about half because filling the
+                   thin sliver ENCLOSED by a path is not the band of width w
+                   FOLLOWING it -- and a filled sliver does not grow with the
+                   stroke width, which is exactly why the ratio drifts DOWN as
+                   the width goes up. GTK4 matches librsvg to within 6 pixels
+                   on all ten cases, so this was ours alone.
+
+                   Stroke it properly: a pen carrying the gradient brush along
+                   the real path. Sub-paths and cap style are preserved, so a
+                   two-subpath stroke stays two strokes. */
+                if (cmd->grad_line_width > 0.0f) {
+                    /* Forward order, and CV_MOVE starts a new figure -- the
+                       walk-back above collects points in REVERSE, which a
+                       closed fill does not care about but a capped,
+                       multi-subpath stroke very much does. */
+                    GpPath* sp = NULL;
+                    if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &sp) == 0 && sp) {
+                        int start = 0;
+                        for (int j = i - 1; j >= 0; j--) {
+                            if (cv->cmds[j].k == CV_BEGIN) { start = j; break; }
+                        }
+                        int fig_open = 0, segs = 0;
+                        for (int j = start; j < i; j++) {
+                            CanvasCmdKind k = cv->cmds[j].k;
+                            if (k == CV_MOVE) {
+                                if (fig_open) GdipStartPathFigure(sp);
+                                else { GdipStartPathFigure(sp); fig_open = 1; }
+                            } else if (k == CV_LINE) {
+                                GpPointI seg[2];
+                                seg[0].X = (INT)cv->cmds[j].p0;
+                                seg[0].Y = (INT)cv->cmds[j].p1;
+                                seg[1].X = (INT)cv->cmds[j].p2;
+                                seg[1].Y = (INT)cv->cmds[j].p3;
+                                if (GdipAddPathLine2I(sp, seg, 2) == 0) segs++;
+                            }
+                        }
+                        if (segs > 0) {
+                            GpPointI ga, gb;
+                            if (cmd->gx1 != cmd->gx2 || cmd->gy1 != cmd->gy2) {
+                                ga.X = (INT)cmd->gx1; ga.Y = (INT)cmd->gy1;
+                                gb.X = (INT)cmd->gx2; gb.Y = (INT)cmd->gy2;
+                            } else {
+                                ga.X = mnx; ga.Y = mny;
+                                gb.X = mxx; gb.Y = mny;
+                            }
+                            GpLineGradient* slg = NULL;
+                            if (GdipCreateLineBrushI(&ga, &gb, cols[0], cols[ns-1],
+                                                     GDIP_WRAP_TILE, &slg) == 0 && slg) {
+                                if (ns >= 2)
+                                    GdipSetLinePresetBlend(slg, cols, pos, ns);
+                                GpPen* gp = NULL;
+                                if (GdipCreatePen2((GpBrush*)slg,
+                                                   cmd->grad_line_width,
+                                                   GDIP_UNIT_PIXEL, &gp) == 0 && gp) {
+                                    /* The command's OWN cap/join, through the
+                                       same helpers CV_STROKE uses -- not a
+                                       hardcoded round. stroke-linecap reaches
+                                       us in cmd->cap either way, and twitter's
+                                       round cap is worth ~2 MAE on its own
+                                       (g_grad_butt scored 3.2 against
+                                       c_grad_line's 4.2). */
+                                    GdipSetPenStartCap(gp, gdip_cap(cmd->cap));
+                                    GdipSetPenEndCap(gp, gdip_cap(cmd->cap));
+                                    GdipSetPenLineJoin(gp, gdip_join(cmd->join));
+                                    GdipDrawPath(g, gp, sp);
+                                    GdipDeletePen(gp);
+                                }
+                                GdipDeleteBrush((GpBrush*)slg);
+                            }
+                        }
+                        GdipDeletePath(sp);
+                    }
+                    break;
+                }
+
+                if (mxx <= mnx || mxy <= mny) break;
 
                 if (cmd->k == CV_FILL_RADIAL) {
                     /* THE REAL CIRCLE, not the path's bounding box.
