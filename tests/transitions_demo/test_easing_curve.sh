@@ -21,12 +21,19 @@
 # so the ratio (progress at 25%) / (progress at 50%) separates them: near 0.5
 # for linear, well above it for ease-out. A snap gives 1.0 at both samples.
 #
-# ENVIRONMENT: needs a REAL framebuffer. /screenshot returns "screenshot
-# capture failed" under a bare `xvfb-run -a`, and the pre-existing
-# test_tween.sh degrades the same way on the same box -- so a failure here
-# with zero-byte PNGs means no display, not a broken curve. ci.sh launches
-# with `xvfb-run -a -s "-screen 0 3200x2000x24"`, which is where both of
-# these are meant to run.
+# ENVIRONMENT: the app must be on the display /screenshot captures. Launching
+# it under its OWN `xvfb-run` while a real session exists makes the capture
+# read a different, blank display and return "screenshot capture failed" --
+# a launch mistake, NOT a missing framebuffer (this box has a real display and
+# it works there). Run the app on the session display, or let ci.sh's
+# run_server_test own the xvfb wrapper.
+#
+# MEASURED on a real display: progress 0.440 at 25% and 0.758 at 50%, against
+# the ease-out curve's predicted 0.438 and 0.750. Linear would read 0.25/0.50,
+# so the two are cleanly separated.
+#
+# NB the demo fades over 1200ms, which is luxuriously slow for real UI (150-250ms
+# is typical) -- it is long on purpose so a mid-flight frame is easy to sample.
 #
 #   usage: test_easing_curve.sh [port]
 set -u
@@ -55,9 +62,9 @@ BTN=$(curl -s -m 5 "$BASE/widgets" | tr '}' '\n' | grep '"text":"Toggle fade"' \
 
 curl -s -m 5 "$BASE/screenshot" -o /tmp/ec_start.png
 if ! python3 -c "from PIL import Image; Image.open('/tmp/ec_start.png')" 2>/dev/null; then
-    echo "  SKIP: /screenshot is unavailable here (no framebuffer) — the curve"
-    echo "        can only be read out of pixels, so there is nothing to assert."
-    echo "        Run under ci.sh, which starts a sized Xvfb screen."
+    echo "  SKIP: /screenshot returned no image — the app is probably on a"
+    echo "        different display than the one being captured. The curve can"
+    echo "        only be read from pixels, so there is nothing to assert."
     exit 0
 fi
 I_START=$(ink /tmp/ec_start.png)
