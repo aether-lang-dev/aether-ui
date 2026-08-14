@@ -660,6 +660,8 @@ echo "=== Phase 5h: implicit transitions tween proof (animations ON) ==="
 if true; then
     ( unset AETHER_UI_NO_ANIMATION
       run_server_test "$(EX_BIN transitions_demo)"                       "$SCRIPT_DIR/tests/transitions_demo/test_tween.sh" transitions ) || FAIL=$((FAIL + 1))
+    ( unset AETHER_UI_NO_ANIMATION
+      run_server_test "$(EX_BIN transitions_demo)"                       "$SCRIPT_DIR/tests/transitions_demo/test_easing_curve.sh" easingcurve ) || FAIL=$((FAIL + 1))
 fi
 
 echo

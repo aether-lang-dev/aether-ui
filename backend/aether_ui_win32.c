@@ -276,6 +276,16 @@ typedef struct {
     char* a11y_name;
     char* a11y_desc;
     int styled_opacity_enc;   // explicit opacity readback: 0=unset, else v*100+1
+    /* Implicit opacity transition (ui.transition). tr_ms > 0 means the NEXT
+       opacity change tweens instead of snapping; tr_ease_out picks the curve.
+       win32 had NO easing code at all -- apply_css set the layered alpha
+       instantly, so `transition(h,"opacity",1200,"ease_out")` was a no-op
+       here while GTK4 honoured it via CSS and macOS via its own record. */
+    int tr_ms;
+    int tr_ease_out;
+    UINT_PTR tr_timer;
+    DWORD tr_start;
+    double tr_from, tr_to;
     // Splitview (WK_SPLITVIEW): requested divider px (+1 encoding, 0=unset →
     // half) and the EFFECTIVE position from the last layout.
     int split_pos_enc;
@@ -4128,17 +4138,77 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
 // Raw-CSS is a GTK concept; win32 honours the ONE property AeCS routes here:
 // "opacity: X;" becomes a real layered-window alpha (the same WS_EX_LAYERED
 // child mechanism the overlay exit fade proved). Everything else is ignored.
+/* Drives one widget's opacity tween. ~60fps, same shape as the overlay fade
+   proc above. The EASE-OUT curve is 1-(1-t)^2: fastest at the start, which is
+   what makes it distinguishable from linear at the midpoint (a linear tween
+   is ~50% done there, ease-out ~75%) -- see
+   tests/transitions_demo/test_easing_curve.sh, which reads the curve out of
+   the framebuffer because no property readback can see it. */
+static void CALLBACK w32_opacity_tween_proc(HWND hwnd, UINT msg,
+                                            UINT_PTR id, DWORD now) {
+    (void)hwnd; (void)msg; (void)now;
+    for (int i = 1; i <= widget_count; i++) {
+        Widget* w = widget_at(i);
+        if (!w || w->tr_timer != id) continue;
+        int ms = w->tr_ms > 0 ? w->tr_ms : 1;
+        DWORD elapsed = GetTickCount() - w->tr_start;
+        double t = (double)elapsed / (double)ms;
+        if (t >= 1.0) t = 1.0;
+        double e = w->tr_ease_out ? (1.0 - (1.0 - t) * (1.0 - t)) : t;
+        double v = w->tr_from + (w->tr_to - w->tr_from) * e;
+        if (IsWindow(w->hwnd)) {
+            w32_make_layered(w->hwnd);
+            SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(v * 255.0), LWA_ALPHA);
+        }
+        if (t >= 1.0) {
+            KillTimer(NULL, id);
+            w->tr_timer = 0;
+        }
+        return;
+    }
+    KillTimer(NULL, id);
+}
+
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
     if (!property_css) return;
     Widget* w = widget_at(handle);
     if (!w) return;
+    /* "transition: opacity 1200ms ease-out;" -- the DECLARATION, recorded so
+       the next opacity change tweens. ui.transition lowers to CSS (GTK4 reads
+       it natively), and this backend simply threw it away. */
+    const char* tr = strstr(property_css, "transition:");
+    if (tr) {
+        if (!strstr(tr, "opacity")) return;      // only opacity is wired
+        const char* ms_at = strstr(tr, "ms");
+        if (!ms_at) return;
+        const char* p = ms_at;
+        while (p > tr && isdigit((unsigned char)p[-1])) p--;
+        int ms = atoi(p);
+        if (ms <= 0) return;
+        w->tr_ms = ms;
+        w->tr_ease_out = strstr(tr, "linear") ? 0 : 1;
+        return;
+    }
     if (strncmp(property_css, "opacity:", 8) == 0) {
         double v = atof(property_css + 8);
         if (v < 0) v = 0;
         if (v > 1) v = 1;
+        double from = (w->styled_opacity_enc > 0)
+                      ? (w->styled_opacity_enc - 1) / 100.0 : 1.0;
+        /* Record the MODEL value immediately either way: the driver reports
+           it, and a tween must not make the readback lag reality. Only the
+           presentation is animated -- the same split GTK4 and macOS have. */
+        w->styled_opacity_enc = (int)(v * 100.0) + 1;
+        if (w->tr_ms > 0 && !w32_anim_off() && from != v) {
+            if (w->tr_timer) KillTimer(NULL, w->tr_timer);
+            w->tr_from = from;
+            w->tr_to = v;
+            w->tr_start = GetTickCount();
+            w->tr_timer = SetTimer(NULL, 0, 16, w32_opacity_tween_proc);
+            return;
+        }
         w32_make_layered(w->hwnd);
         SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(v * 255.0), LWA_ALPHA);
-        w->styled_opacity_enc = (int)(v * 100.0) + 1;
     }
 }
 
