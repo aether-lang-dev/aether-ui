@@ -434,9 +434,13 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
   POST /redo, GET /undo_state on both servers (per-platform marshalled
   fires). `undo_demo` 5/5 GTK4 AND win32. Follow-up: text-field
   auto-enrolment (coalesced edits).
-- **Widget Inspector (Flutter DevTools)** — a live tree browser over the
-  existing AetherUIDriver; itself an aether-ui app. The protocol already
-  exists; the inspector is a client.
+- ~~**Widget Inspector (Flutter DevTools)**~~ **DONE 2026-08-14** —
+  `apps/inspector`: browses any running app's tree over the AetherUIDriver,
+  indented by parent depth, with a full field dump on selection. Needed NO
+  new backend surface, exactly as this entry predicted. Verified end-to-end
+  against a live listbox_demo (13 widgets, detail pane correct), driven
+  through the inspector's own driver on 9444 — it serves the protocol it
+  consumes. Read-only by choice, so it is safe to point at an app mid-debug.
 - ~~**Golden-image tests (Flutter)**~~ **DONE 2026-08-01** (67d3cb6) —
   shipped as `examples/golden_gallery` + `tests/goldens/<backend>/*.sig`,
   blessed on gtk4/win32/macOS and driven by the `golden` suite in every
