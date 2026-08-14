@@ -6404,8 +6404,47 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                radial FILL case documents. Left as-is
                                deliberately rather than made confidently wrong. */
                             GpBrush* sbr = NULL;
+                            GpPath* rspath = NULL;
+                            /* A RADIAL stroke gets a PATH-GRADIENT brush, using
+                               the command's OWN centre and radius. The earlier
+                               attempt at this used the shape's bounding
+                               ellipse and measured worse (6.31 -> 7.29) --
+                               correctly, because phpg is userSpaceOnUse
+                               centred at (250,0) r=300, far outside the shape.
+                               The radial FILL case has since been fixed the
+                               same way, and that fix is what makes this
+                               tractable: take the geometry from the command,
+                               never from the bbox. */
+                            if (cmd->k == CV_FILL_RADIAL && cmd->gr > 0.0f) {
+                                int scx = (INT)cmd->gx1, scy = (INT)cmd->gy1;
+                                int srr = (INT)cmd->gr;
+                                if (srr < 1) srr = 1;
+                                if (GdipCreatePath(GDIP_FILLMODE_ALTERNATE, &rspath) == 0
+                                    && rspath) {
+                                    GdipAddPathEllipseI(rspath, scx - srr, scy - srr,
+                                                        srr * 2, srr * 2);
+                                    GpPathGradient* rpg = NULL;
+                                    if (GdipCreatePathGradientFromPath(rspath, &rpg) == 0
+                                        && rpg) {
+                                        /* Rim -> centre, so the SVG stops are
+                                           reversed -- the same correction the
+                                           radial fill documents. */
+                                        ARGB rc[16]; float rp[16];
+                                        for (int s2 = 0; s2 < ns; s2++) {
+                                            rc[s2] = cols[ns - 1 - s2];
+                                            rp[s2] = 1.0f - pos[ns - 1 - s2];
+                                        }
+                                        rp[0] = 0.0f; rp[ns-1] = 1.0f;
+                                        GdipSetPathGradientCenterColor(rpg, cols[0]);
+                                        if (ns >= 2)
+                                            GdipSetPathGradientPresetBlend(rpg, rc, rp, ns);
+                                        sbr = (GpBrush*)rpg;
+                                    }
+                                }
+                            }
                             GpLineGradient* slg = NULL;
-                            if (GdipCreateLineBrushI(&ga, &gb, scols[0], scols[sns-1],
+                            if (!sbr &&
+                                GdipCreateLineBrushI(&ga, &gb, scols[0], scols[sns-1],
                                                      GDIP_WRAP_TILE, &slg) == 0 && slg) {
                                 if (cmd->grad_extend == 1)
                                     GdipSetLineWrapMode(slg, GDIP_WRAP_TILE_FLIPX);
@@ -6435,6 +6474,9 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                     GdipDeletePen(gp);
                                 }
                                 GdipDeleteBrush(sbr);
+                                /* Owned by the radial branch; the brush was
+                                   created FROM it, so it outlives the brush. */
+                                if (rspath) GdipDeletePath(rspath);
                             }
                         }
                         GdipDeletePath(sp);
