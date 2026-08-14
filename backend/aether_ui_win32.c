@@ -5685,6 +5685,12 @@ __declspec(dllimport) int __stdcall GdipSetWorldTransform(GpGraphics* g,
    than with the other pen functions because GpPath is only typedef'd above. */
 __declspec(dllimport) int __stdcall GdipDrawPath(GpGraphics* g, GpPen* pen,
                                                  GpPath* path);
+/* Glyph outlines as strokable geometry -- how a stroked <text> is drawn,
+   since GdipDrawString can only fill. */
+typedef struct { INT X, Y, Width, Height; } GpRectI;
+__declspec(dllimport) int __stdcall GdipAddPathStringI(GpPath* path,
+    const unsigned short* str, int length, const GpFontFamily* family,
+    int style, float emSize, const GpRectI* layoutRect, const void* format);
 #define GDIP_COMBINE_REPLACE 0
 /* Radial gradients: centre point and rim colour, so an SVG <radialGradient>
    with a focal point (fx,fy) distinct from its centre renders correctly. */
@@ -6845,24 +6851,65 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 break;
             }
             case CV_STROKE_TEXT: {
-                /* SVG stroke on <text> -- NOT DRAWN, deliberately.
-                   aether_ui_canvas_stroke_text_impl now records the command
-                   (it used to discard it), but there is no correct way to
-                   paint it here yet: GdipDrawString can only FILL, and a
-                   filled second pass in the stroke colour OVERPAINTS the fill
-                   instead of outlining it. Measured -- that approximation
-                   moved Steps.svg from 38.66 to 42.80, i.e. AWAY from GTK4's
-                   33.58, so it is wrong rather than merely coarse.
+                /* SVG stroke on <text>. GdipDrawString can only FILL, so the
+                   glyphs are taken as PATH GEOMETRY via GdipAddPathStringI
+                   and that path is stroked -- a real outline, not a filled
+                   second pass (which overpaints rather than outlines, and
+                   measured worse: it moved Steps.svg AWAY from GTK4).
 
-                   The right implementation takes glyph outlines as strokable
-                   geometry via GdipAddPathString/I. Those are declared
-                   nowhere here on purpose: getting them working needs the
-                   marshalling verified against a probe (an isolated one calls
-                   both variants fine), which is a task of its own.
+                   An earlier attempt blamed this API for an exit-127 crash.
+                   It was not the API: utf8_to_wide returns a pointer into a
+                   STATIC rotating buffer and the free(w) beside it corrupted
+                   the heap. There is deliberately no free here -- CV_FILL_TEXT
+                   does not free it either.
 
-                   Minimal repro kept at vg/test/svg/text_stroke_repro.svg:
-                   librsvg and GTK4 draw a red B with a blue outline, GDI+ a
-                   plain red one. */
+                   Repro: vg/test/svg/text_stroke_repro.svg -- librsvg and
+                   GTK4 draw a red B with a blue outline. */
+                if (!cmd->text) break;
+                wchar_t* w = utf8_to_wide(cmd->text);
+                if (!w || !w[0]) break;
+                GpFontFamily* fam = gdip_resolve_family(cmd->font_family);
+                if (!fam) break;
+                unsigned short asc = 0, emh = 0;
+                float up = (float)cmd->p2 * 0.8f;
+                if (GdipGetCellAscent(fam, GDIP_FONTSTYLE_REGULAR, &asc) == 0
+                    && GdipGetEmHeight(fam, GDIP_FONTSTYLE_REGULAR, &emh) == 0
+                    && emh > 0) {
+                    up = (float)cmd->p2 * ((float)asc / (float)emh);
+                }
+                GpPath* tp = NULL;
+                if (GdipCreatePath(GDIP_FILLMODE_WINDING, &tp) == 0 && tp) {
+                    GpRectI layout;
+                    layout.X = (INT)cmd->p0;
+                    layout.Y = (INT)((float)cmd->p1 - up);
+                    layout.Width = 0;
+                    layout.Height = 0;
+                    int wlen = 0;
+                    while (w[wlen]) wlen++;
+                    /* The SAME typographic format the FILL pass uses. With a
+                       NULL format GDI+ insets the run by the font's leading,
+                       so the outline landed offset right and down from the
+                       fill it is supposed to trace -- visible immediately on
+                       the repro as a doubled B. */
+                    GpStringFormat* sfmt = NULL;
+                    GdipStringFormatGetGenericTypographic(&sfmt);
+                    if (wlen > 0 &&
+                        GdipAddPathStringI(tp, (const unsigned short*)w, wlen,
+                                           fam, GDIP_FONTSTYLE_REGULAR,
+                                           (float)cmd->p2, &layout, sfmt) == 0) {
+                        float lw = (float)cmd->p3;
+                        if (lw <= 0.0f) lw = 1.0f;
+                        GpPen* tpen = NULL;
+                        if (GdipCreatePen1(gdip_argb(cmd), lw,
+                                           GDIP_UNIT_PIXEL, &tpen) == 0 && tpen) {
+                            GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
+                            GdipDrawPath(g, tpen, tp);
+                            GdipDeletePen(tpen);
+                        }
+                    }
+                    GdipDeletePath(tp);
+                }
+                GdipDeleteFontFamily(fam);
                 break;
             }
             case CV_DRAW_IMAGE: {
