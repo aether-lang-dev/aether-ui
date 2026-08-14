@@ -107,6 +107,7 @@ SUITES=(
   "a11y|examples/a11y_demo|a11y_demo/spec_a11y_demo|"
   "material|examples/material_demo|material_demo/spec_material_demo|"
   "themes|examples/themes_demo|themes_demo/spec_themes_demo|"
+  "roles|examples/roles_demo|roles_demo/spec_roles_demo|"
   "csssem|examples/csssem_demo|csssem_demo/spec_csssem_demo|"
   "zen|examples/zen_demo|zen_demo/spec_zen_demo|"
   "states|examples/states_demo|states_demo/spec_states_demo|"

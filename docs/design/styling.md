@@ -47,6 +47,11 @@ Dark/light pairs: `styles_for_mode(light, dark)` returns the sheet matching
 `is_dark_mode()` right now. Re-call + re-apply on a mode flip (no
 appearance-change event yet).
 
+Semantic roles (v1.3): `color_scheme()` + `role(sc, "primary", 0x…)` name
+colours by meaning; `scheme_sheet(sc)` generates an ordinary sheet from them.
+See **v1.3** below — roles sit *above* everything in this section rather than
+beside it.
+
 ## How it works
 
 `apply_styles` walks the live widget registry in-process — four tiny ABI
@@ -107,6 +112,64 @@ weight too; `themes_demo`'s green theme is the worked example.
 
 Spec: 13/13 on GTK4 AND win32 (winbaz), including a clean-close check after
 the suite (no lingering process, port freed).
+
+## v1.3 (2026-08-14): semantic colour roles
+
+Name colours by **meaning**, not by widget kind — Flutter's `ColorScheme`, also
+Material 3 tokens and iOS semantic colours. A theme becomes a table of eight
+decisions rather than a long list of per-kind rules, and a dark theme is the
+same eight decisions with different values instead of a second stylesheet to
+keep in sync.
+
+```
+sc = color_scheme()
+role(sc, "primary", 0x5C458A)
+role(sc, "on_primary", 0xFFFFFF)
+use_styles(scheme_sheet(sc))          // an ORDINARY AeCS sheet
+```
+
+**Roles are a generator, not a parallel colour system.** `scheme_sheet()` emits
+plain `st_bg`/`st_color` rules into a normal sheet, so everything already built
+keeps working untouched: the `class.kind → class → kind → container → root`
+cascade, `styles_for_mode`, `ui_states`, `load_styles`, and the driver's
+`fg`/`bg` readback. You can `st_*` over the top of a generated sheet to
+override one widget without leaving the roles system, because there is no
+separate system to leave. It is also why this needed **no backend change** — by
+the time a colour reaches a platform it is just a colour.
+
+The eight roles are Flutter's core set minus those needing surfaces we do not
+model (`inverse*`, `*Container` beyond one level):
+
+| pair | meaning |
+|---|---|
+| `primary` / `on_primary` | the main action, and what sits legibly on it |
+| `surface` / `on_surface` | ordinary background and its text |
+| `error` / `on_error` | destructive or invalid |
+| `accent` / `outline` | secondary emphasis; borders and dividers |
+
+`on_X` is the contrast partner of X and is always used as the **foreground**
+wherever X is the background. That pairing is the point: setting a background
+without its partner is how themes end up with dark-on-dark text after a mode
+flip, so each half only lands when actually specified, and unset roles emit
+nothing (a partial scheme layers rather than blanks).
+
+The mapping is deliberately small: `surface` → root + container, `primary` →
+button, `error` → the opt-in `.danger` class, `accent` → the `.accent` class,
+`outline` → divider + a 1px textfield border. `error` reaching **only** the
+widget that opted in is the cascade doing the work, not the roles code — and
+the spec pins it with an unclassed button beside a classed one.
+
+Also: `role.<name> = #RRGGBB` lines in `load_styles` files, `role_of` (returns
+−1 rather than 0 when unset, since black is a legitimate colour),
+`scheme_into` for layering under hand-written rules, and `use_scheme_pair`,
+which routes both schemes through the existing `use_styles_pair` machinery so
+an OS mode flip re-themes by exactly the path a hand-written pair does.
+
+Unknown role names are accepted and stored — an app may carry its own
+(`brand`, `warning`) and read them back with `role_of` to paint bespoke
+chrome — but only the eight known names generate rules.
+
+Spec: `examples/roles_demo` + `tests/roles_demo`, 6 assertions.
 
 ## Still-open boundaries (deliberate)
 

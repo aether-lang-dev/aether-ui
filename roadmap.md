@@ -474,10 +474,25 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
 
   **Still open:** swiby's `$context.goto` + session shape is untouched.
 
-Tier 2: semantic color roles for AeCS (Flutter ColorScheme); QML
-property-to-property bindings (width: parent.width/2 via on_layout);
-Swing TableRowSorter (built-in table sort/filter); QML SpringAnimation
-easing for transitions.
+Tier 2 — **semantic colour roles: DONE 2026-08-14.** `color_scheme()` +
+`role(sc, name, hex)` name colours by meaning (Flutter's ColorScheme);
+`scheme_sheet(sc)` GENERATES an ordinary AeCS sheet from them, which is
+what kept the change small: the cascade, `styles_for_mode`, `ui_states`,
+`load_styles` and the driver readback all work on the result unchanged,
+and no backend was touched — by the time a colour reaches a platform it
+is just a colour. Eight roles in four contrast pairs
+(primary/on_primary, surface/on_surface, error/on_error,
+accent/outline), `role.<name> = #RRGGBB` lines in theme files, and
+`use_scheme_pair` routing through the existing light/dark machinery.
+`examples/roles_demo` + 7 assertions, green on GTK4 and win32. The
+sharpest one is a control: `error` must reach ONLY the button that opted
+in via class `danger`, while the unclassed button beside it keeps
+primary — that is the cascade doing the work, not the roles code.
+
+Still Tier 2: QML property-to-property bindings (width: parent.width/2
+via on_layout); Swing TableRowSorter (built-in table sort/filter); QML
+SpringAnimation easing for transitions (the discriminating curve test
+now exists — see tests/transitions_demo/test_easing_curve.sh).
 
 Noted, not scheduled: hero/matchedGeometry animations (wants the
 retained compositor); Flutter-style hot reload as "hot restart with

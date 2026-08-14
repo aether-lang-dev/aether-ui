@@ -1,0 +1,19 @@
+// AeCS theme file using SEMANTIC ROLES rather than widget kinds.
+//
+// Compare with examples/themes_demo/theme/purple.aecs, which names widgets:
+// this file names MEANINGS, and the widget rules are generated from them. The
+// two styles mix freely in one file -- role lines generate rules as they are
+// read, so an ordinary rule LATER in the file still wins, which is the same
+// layering scheme_into gives in code.
+role.surface     = #ECF6F4
+role.on_surface  = #10312C
+role.primary     = #0F6B5C
+role.on_primary  = #FFFFFF
+role.error       = #A3231B
+role.on_error    = #FFFFFF
+role.accent      = #7A4E12
+role.outline     = #B6CFC9
+
+// An ordinary rule layered over the generated ones: roles decided the palette,
+// this decides one detail they do not model.
+header.text.weight = bold

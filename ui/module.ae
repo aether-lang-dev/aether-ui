@@ -43,6 +43,8 @@ exports (
     st_radius, st_font_family, st_opacity, st_gradient, st_insets, st_border,
     st_hover, st_active,
     apply_styles, style_id, styles_for_mode,
+    color_scheme, role, role_of, scheme_sheet, scheme_into,
+    scheme_for_mode, use_scheme_pair,
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     load_styles,
     ui_states, add_state, set_state, current_state,
@@ -1734,6 +1736,162 @@ styles_for_mode(light: ptr, dark: ptr) -> ptr {
     return light
 }
 
+// ── Semantic colour roles ───────────────────────────────────────────
+// Name colours by MEANING rather than by widget kind, so a theme is a small
+// table of decisions instead of a long list of per-kind rules. The Flutter
+// ColorScheme idea (also Material 3 tokens, iOS semantic colours): you say
+// "this is the primary action" once, and light mode, dark mode and every
+// widget that participates follow from it.
+//
+//   sc = color_scheme()
+//   role(sc, "primary", 0x5C458A)
+//   role(sc, "on_primary", 0xFFFFFF)
+//   sheet = scheme_sheet(sc)          // an ORDINARY AeCS sheet
+//   use_styles(sheet)
+//
+// DESIGN: roles are a GENERATOR, not a parallel colour system. scheme_sheet()
+// emits plain st_bg/st_color rules into a normal sheet, so everything already
+// built keeps working untouched -- the class.kind -> class -> kind ->
+// container -> root cascade, styles_for_mode, ui_states, load_styles, and the
+// driver's fg/bg readback. A caller can st_* over the top of a generated sheet
+// to override one widget without leaving the roles system, because there is
+// no separate system to leave. That is also why this needs no backend change:
+// by the time anything reaches a backend it is an ordinary colour.
+//
+// The eight roles are Flutter's core set, minus the ones that need surfaces we
+// do not model (inverse*, *Container beyond one level):
+//   primary / on_primary      the main action and what sits legibly on it
+//   surface / on_surface      ordinary background and its text
+//   error   / on_error        destructive or invalid
+//   accent  / outline         secondary emphasis; borders and dividers
+// "on_X" is the contrast partner of X and is always used as the FOREGROUND
+// wherever X is the background -- that pairing is the whole point, and is what
+// makes a mode flip safe.
+struct RoleEntry { name: string, hex: int, has: int }
+struct ColorScheme { roles: ptr }
+
+color_scheme() -> ptr {
+    sc = malloc(8) as *ColorScheme
+    sc.roles = list.new()
+    return sc as ptr
+}
+
+_role_find(scp: ptr, name: string) -> ptr {
+    sc = scp as *ColorScheme
+    n = list.size(sc.roles)
+    i = 0
+    while i < n {
+        it, _e = list.get(sc.roles, i)
+        r = it as *RoleEntry
+        if string.equals(r.name, name) == 1 { return it }
+        i = i + 1
+    }
+    return null
+}
+
+// role(sc, name, 0xRRGGBB) — set one role. Unknown names are ACCEPTED: an app
+// may carry its own ("brand", "warning") and read them back with role_of to
+// paint bespoke chrome. Only the eight known names generate rules.
+role(scp: ptr, name: string, hex: int) {
+    found = _role_find(scp, name)
+    if found != null {
+        e = found as *RoleEntry
+        e.hex = hex
+        e.has = 1
+        return
+    }
+    sc = scp as *ColorScheme
+    r = malloc(24) as *RoleEntry
+    r.name = name
+    r.hex = hex
+    r.has = 1
+    _ = list.add(sc.roles, r as ptr)
+}
+
+// role_of(sc, name) — the colour, or -1 when unset. -1 rather than 0 because
+// 0x000000 is a legitimate colour; a caller testing "did the theme define
+// this?" must not be fooled by black.
+role_of(scp: ptr, name: string) -> int {
+    found = _role_find(scp, name)
+    if found == null { return 0 - 1 }
+    e = found as *RoleEntry
+    if e.has == 0 { return 0 - 1 }
+    return e.hex
+}
+
+// scheme_sheet(sc) — generate an ordinary AeCS sheet from the roles.
+//
+// The MAPPING is the opinionated part, and is deliberately small:
+//   surface/on_surface -> root + container   the default backdrop and text
+//   primary/on_primary -> button             the main action
+//   error/on_error     -> ".danger" class    opt-in, so a destructive button
+//                                            is add_css_class(b, "danger")
+//   accent             -> ".accent" class    secondary emphasis (text colour)
+//   outline            -> divider + 1px border on textfield
+// Roles left unset emit NOTHING, so a partial scheme is legal and layers over
+// whatever is already there rather than blanking it.
+scheme_sheet(scp: ptr) -> ptr {
+    sp = create_styles()
+    _scheme_into(scp, sp)
+    return sp
+}
+
+// scheme_into(sc, sheet) — same generation, into a sheet the caller owns.
+// For layering roles UNDER hand-written rules: generate first, then st_* over
+// the top (later setters win, since each writes its own rule fields).
+scheme_into(scp: ptr, sp: ptr) {
+    _scheme_into(scp, sp)
+}
+
+_scheme_into(scp: ptr, sp: ptr) {
+    surface = role_of(scp, "surface")
+    on_surface = role_of(scp, "on_surface")
+    primary = role_of(scp, "primary")
+    on_primary = role_of(scp, "on_primary")
+    err = role_of(scp, "error")
+    on_error = role_of(scp, "on_error")
+    accent = role_of(scp, "accent")
+    outline = role_of(scp, "outline")
+
+    if surface >= 0 {
+        st_bg(sp, "root", surface)
+        st_bg(sp, "container", surface)
+    }
+    if on_surface >= 0 { st_color(sp, "root", on_surface) }
+
+    // A button carries the primary pair TOGETHER: setting one without the
+    // other is how themes end up with unreadable text (dark-on-dark after a
+    // mode flip), so each half only lands when it is actually specified.
+    if primary >= 0 { st_bg(sp, "button", primary) }
+    if on_primary >= 0 { st_color(sp, "button", on_primary) }
+
+    if err >= 0 { st_bg(sp, "danger.button", err) }
+    if on_error >= 0 { st_color(sp, "danger.button", on_error) }
+    if err >= 0 { st_color(sp, "danger.text", err) }
+
+    if accent >= 0 { st_color(sp, "accent", accent) }
+
+    if outline >= 0 {
+        st_bg(sp, "divider", outline)
+        st_border(sp, "textfield", 1.0, outline)
+    }
+}
+
+// scheme_for_mode(light, dark) — the roles-level twin of styles_for_mode:
+// picks the scheme matching the OS appearance. Pairs with use_styles_pair via
+// scheme_sheet on each side.
+scheme_for_mode(light: ptr, dark: ptr) -> ptr {
+    if is_dark_mode() == 1 { return dark }
+    return light
+}
+
+// use_scheme_pair(light, dark) — the whole semantic-colour story in one call:
+// generate both sheets and hand them to the existing pair machinery, so an OS
+// mode flip re-themes through exactly the same path a hand-written pair does.
+use_scheme_pair(light: ptr, dark: ptr) {
+    use_styles_pair(scheme_sheet(light), scheme_sheet(dark))
+}
+
 // True when `h` is `target` or sits under it (parent-chain walk).
 _style_is_under(h: int, target: int) -> int {
     p = h
@@ -1809,6 +1967,8 @@ use_styles_pair(light: ptr, dark: ptr) {
 //   #status.color    = #224488        the LAST dot splits off the property)
 //   root.family      = monospace
 //   hint.text.opacity = 0.6
+//   role.primary     = #5C458A        (semantic roles; see color_scheme)
+//   role.on_primary  = #FFFFFF
 // Props: color bg size weight radius family opacity. Unknown lines are
 // skipped (forward compatibility). Returns a sheet, or null on read error.
 _hex6(s: string) -> int {
@@ -1828,6 +1988,18 @@ _style_line(sp: ptr, line: string) {
     if eq < 1 { return }
     lhs = string.trim(string.string_substring(l, 0, eq))
     rhs = string.trim(string.string_substring(l, eq + 1, string.length(l)))
+    // A "role.<name> = #RRGGBB" line names a colour by MEANING, and generates
+    // the same rules scheme_sheet would. Roles are applied per line rather
+    // than collected first, so a file may mix roles with ordinary rules and
+    // the ordinary ones still win when they come later -- the same layering
+    // scheme_into gives in code.
+    if string.string_index_of(lhs, "role.") == 0 {
+        rname = string.string_substring(lhs, 5, string.length(lhs))
+        one = color_scheme()
+        role(one, rname, _hex6(rhs))
+        _scheme_into(one, sp)
+        return
+    }
     // The LAST dot splits selector from property (selectors carry dots).
     dot = 0 - 1
     i = 0

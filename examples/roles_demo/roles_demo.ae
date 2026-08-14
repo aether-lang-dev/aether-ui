@@ -1,0 +1,95 @@
+// Aether UI semantic colour ROLES example — the Flutter ColorScheme idea on
+// AeCS (see docs/design/styling.md).
+//
+// The point: a theme is a table of MEANINGS, not a list of widget kinds. You
+// say "primary is this purple, and white sits on it" once; every button, the
+// backdrop, the danger action and the dividers follow. A dark theme is the
+// same eight decisions with different values -- not a second stylesheet to
+// keep in sync.
+//
+// Roles GENERATE an ordinary AeCS sheet (scheme_sheet), so nothing else in the
+// system had to change: the cascade, ui_states, load_styles and the driver's
+// fg/bg readback all work on the result exactly as they do on a hand-written
+// sheet. That is also why there is no backend change -- by the time a colour
+// reaches the platform it is just a colour.
+//
+// The driver proves it from the BACKEND: /widgets entries carry "fg"/"bg",
+// the last colours the platform was actually given.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+import ui
+import ui (window, vstack, hstack, text, btn, textfield, divider,
+    add_css_class, color_scheme, role, scheme_sheet, use_styles,
+    load_styles, enable_test_server)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+// The two themes, as eight decisions each. Compare this with writing out
+// button.bg / button.color / root.bg / root.color / divider.bg / ... twice.
+_light() -> ptr {
+    sc = color_scheme()
+    role(sc, "surface", 0xF4F2F8)
+    role(sc, "on_surface", 0x1A1626)
+    role(sc, "primary", 0x5C458A)
+    role(sc, "on_primary", 0xFFFFFF)
+    role(sc, "error", 0xB3261E)
+    role(sc, "on_error", 0xFFFFFF)
+    role(sc, "accent", 0x1F6F4A)
+    role(sc, "outline", 0xC7C1D4)
+    return sc
+}
+
+_dark() -> ptr {
+    sc = color_scheme()
+    role(sc, "surface", 0x1A1626)
+    role(sc, "on_surface", 0xE8E4F0)
+    role(sc, "primary", 0xB9A3E3)
+    role(sc, "on_primary", 0x241C36)
+    role(sc, "error", 0xF2B8B5)
+    role(sc, "on_error", 0x3B0907)
+    role(sc, "accent", 0x7ADBA8)
+    role(sc, "outline", 0x4A4359)
+    return sc
+}
+
+main() {
+    status = 0
+    window("roles demo", 460, 300) {
+        vstack(10) {
+            status = text("theme: none")
+            divider()
+            text("Semantic colour roles")
+            hint = text("secondary emphasis")
+            add_css_class(hint, "accent")
+            _f = textfield("outline shows as a border") callback |val: string| { }
+            hstack(8) {
+                _save = btn("Save") callback { }
+                del = btn("Delete") callback { }
+                add_css_class(del, "danger")   // opts into the error role
+            }
+            divider()
+            hstack(8) {
+                _l = btn("Light") callback {
+                    use_styles(scheme_sheet(_light()))
+                    aether_ui_text_set_string(status, "theme: light")
+                }
+                _d = btn("Dark") callback {
+                    use_styles(scheme_sheet(_dark()))
+                    aether_ui_text_set_string(status, "theme: dark")
+                }
+                // Roles from a FILE: same eight decisions, written as
+                // "role.<name> = #RRGGBB" lines (see theme/teal.aecs).
+                _t = btn("Teal (file)") callback {
+                    fsheet = load_styles("examples/roles_demo/theme/teal.aecs")
+                    if fsheet != null {
+                        use_styles(fsheet)
+                        aether_ui_text_set_string(status, "theme: teal")
+                    }
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+    return 0
+}

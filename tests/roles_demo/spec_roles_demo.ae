@@ -1,0 +1,126 @@
+// spec_roles_demo.ae — semantic colour ROLES over the AetherUIDriver.
+//
+// Roles name colours by MEANING (Flutter's ColorScheme idea) and GENERATE an
+// ordinary AeCS sheet. So the thing worth proving is not "a colour was set" --
+// AeCS already had that -- but that the MAPPING from meaning to widget holds,
+// and that it holds at the BACKEND: "fg"/"bg" in the widget JSON are the last
+// colours the platform was actually given, not the DSL model.
+//
+// What each assertion pins:
+//   * primary/on_primary land on a button as a PAIR (the pairing is the whole
+//     point: setting a background without its contrast partner is how themes
+//     produce unreadable text);
+//   * error reaches only the widget that OPTED IN via class "danger", so an
+//     ordinary button beside it keeps primary -- one role, two outcomes,
+//     driven by the cascade rather than by the roles code;
+//   * surface/on_surface reach a plain text widget through the ROOT rule,
+//     which is the cascade doing the work;
+//   * accent reaches a class-scoped widget;
+//   * a second scheme RE-THEMES the live tree, and every role moves together.
+//
+// Run via ci.sh / spec_matrix, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/roles_demo/bin/roles_demo &
+//   UI_SPEC=roles_demo/spec_roles_demo tests/run_spec.sh
+import aeocha
+import uidriver
+import std.string
+
+main() {
+    fw = aeocha.init()
+    uidriver.wait_server()
+
+    aeocha.describe(fw, "semantic colour roles over AetherUIDriver") {
+        aeocha.it("starts with no explicit colours") callback {
+            h = uidriver.widget_id_by_text("Save")
+            aeocha.assert_gt(h, 0, "Save button found")
+            b = uidriver.get_body("/widget/${h}")
+            styled = string.contains(b, "\"bg\":")
+            aeocha.assert_eq(styled, 0, "no role colours applied yet")
+        }
+
+        aeocha.it("light: primary and on_primary land on a button TOGETHER") callback {
+            t = uidriver.widget_id_by_text("Light")
+            uidriver.post_ok("/widget/${t}/click", "apply light scheme")
+            ok = uidriver.wait_body_contains("/widgets", "theme: light", 20)
+            aeocha.assert_true(ok, "status flipped")
+            s = uidriver.widget_id_by_text("Save")
+            b = uidriver.get_body("/widget/${s}")
+            aeocha.assert_contains(b, "\"bg\":\"#5c458a\"", "button carries primary")
+            aeocha.assert_contains(b, "\"fg\":\"#ffffff\"", "button carries on_primary")
+        }
+
+        aeocha.it("light: error reaches ONLY the widget that opted in") callback {
+            d = uidriver.widget_id_by_text("Delete")
+            bd = uidriver.get_body("/widget/${d}")
+            aeocha.assert_contains(bd, "\"bg\":\"#b3261e\"",
+                "danger-classed button carries error")
+            aeocha.assert_contains(bd, "\"fg\":\"#ffffff\"",
+                "danger-classed button carries on_error")
+            // The neighbouring button is the control: same kind, no class, so
+            // it must still read primary. If error leaked to "button" this is
+            // where it shows.
+            s = uidriver.widget_id_by_text("Save")
+            bs = uidriver.get_body("/widget/${s}")
+            aeocha.assert_contains(bs, "\"bg\":\"#5c458a\"",
+                "the unclassed button beside it kept primary")
+        }
+
+        aeocha.it("light: surface/on_surface reach plain text via the root rule") callback {
+            h = uidriver.widget_id_by_text("Semantic colour roles")
+            b = uidriver.get_body("/widget/${h}")
+            aeocha.assert_contains(b, "\"fg\":\"#1a1626\"", "text carries on_surface")
+            aeocha.assert_contains(b, "\"bg\":\"#f4f2f8\"", "text carries surface")
+        }
+
+        aeocha.it("light: accent reaches its class-scoped widget") callback {
+            h = uidriver.widget_id_by_text("secondary emphasis")
+            b = uidriver.get_body("/widget/${h}")
+            aeocha.assert_contains(b, "\"fg\":\"#1f6f4a\"", "accent-classed text carries accent")
+        }
+
+        aeocha.it("dark: a second scheme re-themes every role at once") callback {
+            t = uidriver.widget_id_by_text("Dark")
+            uidriver.post_ok("/widget/${t}/click", "apply dark scheme")
+            ok = uidriver.wait_body_contains("/widgets", "theme: dark", 20)
+            aeocha.assert_true(ok, "status flipped")
+
+            s = uidriver.widget_id_by_text("Save")
+            bs = uidriver.get_body("/widget/${s}")
+            aeocha.assert_contains(bs, "\"bg\":\"#b9a3e3\"", "primary moved")
+            aeocha.assert_contains(bs, "\"fg\":\"#241c36\"", "on_primary moved WITH it")
+
+            d = uidriver.widget_id_by_text("Delete")
+            bd = uidriver.get_body("/widget/${d}")
+            aeocha.assert_contains(bd, "\"bg\":\"#f2b8b5\"", "error moved")
+
+            h = uidriver.widget_id_by_text("Semantic colour roles")
+            bh = uidriver.get_body("/widget/${h}")
+            aeocha.assert_contains(bh, "\"fg\":\"#e8e4f0\"", "on_surface moved")
+        }
+        // Roles are not code-only: "role.<name> = #RRGGBB" lines in a
+        // load_styles file generate the same rules. Worth its own assertion
+        // because it is a SECOND parse path to the same generator, and a
+        // silently-skipped line would look like a theme that simply did
+        // nothing (unknown lines are ignored for forward compatibility).
+        aeocha.it("roles load from a theme FILE too") callback {
+            t = uidriver.widget_id_by_text("Teal (file)")
+            uidriver.post_ok("/widget/${t}/click", "apply teal scheme from file")
+            ok = uidriver.wait_body_contains("/widgets", "theme: teal", 20)
+            aeocha.assert_true(ok, "status flipped")
+
+            s = uidriver.widget_id_by_text("Save")
+            bs = uidriver.get_body("/widget/${s}")
+            aeocha.assert_contains(bs, "\"bg\":\"#0f6b5c\"", "file's primary applied")
+            aeocha.assert_contains(bs, "\"fg\":\"#ffffff\"", "file's on_primary applied")
+
+            d = uidriver.widget_id_by_text("Delete")
+            bd = uidriver.get_body("/widget/${d}")
+            aeocha.assert_contains(bd, "\"bg\":\"#a3231b\"", "file's error applied")
+
+            h = uidriver.widget_id_by_text("Semantic colour roles")
+            bh = uidriver.get_body("/widget/${h}")
+            aeocha.assert_contains(bh, "\"bg\":\"#ecf6f4\"", "file's surface applied")
+        }
+    }
+    aeocha.run_summary(fw)
+}
