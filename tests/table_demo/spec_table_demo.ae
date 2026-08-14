@@ -54,6 +54,50 @@ main() {
             aeocha.assert_true(before("alice", "carol"), "alice before carol (30)")
         }
 
+        // ── the built-in sorter (TableRowSorter) ───────────────────────
+        // The LOWER table owns its ordering. Its rows are zoe/yan/xu/wu --
+        // deliberately distinct from the upper table's names, so `before`
+        // reads unambiguously even though both tables share one /widgets
+        // listing and re-rendering moves a table's cells to the end of it.
+        aeocha.it("sorter: first click on a column sorts ascending") callback {
+            h = uidriver.widget_id_by_text("SSize")
+            uidriver.post_ok("/widget/${h}/click", "sort by size")
+            ok = uidriver.wait_body_contains("/widgets", "sorted: col 1 asc", 20)
+            aeocha.assert_true(ok, "sorter reports col 1 ascending")
+            aeocha.assert_true(before("zoe", "yan"), "zoe (30) first")
+            aeocha.assert_true(before("yan", "xu"), "yan (90) then xu (95)")
+        }
+
+        // THE POINT OF THE NUMERIC BRANCH: as strings "100" sorts BEFORE
+        // "95", so a naive cell-text sort puts wu second. Numerically
+        // 95 < 100 and wu is last. This is what fails if the sorter ever
+        // loses its number detection.
+        aeocha.it("sorter: numeric columns sort numerically, not as text") callback {
+            aeocha.assert_true(before("xu", "wu"),
+                "xu (95) before wu (100) -- a string sort would invert this")
+            aeocha.assert_true(before("yan", "wu"), "yan (90) before wu (100)")
+        }
+
+        aeocha.it("sorter: clicking the same column toggles direction") callback {
+            h = uidriver.widget_id_by_text("SSize")
+            uidriver.post_ok("/widget/${h}/click", "toggle to descending")
+            ok = uidriver.wait_body_contains("/widgets", "sorted: col 1 desc", 20)
+            aeocha.assert_true(ok, "sorter reports col 1 descending")
+            aeocha.assert_true(before("wu", "xu"), "wu (100) first now")
+            aeocha.assert_true(before("yan", "zoe"), "zoe (30) last")
+        }
+
+        // Switching columns restarts ascending rather than inheriting the
+        // previous direction -- Swing's behaviour, and what a user expects.
+        aeocha.it("sorter: switching columns restarts ascending") callback {
+            h = uidriver.widget_id_by_text("SName")
+            uidriver.post_ok("/widget/${h}/click", "sort by name")
+            ok = uidriver.wait_body_contains("/widgets", "sorted: col 0 asc", 20)
+            aeocha.assert_true(ok, "col 0 ascending, not inheriting desc")
+            aeocha.assert_true(before("wu", "xu"), "wu before xu alphabetically")
+            aeocha.assert_true(before("yan", "zoe"), "yan before zoe")
+        }
+
         aeocha.it("row selection delegates to the listbox layer") callback {
             lbl = uidriver.widget_id_by_text("alice")
             r = uidriver.widget_int_field_by_id(lbl, "parent")

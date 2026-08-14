@@ -9,7 +9,8 @@
 import ui
 import ui (window, vstack, hstack, text, btn, divider,
     table_cols, table_col, table, table_update, table_selected, table_count,
-    table_on_select, on_sort, enable_test_server)
+    table_on_select, on_sort, table_sorter, table_sort_by, table_sort_col,
+    table_sort_dir, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -26,6 +27,10 @@ mk_p(name: string, kb: int) -> ptr {
     return p as ptr
 }
 
+// The HAND-ROLLED sort, kept as the lower table's implementation so the
+// contrast with the built-in sorter above it is visible in one file: 24 lines
+// here, one table_sorter() call there, and this version cannot even toggle
+// direction (col 0 is always ascending, col 1 always descending).
 // Insertion sort of the ptr list by column c (0 = name asc, 1 = kb desc).
 sort_by(items: ptr, c: int) {
     n = list.size(items)
@@ -58,7 +63,19 @@ main() {
     _ = list.add(items, mk_p("alice", 90))
     _ = list.add(items, mk_p("bob", 95))
 
-    window("table demo", 520, 420) {
+    // DISTINCT names from the upper table on purpose: both tables render
+    // into one /widgets listing, so shared names would make every ordering
+    // assertion ambiguous about which table it was reading. zoe//yan/xu/wu
+    // also make the sort visibly non-alphabetical to start with.
+    // wu=100 against xu=95 is the pair that separates a numeric sort from a
+    // text one ("100" sorts BEFORE "95" as a string).
+    sitems = list.new()
+    _ = list.add(sitems, mk_p("zoe", 30))
+    _ = list.add(sitems, mk_p("yan", 90))
+    _ = list.add(sitems, mk_p("xu", 95))
+    _ = list.add(sitems, mk_p("wu", 100))
+
+    window("table demo", 520, 620) {
         vstack(8) {
             status = text("status: idle")
             divider()
@@ -82,6 +99,32 @@ main() {
                     string.concat("sorted by col ", string.from_int(c)))
             }
             table_update(t, items)
+
+            divider()
+            text("Built-in sorter (TableRowSorter): click headers to toggle")
+            sstatus = text("sorted: none")
+
+            // The SAME columns and cell template, but the table owns the
+            // ordering: table_sorter arms it over the list, and header clicks
+            // sort + toggle without the app comparing anything. Numeric
+            // columns sort numerically -- 30 < 95 < 100 rather than "100"
+            // before "95" -- because the sorter parses the cell text.
+            scols = table_cols()
+            table_col(scols, "SName", 220)
+            table_col(scols, "SSize", 90)
+            st = table(scols) callback |item: ptr, c: int| {
+                p = item as *Person
+                if c == 1 { return string.from_int(p.kb) }
+                return p.name
+            }
+            table_sorter(st, sitems)
+            on_sort(st) callback |c: int| {
+                d = "asc"
+                if table_sort_dir(st) < 0 { d = "desc" }
+                aether_ui_text_set_string(sstatus,
+                    "sorted: col ${table_sort_col(st)} ${d}")
+            }
+            table_update(st, sitems)
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

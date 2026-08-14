@@ -489,7 +489,36 @@ sharpest one is a control: `error` must reach ONLY the button that opted
 in via class `danger`, while the unclassed button beside it keeps
 primary — that is the cascade doing the work, not the roles code.
 
-Still Tier 2: Swing TableRowSorter (built-in table sort/filter); QML
+**Swing TableRowSorter — DONE 2026-08-14 (sort; filter not done).**
+`table_sorter(t, items)` arms it and header clicks sort, toggling
+direction on a repeat click and restarting ascending when the column
+changes (Swing's behaviour, and what a user expects). Plus
+`table_sort_by` to sort programmatically, `table_sort_col`/
+`table_sort_dir` to read the state, and `table_sorter_cmp` for an
+app-supplied comparator when the default will not do (dates, secondary
+keys, locale collation).
+
+What made it small: the table already had a `cell()` callback returning
+each cell's TEXT, so the sorter sorts on those strings and a table that
+renders correctly sorts correctly with no extra work from the app. The
+one wrinkle worth its own assertion is that a pure text sort puts "100"
+before "95"; `_table_cmp` detects two numeric strings and compares them
+as numbers. The spec pins that with dave(100) against bob(95) — the pair
+whose order inverts if the numeric branch is ever lost.
+
+`examples/table_demo` keeps its hand-rolled insertion sort in the upper
+table and gains a sorter-driven one below, so the contrast is visible in
+one file: 24 lines that cannot toggle direction, against one
+`table_sorter()` call. `on_sort` still fires after the built-in sort, so
+an app can react without implementing the ordering.
+
+**Filtering is NOT done** — `RowFilter` is the other half of Swing's
+class and wants its own design pass (does a filtered view change
+`table_count`? what does `table_select` index into?). Sorting re-orders
+the app's list in place, so those questions do not arise; filtering
+would introduce a view/model split that sorting deliberately avoids.
+
+Still Tier 2: QML
 SpringAnimation easing for transitions (the discriminating curve test
 now exists — see tests/transitions_demo/test_easing_curve.sh).
 

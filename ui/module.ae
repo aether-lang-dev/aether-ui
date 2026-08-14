@@ -70,6 +70,8 @@ exports (
     on_select, add_css_class, remove_css_class,
     table_cols, table_col, table_col_delegate, table, table_update,
     table_select, table_selected, table_count, table_on_select, table_bind,
+    table_sorter, table_sorter_cmp, table_sort_by, table_sort_col,
+    table_sort_dir,
     on_sort,
     tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
     tree_visible_count,
@@ -2834,10 +2836,23 @@ remove_css_class(handle: int, cls: string) {
 //   }
 //   on_sort(t) callback |c: int| { …sort my list…; table_update(t, my_list) }
 //   table_update(t, my_list)
+//
+// Or let the TABLE sort (Swing's TableRowSorter — see table_sorter below):
+//
+//   table_sorter(t, my_list)     // header clicks now sort + toggle direction
+//
+// with on_sort left for reacting rather than implementing.
 // ---------------------------------------------------------------------------
 
 struct TableCol { title: string, w: int, delegate: ptr }
-struct TableDef { cols: ptr, lb: ptr, cell: ptr, sort_cb: ptr }
+// sorter: the built-in TableRowSorter (0 = off, app owns sorting via on_sort).
+// sort_col/sort_dir are the CURRENT sort (dir 1 asc, -1 desc, 0 unsorted);
+// items is the list the sorter re-orders in place; cmp is an optional
+// app-supplied comparator.
+struct TableDef {
+    cols: ptr, lb: ptr, cell: ptr, sort_cb: ptr,
+    sorter: int, sort_col: int, sort_dir: int, items: ptr, cmp: ptr
+}
 
 table_cols() -> ptr { return list.new() }
 
@@ -2874,10 +2889,15 @@ _table_invoke_sort(cb: fn, c: int) {
 
 // table(cols, cell) -> table-handle. cell = |item, c| -> string.
 table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
-    t = malloc(32) as *TableDef
+    t = malloc(72) as *TableDef
     t.cols = cols
     t.cell = box_closure(cell)
     t.sort_cb = null
+    t.sorter = 0
+    t.sort_col = 0 - 1
+    t.sort_dir = 0
+    t.items = null
+    t.cmp = null
     tp = t as ptr
     // ONE widget into the parent: header + body wrapped in a vstack (a
     // scrollview parent takes a single child; two attachments would clobber).
@@ -2921,6 +2941,10 @@ table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
 
 _table_header_clicked(tp: ptr, c: int) {
     t = tp as *TableDef
+    // The built-in sorter takes the click when armed; on_sort still fires
+    // AFTER it, so an app can react (update a status line) without having to
+    // implement the ordering itself. Both may be active at once.
+    if t.sorter == 1 { _table_sort_click(tp, c) }
     if t.sort_cb != null {
         cb = unbox_closure(t.sort_cb)
         _table_invoke_sort(cb, c)
@@ -2928,9 +2952,150 @@ _table_header_clicked(tp: ptr, c: int) {
 }
 
 // on_sort(t) callback |c: int| { … } — header click; the app sorts + updates.
+// With table_sorter armed the app does NOT have to sort: the callback becomes
+// a notification (which column, now in which direction — read table_sort_dir).
 on_sort(tp: ptr, cb: fn) {
     t = tp as *TableDef
     t.sort_cb = box_closure(cb)
+}
+
+// ── TableRowSorter: sorting the table owns ──────────────────────────────
+// Swing's TableRowSorter move — click a header and the TABLE re-orders,
+// instead of every app hand-rolling an insertion sort (examples/table_demo
+// carried 24 lines of one, with the direction hardcoded per column and no
+// way to toggle).
+//
+//   table_sorter(t, items)                  // arm it; clicks now sort
+//   table_sort_by(t, 1, -1)                 // or sort programmatically
+//   table_sort_col(t) / table_sort_dir(t)   // what is sorted, which way
+//
+// WHAT IT COMPARES, and why that needs no work from the app: the table
+// already has a cell() callback returning each cell's TEXT. The sorter sorts
+// on those strings, so a table that renders correctly sorts correctly for
+// free. Numeric columns still order properly because _table_cmp detects two
+// numeric strings and compares them as numbers -- otherwise "95" would sort
+// before "100", which is the classic string-sort bug and exactly what the
+// spec pins.
+//
+// An app that needs different semantics (dates, a secondary key, locale
+// collation) passes its own comparator to table_sorter_cmp and the built-in
+// comparison steps aside entirely.
+//
+// The sorter re-orders the list IN PLACE and calls table_update, so it stays
+// compatible with table_bind and with an app that keeps its own reference --
+// there is no second copy of the data to drift.
+
+// Compare two cell strings. Numeric when BOTH parse as numbers (so a column
+// of sizes sorts 30 < 95 < 100), lexicographic otherwise.
+_table_cmp(a: string, b: string) -> int {
+    // to_int returns (value, error_string) -- an EMPTY error means it parsed.
+    an, aerr = string.to_int(string.trim(a))
+    bn, berr = string.to_int(string.trim(b))
+    if string.length(aerr) == 0 && string.length(berr) == 0 {
+        if an < bn { return 0 - 1 }
+        if an > bn { return 1 }
+        return 0
+    }
+    return string.string_compare(a, b)
+}
+
+_table_invoke_cmp(cb: fn, x: ptr, y: ptr, c: int) -> int {
+    return cb(x, y, c)
+}
+
+// One comparison under the current sort: app comparator when given, else the
+// cell text through _table_cmp. Direction is applied by the caller.
+_table_cmp_items(t: *TableDef, ap: ptr, bp: ptr, c: int) -> int {
+    if t.cmp != null {
+        cf = unbox_closure(t.cmp)
+        return _table_invoke_cmp(cf, ap, bp, c)
+    }
+    cellf = unbox_closure(t.cell)
+    sa = _table_invoke_cell(cellf, ap, c)
+    sb = _table_invoke_cell(cellf, bp, c)
+    return _table_cmp(sa, sb)
+}
+
+// Insertion sort: stable, and these lists are UI-sized (a table with enough
+// rows to care about O(n^2) wants vlist and a different design anyway).
+// Stability is the property that matters -- sorting by one column then
+// another leaves the first as a secondary key, which is what Swing does.
+_table_do_sort(tp: ptr) {
+    t = tp as *TableDef
+    if t.items == null { return }
+    if t.sort_dir == 0 { return }
+    c = t.sort_col
+    n = list.size(t.items)
+    i = 1
+    while i < n {
+        j = i
+        while j > 0 {
+            ap, _a = list.get(t.items, j - 1)
+            bp, _b = list.get(t.items, j)
+            r = _table_cmp_items(t, ap, bp, c) * t.sort_dir
+            if r > 0 {
+                list.set(t.items, j - 1, bp)
+                list.set(t.items, j, ap)
+                j = j - 1
+            } else {
+                j = 0
+            }
+        }
+        i = i + 1
+    }
+    table_update(tp, t.items)
+}
+
+// Header click under the sorter: first click on a column sorts ascending,
+// clicking the SAME column again flips direction (Swing's toggle). Switching
+// columns always starts ascending rather than inheriting the previous
+// direction, which is what users expect and what Swing does.
+_table_sort_click(tp: ptr, c: int) {
+    t = tp as *TableDef
+    if t.sort_col == c {
+        t.sort_dir = 0 - t.sort_dir
+        if t.sort_dir == 0 { t.sort_dir = 1 }
+    } else {
+        t.sort_col = c
+        t.sort_dir = 1
+    }
+    _table_do_sort(tp)
+}
+
+// table_sorter(t, items) — arm the built-in sorter over `items`. The list is
+// re-ordered in place on every sort.
+table_sorter(tp: ptr, items: ptr) {
+    t = tp as *TableDef
+    t.sorter = 1
+    t.items = items
+}
+
+// table_sorter_cmp(t, cb) — supply a comparator, cb(|a: ptr, b: ptr, c: int|)
+// returning <0 / 0 / >0, replacing the cell-text comparison. Use for dates,
+// secondary keys, or locale collation.
+table_sorter_cmp(tp: ptr, cb: fn) {
+    t = tp as *TableDef
+    t.cmp = box_closure(cb)
+}
+
+// table_sort_by(t, col, dir) — sort programmatically (dir 1 asc, -1 desc).
+// Same path as a header click, so the reported state matches either way.
+table_sort_by(tp: ptr, col: int, dir: int) {
+    t = tp as *TableDef
+    t.sort_col = col
+    t.sort_dir = dir
+    _table_do_sort(tp)
+}
+
+// Which column is sorted (-1 = none) and which way (1 asc, -1 desc, 0 none).
+table_sort_col(tp: ptr) -> int {
+    t = tp as *TableDef
+    return t.sort_col
+}
+
+table_sort_dir(tp: ptr) -> int {
+    t = tp as *TableDef
+    return t.sort_dir
 }
 
 table_update(tp: ptr, items: ptr) {
