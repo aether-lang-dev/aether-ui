@@ -1,0 +1,9 @@
+# Golden signatures are DATA, not text: the parser reads cells at computed byte
+# offsets, so a stray "\r" per line shifts every offset past row 0 and the file
+# reads as garbage. That is what "prims MALFORMED" on winbaz was (2026-08-14):
+# the box has core.autocrlf=true, so `git checkout` expanded the 2717-byte
+# golden to 2734 on disk. The three older goldens predated it and survived.
+#
+# The reader now tolerates either terminator, but pin these to LF so the
+# checkout matches the repo and a Windows working copy does not diverge.
+tests/goldens/**/*.sig -text eol=lf

@@ -108,10 +108,27 @@ signature(cid: int) -> string {
 
 // Parse one hex cell out of a signature body at cell index i (grid order).
 // Signatures are fixed-format, so cells sit at computable offsets.
-sig_cell(sig: string, header_len: int, i: int) -> int {
+//
+// `eol` is the bytes each row's terminator occupies: 1 for LF, 2 for CRLF.
+// It is a PARAMETER rather than a constant because GIT hands this file over
+// with either one. winbaz has core.autocrlf=true, so `git checkout` wrote the
+// working copy as CRLF -- 2717 bytes in the repo becoming 2734 on disk. (Not
+// the writer: blessing on Windows produces LF, verified.) With a hardcoded
+// stride every offset past row 0 drifts by a byte per row and the file reads
+// as garbage. That is what "prims MALFORMED" on winbaz was.
+//
+// Reading it correctly did NOT make win32 green, and that is the point of
+// fixing it: underneath the corruption all four win32 goldens are simply
+// STALE -- 11 of 16 rows differ on stroke, real scene colours in shifted
+// positions, i.e. rendering that legitimately moved since 2026-08-01. The
+// CRLF bug had been hiding that behind an unreadable file. .gitattributes
+// pins *.sig to LF so the checkout stays canonical.
+sig_cell(sig: string, header_len: int, i: int, eol: int) -> int {
     row = i / GG_GRID_X
     col = i % GG_GRID_X
-    line_len = GG_GRID_X * 7   // 6 hex + separator (space or newline)
+    // 6 hex + a separator per cell, but the LAST separator on a row is the
+    // line terminator, which may be 2 bytes.
+    line_len = GG_GRID_X * 7 + (eol - 1)
     at = header_len + row * line_len + col * 7
     v = 0
     k = 0
@@ -132,22 +149,42 @@ sig_header_len(sig: string) -> int {
     return at + 1
 }
 
+// Bytes this signature uses per line terminator: 2 for CRLF, 1 for LF. See
+// sig_cell for why a golden may legitimately be either.
+sig_eol(sig: string) -> int {
+    at = string.string_index_of_from(sig, "\n", 0)
+    if at < 1 { return 1 }
+    if string_char_at(sig, at - 1) == 13 { return 2 }
+    return 1
+}
+
+// The header without its line terminator, so a CRLF golden and an LF one
+// compare equal on version/dimensions/grid -- the thing the header is FOR.
+sig_header_text(sig: string, hl: int, eol: int) -> string {
+    return string_substring(sig, 0, hl - eol)
+}
+
 // Compare live vs golden: number of cells whose max channel delta exceeds
 // the tolerance; -1 if the golden is unreadable/malformed.
 compare(live: string, golden: string) -> int {
     if string.length(golden) < 32 { return 0 - 1 }
     hl_l = sig_header_len(live)
     hl_g = sig_header_len(golden)
-    // Headers must agree exactly (dimensions/grid/version).
-    if string.equals(string_substring(live, 0, hl_l), string_substring(golden, 0, hl_g)) == 0 {
+    eol_l = sig_eol(live)
+    eol_g = sig_eol(golden)
+    // Headers must agree on version/dimensions/grid -- but NOT on their line
+    // terminator, which says nothing about the rendering and differs purely by
+    // which platform blessed the file.
+    if string.equals(sig_header_text(live, hl_l, eol_l),
+                     sig_header_text(golden, hl_g, eol_g)) == 0 {
         return 0 - 1
     }
     bad = 0
     n = GG_GRID_X * GG_GRID_Y
     i = 0
     while i < n {
-        a = sig_cell(live, hl_l, i)
-        g = sig_cell(golden, hl_g, i)
+        a = sig_cell(live, hl_l, i, eol_l)
+        g = sig_cell(golden, hl_g, i, eol_g)
         dr = ((a >> 16) & 255) - ((g >> 16) & 255)
         if dr < 0 { dr = 0 - dr }
         dg = ((a >> 8) & 255) - ((g >> 8) & 255)

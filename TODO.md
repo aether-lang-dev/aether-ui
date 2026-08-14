@@ -147,6 +147,36 @@ Whether `video_frame` belongs in `apps/` long-term or becomes a
 of the exercise, but the API should follow a second real consumer rather
 than be guessed at from one demo.
 
+## win32 goldens are stale (and were hiding behind a CRLF bug)
+
+`tests/goldens/win32/*.sig` no longer match what win32 renders. All four
+canvases fail: prims 62 cells, stroke 18, type 49, cube 14. The differences are
+real scene colours in shifted positions -- on `stroke`, 11 of 16 rows differ,
+starting at row 7 -- i.e. geometry that legitimately moved, not corruption.
+They were blessed 2026-08-01 (prims re-blessed 08-11), and a lot of renderer
+work has landed since: the gradient ellipse across all three backends, stroked
+text via glyph outlines, radial gradient strokes, the font-family stack, and
+the vg-layer serif default.
+
+**This was invisible until 2026-08-14** because `prims.sig` read as MALFORMED
+rather than failing: winbaz has `core.autocrlf=true`, so `git checkout` wrote
+the 2717-byte golden as 2734 bytes of CRLF, and the parser reads cells at
+computed byte offsets. Fixing the reader (tolerate either terminator) and
+pinning `*.sig` to LF in `.gitattributes` did NOT turn win32 green -- it
+revealed the staleness the corruption had been masking. Worth remembering: an
+unreadable golden and a failing golden look similar in a summary line, and only
+one of them is telling you about your renderer.
+
+**Not re-blessed deliberately.** Blessing is a one-line command and would make
+the suite green immediately, but it would also erase the only record of what
+moved. Someone should look at `target/golden_out/*.png` on winbaz against the
+committed signatures first and confirm the new rendering is *better* (the
+stroked-text and gradient work says it should be), because "the goldens
+disagree" is exactly the signal this suite exists to raise. Bless once that is
+confirmed, in its own commit, so the diff is reviewable.
+
+GTK4 goldens are unaffected and green.
+
 ## win32 child-widget opacity (and the capture path that would prove it)
 
 `ui.style_opacity` on a child widget does nothing visible on win32, and
