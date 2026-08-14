@@ -30,7 +30,34 @@ silent visual breakage. Sketch:
   splitview); grow as fonts/AA differences per box are understood (may
   need per-host goldens or a tolerance bump — be honest about flake).
 
-## Widget Inspector (Flutter DevTools-style)
+## Widget Inspector — DONE 2026-08-14 (apps/inspector)
+
+Shipped as `apps/inspector`, an aether-ui app that browses any other running
+app's widget tree over the AetherUIDriver. No new backend surface, exactly as
+the brief predicted: the protocol was already sufficient.
+
+    inspector [port]        # default 9222
+
+Verified end-to-end against a live `listbox_demo`: Refresh loads its 13
+widgets, indented by parent depth with type/id/text/size per row, and
+selecting a row fills the detail pane (id 9, type button, text "Add",
+parent 8). Driven through the inspector's OWN driver on 9444 -- it serves
+the same protocol it consumes, so its spec can click its own buttons.
+
+Read-only by choice: nothing mutates the target, so it is safe to point at
+something mid-debug. The brief's optional "flash the selected widget" was
+dropped for that reason.
+
+Two things worth keeping:
+* `enable_test_server` is a BUILDER call and needs the live `_ctx` -- called
+  from `main()` it silently no-ops, which cost a debugging cycle.
+* `visible`/`enabled`/`sealed` are JSON booleans and **std.json cannot read
+  them**: `json_get_int` returns 0 for both `true` and `false`, and
+  `json_get_string_raw` returns "(null)" -- neither reports an error. The
+  inspector says so in the pane rather than printing a confident, uniform
+  "0". Upstream ask: a boolean accessor for std.json.
+
+### The original sketch
 
 A live widget-tree browser over the AetherUIDriver — the protocol already
 exists; the inspector is just a client (and can itself be an aether-ui

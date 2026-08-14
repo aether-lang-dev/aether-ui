@@ -1,0 +1,267 @@
+// inspector.ae — a live widget-tree browser for any running aether-ui app.
+//
+// Flutter DevTools' inspector, in the shape this toolkit already affords: the
+// AetherUIDriver protocol is a plain HTTP+JSON surface every backend already
+// serves, so the inspector needs NO new backend code. It is just a client --
+// and it is itself an aether-ui app, which is the point: the toolkit gets
+// inspected by something built with the toolkit.
+//
+// Usage:
+//   inspector [port]        (default 9222 -- what AETHER_UI_TEST_PORT arms)
+//
+// Point it at any app started with the driver enabled, press Refresh, and
+// browse. The detail pane shows the SAME JSON the spec harness reads, so what
+// you see here is exactly what a spec would assert on -- if a widget looks
+// wrong in the inspector, the spec sees it wrong too.
+//
+// v1 scope per TODO.md: browse the tree, inspect a node, and reach the
+// windows/overlays routes. Read-only: nothing here mutates the target app,
+// so it is safe to point at something mid-debug.
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, scrollview,
+    listbox, listbox_update, listbox_count, on_select, spacer, fill_height,
+    enable_test_server)
+import std.http.client
+import std.json
+import std.string
+import std.list
+import std.os (os_getenv)
+
+extern println(s: string)
+extern malloc(size: int) -> ptr
+extern aether_ui_text_set_string(handle: int, text: string)
+extern aether_args_count() -> int
+extern aether_args_get(i: int) -> string
+
+// One row of the tree, flattened for display. The driver hands back a FLAT
+// array with each entry carrying its own `parent`, so the depth is computed
+// once here rather than building a tree the protocol never promised.
+struct Node {
+    label: string      // indented, ready to draw
+    detail: string     // the full field dump for the detail pane
+}
+
+mk_node(label: string, detail: string) -> *Node {
+    n = malloc(64) as *Node
+    n.label = label
+    n.detail = detail
+    return n
+}
+
+// ─── driver access ───────────────────────────────────────────────────
+//
+// Errors come back as "" so the UI can report them instead of dying: an
+// inspector that crashes when its target quits is worse than useless.
+
+driver_get(port: int, path: string) -> string {
+    req = client.request("GET", "http://127.0.0.1:${port}${path}")
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" { return "" }
+    body = client.response_body(resp)
+    client.response_free(resp)
+    return body
+}
+
+str_of(rec: ptr, key: string) -> string {
+    node = json.json_object_get_raw(rec, key)
+    if node == null { return "" }
+    return json.json_get_string_raw(node)
+}
+
+// visible/enabled/sealed are JSON BOOLEANS and std.json cannot read them:
+// json_get_int returns 0 for both `true` and `false`, and json_get_string_raw
+// returns "(null)" -- both verified, neither reported as an error. Printing
+// the int would have shown a confident, uniform "0" for every widget, which
+// in an INSPECTOR is worse than an obvious gap: the whole value of the tool
+// is that what it shows is what the protocol said.
+//
+// So these are reported as unavailable, with the reason, until std.json grows
+// a boolean accessor (an upstream ask). Everything else here is exact.
+bool_of(rec: ptr, key: string) -> string {
+    node = json.json_object_get_raw(rec, key)
+    if node == null { return "(absent)" }
+    return "(bool — std.json cannot read; see /widgets raw)"
+}
+
+int_of(rec: ptr, key: string) -> int {
+    node = json.json_object_get_raw(rec, key)
+    if node == null { return 0 }
+    return json.json_get_int(node)
+}
+
+// Depth by walking the parent chain. Bounded: a malformed chain must not
+// hang the UI, and the array is tens of entries so a linear lookup is fine.
+depth_of(root: ptr, idx: int) -> int {
+    rec = json.json_array_get_raw(root, idx)
+    parent = int_of(rec, "parent")
+    d = 0
+    guard = 0
+    n = json.json_array_size(root)
+    while parent > 0 {
+        if guard > 64 { return d }
+        guard = guard + 1
+        d = d + 1
+        found = 0
+        i = 0
+        while i < n {
+            r2 = json.json_array_get_raw(root, i)
+            if int_of(r2, "id") == parent {
+                parent = int_of(r2, "parent")
+                found = 1
+                i = n
+            }
+            i = i + 1
+        }
+        if found == 0 { return d }
+    }
+    return d
+}
+
+indent_for(d: int) -> string {
+    s = ""
+    i = 0
+    while i < d {
+        s = string.concat(s, "    ")
+        i = i + 1
+    }
+    return s
+}
+
+// "    button #12  \"OK\"  40x24"
+row_label(root: ptr, idx: int) -> string {
+    rec = json.json_array_get_raw(root, idx)
+    id = int_of(rec, "id")
+    kind = str_of(rec, "type")
+    txt = str_of(rec, "text")
+    w = int_of(rec, "w")
+    h = int_of(rec, "h")
+    lbl = string.concat(indent_for(depth_of(root, idx)), kind)
+    lbl = string.concat(lbl, " #")
+    lbl = string.concat(lbl, string.from_int(id))
+    if string.length(txt) > 0 {
+        t = txt
+        if string.length(t) > 24 { t = string.substring(t, 0, 24) }
+        lbl = string.concat(lbl, "  \"")
+        lbl = string.concat(lbl, t)
+        lbl = string.concat(lbl, "\"")
+    }
+    lbl = string.concat(lbl, "  ")
+    lbl = string.concat(lbl, string.from_int(w))
+    lbl = string.concat(lbl, "x")
+    lbl = string.concat(lbl, string.from_int(h))
+    return lbl
+}
+
+kv(k: string, v: string) -> string {
+    return string.concat(string.concat(k, v), "\n")
+}
+
+// Every field the driver reports, RAW. An inspector that prettifies is an
+// inspector that can lie about what the protocol said.
+detail_text(port: int, root: ptr, idx: int) -> string {
+    rec = json.json_array_get_raw(root, idx)
+    id = int_of(rec, "id")
+    out = kv("id          ", string.from_int(id))
+    out = string.concat(out, kv("type        ", str_of(rec, "type")))
+    out = string.concat(out, kv("text        ", str_of(rec, "text")))
+    geo = string.concat(string.from_int(int_of(rec, "x")), ",")
+    geo = string.concat(geo, string.from_int(int_of(rec, "y")))
+    geo = string.concat(geo, "  ")
+    geo = string.concat(geo, string.from_int(int_of(rec, "w")))
+    geo = string.concat(geo, "x")
+    geo = string.concat(geo, string.from_int(int_of(rec, "h")))
+    out = string.concat(out, kv("geometry    ", geo))
+    out = string.concat(out, kv("parent      ", string.from_int(int_of(rec, "parent"))))
+    out = string.concat(out, kv("window      ", string.from_int(int_of(rec, "window"))))
+    out = string.concat(out, kv("visible     ", bool_of(rec, "visible")))
+    out = string.concat(out, kv("enabled     ", bool_of(rec, "enabled")))
+    out = string.concat(out, kv("sealed      ", bool_of(rec, "sealed")))
+    a11y = driver_get(port, string.concat(string.concat("/widget/",
+                          string.from_int(id)), "/a11y"))
+    if string.length(a11y) > 0 {
+        out = string.concat(out, kv("a11y        ", a11y))
+    }
+    return out
+}
+
+main() {
+    port = 9222
+    if aether_args_count() >= 2 {
+        v, ok = string.to_int(aether_args_get(1))
+        if ok == 1 { port = v }
+    }
+
+    nodes = list.new()
+
+
+    window("aether-ui inspector", 900, 620) {
+        vstack(8) {
+            // All the handles the buttons need live at ONE level: a handle
+            // declared inside a nested block is not visible to a later
+            // sibling, which is how the first cut failed to compile.
+            _hdr = text("aether-ui inspector — widget tree over the AetherUIDriver")
+            status = text("not connected — press Refresh")
+            divider()
+
+            tree = listbox(2) callback |item: ptr, i: int, row: int| {
+                nd = item as *Node
+                _lbl = text(row, nd.label)
+            }
+            divider()
+            detail = text("Select a node to inspect it.")
+
+            on_select(tree) callback |i: int| {
+                if i >= 0 {
+                    if i < list.size(nodes) {
+                        np2, _ok = list.get(nodes, i)
+                        nd = np2 as *Node
+                        aether_ui_text_set_string(detail, nd.detail)
+                    }
+                }
+            }
+
+            divider()
+            hstack(6) {
+                _r = btn("Refresh") callback {
+                    body = driver_get(port, "/widgets")
+                    if string.length(body) == 0 {
+                        aether_ui_text_set_string(status,
+                            "no app on that port — start one with AETHER_UI_TEST_PORT set")
+                    } else {
+                        root, jerr = json.parse(body)
+                        if jerr != "" {
+                            aether_ui_text_set_string(status, "bad JSON from driver")
+                        } else {
+                            list.clear(nodes)
+                            n = json.json_array_size(root)
+                            i = 0
+                            while i < n {
+                                _ = list.add(nodes, mk_node(row_label(root, i),
+                                                            detail_text(port, root, i)))
+                                i = i + 1
+                            }
+                            listbox_update(tree, nodes)
+                            aether_ui_text_set_string(status,
+                                string.concat(string.from_int(n), " widgets"))
+                        }
+                    }
+                }
+                _w = btn("Windows") callback {
+                    aether_ui_text_set_string(detail, driver_get(port, "/windows"))
+                }
+                _o = btn("Overlays") callback {
+                    aether_ui_text_set_string(detail, driver_get(port, "/overlays"))
+                }
+                spacer()
+                _n = text("read-only — never mutates the target")
+            }
+        }
+        // The inspector is an aether-ui app, so it serves the SAME driver it
+        // consumes -- which is how its own spec drives it. Must be INSIDE the
+        // window block: enable_test_server is a builder call and needs the
+        // live _ctx; called from main() it silently no-ops.
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9444) }
+    }
+}
