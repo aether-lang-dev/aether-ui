@@ -428,10 +428,38 @@ geometry and paint state, the backend only draws it. Concretely:
      should be.
 
    So the canvas surface is in good shape apart from text. The remaining
-   groups (overlay 10, widget 8, tray 6, surface 5) are UNAUDITED — they are
-   widget-level rather than rendering, so a leak there looks different
-   (platform convention rather than discarded geometry) and deserves its own
-   pass.
+   **AUDIT COMPLETED over the remaining 210 externs, 2026-08-14.** The
+   non-canvas groups are widget-level, so a leak there looks different --
+   platform CONVENTION rather than discarded geometry. Findings:
+
+   * **OVERLAY TRANSITION KIND — a real leak, three interpretations.**
+     `overlay_set_transition(handle, kind, ms)` passes a string each backend
+     reads differently: GTK4 knows `fade`/`scale`/`none`; win32 animates ANY
+     non-empty kind as a fade (it stores the string but branches only on
+     non-emptiness, so `scale` silently fades); macOS discards it outright
+     (`(void)kind`) and honours only the duration. Same shape as fill-rule
+     before it was fixed: one string, three answers, and the reference
+     backend looks right so nothing flags it.
+
+   * **`widget_apply_css` — inherent, not a leak.** GTK4 hands the string
+     straight to `gtk_css_provider_load_from_data`; win32 and macOS parse the
+     subset they can honour. CSS is a GTK-native format, so this is a
+     deliberate asymmetry rather than semantics leaking below the ABI.
+     Narrowing it would mean designing a neutral style surface -- the AeCS
+     layer already is that, one level up.
+
+   * **Reviewed and CLEAN:** a11y (all three recognise the identical role
+     set -- button/checkbox/dialog/heading/image/link/list/listitem),
+     overlay material (`dim`/`blur`/`none`, consistent), tray, window,
+     widget, sheet, surface, undo, shortcut, notify, bind. These pass
+     handles, geometry and opaque payloads; none require a backend to decide
+     what something MEANS.
+
+   So across all 241 externs the audit found **ten** leaks, of which nine are
+   closed and one (the overlay transition kind) is recorded but not fixed --
+   it needs a driver spec to verify, since the SVG corpus cannot see an
+   animation.
+
 
 
    **FONT FAMILY: DONE on all three backends, 2026-08-13.** The raw CSS
