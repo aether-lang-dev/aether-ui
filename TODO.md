@@ -51,11 +51,15 @@ dropped for that reason.
 Two things worth keeping:
 * `enable_test_server` is a BUILDER call and needs the live `_ctx` -- called
   from `main()` it silently no-ops, which cost a debugging cycle.
-* `visible`/`enabled`/`sealed` are JSON booleans and **std.json cannot read
-  them**: `json_get_int` returns 0 for both `true` and `false`, and
-  `json_get_string_raw` returns "(null)" -- neither reports an error. The
-  inspector says so in the pane rather than printing a confident, uniform
-  "0". Upstream ask: a boolean accessor for std.json.
+* `visible`/`enabled`/`sealed` are JSON booleans and need
+  **`json.json_get_bool`**. `json_get_int` returns 0 for BOTH `true` and
+  `false` without reporting an error, so reading them as ints shows a
+  confident, uniform "0" for every widget -- in an inspector that is worse
+  than an obvious gap. (I first concluded std.json had no boolean support at
+  all and nearly filed an upstream issue; I had probed for `json_is_bool` /
+  `json_is_true` / `json_type_of`, which do not exist, and stopped there.
+  `json_get_bool`, `json_is_null`, `json_type` and `json_get_number` all do.
+  Probe for the feature, not for a guessed name.)
 
 ### The original sketch
 

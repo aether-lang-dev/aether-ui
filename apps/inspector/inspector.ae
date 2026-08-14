@@ -70,19 +70,16 @@ str_of(rec: ptr, key: string) -> string {
     return json.json_get_string_raw(node)
 }
 
-// visible/enabled/sealed are JSON BOOLEANS and std.json cannot read them:
-// json_get_int returns 0 for both `true` and `false`, and json_get_string_raw
-// returns "(null)" -- both verified, neither reported as an error. Printing
-// the int would have shown a confident, uniform "0" for every widget, which
-// in an INSPECTOR is worse than an obvious gap: the whole value of the tool
-// is that what it shows is what the protocol said.
-//
-// So these are reported as unavailable, with the reason, until std.json grows
-// a boolean accessor (an upstream ask). Everything else here is exact.
+// visible/enabled/sealed are JSON BOOLEANS, and they need json_get_bool --
+// NOT json_get_int, which returns 0 for both `true` and `false` without
+// reporting an error, so every widget would have shown a confident, uniform
+// "0". In an inspector that is worse than an obvious gap: the tool's whole
+// value is that what it shows is what the protocol said.
 bool_of(rec: ptr, key: string) -> string {
     node = json.json_object_get_raw(rec, key)
     if node == null { return "(absent)" }
-    return "(bool — std.json cannot read; see /widgets raw)"
+    if json.json_get_bool(node) == 1 { return "true" }
+    return "false"
 }
 
 int_of(rec: ptr, key: string) -> int {
