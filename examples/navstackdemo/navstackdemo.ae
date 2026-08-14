@@ -15,7 +15,7 @@
 
 import ui
 import ui (window, vstack, hstack, text, btn, divider, navstack,
-    nav_push, nav_pop, spacer, enable_test_server)
+    nav_push, nav_pop, nav_depth, spacer, enable_test_server)
 import std.os (os_getenv)
 import std.string
 
@@ -32,6 +32,10 @@ main() {
         vstack(8) {
             crumb = text("Home")
             status = text("depth: 1")
+            // The BACKEND's own count, via nav_depth. Reported separately from
+            // the app's `depth` so the spec can prove the toolkit tracks this
+            // rather than the app having to.
+            backend_depth = text("pages: 0")
             divider()
 
             nav = navstack()
@@ -51,6 +55,8 @@ main() {
                     aether_ui_text_set_string(crumb, title)
                     aether_ui_text_set_string(status,
                         string.concat("depth: ", string.from_int(depth)))
+                    aether_ui_text_set_string(backend_depth,
+                        string.concat("pages: ", string.from_int(nav_depth(nav))))
                 }
                 _back = btn("Back") callback {
                     if depth > 1 {
@@ -63,6 +69,8 @@ main() {
                         aether_ui_text_set_string(crumb, crumb_text)
                         aether_ui_text_set_string(status,
                             string.concat("depth: ", string.from_int(depth)))
+                        aether_ui_text_set_string(backend_depth,
+                            string.concat("pages: ", string.from_int(nav_depth(nav))))
                     }
                 }
                 spacer()

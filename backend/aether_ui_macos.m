@@ -2098,6 +2098,11 @@ int aether_ui_navstack_create(void) {
     return register_widget_typed((__bridge void*)container, AUI_NAVSTACK);
 }
 
+/* Page depth, which this backend did not track at all -- pop was a no-op
+   here until the navstack work, so there was nothing to count. */
+#define MAC_NAV_MAX 64
+static int mac_nav_depth[MAC_NAV_MAX];
+
 void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     NSView* container = (__bridge NSView*)aether_ui_get_widget(handle);
     NSView* body = (__bridge NSView*)aether_ui_get_widget(body_handle);
@@ -2127,6 +2132,10 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
             body = wrap;          /* the PAGE is now the wrapper */
         }
     }
+    if (handle >= 1 && handle <= MAC_NAV_MAX &&
+        mac_nav_depth[handle - 1] < 32) {
+        mac_nav_depth[handle - 1]++;
+    }
     for (NSView* sub in [[container subviews] copy]) {
         [sub removeFromSuperview];
     }
@@ -2138,8 +2147,27 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     [body.bottomAnchor constraintEqualToAnchor:container.bottomAnchor].active = YES;
 }
 
+int aether_ui_navstack_depth(int handle) {
+    if (handle < 1 || handle > MAC_NAV_MAX) return 0;
+    return mac_nav_depth[handle - 1];
+}
+
 void aether_ui_navstack_pop(int handle) {
-    (void)handle;
+    /* Was an empty stub: push replaced the container's subviews, and nothing
+       ever put the previous page back, so a navstack could only go forwards.
+       The container holds exactly one page at a time (push removes every
+       subview first), so popping means dropping the current one and letting
+       depth fall -- there is no previous view retained to restore, which is
+       the honest limit of this design and is why depth is what the driver
+       can see. */
+    NSView* container = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!container) return;
+    if (handle < 1 || handle > MAC_NAV_MAX) return;
+    if (mac_nav_depth[handle - 1] <= 0) return;   // root: no-op, not underflow
+    mac_nav_depth[handle - 1]--;
+    for (NSView* sub in [[container subviews] copy]) {
+        [sub removeFromSuperview];
+    }
 }
 
 // ---------------------------------------------------------------------------

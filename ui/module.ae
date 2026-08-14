@@ -20,7 +20,7 @@ exports (
     vstack, hstack, scrollview, zstack, form, section, navstack,
     splitview, split_position, split_set_position, on_layout, weight, rtl, wrap,
     tabs, tab, on_tab_change, tab_select, tab_selected,
-    nav_push, nav_pop,
+    nav_push, nav_pop, nav_depth,
     text, text_wrapped, text_anchor, button, btn, spacer, divider,
     textfield, textfield_bound, securefield, toggle, toggle_group, slider, picker, picker_add,
     textarea, progressbar,
@@ -224,6 +224,7 @@ extern aether_ui_form_section_create(title: string) -> int
 extern aether_ui_navstack_create() -> int
 extern aether_ui_navstack_push(handle: int, title: string, body_handle: int)
 extern aether_ui_navstack_pop(handle: int)
+extern aether_ui_navstack_depth(handle: int) -> int
 
 extern aether_ui_tabs_create(boxed_closure: ptr) -> int
 extern aether_ui_tab_add(tabs_handle: int, title: string) -> int
@@ -747,6 +748,12 @@ nav_push(nav_handle: int, title: string, body_handle: int) {
 
 nav_pop(nav_handle: int) {
     aether_ui_navstack_pop(nav_handle)
+}
+
+// nav_depth(nav) -> pages pushed on top of the root (0 at the root).
+// Without this an app must track depth itself to know whether Back applies.
+nav_depth(nav_handle: int) -> int {
+    return aether_ui_navstack_depth(nav_handle)
 }
 
 // tabs { tab("A") {…}  tab("B") {…} } — a native tab strip over a page

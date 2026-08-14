@@ -11,6 +11,7 @@
 //   * pop REMOVES the top page's widgets (the count falls back)
 //   * pop at the root is a no-op rather than an underflow
 //   * the page TITLE renders as a real widget (the back chrome)
+//   * nav_depth reports the BACKEND's page count, not the app's
 //
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/navstackdemo/bin/navstackdemo &
@@ -87,6 +88,15 @@ main() {
             // it, which is what makes a later pop meaningful.
             aeocha.assert_contains(b, "Page 2", "page 2 still in the tree")
             aeocha.assert_contains(b, "Page 3", "page 3 pushed on top")
+        }
+
+        aeocha.it("nav_depth reports the backend's own page count") callback {
+            // Before this readback existed an app had to track depth ITSELF
+            // to know whether Back applied -- state the toolkit already held.
+            // Two pages are pushed by the time this runs.
+            b = uidriver.get_body("/widgets")
+            aeocha.assert_contains(b, "pages: 2",
+                                   "backend reports 2 pages pushed")
         }
 
         aeocha.it("pop removes the top page") callback {

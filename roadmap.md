@@ -466,8 +466,13 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
   tried first and was invisible to the driver — on-screen but untestable,
   which in this codebase means untested.
 
-  **Still open:** no backend exposes a page count, so the demo tracks depth
-  itself; swiby's `$context.goto` + session shape is untouched.
+  **Page count landed too**: `nav_depth(nav)` now reports the BACKEND's own
+  count on all three, so an app no longer has to track depth itself to know
+  whether Back applies. Adding it exposed that macOS's `pop` was still an
+  empty stub — a navstack there could only go forwards. Spec 7/7 green on
+  GTK4 and win32.
+
+  **Still open:** swiby's `$context.goto` + session shape is untouched.
 
 Tier 2: semantic color roles for AeCS (Flutter ColorScheme); QML
 property-to-property bindings (width: parent.width/2 via on_layout);

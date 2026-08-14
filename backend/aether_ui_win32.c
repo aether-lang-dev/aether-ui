@@ -2851,6 +2851,11 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     stack_do_layout(host->hwnd);
 }
 
+int aether_ui_navstack_depth(int handle) {
+    if (handle < 1 || handle > W32_NAV_MAX) return 0;
+    return w32_nav_depth[handle - 1];
+}
+
 /* Defined with the other registry helpers below; navstack_pop needs it. */
 static void mark_subtree_dead(HWND hwnd);
 

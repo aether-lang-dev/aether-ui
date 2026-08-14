@@ -2014,6 +2014,11 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     gtk_stack_set_visible_child(GTK_STACK(stack), page);
 }
 
+int aether_ui_navstack_depth(int handle) {
+    if (handle < 1 || handle > 64) return 0;
+    return navstack_page_counts[handle - 1];
+}
+
 void aether_ui_navstack_pop(int handle) {
     GtkWidget* stack = aether_ui_get_widget(handle);
     if (!stack || !GTK_IS_STACK(stack)) return;

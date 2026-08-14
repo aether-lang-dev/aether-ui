@@ -146,6 +146,10 @@ int aether_ui_form_section_create(const char* title);
 int aether_ui_navstack_create(void);
 void aether_ui_navstack_push(int handle, const char* title, int body_handle);
 void aether_ui_navstack_pop(int handle);
+/* How many pages are on the stack (0 = the root page only). Exposed because
+   without it an app has to track depth ITSELF to know whether a Back button
+   should be live -- state the toolkit already holds. */
+int aether_ui_navstack_depth(int handle);
 
 // Styling (Group 4)
 // Stylesheet support (ui.create_styles / apply_styles — AeCS, the swiby-shaped
