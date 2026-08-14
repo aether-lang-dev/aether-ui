@@ -705,7 +705,13 @@ wrap(_ctx: ptr) {
 // stays zero-cost). Safe to build/mutate widgets from inside — that's the
 // point (the hook is deferred off the allocation pass). STACKS ONLY
 // (vstack/hstack) v1; for canvases use canvas_on_resize, which this
-// generalizes but does not replace. GTK4 only for now; no-op elsewhere.
+// generalizes but does not replace.
+//
+// REAL ON ALL THREE BACKENDS: GTK4 via the flex layout's allocate pass,
+// win32 via w32_note_layout off every layout site (tracking last w/h so it
+// fires on CHANGE, not per resize message), macOS via
+// NSViewFrameDidChangeNotification. This comment claimed "GTK4 only" long
+// after the other two landed.
 on_layout(handle: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_on_layout_impl(handle, boxed)

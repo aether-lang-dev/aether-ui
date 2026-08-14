@@ -489,10 +489,38 @@ sharpest one is a control: `error` must reach ONLY the button that opted
 in via class `danger`, while the unclassed button beside it keeps
 primary — that is the cascade doing the work, not the roles code.
 
-Still Tier 2: QML property-to-property bindings (width: parent.width/2
-via on_layout); Swing TableRowSorter (built-in table sort/filter); QML
+Still Tier 2: Swing TableRowSorter (built-in table sort/filter); QML
 SpringAnimation easing for transitions (the discriminating curve test
 now exists — see tests/transitions_demo/test_easing_curve.sh).
+
+**QML property-to-property bindings — NOT SCHEDULED, 2026-08-14.** Examined
+and deliberately deferred, on the evidence rather than the plan.
+
+*No consumer.* `on_layout` has exactly ONE call site in the whole tree
+(`examples/split_demo`), and it formats a label with the size rather than
+driving a property. Nobody is hand-writing `width = parent.width/2` and
+finding it tedious, so a binding system would be designed against an
+imagined pain point — the same argument this roadmap already makes for
+not guessing the `ui.video_frame` API from one demo, but with *less*
+evidence, not more.
+
+*The loop hazard is concrete here.* `width(h, n)` calls `set_width`,
+which triggers a re-layout, which fires `on_layout`, which would run the
+binding, which calls `width` again. QML stops that with a dependency
+graph plus change-detection that halts propagation once a value settles;
+naive invalidation gives infinite layout loops that present as a hung
+app. That failure mode has already appeared once in miniature — win32's
+`on_layout` needed last-w/h tracking so it fires on CHANGE rather than
+per resize message.
+
+*Correction found while examining it:* `on_layout`'s doc comment claimed
+"GTK4 only for now; no-op elsewhere" long after win32
+(`w32_note_layout`) and macOS (`NSViewFrameDidChangeNotification`) both
+implemented it. Anyone costing this feature would have read that and
+concluded the primitive was single-backend. Fixed.
+
+Revisit when a real app wants it — the honest trigger is a second and
+third `on_layout` consumer doing arithmetic on the reported size.
 
 Noted, not scheduled: hero/matchedGeometry animations (wants the
 retained compositor); Flutter-style hot reload as "hot restart with
