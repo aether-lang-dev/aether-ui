@@ -2808,10 +2808,31 @@ static HWND w32_nav_pages[W32_NAV_MAX][W32_NAV_DEPTH];
 static int  w32_nav_depth[W32_NAV_MAX];
 
 void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
-    (void)title;
     Widget* host = widget_at(handle);
     Widget* body = widget_at(body_handle);
     if (!host || !body) return;
+    /* THE TITLE, as real widgets -- see the GTK4 push for why this is a
+       widget bar rather than a per-platform chrome API. Wrapping happens
+       BEFORE the page stack records the HWND, so pop destroys the wrapper
+       and takes the title with it. */
+    if (title && title[0]) {
+        int wrap_h = aether_ui_vstack_create(0);
+        int bar_h = aether_ui_text_create(title);
+        Widget* wrap = widget_at(wrap_h);
+        Widget* bar = widget_at(bar_h);
+        if (wrap && bar) {
+            SetParent(bar->hwnd, wrap->hwnd);
+            SetParent(body->hwnd, wrap->hwnd);
+            LONG_PTR bs = GetWindowLongPtrW(bar->hwnd, GWL_STYLE);
+            SetWindowLongPtrW(bar->hwnd, GWL_STYLE, bs | WS_CHILD | WS_VISIBLE);
+            LONG_PTR ys = GetWindowLongPtrW(body->hwnd, GWL_STYLE);
+            SetWindowLongPtrW(body->hwnd, GWL_STYLE, ys | WS_CHILD | WS_VISIBLE);
+            ShowWindow(bar->hwnd, SW_SHOW);
+            ShowWindow(body->hwnd, SW_SHOW);
+            stack_do_layout(wrap->hwnd);
+            body = wrap;          /* the PAGE is now the wrapper */
+        }
+    }
     // Hide previous children, show this one.
     for (HWND c = GetWindow(host->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
         ShowWindow(c, SW_HIDE);

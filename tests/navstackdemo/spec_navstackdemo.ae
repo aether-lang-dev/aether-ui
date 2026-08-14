@@ -10,6 +10,7 @@
 //   * push twice nests: both pages exist, the newest is on top
 //   * pop REMOVES the top page's widgets (the count falls back)
 //   * pop at the root is a no-op rather than an underflow
+//   * the page TITLE renders as a real widget (the back chrome)
 //
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/navstackdemo/bin/navstackdemo &
@@ -57,6 +58,23 @@ main() {
                                    "page body rendered")
             after = widget_count()
             aeocha.assert_gt(after, before, "push GREW the widget tree")
+        }
+
+        aeocha.it("the page title renders as a real widget") callback {
+            // The title argument was discarded by all three backends, so a
+            // navstack had no back chrome. It is now a REGISTERED widget --
+            // which is what makes it assertable here at all. "Page 2" appears
+            // three times: the crumb, this title bar, and the page body's own
+            // label.
+            b = uidriver.get_body("/widgets")
+            first = string.index_of(b, "Page 2")
+            aeocha.assert_gt(first, -1, "a Page 2 label exists")
+            rest = string.substring(b, first + 6, string.length(b))
+            second = string.index_of(rest, "Page 2")
+            aeocha.assert_gt(second, -1, "a SECOND Page 2 exists (the title bar)")
+            rest2 = string.substring(rest, second + 6, string.length(rest))
+            third = string.index_of(rest2, "Page 2")
+            aeocha.assert_gt(third, -1, "and a THIRD (crumb + title + body)")
         }
 
         aeocha.it("a second push nests rather than replacing") callback {

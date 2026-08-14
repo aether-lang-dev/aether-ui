@@ -1978,9 +1978,40 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     int idx = (handle <= 64) ? navstack_page_counts[handle - 1]++ : 0;
     char name[32];
     snprintf(name, sizeof(name), "page_%d", idx);
-    gtk_stack_add_named(GTK_STACK(stack), body, name);
-    gtk_stack_set_visible_child(GTK_STACK(stack), body);
-    (void)title;
+
+    /* THE TITLE, as a real widget. Every backend discarded it ((void)title
+       here, in win32 and in macOS alike), which is why a navstack had no back
+       chrome at all -- the eleventh ABI leak, and the only one found after the
+       audit was declared complete.
+       
+       Deliberately NOT gtk_stack_page_set_title(): that is GTK-native, and
+       win32/AppKit have no equivalent, so each backend would invent its own
+       chrome -- the exact pattern this codebase has spent the day removing.
+       A title BAR built from ordinary widgets renders identically on all
+       three AND is visible to the driver as plain text, so a spec can assert
+       it with no new driver surface. */
+    GtkWidget* page = body;
+    if (title && title[0]) {
+        /* REGISTERED widgets, not raw GTK ones: a bare gtk_label_new is
+           invisible to the driver, so the title would render on screen and
+           be unassertable -- which for this codebase means untested. Going
+           through aether_ui_text_create / _vstack_create puts both in the
+           widget registry, and the title arrives in /widgets as ordinary
+           text. */
+        int wrap_h = aether_ui_vstack_create(0);
+        int bar_h = aether_ui_text_create(title);
+        GtkWidget* wrap = aether_ui_get_widget(wrap_h);
+        GtkWidget* bar = aether_ui_get_widget(bar_h);
+        if (wrap && bar) {
+            gtk_widget_add_css_class(bar, "aui-nav-title");
+            gtk_box_append(GTK_BOX(wrap), bar);
+            gtk_box_append(GTK_BOX(wrap), body);
+            gtk_widget_set_vexpand(body, TRUE);
+            page = wrap;
+        }
+    }
+    gtk_stack_add_named(GTK_STACK(stack), page, name);
+    gtk_stack_set_visible_child(GTK_STACK(stack), page);
 }
 
 void aether_ui_navstack_pop(int handle) {

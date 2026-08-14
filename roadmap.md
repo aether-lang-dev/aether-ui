@@ -448,7 +448,7 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
   diffing: text, git-diffable, and no image decoder needed on any
   platform. PNGs still land in `target/golden_out/` for human eyes.
   See TODO.md for the original sketch.
-- ~~**NavigationStack × swiby sweb pages**~~ **PART DONE 2026-08-14** —
+- ~~**NavigationStack × swiby sweb pages**~~ **DONE 2026-08-14** —
   `examples/navstackdemo` + `tests/navstackdemo/spec_navstackdemo`, 5/5
   green on GTK4 **and** win32. The ABI is no longer an unexercised stub:
   push/pop are driven and asserted over the AetherUIDriver, which is the
@@ -456,11 +456,18 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
   lifecycle — invisible to the SVG corpus and to golden images). The spec
   caught a real win32 pop bug on its first run.
 
-  **Still open:** the `title` argument is discarded by all three backends
-  (`(void)title` in gtk4, win32 and macOS alike), so there is no BACK
-  CHROME — the eleventh ABI leak, found after the audit was declared
-  complete. No backend exposes a page count either, so the demo tracks
-  depth itself. swiby's `$context.goto` + session shape is untouched.
+  **Back chrome landed too**: the `title` argument had been discarded by all
+  three backends (`(void)title` in each), the eleventh ABI leak and the only
+  one found after the audit was declared complete. It now renders as a real
+  title bar on GTK4, win32 and macOS — built from REGISTERED widgets rather
+  than each platform's own chrome API, so all three look the same and the
+  driver sees the title as ordinary text. That is what makes it assertable:
+  the spec is 6/6 and checks the title appears. A raw `gtk_label_new` was
+  tried first and was invisible to the driver — on-screen but untestable,
+  which in this codebase means untested.
+
+  **Still open:** no backend exposes a page count, so the demo tracks depth
+  itself; swiby's `$context.goto` + session shape is untouched.
 
 Tier 2: semantic color roles for AeCS (Flutter ColorScheme); QML
 property-to-property bindings (width: parent.width/2 via on_layout);

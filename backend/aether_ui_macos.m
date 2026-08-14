@@ -2099,10 +2099,34 @@ int aether_ui_navstack_create(void) {
 }
 
 void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
-    (void)title;
     NSView* container = (__bridge NSView*)aether_ui_get_widget(handle);
     NSView* body = (__bridge NSView*)aether_ui_get_widget(body_handle);
     if (!container || !body) return;
+    /* THE TITLE, as real widgets -- see the GTK4 push for why this is a
+       widget bar rather than a per-platform chrome API (NSTitlebar and
+       friends have no win32 equivalent, so each backend would invent its
+       own). Registered creators, so the driver sees the title as plain
+       text and a spec can assert it. */
+    if (title && title[0]) {
+        int wrap_h = aether_ui_vstack_create(0);
+        int bar_h = aether_ui_text_create(title);
+        NSView* wrap = (__bridge NSView*)aether_ui_get_widget(wrap_h);
+        NSView* bar = (__bridge NSView*)aether_ui_get_widget(bar_h);
+        if (wrap && bar) {
+            [bar setTranslatesAutoresizingMaskIntoConstraints:NO];
+            [body setTranslatesAutoresizingMaskIntoConstraints:NO];
+            [wrap addSubview:bar];
+            [wrap addSubview:body];
+            [bar.leadingAnchor constraintEqualToAnchor:wrap.leadingAnchor].active = YES;
+            [bar.trailingAnchor constraintEqualToAnchor:wrap.trailingAnchor].active = YES;
+            [bar.topAnchor constraintEqualToAnchor:wrap.topAnchor].active = YES;
+            [body.leadingAnchor constraintEqualToAnchor:wrap.leadingAnchor].active = YES;
+            [body.trailingAnchor constraintEqualToAnchor:wrap.trailingAnchor].active = YES;
+            [body.topAnchor constraintEqualToAnchor:bar.bottomAnchor].active = YES;
+            [body.bottomAnchor constraintEqualToAnchor:wrap.bottomAnchor].active = YES;
+            body = wrap;          /* the PAGE is now the wrapper */
+        }
+    }
     for (NSView* sub in [[container subviews] copy]) {
         [sub removeFromSuperview];
     }
