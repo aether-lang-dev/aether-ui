@@ -214,34 +214,49 @@ valid SVG at all, and the file is one every browser paints differently.
 So there are two means worth quoting, and the narrower one is the honest
 measure of the renderer:
 
-| set | GTK4 | GDI+ |
-|-----|------|------|
-| 167 files with a real `viewBox` | 1.77 | **3.00** |
-| all 207 | 3.44 | 4.71 |
+| set | GTK4 | GDI+ | macOS |
+|-----|------|------|-------|
+| 167 files with a real `viewBox` | **1.32** | **2.61** | **1.61** |
+| all 207 | 2.79 | 4.28 | 3.37 |
+
+*(Superseded numbers: this table read 1.77 / 3.00 / — when first written.
+Everything moved on 2026-08-13/14 from work that was NOT about GDI+ at all:
+`svg_render_png` sizing its canvas from the SVG's own aspect instead of
+always square, `font-family` reaching the backends, `fill-rule` and
+`gradientTransform` being carried rather than guessed, and stroked text
+finally drawing on macOS. See
+[semantics-belong-above-the-abi.md](semantics-belong-above-the-abi.md).
+The GDI+/GTK4 gap narrowed as a side effect of fixing the vg layer, which is
+the point that document makes.)*
 
 ## What is still wrong on GDI+
 
 Nine of the 167 fairly-scored files are more than 3 MAE worse than GTK4.
 They are four causes, not nine problems:
 
-1. **Radial gradient geometry** — `json` 27.2, `jsonatom` 26.5. GDI+ has no
-   radial brush; the fill approximates one with a path gradient over the
-   shape's bounding ellipse. Where the gradient is centred outside its
-   shape, that approximation breaks down.
-2. **Non-uniform `gradientTransform`** — `python` 11.5,
-   `compuserver_msn_Ford_Focus` 10.7, `car` 8.6 (its grille patch). This is
-   **not a backend bug**: `defs.ae` collapses the matrix to
-   `affine_average_scale` before any backend sees it, so the information is
-   already gone. Fixing it is a vg-layer change that would benefit all three
-   backends.
-3. **Radial gradient STROKES use a linear brush** — `php` 4.2. The stroke
-   branch is entered for both gradient kinds. php currently scores *well* by
-   accident; three corrected geometries were measured and all scored worse,
-   because they trade php against the dedicated radial tests.
-4. **Stroked text is not painted** — `aether_ui_canvas_stroke_text_impl`
-   records its command but the replay does not draw it. `GdipDrawString` can
-   only fill, and a filled second pass overpaints rather than outlines
-   (measured: moved `Steps.svg` *away* from GTK4). Needs glyph outlines via
-   `GdipAddPathString`. Minimal repro: `vg/test/svg/text_stroke_repro.svg`.
+1. ~~**Radial gradient geometry**~~ **FIXED 2026-08-13.** The fill sized
+   itself from the shape's bounding box rather than the gradient's own
+   centre and radius, which `CanvasCmd` had carried all along. `json`
+   27.25 → 3.21, `jsonatom` 26.50 → 4.29.
+2. ~~**Non-uniform `gradientTransform`**~~ **FIXED 2026-08-13**, and it was
+   indeed a vg-layer change that benefited all three backends, exactly as
+   this entry predicted. The matrix was collapsed to a scalar at **three**
+   sites, not one; `rx`/`ry`/`rot_deg` now travel and every backend renders
+   the real ellipse. Verified by an axis-ratio oracle rather than by MAE:
+   `tests/radial_ellipse_check.py`, GTK4 5/5, macOS 5/5, GDI+ 5/5.
+3. **Radial gradient STROKES still use a linear brush** — `php` 4.2, and it
+   still scores *well by accident*. Three corrected geometries were measured
+   and all scored worse, because they trade php against the dedicated radial
+   tests. Genuinely open.
+4. ~~**Stroked text is not painted**~~ **FIXED 2026-08-13/14** on macOS
+   (via `NSStrokeWidthAttributeName`, which is a stroke-only mode when
+   positive) and GTK4 (whose stroke pass was selecting a *different face*
+   than its fill pass). `bloglines` 39.10 → 26.59 on GTK4, 71.93 → 49.51 on
+   macOS. **Still open on win32**: `GdipDrawString` can only fill, a filled
+   second pass overpaints rather than outlines (measured: moved `Steps.svg`
+   *away* from GTK4), and it needs glyph outlines via `GdipAddPathString`.
+   Minimal repro: `vg/test/svg/text_stroke_repro.svg`.
 
-104 of the 167 are within 1.0 of GTK4.
+So two of the four are closed, one is half-closed, and one (php's radial
+stroke) is genuinely open. The two that closed did so in the **vg layer** —
+see [semantics-belong-above-the-abi.md](semantics-belong-above-the-abi.md).
