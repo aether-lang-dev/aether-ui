@@ -282,7 +282,8 @@ typedef struct {
        instantly, so `transition(h,"opacity",1200,"ease_out")` was a no-op
        here while GTK4 honoured it via CSS and macOS via its own record. */
     int tr_ms;
-    int tr_ease_out;
+    int tr_ease_out;      /* 1 = ease-out, 0 = linear (ignored when tr_spring) */
+    int tr_spring;        /* 1 = damped spring: OVERSHOOTS, then settles */
     UINT_PTR tr_timer;
     DWORD tr_start;
     double tr_from, tr_to;
@@ -4153,6 +4154,28 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
    is ~50% done there, ease-out ~75%) -- see
    tests/transitions_demo/test_easing_curve.sh, which reads the curve out of
    the framebuffer because no property readback can see it. */
+/* Damped-spring progress: the QML SpringAnimation shape, as a closed form
+   rather than an integrated physics step (a timer-driven tween needs a
+   function of t, not a stateful simulation).
+
+       p(t) = 1 - e^(-6t) * cos(9t)
+
+   The exponential is the damping envelope and the cosine is the oscillation,
+   so p RISES PAST 1 near t≈0.35 and rings back down -- the overshoot is the
+   whole point, and is what no CSS cubic-bezier and no ease-out can express.
+   Constants chosen so the first overshoot PEAKS AT ~15% ABOVE the target at
+   t=0.30, rings back under by t=0.55, and is within 0.2% of 1.0 from t=0.85
+   -- visible enough that a pixel test can see it, settled enough that the end
+   state is not in doubt.
+
+   p(0) = 0 and p(1) is forced to exactly 1.0 by the caller's clamp, so a
+   tween still lands precisely on its target however the maths rounds. */
+static double w32_spring_progress(double t) {
+    if (t <= 0.0) return 0.0;
+    if (t >= 1.0) return 1.0;
+    return 1.0 - exp(-6.0 * t) * cos(9.0 * t);
+}
+
 static void CALLBACK w32_opacity_tween_proc(HWND hwnd, UINT msg,
                                             UINT_PTR id, DWORD now) {
     (void)hwnd; (void)msg; (void)now;
@@ -4163,7 +4186,9 @@ static void CALLBACK w32_opacity_tween_proc(HWND hwnd, UINT msg,
         DWORD elapsed = GetTickCount() - w->tr_start;
         double t = (double)elapsed / (double)ms;
         if (t >= 1.0) t = 1.0;
-        double e = w->tr_ease_out ? (1.0 - (1.0 - t) * (1.0 - t)) : t;
+        double e;
+        if (w->tr_spring) e = w32_spring_progress(t);
+        else e = w->tr_ease_out ? (1.0 - (1.0 - t) * (1.0 - t)) : t;
         double v = w->tr_from + (w->tr_to - w->tr_from) * e;
         if (IsWindow(w->hwnd)) {
             w32_make_layered(w->hwnd);
@@ -4195,6 +4220,9 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
         int ms = atoi(p);
         if (ms <= 0) return;
         w->tr_ms = ms;
+        /* "spring" arrives as a marker comment on the bezier (this backend
+           does not parse control points); it overrides the ease flag. */
+        w->tr_spring = strstr(tr, "spring") ? 1 : 0;
         w->tr_ease_out = strstr(tr, "linear") ? 0 : 1;
         return;
     }

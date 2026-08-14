@@ -518,9 +518,39 @@ class and wants its own design pass (does a filtered view change
 the app's list in place, so those questions do not arise; filtering
 would introduce a view/model split that sorting deliberately avoids.
 
-Still Tier 2: QML
-SpringAnimation easing for transitions (the discriminating curve test
-now exists — see tests/transitions_demo/test_easing_curve.sh).
+**QML SpringAnimation easing — DONE 2026-08-14.**
+`transition(h, "opacity", ms, "spring")` now animates a damped spring
+that OVERSHOOTS its target and rings back, rather than being silently
+accepted and ignored.
+
+That silence was the bug worth naming: all three backends decided the
+curve with `strstr(t, "linear") ? 0 : 1`, so every value that was not
+"linear" — including "spring" — became ease-out. Measured before the
+change, `"spring"` produced a curve identical to ease_out with no
+overshoot anywhere. Same shape as the leaks in
+docs/design/semantics-belong-above-the-abi.md: a real property read
+upstream, reduced to a bit before dispatch, and three backends inventing
+the rest.
+
+A spring is not a CSS timing function — no cubic-bezier can ring back —
+so it lowers to `cubic-bezier(.5,1.6,.6,1)/*spring*/`: GTK4 animates the
+overshooting bezier natively, while win32 and macOS branch on the marker
+and drive their own timers with the closed form `p(t) = 1 - e^(-6t)·cos(9t)`
+(damping envelope × oscillation). Endpoints are pinned so a tween still
+lands exactly on target.
+
+Verified by OVERSHOOT, which is the only property that separates a spring
+from ease-out — both decelerate, so the existing curve test would have
+passed a spring and told you nothing. `test_spring_curve.sh` measures
+peak progress: GTK4 reads **1.103 at 720ms** of a 1200ms tween against a
+hard ceiling of 1.000 for any monotone curve. Confirmed non-vacuous by
+pointing it at an ease_out tween, where it reads exactly 1.000 and fails.
+win32's curve was verified by compiling the function with MinGW and
+running it there (peak 1.1515, endpoints 0 and 1) because that box's
+`/screenshot` cannot see child controls — the test's blindness guard
+fires and skips rather than returning a false verdict.
+
+Tier 2 is now closed.
 
 **QML property-to-property bindings — NOT SCHEDULED, 2026-08-14.** Examined
 and deliberately deferred, on the evidence rather than the plan.

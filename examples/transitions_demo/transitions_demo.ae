@@ -15,7 +15,8 @@ extern aether_ui_text_set_string(handle: int, text: string)
 
 main() {
     faded = 0
-    window("transitions demo", 420, 260) {
+    sfaded = 0
+    window("transitions demo", 420, 420) {
         vstack(10) {
             status = text("state: opaque")
             divider()
@@ -31,6 +32,28 @@ main() {
                     _o2 = style_opacity(target, 1.0)
                     faded = 0
                     aether_ui_text_set_string(status, "state: opaque")
+                }
+            }
+
+            divider()
+            // The SPRING curve (QML SpringAnimation), on its own label so the
+            // two are measurable side by side. A spring OVERSHOOTS: this one
+            // fades PAST its 0.15 target -- lighter than the end state --
+            // around 60% through, then rings back up and settles. That is the
+            // property no CSS timing function and no ease-out has, and it is
+            // exactly what the spec asserts.
+            sstatus = text("spring: opaque")
+            starget = text("WATCH ME SPRING")
+            _tr2 = transition(starget, "opacity", 1200, "spring")
+            _f2 = btn("Toggle spring") callback {
+                if sfaded == 0 {
+                    _s1 = style_opacity(starget, 0.15)
+                    sfaded = 1
+                    aether_ui_text_set_string(sstatus, "spring: faded")
+                } else {
+                    _s2 = style_opacity(starget, 1.0)
+                    sfaded = 0
+                    aether_ui_text_set_string(sstatus, "spring: opaque")
                 }
             }
         }

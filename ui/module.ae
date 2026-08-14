@@ -2769,13 +2769,35 @@ on_select(lbp: ptr, cb: fn) {
 // every subsequent change of `prop` on this widget TWEENS instead of
 // snapping. v1 props: "opacity" (style_opacity routes through CSS so the
 // transition engine sees it) and "all" (any CSS-driven change, incl. the
-// theme's enabled/disabled fade). easing: "linear" | "ease_out".
+// theme's enabled/disabled fade).
+//
+// easing: "linear" | "ease_out" | "spring"
+//
+// SPRING (QML's SpringAnimation) is the one that is not a CSS timing
+// function: it OVERSHOOTS the target and settles back, which no
+// cubic-bezier can express. It therefore lowers to a marker CSS declaration
+// the backends recognise -- `cubic-bezier(.5,1.6,.6,1)` approximates the
+// overshoot for GTK4, which consumes the CSS natively, while win32 and macOS
+// see the "spring" token and drive their own timers with the real damped
+// curve (see _spring_progress in each backend).
+//
+// Before 2026-08-14 every value that was not "linear" silently became
+// ease-out on ALL THREE backends (`strstr(t, "linear") ? 0 : 1`), so
+// "spring" was accepted and ignored -- measured identical to ease_out, no
+// overshoot anywhere. That is the loss this widening closes.
+//
 // AETHER_UI_NO_ANIMATION=1 makes this a no-op — every change is instant
 // (ci.sh exports it for spec phases; specs assert END states).
 transition(handle: int, prop: string, ms: int, easing: string) -> int {
     if os_getenv("AETHER_UI_NO_ANIMATION") != null { return handle }
     ease = "ease-out"
     if string.equals(easing, "linear") == 1 { ease = "linear" }
+    // The overshooting bezier is what GTK4 animates with; the trailing
+    // /*spring*/ marker is what win32 and macOS branch on, since neither
+    // parses bezier control points.
+    if string.equals(easing, "spring") == 1 {
+        ease = "cubic-bezier(0.5,1.6,0.6,1)/*spring*/"
+    }
     css = "transition: ${prop} ${ms}ms "
     css = string.concat(css, ease)
     css = string.concat(css, ";")

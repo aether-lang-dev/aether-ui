@@ -217,6 +217,16 @@ skips as a blind instrument rather than failing; until that skip stops firing,
 Worth fixing the capture first: it is the same instrument golden-image tests
 would need on win32, so it is not effort spent only on this item.
 
+**It now blocks a second thing.** The spring easing added 2026-08-14 is
+verified on GTK4 by pixels (peak progress 1.103, overshooting its target) and
+on win32 only by compiling `w32_spring_progress` with MinGW and running it
+standalone there (peak 1.1515, endpoints pinned at 0 and 1). The maths is
+right on Windows; whether it reaches the screen is unproven, for exactly the
+reason above. `test_spring_curve.sh` skips there rather than guessing — which
+is correct behaviour, but a skip is not a pass. Every future animation
+feature will land in the same position until the capture can see child
+controls.
+
 ## Push rendering semantics out of the backends and into the vg layer
 
 **The balance of C to Aether is roughly right; the boundary is wrong in one

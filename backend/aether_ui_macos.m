@@ -2403,7 +2403,8 @@ void aether_ui_set_height(int handle, int height) {
 static int aeui_opacity_transition_ms(int handle);
 static int aeui_opacity_transition_ease_out(int handle);
 static void aeui_start_opacity_tween(NSView* v, int handle,
-                                     double from, double to, int ms, int ease_out);
+                                     double from, double to, int ms, int ease_out,
+                                     int spring);
 
 void aether_ui_set_opacity(int handle, double opacity) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
@@ -2414,7 +2415,8 @@ void aether_ui_set_opacity(int handle, double opacity) {
     int ms = aeui_opacity_transition_ms(handle);
     if (ms > 0) {
         aeui_start_opacity_tween(v, handle, [v alphaValue], opacity, ms,
-                                 aeui_opacity_transition_ease_out(handle));
+                                 aeui_opacity_transition_ease_out(handle),
+                                 aeui_opacity_transition_spring(handle));
         return;
     }
     [v setAlphaValue:opacity];
@@ -3255,7 +3257,8 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
 // ---------------------------------------------------------------------------
 typedef struct {
     int  ms;         // 0 = no transition declared
-    int  ease_out;   // 1 = ease-out, 0 = linear
+    int  ease_out;   // 1 = ease-out, 0 = linear (ignored when spring)
+    int  spring;     // 1 = damped spring: OVERSHOOTS the target, then settles
 } OpacityTransition;
 
 static OpacityTransition* widget_transitions = NULL;   // indexed by handle-1
@@ -3283,6 +3286,26 @@ static int aeui_opacity_transition_ease_out(int handle) {
     return widget_transitions[handle - 1].ease_out;
 }
 
+static int aeui_opacity_transition_spring(int handle) {
+    if (handle < 1 || handle > widget_transition_cap) return 0;
+    return widget_transitions[handle - 1].spring;
+}
+
+/* Damped-spring progress -- the QML SpringAnimation shape as a closed form,
+   matching w32_spring_progress in the win32 backend exactly:
+
+       p(t) = 1 - e^(-6t) * cos(9t)
+
+   Exponential damping envelope times an oscillation, so p rises PAST 1
+   (peaking ~15% over at t=0.30) and rings back -- the overshoot no CSS
+   cubic-bezier or ease-out can express. Both endpoints are pinned so a tween
+   still lands exactly on its target. */
+static double aeui_spring_progress(double t) {
+    if (t <= 0.0) return 0.0;
+    if (t >= 1.0) return 1.0;
+    return 1.0 - exp(-6.0 * t) * cos(9.0 * t);
+}
+
 // The tween is driven BY HAND, on a timer, rather than through
 // -[NSView animator].
 //
@@ -3301,6 +3324,7 @@ static int aeui_opacity_transition_ease_out(int handle) {
 @property (assign) double   to;
 @property (assign) double   duration;   // seconds
 @property (assign) int      easeOut;
+@property (assign) int      spring;
 @property (assign) CFTimeInterval start;
 @property (strong) NSTimer* timer;
 @end
@@ -3317,7 +3341,9 @@ static int aeui_opacity_transition_ease_out(int handle) {
         self.timer = nil;
         return;
     }
-    double e = self.easeOut ? (1.0 - (1.0 - p) * (1.0 - p)) : p;   // quad ease-out
+    double e;
+    if (self.spring) e = aeui_spring_progress(p);
+    else e = self.easeOut ? (1.0 - (1.0 - p) * (1.0 - p)) : p;   // quad ease-out
     [v setAlphaValue:self.from + (self.to - self.from) * e];
 }
 @end
@@ -3326,7 +3352,8 @@ static int aeui_opacity_transition_ease_out(int handle) {
 static NSMutableDictionary<NSNumber*, AetherTween*>* aeui_tweens = nil;
 
 static void aeui_start_opacity_tween(NSView* v, int handle,
-                                     double from, double to, int ms, int ease_out) {
+                                     double from, double to, int ms, int ease_out,
+                                     int spring) {
     if (!aeui_tweens) aeui_tweens = [NSMutableDictionary dictionary];
     NSNumber* key = @(handle);
     AetherTween* old = aeui_tweens[key];
@@ -3340,6 +3367,7 @@ static void aeui_start_opacity_tween(NSView* v, int handle,
     tw.to = to;
     tw.duration = (double)ms / 1000.0;
     tw.easeOut = ease_out;
+    tw.spring = spring;
     tw.start = CACurrentMediaTime();
     tw.timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
                                                 target:tw
@@ -3369,6 +3397,9 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
         aeui_transitions_reserve(handle);
         if (handle > widget_transition_cap) return;
         widget_transitions[handle - 1].ms = ms;
+        /* "spring" arrives as a marker comment on the bezier (this backend
+           does not parse control points); it overrides the ease flag. */
+        widget_transitions[handle - 1].spring   = strstr(t, "spring") ? 1 : 0;
         widget_transitions[handle - 1].ease_out = strstr(t, "linear") ? 0 : 1;
         return;
     }

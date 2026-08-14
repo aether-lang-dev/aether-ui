@@ -1,7 +1,9 @@
 # Semantics belong above the ABI
 
 *Written 2026-08-14, from an audit of all 241 externs in `ui/module.ae` and
-the eleven leaks it found.*
+the eleven leaks it found. A twelfth — the easing curve — turned up the same
+day while adding spring animation, which is the argument for the rule rather
+than against it: the pattern is easy to reintroduce and hard to notice.*
 
 ## The rule
 
@@ -26,6 +28,21 @@ Every one had the same shape:
 3. Each backend, handed the reduced form, invents the rest.
 4. The reference backend's invention looks right, so nothing flags it.
 
+The **easing curve** (found 2026-08-14) is the pattern arriving late and
+unmistakably. `ui.transition(h, prop, ms, easing)` takes a curve NAME, and all
+three backends reduced it to a boolean with the same line:
+
+    strstr(t, "linear") ? 0 : 1
+
+So every value that was not "linear" became ease-out. `"spring"` was accepted
+and silently ignored on all three — measured, it produced a curve identical to
+ease_out with no overshoot at all. Nothing flagged it because ease-out is a
+perfectly plausible fade, which is step 4 exactly: the invention looks right.
+Fixing it meant carrying the curve rather than a bit, and because a spring
+overshoots — something no CSS timing function expresses — GTK4 takes an
+overshooting bezier while win32 and macOS drive the closed form
+`p(t) = 1 - e^(-6t)·cos(9t)` on their own timers.
+
 Step 4 is why these survive. `fill-rule` is the cleanest example: no backend
 was ever told the rule, so each hardcoded one. GTK4 looked correct purely
 because cairo's default (winding) happens to match SVG's default (nonzero) —
@@ -33,7 +50,7 @@ so it had been **silently wrong on every `fill-rule="evenodd"` file** for as
 long as the feature existed. Fixing it moved GTK4 too: `accessible.svg`
 17.87 → 0.39, `ruby` 4.95 → 0.05.
 
-## The eleven
+## The twelve
 
 | leak | what was lost | fixed in |
 |---|---|---|
@@ -48,6 +65,7 @@ long as the feature existed. Fixing it moved GTK4 too: `accessible.svg`
 | stroked text | not drawn at all on macOS; wrong face on GTK4 | macOS + gtk4 |
 | overlay transition kind | `slide`/`scale` silently fading; macOS discarding it | win32 + macOS |
 | navstack `title` | discarded by all three — hence no back chrome | **open** |
+| easing curve | reduced to a BIT; every value but "linear" became ease-out | all 3 |
 
 ## Two instruments, and neither is sufficient alone
 
