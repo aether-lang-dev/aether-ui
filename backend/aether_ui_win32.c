@@ -2801,17 +2801,7 @@ int aether_ui_navstack_create(void) {
    its first run: after a pop the widget census stayed at 18, i.e. nothing
    was destroyed. GTK4 has always kept a per-stack page count; this is the
    win32 equivalent, and it stores the HWNDs so pop needs no guessing.
-
-   STILL NOT SUFFICIENT, and recorded rather than left as a mystery: with the
-   explicit stack in place, pop runs (the demo's depth counter falls to 1) but
-   the pushed page's widgets REMAIN in the driver census -- ids 13/14/15 still
-   report as vstack/text/text after popping. hook_widget_type reports "null"
-   for a widget whose HWND fails IsWindow(), which is how a destroyed listbox
-   row disappears, so either the HWND stored here is not the one actually
-   parented under the host, or DestroyWindow is not reaching a container that
-   was created without its own window. Needs a trace of body->hwnd at push
-   against GetWindow(host, GW_CHILD) at pop. GTK4 pops correctly (18 -> 15
-   widgets, verified), so this is win32-only. */
+ */
 #define W32_NAV_MAX 64
 #define W32_NAV_DEPTH 32
 static HWND w32_nav_pages[W32_NAV_MAX][W32_NAV_DEPTH];
@@ -2840,6 +2830,9 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     stack_do_layout(host->hwnd);
 }
 
+/* Defined with the other registry helpers below; navstack_pop needs it. */
+static void mark_subtree_dead(HWND hwnd);
+
 void aether_ui_navstack_pop(int handle) {
     Widget* host = widget_at(handle);
     if (!host) return;
@@ -2848,7 +2841,20 @@ void aether_ui_navstack_pop(int handle) {
     if (d <= 0) return;              // at the root: a no-op, not an underflow
     HWND top = w32_nav_pages[handle - 1][d - 1];
     w32_nav_depth[handle - 1] = d - 1;
-    if (top && IsWindow(top)) DestroyWindow(top);
+    if (top && IsWindow(top)) {
+        /* mark_subtree_dead FIRST: the registry never shrinks, and Windows
+           recycles HWND values, so IsWindow() alone cannot tell a destroyed
+           page from a live widget that inherited its handle -- the `dead`
+           flag is what the driver actually reads. It must run BEFORE
+           DestroyWindow, because afterwards GetWindow can no longer
+           enumerate the children to mark them.
+
+           Omitting this is why the spec stayed red after the page stack
+           landed: pop destroyed the right window, but its widgets kept
+           reporting live types and the census never fell. */
+        mark_subtree_dead(top);
+        DestroyWindow(top);
+    }
     // Re-show ONLY the page beneath, not every child: showing all of them
     // stacked every previously-pushed page on top of each other.
     if (d - 1 > 0) {

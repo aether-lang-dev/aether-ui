@@ -4,7 +4,7 @@
 // implement push, but nothing drove it, nothing asserted it, and the `title`
 // argument was discarded by every one of them ((void)title in gtk4, win32 and
 // macOS alike) so there was no back chrome to speak of. This demo is the
-// exercise, and tests/spec_navstack_demo the assertion.
+// exercise, and tests/spec_navstackdemo the assertion.
 //
 // Shape borrowed from swiby's multi-page apps: a stack of pages, each pushed
 // with a title, a back affordance that pops, and a breadcrumb showing where

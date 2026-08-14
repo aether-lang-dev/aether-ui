@@ -1,4 +1,4 @@
-// spec_navstack_demo.ae — drives the navstack example over the AetherUIDriver.
+// spec_navstackdemo.ae — drives the navstack example over the AetherUIDriver.
 //
 // The navstack ABI shipped as an UNEXERCISED stub: all three backends
 // implemented push, nothing drove it, and nothing asserted it. This is the
@@ -12,8 +12,8 @@
 //   * pop at the root is a no-op rather than an underflow
 //
 // Run via ci.sh, or by hand:
-//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/navstack_demo/bin/navstack_demo &
-//   UI_SPEC=navstack_demo/spec_navstack_demo tests/run_spec.sh
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/navstackdemo/bin/navstackdemo &
+//   UI_SPEC=navstackdemo/spec_navstackdemo tests/run_spec.sh
 import aeocha
 import uidriver
 import std.string

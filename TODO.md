@@ -515,7 +515,16 @@ geometry and paint state, the backend only draws it. Concretely:
      platform. Kept on the evidence of what the code does, not the number.
    * macOS: **no change, and honestly so** — see the bug below.
 
-   **FOUND, NOT FIXED: macOS renders TEXT-ONLY SVGs completely blank.**
+   ~~**FOUND, NOT FIXED: macOS renders TEXT-ONLY SVGs completely blank.**~~
+   **FIXED 2026-08-13** — `CANVAS_FILL_TEXT` draws with AppKit's
+   `-[NSString drawAtPoint:]`, which renders into
+   `+[NSGraphicsContext currentContext]` and NOT into the `CGContextRef` it
+   is handed; headless there was no focused view, so every glyph went
+   nowhere. Pushing a context backed by the PNG bitmap around the replay
+   (`flipped:YES`, matching the already-flipped CTM) fixed it. Original
+   finding below.
+
+   **THE FINDING:**
    `decimal`, `Steps` and `blocks_game` produce ZERO ink on macOS while GTK4
    and librsvg draw them (decimal: librsvg 25115, GTK4 25125, macOS 0);
    `helloworld`, which has other content alongside its text, renders fine.

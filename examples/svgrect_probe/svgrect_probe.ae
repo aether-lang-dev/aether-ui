@@ -1,0 +1,68 @@
+// svgrect_probe — does an SVG <rect> AFTER a <text> still render on win32?
+//
+// cmdkind_coverage loses its 6th element (a plain dark <rect>) on win32 while
+// elements 1-5 (two gradients, two texts) all render. blit_probe proved
+// CV_DRAW_IMAGE works, and CV_FILL_RECT is measured working since BbA step 3.
+// So the suspect is ORDER: something about a fill that follows text.
+//
+// Two rects and one text between them. If rect B is missing on win32 and rect
+// A is present, the text is what breaks the following draw.
+
+import ui
+import vg.backend.gtk
+import vg.svg.loader
+import vg.region
+import std.string
+import std.os (os_getenv)
+
+cat(a: string, b: string) -> string { return string.concat(a, b) }
+
+main() {
+    root = ui.root_vstack(0) {
+        c = ui.canvas_create(240, 160)
+        backend = gtk.gtk_backend_new(c)
+
+        svg = "<svg viewBox='0 0 240 160'>"
+        svg = cat(svg, "<rect x='0' y='0' width='240' height='160' fill='#ffffff'/>")
+        // A: BEFORE any text
+        svg = cat(svg, "<rect x='10' y='10' width='60' height='40' fill='#2563eb'/>")
+        // The element cmdkind_coverage has that this probe lacked: a circle
+        // filled from a RADIAL gradient. Legacy degrades radial to a
+        // horizontal ramp; the question is whether it also breaks what follows.
+        svg = cat(svg, "<defs><radialGradient id='rad' cx='0.5' cy='0.5' r='0.5'>")
+        svg = cat(svg, "<stop offset='0' stop-color='#f2f5f8'/>")
+        svg = cat(svg, "<stop offset='1' stop-color='#101018'/>")
+        svg = cat(svg, "</radialGradient></defs>")
+        svg = cat(svg, "<circle cx='180' cy='40' r='30' fill='url(#rad)'/>")
+        svg = cat(svg, "<text x='10' y='90' font-size='20' fill='#101018'>Hg</text>")
+        // B: AFTER text — the one cmdkind_coverage loses
+        svg = cat(svg, "<rect x='140' y='96' width='90' height='56' fill='#db2777'/>")
+        svg = cat(svg, "</svg>")
+
+        _ctx = loader.load_svg(backend, svg, 240.0, 160.0)
+
+        // The LAST difference from cmdkind_coverage: a raw canvas_draw_image
+        // issued AFTER load_svg has run. If the pink rect (drawn inside the
+        // SVG, before this) survives, the blit is innocent; if it vanishes,
+        // mixing raw canvas calls after a vg scene is the problem.
+        IW = 40
+        IH = 40
+        buf = region.new_frame_buffer(IW, IH)
+        py = 0
+        while py < IH {
+            px = 0
+            while px < IW {
+                region.buf_set_px(buf, py * IW + px, 217, 161, 60, 128)
+                px = px + 1
+            }
+            py = py + 1
+        }
+        rgba = region.frame_finish(buf, IW, IH)
+        ui.canvas_draw_image(c, 60.0, 60.0, IW, IH, rgba, IW * IH * 4)
+        ui.canvas_redraw(c)
+    }
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        ui.enable_test_server_root(9222, root)
+    }
+    ui.app_run("svgrect probe", 260, 200, root)
+}
