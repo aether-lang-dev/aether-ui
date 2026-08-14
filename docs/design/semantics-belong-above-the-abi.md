@@ -112,6 +112,16 @@ path here?") and not to its **semantics** ("what does even-odd mean?").
 ## What is still open
 
 - **navstack `title`** — discarded by all three backends; no back chrome.
+- **win32 child opacity, and the instrument to see it** — `style_opacity` is
+  top-level-only there, so `ui.transition`'s easing has nothing to animate. The
+  sharper problem is that three capture paths (driver `/screenshot`,
+  `GetPixel`, `PrintWindow`) are all blind to child controls on that box, and a
+  *blank* capture still produces a plausible number. That is a new failure mode
+  for the "two instruments" argument above: not a tripwire that argues for
+  worse code, but an instrument that reports a confident measurement of
+  nothing. A pixel test must prove it can SEE the thing before its readings
+  count — `test_easing_curve.sh` now checks pixel spread and skips if not.
+  See TODO.md.
 - **win32 navstack pop** — pages remain in the widget census after popping.
   `spec_navstack_demo` is red on win32 on purpose, describing a real defect.
 - **`widget_apply_css`** — asymmetric by design rather than leaking: GTK4

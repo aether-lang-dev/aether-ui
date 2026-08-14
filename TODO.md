@@ -147,6 +147,46 @@ Whether `video_frame` belongs in `apps/` long-term or becomes a
 of the exercise, but the API should follow a second real consumer rather
 than be guessed at from one demo.
 
+## win32 child-widget opacity (and the capture path that would prove it)
+
+`ui.style_opacity` on a child widget does nothing visible on win32, and
+`ui.transition`'s easing therefore has nothing to animate there. Two separate
+pieces, only the first of which is understood.
+
+**Wiring it up.** `aether_ui_set_opacity` is top-level-only by design. The
+guard that enforced this was broken until 2026-08-14 — it tested `WS_CHILD`
+against `GWL_EXSTYLE`, where that bit is `WS_EX_NOINHERITLAYOUT` and normally
+clear, so children *were* being made `WS_EX_LAYERED` while the comment claimed
+they were skipped. Now fixed, which makes the no-op honest but still a no-op.
+
+Child alpha is **not** known to be impossible here: uniform alpha has worked on
+child windows since Win8, and the overlay exit fade (`w32_make_layered` +
+`SetLayeredWindowAttributes` on `e->content`, a child) depends on it and is
+green at 3/3. So the likely job is wiring `set_opacity` and the tween through
+the same mechanism the overlays already use, not inventing a new one. The open
+design question is whether a STATIC label honours it the way the overlay's
+container does, and if not, whether to owner-draw the label or fade a layered
+parent.
+
+**Proving it is the harder half, and is a prerequisite.** Three instruments
+were tried on 2026-08-14 and all three are blind to child controls on that box:
+
+| instrument | result |
+|---|---|
+| driver `/screenshot` | decodes fine, but **uniform** — `min == max == 240`, zero dark pixels, no controls in frame |
+| `GetPixel` on the live desktop | reads nothing (Session 0, no interactive desktop over ssh) |
+| `PrintWindow` into a DIB | uniformly black bitmap |
+
+This matters more than it looks. A capture that is merely *blank* still decodes
+and still yields a number, so a pixel test reads constant ink and reports "the
+label did not fade" — a false accusation against code that may be correct.
+`tests/transitions_demo/test_easing_curve.sh` now guards on pixel SPREAD and
+skips as a blind instrument rather than failing; until that skip stops firing,
+**no pixel evidence about win32 easing is admissible either way**.
+
+Worth fixing the capture first: it is the same instrument golden-image tests
+would need on win32, so it is not effort spent only on this item.
+
 ## Push rendering semantics out of the backends and into the vg layer
 
 **The balance of C to Aether is roughly right; the boundary is wrong in one

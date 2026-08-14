@@ -3235,11 +3235,20 @@ void aether_ui_set_opacity(int handle, double opacity) {
     Widget* w = widget_at(handle);
     if (!w) return;
     w->opacity = opacity;
-    // WS_EX_LAYERED only works reliably on top-level windows; for child
-    // widgets this is a no-op. Apps requesting child opacity should use
-    // compositing backends (we fall back silently).
-    LONG_PTR ex = GetWindowLongPtrW(w->hwnd, GWL_EXSTYLE);
-    if (!(ex & WS_CHILD)) {
+    // Top-level windows only, deliberately. NB WS_CHILD is a REGULAR style, so
+    // it must be read from GWL_STYLE: this line used to query GWL_EXSTYLE,
+    // where the same bit (0x40000000) means WS_EX_NOINHERITLAYOUT and is
+    // normally clear -- so the guard never fired and children DID get made
+    // layered, the opposite of what it says. That is not harmless: line ~7788
+    // notes ChildWindowFromPointEx skips WS_EX_LAYERED children, so hit-testing
+    // could break on any widget an app set opacity on.
+    //
+    // Child alpha itself is NOT known-broken (uniform alpha works on child
+    // windows since Win8, and the overlay exit fade relies on it) -- it is
+    // simply not wired up here. See TODO.md, "win32 child-widget opacity".
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    if (!(st & WS_CHILD)) {
+        LONG_PTR ex = GetWindowLongPtrW(w->hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(w->hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED);
         double a = opacity;
         if (a < 0) a = 0;
