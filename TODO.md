@@ -455,10 +455,14 @@ geometry and paint state, the backend only draws it. Concretely:
      handles, geometry and opaque payloads; none require a backend to decide
      what something MEANS.
 
-   So across all 241 externs the audit found **ten** leaks, of which nine are
-   closed and one (the overlay transition kind) is recorded but not fixed --
-   it needs a driver spec to verify, since the SVG corpus cannot see an
-   animation.
+   So across all 241 externs the audit found **ten** leaks, and **all ten are
+   now closed.** The overlay transition kind was fixed the same day it was
+   recorded: win32 now distinguishes slide-up/slide-down/scale (moving and
+   resizing the layered window on the same tween clock as the alpha) and
+   macOS honours them via Core Animation frame tweens, having previously
+   discarded the string outright. Unrecognised kinds still fade, so nothing
+   that worked before changed. `overlaytr` 3/3 green on GTK4 and on win32
+   with a forced rebuild.
 
 
 

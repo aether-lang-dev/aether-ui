@@ -2873,6 +2873,7 @@ typedef struct {
     int live;
     int exiting;    // 1 while the exit tween plays (before live flips to 0)
     int trans_ms;   // per-entry transition duration; 0 = no tween (instant)
+    char* trans_kind;  // "fade"/"slide-up"/"slide-down"/"scale"; NULL = fade
     // Scrim material (overlay_material). macOS has a REAL frosted material —
     // "blur" installs an NSVisualEffectView behind the scrim. effective is
     // "dim" | "blur" | "tint". material_view is the effect view (nil = none).
@@ -3027,9 +3028,26 @@ void aether_ui_overlay_close_impl(int overlay_handle) {
         int cap = overlay_handle;
         NSView* content = e->content;
         NSView* scrim = e->scrim;
+        /* Alpha always; GEOMETRY as well for the kinds that ask for it.
+           Core Animation tweens the frame directly, so slide is a frame
+           offset and scale an inset about the centre. An unrecognised kind
+           (or none) is a plain fade, exactly as before. */
+        const char* kind = e->trans_kind;
+        NSRect start = [content frame];
+        NSRect target = start;
+        if (kind) {
+            if (strcmp(kind, "slide-up") == 0)        target.origin.y += start.size.height;
+            else if (strcmp(kind, "slide-down") == 0) target.origin.y -= start.size.height;
+            else if (strcmp(kind, "scale") == 0) {
+                target = NSInsetRect(start, start.size.width * 0.5 - 1.0,
+                                            start.size.height * 0.5 - 1.0);
+            }
+        }
+        BOOL moves = !NSEqualRects(start, target);
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
             ctx.duration = (double)dur_ms / 1000.0;
             [[content animator] setAlphaValue:0.0];
+            if (moves) [[content animator] setFrame:target];
             if (scrim) [[scrim animator] setAlphaValue:0.0];
         } completionHandler:^{
             overlay_finalize_close(cap);
@@ -3062,9 +3080,16 @@ int aether_ui_overlay_is_modal_impl(int overlay_handle) {
 // animations are off the tween is skipped and exit is instant.
 void aether_ui_overlay_set_transition_impl(int overlay_handle,
                                            const char* kind, int ms) {
-    (void)kind;
     OverlayEntry* e = overlay_at(overlay_handle);
-    if (e) e->trans_ms = ms > 0 ? ms : 0;
+    if (!e) return;
+    /* The KIND was discarded here -- (void)kind -- so every transition played
+       as a fade regardless of what was asked for. GTK4 has always
+       distinguished fade/slide-up/slide-down/scale; win32 stored the string
+       but branched only on non-emptiness. One string, three interpretations.
+       See TODO.md, "push rendering semantics out of the backends". */
+    free(e->trans_kind);
+    e->trans_kind = (kind && *kind) ? strdup(kind) : NULL;
+    e->trans_ms = ms > 0 ? ms : 0;
 }
 
 int aether_ui_overlay_is_exiting_impl(int overlay_handle) {

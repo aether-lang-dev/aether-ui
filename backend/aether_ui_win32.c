@@ -3676,6 +3676,9 @@ typedef struct {
     // close plays an alpha fade over trans_ms before the real detach; exiting
     // holds 1 during it. fade_* track the running animation.
     char* trans_kind;
+    /* Start geometry of the exit tween, captured on the first timer tick so
+       slide/scale interpolate from where the overlay actually is. */
+    int tr_x, tr_y, tr_w, tr_h;
     int trans_ms;
     int exiting;
     UINT_PTR fade_timer;  // system-assigned WM_TIMER id while fading (0 = none)
@@ -3799,6 +3802,43 @@ static void CALLBACK w32_overlay_fade_proc(HWND hwnd, UINT msg, UINT_PTR id, DWO
         if (e->content)
             SetLayeredWindowAttributes(e->content, 0,
                 (BYTE)((255 * rem) / ms), LWA_ALPHA);
+        /* THE KIND, not just the duration. This branched only on the kind
+           being non-empty, so every transition_overlay() exit was a fade --
+           "slide-up", "slide-down" and "scale" all silently rendered as one.
+           GTK4 has always distinguished the four (see transition_css_class
+           there); macOS discarded the kind entirely. One string, three
+           interpretations, and the reference backend looked right so nothing
+           flagged it.
+
+           Geometry alongside the alpha: slide moves the content window,
+           scale shrinks it about its centre. Both ride the same tween clock,
+           so a kind that is unrecognised still fades exactly as before. */
+        if (e->content && e->trans_kind) {
+            RECT r;
+            if (GetWindowRect(e->content, &r)) {
+                int w = r.right - r.left, h = r.bottom - r.top;
+                if (e->tr_w == 0) { e->tr_x = r.left; e->tr_y = r.top;
+                                    e->tr_w = w; e->tr_h = h; }
+                int done = (int)elapsed;
+                if (strcmp(e->trans_kind, "slide-up") == 0) {
+                    int dy = (e->tr_h * done) / ms;
+                    SetWindowPos(e->content, NULL, e->tr_x, e->tr_y - dy, 0, 0,
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                } else if (strcmp(e->trans_kind, "slide-down") == 0) {
+                    int dy = (e->tr_h * done) / ms;
+                    SetWindowPos(e->content, NULL, e->tr_x, e->tr_y + dy, 0, 0,
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                } else if (strcmp(e->trans_kind, "scale") == 0) {
+                    int nw = (e->tr_w * rem) / ms, nh = (e->tr_h * rem) / ms;
+                    if (nw < 1) nw = 1;
+                    if (nh < 1) nh = 1;
+                    SetWindowPos(e->content, NULL,
+                                 e->tr_x + (e->tr_w - nw) / 2,
+                                 e->tr_y + (e->tr_h - nh) / 2, nw, nh,
+                                 SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+            }
+        }
         // Fade the scrim from its ~45% start (115) proportionally.
         if (e->scrim)
             SetLayeredWindowAttributes(e->scrim, 0,
