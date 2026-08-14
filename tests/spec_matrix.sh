@@ -83,6 +83,7 @@ SUITES=(
   "picker|examples/picker|picker/spec_picker|AETHER_UI_PICKER=drawn"
   "each|examples/each_demo|each_demo/spec_each_demo|"
   "listbox|examples/listbox_demo|listbox_demo/spec_listbox_demo|"
+  "navstack|examples/navstack_demo|navstack_demo/spec_navstack_demo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"
   "split|examples/split_demo|split_demo/spec_split_demo|"
   "bindings|examples/bindings_demo|bindings_demo/spec_bindings_demo|"

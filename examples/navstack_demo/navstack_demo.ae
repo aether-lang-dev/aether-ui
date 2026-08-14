@@ -1,0 +1,73 @@
+// Aether UI NavigationStack example — push/pop pages with back chrome.
+//
+// The navstack ABI has existed as an UNEXERCISED stub: all three backends
+// implement push, but nothing drove it, nothing asserted it, and the `title`
+// argument was discarded by every one of them ((void)title in gtk4, win32 and
+// macOS alike) so there was no back chrome to speak of. This demo is the
+// exercise, and tests/spec_navstack_demo the assertion.
+//
+// Shape borrowed from swiby's multi-page apps: a stack of pages, each pushed
+// with a title, a back affordance that pops, and a breadcrumb showing where
+// you are. Everything here is REAL widgets, so the driver sees pages appear
+// and disappear -- which is the only way this feature can be tested at all.
+//
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, navstack,
+    nav_push, nav_pop, spacer, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    // Depth is tracked here rather than read back from the stack: no backend
+    // exposes its page count, which is itself worth noting -- the driver can
+    // see WHICH page is visible (the page's widgets appear in /widgets) but
+    // not how deep the stack is.
+    depth = 1
+
+    window("navstack demo", 520, 420) {
+        vstack(8) {
+            crumb = text("Home")
+            status = text("depth: 1")
+            divider()
+
+            nav = navstack()
+
+            divider()
+            hstack(8) {
+                _push = btn("Push page") callback {
+                    depth = depth + 1
+                    title = string.concat("Page ", string.from_int(depth))
+                    // The body is built OUTSIDE the stack and handed over --
+                    // nav_push takes a handle, not a builder block.
+                    body = vstack(6) {
+                        _t = text(title)
+                        _h = text("pushed onto the navigation stack")
+                    }
+                    nav_push(nav, title, body)
+                    aether_ui_text_set_string(crumb, title)
+                    aether_ui_text_set_string(status,
+                        string.concat("depth: ", string.from_int(depth)))
+                }
+                _back = btn("Back") callback {
+                    if depth > 1 {
+                        nav_pop(nav)
+                        depth = depth - 1
+                        crumb_text = "Home"
+                        if depth > 1 {
+                            crumb_text = string.concat("Page ", string.from_int(depth))
+                        }
+                        aether_ui_text_set_string(crumb, crumb_text)
+                        aether_ui_text_set_string(status,
+                            string.concat("depth: ", string.from_int(depth)))
+                    }
+                }
+                spacer()
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

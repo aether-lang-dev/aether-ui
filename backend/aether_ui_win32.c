@@ -2793,6 +2793,30 @@ int aether_ui_navstack_create(void) {
     return handle;
 }
 
+/* An EXPLICIT page stack per navstack, because pop cannot be inferred from
+   the window list. The old pop scanned children for "the last visible one"
+   and DestroyWindow'd it -- but push hides the previous pages and SetParent
+   does not guarantee where a new child lands in GW_HWNDNEXT order, so the
+   scan could pick the wrong window (or none). The driver spec caught it on
+   its first run: after a pop the widget census stayed at 18, i.e. nothing
+   was destroyed. GTK4 has always kept a per-stack page count; this is the
+   win32 equivalent, and it stores the HWNDs so pop needs no guessing.
+
+   STILL NOT SUFFICIENT, and recorded rather than left as a mystery: with the
+   explicit stack in place, pop runs (the demo's depth counter falls to 1) but
+   the pushed page's widgets REMAIN in the driver census -- ids 13/14/15 still
+   report as vstack/text/text after popping. hook_widget_type reports "null"
+   for a widget whose HWND fails IsWindow(), which is how a destroyed listbox
+   row disappears, so either the HWND stored here is not the one actually
+   parented under the host, or DestroyWindow is not reaching a container that
+   was created without its own window. Needs a trace of body->hwnd at push
+   against GetWindow(host, GW_CHILD) at pop. GTK4 pops correctly (18 -> 15
+   widgets, verified), so this is win32-only. */
+#define W32_NAV_MAX 64
+#define W32_NAV_DEPTH 32
+static HWND w32_nav_pages[W32_NAV_MAX][W32_NAV_DEPTH];
+static int  w32_nav_depth[W32_NAV_MAX];
+
 void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     (void)title;
     Widget* host = widget_at(handle);
@@ -2801,6 +2825,13 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
     // Hide previous children, show this one.
     for (HWND c = GetWindow(host->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
         ShowWindow(c, SW_HIDE);
+    }
+    if (handle >= 1 && handle <= W32_NAV_MAX) {
+        int d = w32_nav_depth[handle - 1];
+        if (d < W32_NAV_DEPTH) {
+            w32_nav_pages[handle - 1][d] = body->hwnd;
+            w32_nav_depth[handle - 1] = d + 1;
+        }
     }
     SetParent(body->hwnd, host->hwnd);
     LONG_PTR st = GetWindowLongPtrW(body->hwnd, GWL_STYLE);
@@ -2812,13 +2843,18 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
 void aether_ui_navstack_pop(int handle) {
     Widget* host = widget_at(handle);
     if (!host) return;
-    HWND top = NULL;
-    for (HWND c = GetWindow(host->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
-        if (IsWindowVisible(c)) top = c;
-    }
-    if (top) {
-        DestroyWindow(top);
-        // Re-show the new top child if any.
+    if (handle < 1 || handle > W32_NAV_MAX) return;
+    int d = w32_nav_depth[handle - 1];
+    if (d <= 0) return;              // at the root: a no-op, not an underflow
+    HWND top = w32_nav_pages[handle - 1][d - 1];
+    w32_nav_depth[handle - 1] = d - 1;
+    if (top && IsWindow(top)) DestroyWindow(top);
+    // Re-show ONLY the page beneath, not every child: showing all of them
+    // stacked every previously-pushed page on top of each other.
+    if (d - 1 > 0) {
+        HWND prev = w32_nav_pages[handle - 1][d - 2];
+        if (prev && IsWindow(prev)) ShowWindow(prev, SW_SHOW);
+    } else {
         for (HWND c = GetWindow(host->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
             ShowWindow(c, SW_SHOW);
         }
