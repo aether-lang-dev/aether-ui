@@ -28,9 +28,18 @@
 # it works there). Run the app on the session display, or let ci.sh's
 # run_server_test own the xvfb wrapper.
 #
-# MEASURED on a real display: progress 0.440 at 25% and 0.758 at 50%, against
-# the ease-out curve's predicted 0.438 and 0.750. Linear would read 0.25/0.50,
-# so the two are cleanly separated.
+# MEASURED on GTK4: progress 0.440 at 25% and 0.758 at 50%, against the
+# ease-out curve's predicted 0.438 and 0.750. Linear would read 0.25/0.50, so
+# the two are cleanly separated.
+#
+# ON WIN32 THIS CURRENTLY FAILS, and the failure is REAL rather than a harness
+# artefact: the model opacity updates (the driver reports 0.15 after the
+# toggle) but the screenshot is byte-identical at every sample -- ink 15.0
+# before, mid-tween and settled. The tween sets the layered-window alpha via
+# SetLayeredWindowAttributes, and a child STATIC control does not composite
+# that way, so nothing reaches the framebuffer. Fixing it needs the label
+# painted with alpha (owner-draw or a layered parent), which is a separate
+# piece of work from the CURVE this test measures.
 #
 # NB the demo fades over 1200ms, which is luxuriously slow for real UI (150-250ms
 # is typical) -- it is long on purpose so a mid-flight frame is easy to sample.
@@ -38,6 +47,11 @@
 #   usage: test_easing_curve.sh [port]
 set -u
 PORT="${1:-9222}"
+# Scratch dir both halves of the toolchain agree on. On MSYS the shell's /tmp
+# and a native-Windows python's /tmp are DIFFERENT directories, so curl would
+# write a PNG that python then could not find -- which reads as "no image" and
+# skips the whole test. TMPDIR (set by MSYS to a real path) avoids the split.
+SCRATCH="${TMPDIR:-/tmp}"
 BASE="http://127.0.0.1:$PORT"
 PASS=0; FAIL=0
 ok()  { echo "  [PASS] $1"; PASS=$((PASS+1)); }
@@ -60,24 +74,24 @@ BTN=$(curl -s -m 5 "$BASE/widgets" | tr '}' '\n' | grep '"text":"Toggle fade"' \
       | grep -oE '"id":[0-9]+' | head -1 | cut -d: -f2)
 [ -n "$BTN" ] && ok "Toggle button found (id $BTN)" || { bad "Toggle button found"; exit 1; }
 
-curl -s -m 5 "$BASE/screenshot" -o /tmp/ec_start.png
-if ! python3 -c "from PIL import Image; Image.open('/tmp/ec_start.png')" 2>/dev/null; then
+curl -s -m 5 "$BASE/screenshot" -o $SCRATCH/ec_start.png
+if ! python3 -c "from PIL import Image; import sys; Image.open(sys.argv[1])" "$SCRATCH/ec_start.png" 2>/dev/null; then
     echo "  SKIP: /screenshot returned no image — the app is probably on a"
     echo "        different display than the one being captured. The curve can"
     echo "        only be read from pixels, so there is nothing to assert."
     exit 0
 fi
-I_START=$(ink /tmp/ec_start.png)
+I_START=$(ink $SCRATCH/ec_start.png)
 
 curl -sf -m 5 -X POST "$BASE/widget/$BTN/click" > /dev/null
 sleep 0.3                                   # 25% through the 1200ms tween
-curl -s -m 5 "$BASE/screenshot" -o /tmp/ec_q1.png
+curl -s -m 5 "$BASE/screenshot" -o $SCRATCH/ec_q1.png
 sleep 0.3                                   # 50%
-curl -s -m 5 "$BASE/screenshot" -o /tmp/ec_q2.png
+curl -s -m 5 "$BASE/screenshot" -o $SCRATCH/ec_q2.png
 sleep 1.2                                   # settled
-curl -s -m 5 "$BASE/screenshot" -o /tmp/ec_end.png
+curl -s -m 5 "$BASE/screenshot" -o $SCRATCH/ec_end.png
 
-I_Q1=$(ink /tmp/ec_q1.png); I_Q2=$(ink /tmp/ec_q2.png); I_END=$(ink /tmp/ec_end.png)
+I_Q1=$(ink $SCRATCH/ec_q1.png); I_Q2=$(ink $SCRATCH/ec_q2.png); I_END=$(ink $SCRATCH/ec_end.png)
 echo "  ink: start=$I_START  25%=$I_Q1  50%=$I_Q2  settled=$I_END"
 
 # A tween happened at all: the settled frame is lighter than the start.
