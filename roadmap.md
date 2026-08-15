@@ -610,7 +610,9 @@ or compositor bugs the overlay layer can't absorb).
 
 1. **Driver-first widgets:** every new widget/effect ships with its
    `/widgets` JSON representation, driver routes, uidriver helpers, and
-   an Aeocha spec in the same commit (the `toggle_group` precedent).
+   a `std.spec` spec in the same commit (the `toggle_group` precedent).
+   (Was "an Aeocha spec" until 2026-08-15; aeocha's core is now `std.spec`
+   in the stdlib.)
 2. **Sommelier is a release gate** for anything compositor-adjacent —
    test on the Chromebook before calling it done; never let a Crostini
    workaround become the default (gate on `$SOMMELIER_VERSION`).
@@ -628,3 +630,17 @@ or compositor bugs the overlay layer can't absorb).
 6. **Geometry specs pin the window** (item 7's lesson): GTK4 on a cold
    Xvfb can map windows at natural size — /window/resize first, then
    assert.
+7. **"-alike", never the toolkit's own name** (2026-08-15): we implement
+   published IDEAS from SwiftUI/QML/Flutter/Swing/Swiby, reading their
+   documented behaviour — not their source. So it is "QML-alike States",
+   "Swing-style undo", "the Flutter ColorScheme idea", and never "QML
+   States" or "Swing UndoManager" as though we shipped theirs. The reason
+   is legal as much as descriptive: those codebases carry different
+   licences and different copyright holders, and naming a feature after
+   one implies we took its code. An independent implementation of an idea
+   carries OUR copyright and OUR licence; a port does not.
+   The exception proves it: `apps/LisMusic` really is a port of someone's
+   Qt6/QML source, so that directory names the author, links upstream,
+   records the original's licence status, and describes itself as a
+   structural translation. Where we ported, say so; where we did not,
+   do not imply it.

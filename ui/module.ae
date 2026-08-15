@@ -2043,8 +2043,17 @@ _style_line(sp: ptr, line: string) {
 }
 
 // ── QML-alike States on AeCS ────────────────────────────────────────
-// Named states for a widget/subtree — QML's States IDEA landing on AeCS
-// (an equivalent of it, not QML):
+// Named states for a widget/subtree — QML's States IDEA landing on AeCS.
+//
+// "-alike", not "QML", and the reason is LEGAL as much as descriptive: no QML
+// source was read or ported here. This is an independent implementation of a
+// published idea, written against AeCS and our own setters, so it carries our
+// copyright and our licence. Naming it "QML States" would imply we took Qt's
+// code, which is differently licensed and differently owned. Where this repo
+// genuinely DID port someone's source (apps/LisMusic, from a Qt6/QML original)
+// that directory says so, credits the author, and keeps the upstream terms.
+//
+// The mechanism:
 // each state is an AeCS sheet fragment; set_state applies it to the target
 // subtree through the existing setters, so properties with a declared
 // ui.transition ANIMATE between states and the rest snap. The current
