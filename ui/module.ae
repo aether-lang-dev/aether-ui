@@ -48,6 +48,8 @@ exports (
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     load_styles,
     ui_states, add_state, set_state, current_state,
+    command, command_fire, command_set_enabled, command_enabled,
+    command_label, command_attach, btn_command, menu_item_command,
     undoable, undo, redo, undo_depth, redo_depth, undo_label,
     enable_undo_shortcuts,
     style_font_weight, style_font_family,
@@ -2108,6 +2110,129 @@ set_state(wsp: ptr, name: string) -> int {
         i = i + 1
     }
     return 0
+}
+
+// ── command: one action, many surfaces (the Swing Action shape) ─────
+// A command bundles a label, an optional accelerator and a callback, then
+// lets any number of SURFACES attach to it — a button, a menu item, the
+// keystroke. Disabling the command disables every one of them at once.
+//
+//   save = command("Save", "Ctrl+S") callback { do_save() }
+//   b = btn_command(save)              // a button wired to it
+//   menu_item_command(fmenu, save)     // a menu item wired to it
+//   command_set_enabled(save, 0)       // greys BOTH and kills the key
+//
+// WHY THE GUARD LIVES HERE, not in the backends: an accelerator, once
+// registered, keeps firing — there is no portable "unregister a shortcut" on
+// all three platforms, and adding one would be three ABI calls to express a
+// state the app already knows. So the command wraps the app's callback in a
+// guard closure and every surface fires THROUGH it. Disable flips one int and
+// the keystroke becomes a no-op, with no backend involvement at all.
+//
+// That also makes the fan-out testable rather than assumed: attached widgets
+// are told through the existing style_enabled (so the driver's "enabled" field
+// reports it, per backend), while the keystroke is gated by the guard. A spec
+// can therefore assert BOTH halves — the widgets grey AND the key does not run
+// the callback. Detaching either half turns the spec red, which is the
+// falsification the brief asks for.
+// surfaces is a FIXED array, not a list: std.list stores ptr and a widget
+// handle is an int, which Aether will not cast between. A command with more
+// than 8 attached surfaces would be a design smell anyway (Swing's Action is
+// typically menu + toolbar + key), and n_surfaces makes the cap explicit
+// rather than silently dropping the ninth.
+const CMD_MAX_SURFACES: int = 8
+struct Command {
+    label: string,
+    accel: string,
+    cb: ptr,          // the app's callback, boxed
+    enabled: int,
+    n_surfaces: int,
+    surfaces: ptr     // intarr of widget handles to grey/ungrey
+}
+
+_command_invoke(cb: fn) {
+    cb()
+}
+
+// Fire the command if it is enabled. Every surface routes through this, so
+// there is exactly one place that decides whether the action runs.
+command_fire(cp: ptr) {
+    c = cp as *Command
+    if c.enabled == 0 { return }
+    f = unbox_closure(c.cb)
+    _command_invoke(f)
+}
+
+// command(label, accel, cb) — accel may be "" for no keystroke.
+command(label: string, accel: string, cb: fn) -> ptr {
+    c = malloc(48) as *Command
+    c.label = label
+    c.accel = accel
+    c.cb = box_closure(cb)
+    c.enabled = 1
+    c.n_surfaces = 0
+    c.surfaces = intarr_new_raw(CMD_MAX_SURFACES)
+    cp = c as ptr
+    // The accelerator fires through the guard, so a disabled command's key is
+    // inert without the backend having to unregister anything.
+    if string.length(accel) > 0 {
+        shortcut(accel) callback { command_fire(cp) }
+    }
+    return cp
+}
+
+command_label(cp: ptr) -> string {
+    c = cp as *Command
+    return c.label
+}
+
+command_enabled(cp: ptr) -> int {
+    c = cp as *Command
+    return c.enabled
+}
+
+// command_set_enabled(cmd, 0|1) — greys every attached surface AND gates the
+// keystroke. One call, all surfaces.
+command_set_enabled(cp: ptr, val: int) {
+    c = cp as *Command
+    c.enabled = val
+    i = 0
+    while i < c.n_surfaces {
+        h = intarr_get_raw(c.surfaces, i)
+        _ = style_enabled(h, val)
+        i = i + 1
+    }
+}
+
+// Register a widget as a surface of this command, so it greys with it.
+command_attach(cp: ptr, handle: int) {
+    c = cp as *Command
+    if c.n_surfaces >= CMD_MAX_SURFACES { return }
+    intarr_set_raw(c.surfaces, c.n_surfaces, handle)
+    c.n_surfaces = c.n_surfaces + 1
+    _ = style_enabled(handle, c.enabled)
+}
+
+// btn_command(ctx, cmd) — a button labelled and wired from the command.
+btn_command(_ctx: ptr, cp: ptr) -> int {
+    c = cp as *Command
+    h = btn(_ctx, c.label) callback { command_fire(cp) }
+    command_attach(cp, h)
+    return h
+}
+
+// menu_item_command(menu, cmd) — a menu item wired to the command. The accel
+// is shown after the label when there is one, matching menu_item_accel, but
+// the KEY was already registered by command() -- registering it twice would
+// fire the action twice per keystroke.
+menu_item_command(menu_handle: int, cp: ptr) {
+    c = cp as *Command
+    shown = c.label
+    if string.length(c.accel) > 0 {
+        shown = string.concat(c.label, string.concat("  ", c.accel))
+    }
+    boxed = box_closure(|| { command_fire(cp) })
+    aether_ui_menu_add_item(menu_handle, shown, boxed)
 }
 
 // ── Undo/Redo (the Swing UndoManager shape) ─────────────────────────

@@ -1,0 +1,99 @@
+// spec_command_demo.ae — `command` over the AetherUIDriver (SWING_ENVY C1).
+//
+// The brief's acceptance test, stated there as: "one command attached to a
+// button, a menu item and its key; command_set_enabled(0) must disable all
+// three — asserted via the driver's widget `enabled` field and a shortcut fire
+// that must NOT run the callback."
+//
+// The two halves are asserted through DIFFERENT instruments on purpose, and
+// that is the point of the design:
+//
+//   * the BUTTON greys through style_enabled, so the backend really disables
+//     the widget and the driver's "enabled" field reports it -- a platform
+//     fact, not a DSL-model one;
+//   * the KEYSTROKE is gated by the command's own guard, because an
+//     accelerator once registered keeps firing (there is no portable
+//     unregister across GTK4/win32/AppKit). So the key is asserted by a
+//     COUNTER that must not move.
+//
+// Falsification, per the brief: detach the enabled fan-out and the button
+// greys while the key still fires -- "fires after disable" would then read 2
+// and this spec goes red. Conversely, if the guard were dropped but the fan-out
+// kept, the button would grey and the counter would still climb. Neither half
+// can carry the other.
+//
+// Run via ci.sh / spec_matrix, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/command_demo/bin/command_demo &
+//   UI_SPEC=command_demo/spec_command_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "command: one action, many surfaces") {
+        spec.it("a button surface carries the command's label and is enabled") callback {
+            h = uidriver.widget_id_by_text("Save")
+            spec.assert_gt(h, 0, "the button took the command's label")
+            b = uidriver.get_body("/widget/${h}")
+            spec.assert_contains(b, "\"enabled\":true", "starts enabled")
+        }
+
+        spec.it("clicking the button fires the command") callback {
+            h = uidriver.widget_id_by_text("Save")
+            uidriver.post_ok("/widget/${h}/click", "click Save")
+            ok = uidriver.wait_body_contains("/widgets", "fired: 1", 20)
+            spec.assert_true(ok, "callback ran once")
+        }
+
+        // The accelerator reaches the SAME callback -- one command, two
+        // surfaces, one counter.
+        spec.it("the accelerator fires the same command") callback {
+            _r = uidriver.window_key("Ctrl+S")
+            ok = uidriver.wait_body_contains("/widgets", "fired: 2", 20)
+            spec.assert_true(ok, "Ctrl+S ran the same callback")
+        }
+
+        spec.it("disabling greys the button (backend readback)") callback {
+            d = uidriver.widget_id_by_text("Disable")
+            uidriver.post_ok("/widget/${d}/click", "disable the command")
+            ok = uidriver.wait_body_contains("/widgets", "save: disabled", 20)
+            spec.assert_true(ok, "status flipped")
+            h = uidriver.widget_id_by_text("Save")
+            b = uidriver.get_body("/widget/${h}")
+            spec.assert_contains(b, "\"enabled\":false",
+                "the button surface really is disabled at the platform")
+        }
+
+        // THE HALF THAT NEEDS ITS OWN INSTRUMENT. The shortcut is still
+        // registered with the backend -- nothing unregistered it -- so this
+        // asserts the GUARD: the key fires, and the callback declines to run.
+        spec.it("disabling also kills the keystroke") callback {
+            _r = uidriver.window_key("Ctrl+S")
+            // Give a real fire the same chance to land as the passing cases
+            // above got, so this cannot pass merely by reading too early.
+            _s = uidriver.wait_body_contains("/widgets", "fired: 3", 6)
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "fired: 2",
+                "counter did NOT move -- the guard stopped the accelerator")
+        }
+
+        spec.it("re-enabling restores both surfaces") callback {
+            e = uidriver.widget_id_by_text("Enable")
+            uidriver.post_ok("/widget/${e}/click", "re-enable")
+            ok = uidriver.wait_body_contains("/widgets", "save: enabled", 20)
+            spec.assert_true(ok, "status flipped back")
+
+            h = uidriver.widget_id_by_text("Save")
+            b = uidriver.get_body("/widget/${h}")
+            spec.assert_contains(b, "\"enabled\":true", "button re-enabled")
+
+            _r = uidriver.window_key("Ctrl+S")
+            ok2 = uidriver.wait_body_contains("/widgets", "fired: 3", 20)
+            spec.assert_true(ok2, "the keystroke works again")
+        }
+    }
+    spec.run_summary(fw)
+}

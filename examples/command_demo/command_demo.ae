@@ -1,0 +1,66 @@
+// Aether UI `command` example — the Swing Action shape (SWING_ENVY C1).
+//
+// A command bundles a label, an accelerator and a callback. Any number of
+// SURFACES attach to it — a button, a menu item, the keystroke — and
+// disabling the command disables every one of them with a single call.
+//
+// Swing's Action does this so that File>Save, the toolbar's save button and
+// Ctrl+S are one object: set it disabled and the whole app agrees. Before
+// this, an aether-ui app wiring the same action three ways had to remember to
+// grey three things, and had no way at all to stop the keystroke.
+//
+// THE PART WORTH TESTING is that last clause. An accelerator, once
+// registered, keeps firing — there is no portable unregister across GTK4 /
+// win32 / AppKit. So the command wraps the app's callback in a guard and every
+// surface fires THROUGH it: disabling flips one int and the keystroke becomes
+// inert, with no backend involvement. The spec asserts both halves — the
+// widgets grey (driver "enabled" field) AND the key stops running the
+// callback (a counter that must not move).
+//
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    command, command_set_enabled, command_enabled, btn_command,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    fires = 0
+    status = 0
+    counter = 0
+
+    window("command demo", 460, 300) {
+        vstack(10) {
+            status = text("save: enabled")
+            counter = text("fired: 0")
+            divider()
+
+            // ONE command, wired to a keystroke here and to a button below.
+            save = command("Save", "Ctrl+S") callback {
+                fires = fires + 1
+                aether_ui_text_set_string(counter, "fired: ${fires}")
+            }
+
+            // A button surface. Greys automatically when the command does.
+            _b = btn_command(save)
+
+            divider()
+            hstack(8) {
+                // Disabling must take the BUTTON and the KEYSTROKE together.
+                _d = btn("Disable") callback {
+                    command_set_enabled(save, 0)
+                    aether_ui_text_set_string(status, "save: disabled")
+                }
+                _e = btn("Enable") callback {
+                    command_set_enabled(save, 1)
+                    aether_ui_text_set_string(status, "save: enabled")
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+    return 0
+}

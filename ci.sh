@@ -60,7 +60,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -579,6 +579,10 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=roles_demo/spec_roles_demo \
     run_server_test "$(EX_BIN roles_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" roles_demo || FAIL=$((FAIL + 1))
+
+    UI_SPEC=command_demo/spec_command_demo \
+    run_server_test "$(EX_BIN command_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" command_demo || FAIL=$((FAIL + 1))
     # AeCS vs CSS semantics — W3C Selectors/cascade intent + pinned divergences.
     UI_SPEC=csssem_demo/spec_csssem_demo \
     run_server_test "$(EX_BIN csssem_demo)" \
