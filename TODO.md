@@ -147,6 +147,43 @@ Whether `video_frame` belongs in `apps/` long-term or becomes a
 of the exercise, but the API should follow a second real consumer rather
 than be guessed at from one demo.
 
+## GTK4 `POST /shutdown` doesn't shut down — and it is why the matrix crawls
+
+`POST /shutdown` answers `{"ok":true}`, the app keeps running, and the window
+stays `"live":true` in `GET /windows`. Same false-success shape as
+`/window/resize` below: the route reports success for something that did not
+happen.
+
+**This is the matrix's speed problem, not a cosmetic one.** Every suite's
+teardown POSTs `/shutdown` and then waits for the port to clear, so every
+suite waits out its whole budget for an exit that never comes. Measured
+2026-08-15 on `multiselect`: **96s wall for a suite whose actual work takes
+0.4s** (app launch→ready 0.2s, spec run 0.2s). A `bash -x` trace put 30.2s of
+one run in a single `sleep 0.25` loop. Across ~57 suites that is the
+difference between a matrix you can run casually and one you avoid.
+
+Harness mitigations landed (they cut ~96s → ~20s per suite): `port_free` no
+longer borrows the 30s *launch* budget for a shutdown it already signalled,
+teardown signals before waiting rather than after, and the poll asks the
+kernel (`ss -tln state listening`) instead of making an HTTP request per
+tick — NB plain `ss -tln` also lists TIME-WAIT sockets, which linger ~60s
+after every request a spec made and made the port read busy when nothing was
+listening. But those only shorten the wait for a broken shutdown; the app
+still has to be killed.
+
+**Root cause, partly traced.** `shutdown_idle` (aether_ui_gtk4.c) walks widget
+1's parent chain and calls `gtk_window_destroy` on the toplevel. It is not
+working: the window is still live afterwards, so either the walk does not
+reach a `GTK_IS_WINDOW` or the destroy is not taking. Apps run through
+`aether_ui_app_run_raw` → `g_application_run` on a `GtkApplication`, where
+destroying the last window should end the run.
+
+**A fix that did NOT work, recorded so it is not retried:** adding a file-scope
+`GMainLoop*` and calling `g_main_loop_quit` from `shutdown_idle`. That targets
+`aether_ui_app_run_headless_impl`'s bare loop, which is NOT the path these
+apps take — port release still took 11s and the process survived. Reverted.
+Start at why the window survives `gtk_window_destroy`, not at the loop.
+
 ## GTK4 `/window/resize` is a silent no-op (spec `split` 5/4 RED)
 
 `POST /window/resize?w=&h=` answers `{"ok":true}` and the window does not

@@ -213,11 +213,33 @@ want_suite() {
 # "DID NOT START" when they were merely slow. 30s everywhere; the loop still
 # exits early the moment /widgets answers, so this costs nothing when fast.
 STARTUP_TRIES=${STARTUP_TRIES:-120}
+PORT_FREE_TRIES=${PORT_FREE_TRIES:-60}   # 6s at 0.1s: a shutdown we already signalled
 
+# Is $PORT free? Polls until the driver stops answering.
+#
+# BUDGET: this used to reuse $STARTUP_TRIES (120 = 30s), which is a LAUNCH
+# budget and far too generous for "has the app we just told to quit finished
+# quitting". Measured 2026-08-15: one suite took 96s wall against 0.4s of
+# actual work, and the trace put 30.2s of it in this loop's `sleep 0.25`.
+# Teardown signals the app before calling here, so a second is plenty; the
+# rare genuine straggler still gets caught by the caller's kill path.
 port_free() {
-    for _ in $(seq 1 $STARTUP_TRIES); do
-        curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets" || return 0
-        sleep 0.25
+    for _ in $(seq 1 $PORT_FREE_TRIES); do
+        # Ask the KERNEL whether anything is listening, rather than making an
+        # HTTP request to find out. curl against a dead port still costs a
+        # connect() + teardown per poll, and the old loop ran it 75 times per
+        # suite; ss reads the socket table. Falls back to curl where ss is
+        # absent (macOS/FreeBSD have no ss).
+        if command -v ss >/dev/null 2>&1; then
+            # LISTEN only. `ss -tln` still lists TIME-WAIT sockets on this
+            # kernel, and those linger ~60s after every HTTP request the spec
+            # made -- matching them made port_free spin its whole budget on a
+            # port with nothing listening (18.3s per suite, measured).
+            ss -tln state listening 2>/dev/null | grep -q ":$PORT " || return 0
+        else
+            curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/widgets" || return 0
+        fi
+        sleep 0.1
     done
     return 1
 }
@@ -252,7 +274,21 @@ teardown() {
     # port, prints "listening", then dies, and the run reports "APP DID NOT
     # START". Observed ~4-in-5 on the macOS VM. Wait for the name to actually
     # clear before handing the port on.
+    #
+    # SIGNAL, THEN WAIT -- in that order. `port_free` above is checked straight
+    # after POST /shutdown, before the app has actually exited, so it often
+    # reports free and the kill is skipped; the loop below would then wait its
+    # full budget for a process nobody had signalled. That is invisible while
+    # pkill -x cannot match a 16-char name (the loop breaks instantly and the
+    # matrix charges on), and becomes ~10s of dead time PER SUITE the moment
+    # the match is fixed -- apps sitting on screen doing nothing. So make sure
+    # the thing we are waiting on has been told to go.
     local watch="${base:0:15}"    # same truncation as above; pgrep -x sees comm
+    if pgrep -x "$base" >/dev/null 2>&1 || pgrep -x "$watch" >/dev/null 2>&1; then
+        kill "$pid" 2>/dev/null
+        pkill -x "$base" 2>/dev/null
+        [ "$watch" != "$base" ] && pkill -x "$watch" 2>/dev/null
+    fi
     for _ in $(seq 1 40); do
         pgrep -x "$base" >/dev/null 2>&1 || pgrep -x "$watch" >/dev/null 2>&1 || break
         sleep 0.25
