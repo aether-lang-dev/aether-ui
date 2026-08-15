@@ -176,6 +176,60 @@ all green in 423s**, the first complete green run in a while. Fixed in
 0614443 + 6660265.
 
 
+## `command` needs its DECLARATIVE form (docs/guide/dsl-with-scope.md)
+
+`command` shipped imperative, and that is not how this toolkit reads:
+
+    save = command("Save", "Ctrl+S") callback { do_save() }
+    b = btn_command(save)              // thread the handle
+    command_set_enabled(save, 0)
+
+Everything else here is a DSL with Scope -- widgets attach to their enclosing
+scope through `_ctx` and nobody passes a parent. Commands should match:
+
+    vstack(10) {
+        commands {
+            action("Save", "Ctrl+S") {
+                does() callback { do_save() }
+                on_button()                  // a button, here, in this vstack
+                on_menu_item(file_menu)      // and an item on that menu
+            }
+        }
+    }
+
+**Attempted 2026-08-15, REVERTED — it segfaults at startup and I did not find
+why.** Recorded in full because the next attempt should not re-derive it:
+
+* **`f(args) callback {…} {…}` is not a call shape.** A call takes ONE trailing
+  block. Passing a callback AND a block compiled without complaint and produced
+  a broken call. That is why `does()` exists as a verb inside the block rather
+  than an argument before it -- and it reads better anyway, since everything
+  the action is made of ends up declared in one place.
+* **Two contexts, one slot.** Inside `action { … }` the ambient `_ctx` must be
+  the COMMAND (so `on_button()` is meaningful), but the button also needs its
+  WIDGET parent. Aether exposes `builder_context()` (top of stack) and nothing
+  to reach one level out. Workaround that compiled: `commands()` records the
+  widget scope in C (`aether_ui_commands_scope_set/get_impl`, beside the AeCS
+  current-sheet cell, since Aether has no top-level mutable module state) and
+  `action()` captures it before its block runs.
+* **`commands` must be a plain function, not a `builder`.** A builder runs its
+  block FIRST and its body after; the scope has to be recorded BEFORE any
+  `action` inside executes.
+* **Container type follows element type.** A command's surfaces are widget
+  handles (int) so they need an intarr; a group holds commands (ptr) so it
+  needs a std.list. Aether will not cast between ptr and int.
+* **Still crashing after all of the above.** Bisected to: an EMPTY
+  `action("Reload","Ctrl+R") { }` inside `commands { }` segfaults before the
+  window appears. The generated C for `ui_commands`, `ui_action` and
+  `ui_command` all read correctly, so the fault is not obvious there. Next
+  suspect, untested: `command()` registers `shortcut(accel)` with a closure
+  capturing `cp`, and this would be the app's SECOND shortcut -- worth checking
+  the closure/shortcut interaction before anything else. Build with symbols
+  first; a stripped `bt` only said `main`.
+
+The imperative API stays and is green (6/0, with its falsification test), so
+this is additive work, not a fix.
+
 ## win32 cannot link ANY app after the ae 0.541.0 upgrade
 
 Every Aether program aeb links on Windows/MinGW now fails at the link step:
