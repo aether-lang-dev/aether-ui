@@ -20,6 +20,8 @@
 import ui
 import ui (window, vstack, hstack, text, btn, textfield, divider,
     add_css_class, color_scheme, role, scheme_sheet, use_styles,
+    scheme, primary, on_primary, surface, on_surface, error_role,
+    on_error, accent, outline,
     load_styles, enable_test_server)
 import std.os (os_getenv)
 
@@ -37,6 +39,23 @@ _light() -> ptr {
     role(sc, "on_error", 0xFFFFFF)
     role(sc, "accent", 0x1F6F4A)
     role(sc, "outline", 0xC7C1D4)
+    return sc
+}
+
+// The same eight decisions, DECLARED (docs/design/declarative-consistency-audit.md).
+// Compare _light() above: no `sc` on every line, and the roles read as what
+// they mean rather than as strings passed to a setter.
+_slate() -> ptr {
+    sc = scheme() {
+        surface(0x2A2F3A)
+        on_surface(0xE6EAF2)
+        primary(0x7FB3D5)
+        on_primary(0x10141C)
+        error_role(0xE57373)
+        on_error(0x1A0000)
+        accent(0xF0C674)
+        outline(0x4A5160)
+    }
     return sc
 }
 
@@ -80,6 +99,10 @@ main() {
                 }
                 // Roles from a FILE: same eight decisions, written as
                 // "role.<name> = #RRGGBB" lines (see theme/teal.aecs).
+                _s2 = btn("Slate (declared)") callback {
+                    use_styles(scheme_sheet(_slate()))
+                    aether_ui_text_set_string(status, "theme: slate")
+                }
                 _t = btn("Teal (file)") callback {
                     fsheet = load_styles("examples/roles_demo/theme/teal.aecs")
                     if fsheet != null {

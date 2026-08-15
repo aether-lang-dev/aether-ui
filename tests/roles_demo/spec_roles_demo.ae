@@ -121,6 +121,26 @@ main() {
             bh = uidriver.get_body("/widget/${h}")
             spec.assert_contains(bh, "\"bg\":\"#ecf6f4\"", "file's surface applied")
         }
+
+        // The DECLARATIVE scheme scope: same eight decisions, read as
+        // structure rather than as eight calls repeating a handle. This
+        // asserts the scope resolved -- the roles reached the sheet with
+        // nothing passed to them.
+        spec.it("a DECLARED scheme applies the same way") callback {
+            t = uidriver.widget_id_by_text("Slate (declared)")
+            uidriver.post_ok("/widget/${t}/click", "apply the declared scheme")
+            ok = uidriver.wait_body_contains("/widgets", "theme: slate", 20)
+            spec.assert_true(ok, "status flipped")
+
+            s = uidriver.widget_id_by_text("Save")
+            bs = uidriver.get_body("/widget/${s}")
+            spec.assert_contains(bs, "\"bg\":\"#7fb3d5\"", "primary from the block")
+            spec.assert_contains(bs, "\"fg\":\"#10141c\"", "on_primary from the block")
+
+            d = uidriver.widget_id_by_text("Delete")
+            bd = uidriver.get_body("/widget/${d}")
+            spec.assert_contains(bd, "\"bg\":\"#e57373\"", "error reached the danger class")
+        }
     }
     spec.run_summary(fw)
 }

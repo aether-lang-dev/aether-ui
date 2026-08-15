@@ -43,6 +43,10 @@ exports (
     st_radius, st_font_family, st_opacity, st_gradient, st_insets, st_border,
     st_hover, st_active,
     apply_styles, style_id, styles_for_mode,
+    styles, color, bg, font_size, weight, bold, family, radius,
+    opacity_of, border, hover, active,
+    scheme, primary, on_primary, surface, on_surface, error_role,
+    on_error, accent, outline, custom,
     color_scheme, role, role_of, scheme_sheet, scheme_into,
     scheme_for_mode, use_scheme_pair,
     use_styles, current_styles, use_styles_pair, on_appearance_change,
@@ -1740,6 +1744,68 @@ _style_on_create(h: int) {
 style_id(handle: int, name: string) {
     add_css_class(handle, string.concat("#", name))
 }
+
+// ── DECLARATIVE styles + scheme scopes ──────────────────────────────
+// The st_* / role() calls above are correct but read as a script: a factory
+// returns a handle and every later line repeats it. These scopes let a sheet
+// read as a description instead (docs/design/declarative-consistency-audit.md):
+//
+//   sheet = styles() {
+//       family("root", "monospace")
+//       color("text", 0x5C458A)
+//       bg("container", 0xD6CFE6)
+//   }
+//
+//   sc = scheme() {
+//       primary(0x5C458A)
+//       on_primary(0xFFFFFF)
+//       surface(0xF4F2F8)
+//   }
+//
+// Both are sugar over the same setters -- the imperative forms stay -- and
+// both are plain functions returning the config ptr, which Aether pushes as
+// _ctx for the block. NB the PARENTHESES: `styles { … }` without them
+// compiles to a function-pointer read and pushes no context (an ae bug, filed
+// with a reproducer), so everything inside would silently write to the wrong
+// object.
+
+// styles() { … } — a sheet, declared. Returns it, so use_styles(sheet) or
+// apply_styles(0, sheet) follows as usual.
+styles() -> ptr {
+    return create_styles()
+}
+
+// The in-scope setters. Each is st_* with the sheet taken from the ambient
+// scope rather than passed.
+color(_ctx: ptr, sel: string, hex: int)        { st_color(_ctx, sel, hex) }
+bg(_ctx: ptr, sel: string, hex: int)           { st_bg(_ctx, sel, hex) }
+font_size(_ctx: ptr, sel: string, size: float) { st_font_size(_ctx, sel, size) }
+weight(_ctx: ptr, sel: string, bold: int)      { st_weight(_ctx, sel, bold) }
+bold(_ctx: ptr, sel: string)                   { st_bold(_ctx, sel) }
+family(_ctx: ptr, sel: string, fam: string)    { st_font_family(_ctx, sel, fam) }
+radius(_ctx: ptr, sel: string, r: float)       { st_radius(_ctx, sel, r) }
+opacity_of(_ctx: ptr, sel: string, v: float)   { st_opacity(_ctx, sel, v) }
+border(_ctx: ptr, sel: string, w: float, hex: int) { st_border(_ctx, sel, w, hex) }
+hover(_ctx: ptr, sel: string, hex: int)        { st_hover(_ctx, sel, hex) }
+active(_ctx: ptr, sel: string, hex: int)       { st_active(_ctx, sel, hex) }
+
+// scheme() { … } — a colour scheme, declared. The eight roles become verbs,
+// so a theme is eight lines that say what they mean.
+scheme() -> ptr {
+    return color_scheme()
+}
+
+primary(_ctx: ptr, hex: int)     { role(_ctx, "primary", hex) }
+on_primary(_ctx: ptr, hex: int)  { role(_ctx, "on_primary", hex) }
+surface(_ctx: ptr, hex: int)     { role(_ctx, "surface", hex) }
+on_surface(_ctx: ptr, hex: int)  { role(_ctx, "on_surface", hex) }
+error_role(_ctx: ptr, hex: int)  { role(_ctx, "error", hex) }
+on_error(_ctx: ptr, hex: int)    { role(_ctx, "on_error", hex) }
+accent(_ctx: ptr, hex: int)      { role(_ctx, "accent", hex) }
+outline(_ctx: ptr, hex: int)     { role(_ctx, "outline", hex) }
+
+// custom(name, hex) — an app's own role, stored and readable with role_of.
+custom(_ctx: ptr, name: string, hex: int) { role(_ctx, name, hex) }
 
 // styles_for_mode(light, dark) — the dark/light pair helper: returns the
 // sheet matching the OS appearance right now. Re-call + re-apply on a mode
