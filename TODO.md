@@ -147,6 +147,36 @@ Whether `video_frame` belongs in `apps/` long-term or becomes a
 of the exercise, but the API should follow a second real consumer rather
 than be guessed at from one demo.
 
+## GTK4 `/window/resize` is a silent no-op (spec `split` 5/4 RED)
+
+`POST /window/resize?w=&h=` answers `{"ok":true}` and the window does not
+move. Reproducible, not flaky, and NOT app-specific: `split_demo` stays
+640 wide through resizes to 300 AND to 900, and `calculator` — untouched all
+session — stays 280 wide through a resize to 900. Both on a real `:0` session
+with a running window manager, so it is not an Xvfb/no-WM artefact.
+
+Costs 4 assertions in `spec_split_demo`, all downstream of a resize:
+"narrow layout settled", "last chip wrapped below the first" (332 vs 332 —
+the chips never re-flowed because the window never narrowed), "current
+allocation reported", "resize re-fired on_layout with the new width". The
+`on_layout` hook itself is fine; nothing ever asks it to fire.
+
+**Pre-existing, not from the 2026-08-14/15 work.** `window_resize_idle` dates
+from 2026-07-06 and was last touched 08-12, both before this session; the
+failing apps include ones this session never opened.
+
+**A wrong theory, recorded so it is not re-run:** the obvious suspect is
+`gtk_window_set_default_size` being documented as the *initial* size, i.e. a
+no-op once mapped. That is NOT it — a 30-line standalone GTK4 program calling
+exactly that on a mapped window resizes it correctly (640x371 → 300x560,
+verified). So the GTK4 call is right and the difference lies in how this
+backend builds its window versus `gtk_application_window_new`. Start there,
+not at the API.
+
+Worth fixing beyond the 4 assertions: resize is the only way a driver spec can
+exercise responsive layout, so every future wrap/weight/flex behaviour is
+untestable until it works.
+
 ## win32 goldens are stale (and were hiding behind a CRLF bug)
 
 `tests/goldens/win32/*.sig` no longer match what win32 renders. All four
