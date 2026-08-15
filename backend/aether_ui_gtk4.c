@@ -6566,6 +6566,30 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_HOVER:        ta.action = 14; break;
         case AETHER_DRV_PRESS:        ta.action = 15; break;
         case AETHER_DRV_RELEASE:      ta.action = 16; break;
+
+        /* SHUTDOWN and WIN_RESIZE do not go through test_action_idle at all --
+           they have their own *_idle handlers below. They were left in the
+           default arm (result 3 -> 404) when the embedded server was deleted,
+           which would have been honest EXCEPT that /shutdown replies 200
+           BEFORE dispatching (it has to: the app is about to exit). So the
+           404 never reached the client and the route reported {"ok":true} for
+           an app that carried on running.
+           
+           Cost: every suite in spec_matrix asked its app to quit, was told
+           yes, and then waited out its teardown budget for an exit that never
+           came -- ~96s wall for a suite doing 0.4s of work. Already on the
+           GTK thread here, so call the handlers' bodies directly. */
+        case AETHER_DRV_SHUTDOWN:
+            shutdown_idle(NULL);
+            ctx->result = 0; ctx->done = 1;
+            return;
+        case AETHER_DRV_WIN_RESIZE: {
+            WindowResizeAction wr = {0};
+            wr.w = ctx->ival; wr.h = ctx->ival2;
+            window_resize_idle(&wr);
+            ctx->result = wr.result; ctx->done = 1;
+            return;
+        }
         default:
             /* Verbs the embedded server routes through paths OTHER than
                test_action_idle (canvas click/move/key/release, pick, hover,
