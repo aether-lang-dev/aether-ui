@@ -422,7 +422,7 @@ term in one result row — cosmetic, doesn't affect the spec.
 
 Surveyed after win32 parity. Tier 1 (fits current architecture):
 
-- ~~**QML States on AeCS**~~ **DONE 2026-07-20** — `ui_states/add_state/
+- ~~**QML-alike States on AeCS**~~ **DONE 2026-07-20** — `ui_states/add_state/
   set_state/current_state`: named states per widget/subtree, each an AeCS
   sheet fragment applied via apply_styles(target); declared ui.transition
   properties animate between states; current state driver-visible as an
@@ -518,7 +518,7 @@ class and wants its own design pass (does a filtered view change
 the app's list in place, so those questions do not arise; filtering
 would introduce a view/model split that sorting deliberately avoids.
 
-**QML SpringAnimation easing — DONE 2026-08-14.**
+**QML-SpringAnimation-alike easing — DONE 2026-08-14.**
 `transition(h, "opacity", ms, "spring")` now animates a damped spring
 that OVERSHOOTS its target and rings back, rather than being silently
 accepted and ignored.
@@ -552,7 +552,7 @@ fires and skips rather than returning a false verdict.
 
 Tier 2 is now closed.
 
-**QML property-to-property bindings — NOT SCHEDULED, 2026-08-14.** Examined
+**QML-alike property-to-property bindings — NOT SCHEDULED, 2026-08-14.** Examined
 and deliberately deferred, on the evidence rather than the plan.
 
 *No consumer.* `on_layout` has exactly ONE call site in the whole tree

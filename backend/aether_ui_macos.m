@@ -2410,7 +2410,7 @@ static void aeui_start_opacity_tween(NSView* v, int handle,
 void aether_ui_set_opacity(int handle, double opacity) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
-    // Implicit transition (QML Behavior): if the app declared
+    // Implicit transition (QML-Behavior-alike): if the app declared
     // ui.transition(h, "opacity", ms, …) once, every later opacity change
     // TWEENS instead of snapping. The declaration is recorded by apply_css.
     int ms = aeui_opacity_transition_ms(handle);
@@ -3292,7 +3292,7 @@ static int aeui_opacity_transition_spring(int handle) {
     return widget_transitions[handle - 1].spring;
 }
 
-/* Damped-spring progress -- the QML SpringAnimation shape as a closed form,
+/* Damped-spring progress -- the QML-SpringAnimation-alike shape as a closed form,
    matching w32_spring_progress in the win32 backend exactly:
 
        p(t) = 1 - e^(-6t) * cos(9t)

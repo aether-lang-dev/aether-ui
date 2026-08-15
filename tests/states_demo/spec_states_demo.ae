@@ -1,4 +1,4 @@
-// spec_states_demo.ae — QML States on AeCS over the AetherUIDriver.
+// spec_states_demo.ae — QML-alike States on AeCS over the AetherUIDriver.
 // Named states are AeCS sheet fragments; set_state applies them to the
 // target subtree and stamps a driver-visible marker class. Asserted from
 // backend readback (fg/bg/fontSize-adjacent fields + classes), not the model.
@@ -16,7 +16,7 @@ main() {
     fw = spec.init()
     uidriver.wait_server()
 
-    spec.describe(fw, "QML states on AeCS over AetherUIDriver") {
+    spec.describe(fw, "QML-alike states on AeCS over AetherUIDriver") {
         spec.it("set_state applies the state's sheet to the subtree") callback {
             e = uidriver.widget_id_by_text("Expand")
             spec.assert_gt(e, 0, "Expand button found")

@@ -1,4 +1,4 @@
-// QML States on AeCS — named states for a widget subtree, each an AeCS
+// QML-alike States on AeCS — named states for a widget subtree, each an AeCS
 // sheet fragment. set_state applies through the existing style setters, so
 // properties with a declared ui.transition ANIMATE and the rest snap. The
 // current state is driver-visible as a marker class ("st-<name>").
@@ -36,7 +36,7 @@ expanded_sheet() -> ptr {
 }
 
 main() {
-    window("QML States on AeCS", 460, 320) {
+    window("QML-alike States on AeCS", 460, 320) {
         vstack(10) {
             status = text("st: none")
             divider()

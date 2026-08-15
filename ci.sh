@@ -587,7 +587,7 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=zen_demo/spec_zen_demo \
     run_server_test "$(EX_BIN zen_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" zen_demo || FAIL=$((FAIL + 1))
-    # QML states on AeCS + Swing-style undo manager.
+    # QML-alike states on AeCS + Swing-style undo manager.
     UI_SPEC=states_demo/spec_states_demo \
     run_server_test "$(EX_BIN states_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" states_demo || FAIL=$((FAIL + 1))

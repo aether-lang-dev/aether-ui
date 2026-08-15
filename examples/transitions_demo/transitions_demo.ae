@@ -1,7 +1,7 @@
 // Aether UI implicit-transitions example (roadmap item 6).
 //
 // ui.transition(handle, "opacity", ms, easing): declared ONCE on the label,
-// every later style_opacity change tweens instead of snapping (QML Behavior,
+// every later style_opacity change tweens instead of snapping (QML-Behavior-alike,
 // not SwiftUI withAnimation). AETHER_UI_NO_ANIMATION=1 turns every tween
 // into an instant change (the ci determinism switch).
 
@@ -36,7 +36,7 @@ main() {
             }
 
             divider()
-            // The SPRING curve (QML SpringAnimation), on its own label so the
+            // The SPRING curve (QML-SpringAnimation-alike), on its own label so the
             // two are measurable side by side. A spring OVERSHOOTS: this one
             // fades PAST its 0.15 target -- lighter than the end state --
             // around 60% through, then rings back up and settles. That is the

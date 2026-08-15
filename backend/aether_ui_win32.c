@@ -4154,7 +4154,7 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
    is ~50% done there, ease-out ~75%) -- see
    tests/transitions_demo/test_easing_curve.sh, which reads the curve out of
    the framebuffer because no property readback can see it. */
-/* Damped-spring progress: the QML SpringAnimation shape, as a closed form
+/* Damped-spring progress: a QML-SpringAnimation-alike shape, as a closed form
    rather than an integrated physics step (a timer-driven tween needs a
    function of t, not a stateful simulation).
 

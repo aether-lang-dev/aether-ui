@@ -683,7 +683,7 @@ shadow(_ctx: ptr, dx: float, dy: float, blur: float, color: string) {
     }
 }
 
-// behavior(prop, ms, easing) — QML Behavior: after this, every
+// behavior(prop, ms, easing) — QML-Behavior-alike: after this, every
 // vg.element_set_fill / element_set_opacity on THIS element tweens from the
 // current value to the target over ms instead of snapping. prop: "fill" |
 // "opacity"; easing: "linear" | "ease_out". The tween rides the scene's
