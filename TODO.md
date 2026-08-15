@@ -1,8 +1,11 @@
 # aether-ui — open follow-ons
 
-Tracked items not yet built. Backends are at full spec-matrix parity
-(GTK4 188/0, win32 188/0, macOS per its sibling cadence); these are the
-next layers. Fuller context: the toolkit-inspired backlog in roadmap.md.
+Tracked items not yet built. Fuller context: the toolkit-inspired backlog in
+roadmap.md.
+
+Spec-matrix state 2026-08-15: **GTK4 303/0 all green** (423s). win32 and macOS
+per their own runs — both were brought to ae 0.541.0 and current aether-ui the
+same day, macOS for the first time in ~60 commits.
 
 ## Golden-image tests (Flutter-style visual regression) — DONE 2026-08-01
 
@@ -147,72 +150,31 @@ Whether `video_frame` belongs in `apps/` long-term or becomes a
 of the exercise, but the API should follow a second real consumer rather
 than be guessed at from one demo.
 
-## GTK4 `POST /shutdown` doesn't shut down — and it is why the matrix crawls
+## ~~GTK4 driver verbs unmapped~~ — DONE 2026-08-15
 
-`POST /shutdown` answers `{"ok":true}`, the app keeps running, and the window
-stays `"live":true` in `GET /windows`. Same false-success shape as
-`/window/resize` below: the route reports success for something that did not
-happen.
+`POST /shutdown` answered `{"ok":true}` without shutting down; `/window/resize`
+answered ok and never moved the window; `overlay`/`vg_tooltip` got "window pick
+not wired on this backend"; `context_menu` got "no such context menu item" for
+activations that had *succeeded*.
 
-**This is the matrix's speed problem, not a cosmetic one.** Every suite's
-teardown POSTs `/shutdown` and then waits for the port to clear, so every
-suite waits out its whole budget for an exit that never comes. Measured
-2026-08-15 on `multiselect`: **96s wall for a suite whose actual work takes
-0.4s** (app launch→ready 0.2s, spec run 0.2s). A `bash -x` trace put 30.2s of
-one run in a single `sleep 0.25` loop. Across ~57 suites that is the
-difference between a matrix you can run casually and one you avoid.
+ONE ROOT CAUSE for six of the seven: `hook_dispatch_action` had no case for
+SHUTDOWN, WIN_RESIZE, PICK, CANVAS_CLICK/MOVE/RELEASE/KEY. Every handler
+already existed and was correct -- they were orphaned when the embedded GTK4
+server was deleted (0590194), and macOS/win32 kept their cases. The `default`
+arm returned 404, which would have been honest except `/shutdown` replies 200
+BEFORE dispatching, so the failure never reached the client.
 
-Harness mitigations landed (they cut ~96s → ~20s per suite): `port_free` no
-longer borrows the 30s *launch* budget for a shutdown it already signalled,
-teardown signals before waiting rather than after, and the poll asks the
-kernel (`ss -tln state listening`) instead of making an HTTP request per
-tick — NB plain `ss -tln` also lists TIME-WAIT sockets, which linger ~60s
-after every request a spec made and made the port read busy when nothing was
-listening. But those only shorten the wait for a broken shutdown; the app
-still has to be killed.
+The seventh was different and worth remembering: `aeui_ctx_menu_activate`
+returned C-idiomatic 0-for-success while the shared server tests
+`!act.retval`. An unmapped verb says "not wired" and is obvious; a mismatched
+return convention answers a plausible 404 *while the action succeeds*, so app
+and driver disagree about what happened. Only that kind fails a spec whose
+feature works.
 
-**Root cause, partly traced.** `shutdown_idle` (aether_ui_gtk4.c) walks widget
-1's parent chain and calls `gtk_window_destroy` on the toplevel. It is not
-working: the window is still live afterwards, so either the walk does not
-reach a `GTK_IS_WINDOW` or the destroy is not taking. Apps run through
-`aether_ui_app_run_raw` → `g_application_run` on a `GtkApplication`, where
-destroying the last window should end the run.
+Results: one suite ~96s -> ~1s; full GTK4 matrix 293/17 with 3 red -> **303/0
+all green in 423s**, the first complete green run in a while. Fixed in
+0614443 + 6660265.
 
-**A fix that did NOT work, recorded so it is not retried:** adding a file-scope
-`GMainLoop*` and calling `g_main_loop_quit` from `shutdown_idle`. That targets
-`aether_ui_app_run_headless_impl`'s bare loop, which is NOT the path these
-apps take — port release still took 11s and the process survived. Reverted.
-Start at why the window survives `gtk_window_destroy`, not at the loop.
-
-## GTK4 `/window/resize` is a silent no-op (spec `split` 5/4 RED)
-
-`POST /window/resize?w=&h=` answers `{"ok":true}` and the window does not
-move. Reproducible, not flaky, and NOT app-specific: `split_demo` stays
-640 wide through resizes to 300 AND to 900, and `calculator` — untouched all
-session — stays 280 wide through a resize to 900. Both on a real `:0` session
-with a running window manager, so it is not an Xvfb/no-WM artefact.
-
-Costs 4 assertions in `spec_split_demo`, all downstream of a resize:
-"narrow layout settled", "last chip wrapped below the first" (332 vs 332 —
-the chips never re-flowed because the window never narrowed), "current
-allocation reported", "resize re-fired on_layout with the new width". The
-`on_layout` hook itself is fine; nothing ever asks it to fire.
-
-**Pre-existing, not from the 2026-08-14/15 work.** `window_resize_idle` dates
-from 2026-07-06 and was last touched 08-12, both before this session; the
-failing apps include ones this session never opened.
-
-**A wrong theory, recorded so it is not re-run:** the obvious suspect is
-`gtk_window_set_default_size` being documented as the *initial* size, i.e. a
-no-op once mapped. That is NOT it — a 30-line standalone GTK4 program calling
-exactly that on a mapped window resizes it correctly (640x371 → 300x560,
-verified). So the GTK4 call is right and the difference lies in how this
-backend builds its window versus `gtk_application_window_new`. Start there,
-not at the API.
-
-Worth fixing beyond the 4 assertions: resize is the only way a driver spec can
-exercise responsive layout, so every future wrap/weight/flex behaviour is
-untestable until it works.
 
 ## win32 goldens are stale (and were hiding behind a CRLF bug)
 
