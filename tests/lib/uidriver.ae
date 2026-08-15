@@ -2,7 +2,7 @@
 //
 // Everything app-agnostic about driving an aether-ui app over the driver's
 // HTTP API: asserting actions (clicks/keys/moves/toggles/resize fail the
-// surrounding `it` on any non-2xx, via aeocha's POST matchers), raw
+// surrounding `it` on any non-2xx, via httptest's POST matchers), raw
 // GET/POST primitives for the odd shapes (403-expected posts, response
 // bodies), /widgets JSON queries, /state access, and polling waits.
 //
@@ -33,7 +33,8 @@ import std.list
 import std.os
 import std.json
 import std.http.client
-import aeocha
+import std.spec
+import std.http.client.httptest
 
 const BASE: string = "http://127.0.0.1:9222"
 
@@ -67,7 +68,7 @@ get_status(path: string) -> int {
 
 // Asserting POST: any transport error or non-2xx fails the current `it`.
 post_ok(path: string, msg: string) {
-    aeocha.expect_http_post_ok(url_of(path), msg)
+    httptest.expect_http_post_ok(url_of(path), msg)
 }
 
 // Non-asserting POST returning the HTTP status (0 = transport error) — for
@@ -94,7 +95,7 @@ post_body(path: string) -> string {
     return body
 }
 
-// ─── Driver actions (all assert via aeocha) ──────────────────────
+// ─── Driver actions (all assert via std.spec) ──────────────────────
 
 extern lrint(x: float) -> long
 f_to_i(x: float) -> int { return lrint(x) }

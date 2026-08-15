@@ -7,48 +7,48 @@
 // Run via ci.sh Phase 5, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/apps/rubiks_cube/bin/rubiks_cube &
 //   UI_SPEC=rubiks_cube/spec_rubiks_cube tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "rubiks_cube over AetherUIDriver") {
-        aeocha.it("shows the game chrome (buttons + canvas + banner)") callback {
+    spec.describe(fw, "rubiks_cube over AetherUIDriver") {
+        spec.it("shows the game chrome (buttons + canvas + banner)") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
-            aeocha.assert_contains(body, "\"banner\":true", "banner present")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Shuffle"), 0, "Shuffle button")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Solve"), 0, "Solve button")
-            aeocha.assert_contains(body, "Moves: 0", "moves start at zero")
+            spec.assert_contains(body, "\"canvas\"", "has a canvas")
+            spec.assert_contains(body, "\"banner\":true", "banner present")
+            spec.assert_gt(uidriver.widget_id_of("button", "Shuffle"), 0, "Shuffle button")
+            spec.assert_gt(uidriver.widget_id_of("button", "Solve"), 0, "Solve button")
+            spec.assert_contains(body, "Moves: 0", "moves start at zero")
         }
 
-        aeocha.it("Shuffle scrambles the cube (20 logged moves)") callback {
+        spec.it("Shuffle scrambles the cube (20 logged moves)") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Shuffle"))
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Scrambled", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Scrambled", 20),
                 "status reads Scrambled")
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Moves: 20", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Moves: 20", 20),
                 "20 shuffle moves logged")
         }
 
-        aeocha.it("Solve returns the shuffled cube to solved") callback {
+        spec.it("Solve returns the shuffled cube to solved") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Solve"))
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Solved!", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Solved!", 20),
                 "status reads Solved!")
         }
 
-        aeocha.it("Reset zeroes the move count and solves") callback {
+        spec.it("Reset zeroes the move count and solves") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Shuffle"))
             uidriver.click_widget(uidriver.widget_id_of("button", "Reset"))
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Moves: 0", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Moves: 0", 20),
                 "moves back to zero")
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Solved!", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Solved!", 20),
                 "reset solves the cube")
         }
 
-        aeocha.it("a press→drag→release on the cube rotates a layer") callback {
+        spec.it("a press→drag→release on the cube rotates a layer") callback {
             // Reset to a clean, solved cube first.
             uidriver.click_widget(uidriver.widget_id_of("button", "Reset"))
             // Aim at the canvas centre (always inside the front face regardless
@@ -62,9 +62,9 @@ main() {
             uidriver.click(mx, y0)                                    // press
             uidriver.move_to(mx, y1)                                  // drag
             uidriver.post_ok("/canvas/1/release?x=${mx}&y=${y1}", "canvas release")
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Scrambled", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Scrambled", 20),
                 "the swipe rotated a layer (cube is no longer solved)")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -3,7 +3,7 @@
 // quirks): row 1 has a weighted child A whose min-width (260) exceeds its fair
 // half-share, so A clamps to its min and B takes the rest; row 2's C/D have
 // tiny mins so they split ~equally. Pin the window first (house rule 6).
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -13,27 +13,27 @@ width_of(label: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
     uidriver.resize_window(380, 220)
 
-    aeocha.describe(fw, "weight min-clamp over AetherUIDriver") {
-        aeocha.it("a weighted child is not squeezed below its min-width") callback {
+    spec.describe(fw, "weight min-clamp over AetherUIDriver") {
+        spec.it("a weighted child is not squeezed below its min-width") callback {
             wa = width_of("AAAA")
-            aeocha.assert_true(wa >= 260, "A held its min-width (got ${wa}, min 260)")
+            spec.assert_true(wa >= 260, "A held its min-width (got ${wa}, min 260)")
             wb = width_of("BBBB")
-            aeocha.assert_true(wb > 0, "B still gets space (got ${wb})")
-            aeocha.assert_true(wb < wa, "B (flexible) is narrower than the clamped A")
+            spec.assert_true(wb > 0, "B still gets space (got ${wb})")
+            spec.assert_true(wb < wa, "B (flexible) is narrower than the clamped A")
         }
 
-        aeocha.it("weighted children with room share ~equally") callback {
+        spec.it("weighted children with room share ~equally") callback {
             wc = width_of("CCCC")
             wd = width_of("DDDD")
-            aeocha.assert_true(wc > 40, "C got a real share (got ${wc})")
+            spec.assert_true(wc > 40, "C got a real share (got ${wc})")
             d = wc - wd
             if d < 0 { d = 0 - d }
-            aeocha.assert_true(d <= 24, "C/D split roughly equally (C=${wc} D=${wd})")
+            spec.assert_true(d <= 24, "C/D split roughly equally (C=${wc} D=${wd})")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

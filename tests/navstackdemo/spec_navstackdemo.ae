@@ -16,7 +16,7 @@
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/navstackdemo/bin/navstackdemo &
 //   UI_SPEC=navstackdemo/spec_navstackdemo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 import std.json
@@ -35,33 +35,33 @@ widget_count() -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "navstack over AetherUIDriver") {
-        aeocha.it("starts at the root with no pushed pages") callback {
+    spec.describe(fw, "navstack over AetherUIDriver") {
+        spec.it("starts at the root with no pushed pages") callback {
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "depth: 1", "depth starts at 1")
-            aeocha.assert_contains(b, "Home", "crumb reads Home")
+            spec.assert_contains(b, "depth: 1", "depth starts at 1")
+            spec.assert_contains(b, "Home", "crumb reads Home")
         }
 
-        aeocha.it("push adds the page's widgets to the tree") callback {
+        spec.it("push adds the page's widgets to the tree") callback {
             before = widget_count()
-            aeocha.assert_gt(before, 0, "tree is non-empty")
+            spec.assert_gt(before, 0, "tree is non-empty")
             p = uidriver.widget_id_by_text("Push page")
-            aeocha.assert_gt(p, 0, "Push button found")
+            spec.assert_gt(p, 0, "Push button found")
             uidriver.post_ok("/widget/${p}/click", "push page 2")
             ok = uidriver.wait_body_contains("/widgets", "depth: 2", 20)
-            aeocha.assert_true(ok, "depth reached 2")
+            spec.assert_true(ok, "depth reached 2")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "Page 2", "page 2 title rendered")
-            aeocha.assert_contains(b, "pushed onto the navigation stack",
+            spec.assert_contains(b, "Page 2", "page 2 title rendered")
+            spec.assert_contains(b, "pushed onto the navigation stack",
                                    "page body rendered")
             after = widget_count()
-            aeocha.assert_gt(after, before, "push GREW the widget tree")
+            spec.assert_gt(after, before, "push GREW the widget tree")
         }
 
-        aeocha.it("the page title renders as a real widget") callback {
+        spec.it("the page title renders as a real widget") callback {
             // The title argument was discarded by all three backends, so a
             // navstack had no back chrome. It is now a REGISTERED widget --
             // which is what makes it assertable here at all. "Page 2" appears
@@ -69,64 +69,64 @@ main() {
             // label.
             b = uidriver.get_body("/widgets")
             first = string.index_of(b, "Page 2")
-            aeocha.assert_gt(first, -1, "a Page 2 label exists")
+            spec.assert_gt(first, -1, "a Page 2 label exists")
             rest = string.substring(b, first + 6, string.length(b))
             second = string.index_of(rest, "Page 2")
-            aeocha.assert_gt(second, -1, "a SECOND Page 2 exists (the title bar)")
+            spec.assert_gt(second, -1, "a SECOND Page 2 exists (the title bar)")
             rest2 = string.substring(rest, second + 6, string.length(rest))
             third = string.index_of(rest2, "Page 2")
-            aeocha.assert_gt(third, -1, "and a THIRD (crumb + title + body)")
+            spec.assert_gt(third, -1, "and a THIRD (crumb + title + body)")
         }
 
-        aeocha.it("a second push nests rather than replacing") callback {
+        spec.it("a second push nests rather than replacing") callback {
             p = uidriver.widget_id_by_text("Push page")
             uidriver.post_ok("/widget/${p}/click", "push page 3")
             ok = uidriver.wait_body_contains("/widgets", "depth: 3", 20)
-            aeocha.assert_true(ok, "depth reached 3")
+            spec.assert_true(ok, "depth reached 3")
             b = uidriver.get_body("/widgets")
             // BOTH pages are present: pushing does not discard what is under
             // it, which is what makes a later pop meaningful.
-            aeocha.assert_contains(b, "Page 2", "page 2 still in the tree")
-            aeocha.assert_contains(b, "Page 3", "page 3 pushed on top")
+            spec.assert_contains(b, "Page 2", "page 2 still in the tree")
+            spec.assert_contains(b, "Page 3", "page 3 pushed on top")
         }
 
-        aeocha.it("nav_depth reports the backend's own page count") callback {
+        spec.it("nav_depth reports the backend's own page count") callback {
             // Before this readback existed an app had to track depth ITSELF
             // to know whether Back applied -- state the toolkit already held.
             // Two pages are pushed by the time this runs.
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "pages: 2",
+            spec.assert_contains(b, "pages: 2",
                                    "backend reports 2 pages pushed")
         }
 
-        aeocha.it("pop removes the top page") callback {
+        spec.it("pop removes the top page") callback {
             before = widget_count()
             bk = uidriver.widget_id_by_text("Back")
-            aeocha.assert_gt(bk, 0, "Back button found")
+            spec.assert_gt(bk, 0, "Back button found")
             uidriver.post_ok("/widget/${bk}/click", "pop to page 2")
             ok = uidriver.wait_body_contains("/widgets", "depth: 2", 20)
-            aeocha.assert_true(ok, "depth fell to 2")
+            spec.assert_true(ok, "depth fell to 2")
             after = widget_count()
-            aeocha.assert_gt(before, after, "pop SHRANK the widget tree")
+            spec.assert_gt(before, after, "pop SHRANK the widget tree")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "Page 2", "page 2 restored as the top")
+            spec.assert_contains(b, "Page 2", "page 2 restored as the top")
         }
 
-        aeocha.it("pop at the root is a no-op, not an underflow") callback {
+        spec.it("pop at the root is a no-op, not an underflow") callback {
             bk = uidriver.widget_id_by_text("Back")
             uidriver.post_ok("/widget/${bk}/click", "pop to root")
             ok = uidriver.wait_body_contains("/widgets", "depth: 1", 20)
-            aeocha.assert_true(ok, "depth back to 1")
+            spec.assert_true(ok, "depth back to 1")
             // Popping again at the root must change nothing and must not
             // crash the app -- the driver still answering IS the assertion.
             before = widget_count()
             uidriver.post_ok("/widget/${bk}/click", "pop at root")
             after = widget_count()
-            aeocha.assert_eq(after, before, "root pop left the tree alone")
+            spec.assert_eq(after, before, "root pop left the tree alone")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "depth: 1", "still at depth 1")
+            spec.assert_contains(b, "depth: 1", "still at depth 1")
         }
     }
 
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -12,7 +12,7 @@
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/overlaytr_demo/bin/overlaytr_demo &
 //   UI_SPEC=overlaytr_demo/spec_overlaytr_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 import std.os
@@ -25,44 +25,44 @@ anim_off() -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "overlay entry transitions over AetherUIDriver") {
-        aeocha.it("starts with no overlays") callback {
+    spec.describe(fw, "overlay entry transitions over AetherUIDriver") {
+        spec.it("starts with no overlays") callback {
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"count\":0", "no overlays at startup")
+            spec.assert_contains(r, "\"count\":0", "no overlays at startup")
         }
 
-        aeocha.it("Open panel shows a live modal entry (not exiting)") callback {
+        spec.it("Open panel shows a live modal entry (not exiting)") callback {
             o = uidriver.widget_id_by_text("Open panel")
-            aeocha.assert_gt(o, 0, "open button found")
+            spec.assert_gt(o, 0, "open button found")
             uidriver.post_ok("/widget/${o}/click", "POST open panel")
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"modal\":1", "a modal overlay is present")
-            aeocha.assert_contains(r, "\"live\":1", "the panel is live")
-            aeocha.assert_contains(r, "\"exiting\":0", "not exiting while open")
+            spec.assert_contains(r, "\"modal\":1", "a modal overlay is present")
+            spec.assert_contains(r, "\"live\":1", "the panel is live")
+            spec.assert_contains(r, "\"exiting\":0", "not exiting while open")
         }
 
-        aeocha.it("Close dismisses the entry, playing the exit first when animated") callback {
+        spec.it("Close dismisses the entry, playing the exit first when animated") callback {
             c = uidriver.widget_id_by_text("Close")
-            aeocha.assert_gt(c, 0, "close button found")
+            spec.assert_gt(c, 0, "close button found")
             uidriver.post_ok("/widget/${c}/click", "POST close")
 
             if anim_off() == 1 {
                 // Deterministic contract: gone immediately, no exit tween.
                 r = uidriver.get_body("/overlays")
-                aeocha.assert_contains(r, "\"live\":0", "removed at once (no animation)")
-                aeocha.assert_contains(r, "\"exiting\":0", "no exit tween when animation off")
+                spec.assert_contains(r, "\"live\":0", "removed at once (no animation)")
+                spec.assert_contains(r, "\"exiting\":0", "no exit tween when animation off")
             } else {
                 // The 200ms slide-down exit tween should be observable before
                 // removal — catch exiting:1, then wait for the entry to go.
                 sawExit = uidriver.wait_body_contains("/overlays", "\"exiting\":1", 10)
-                aeocha.assert_true(sawExit, "exit tween is playing (exiting:1)")
+                spec.assert_true(sawExit, "exit tween is playing (exiting:1)")
                 gone = uidriver.wait_body_contains("/overlays", "\"live\":0", 30)
-                aeocha.assert_true(gone, "entry removed after the exit tween")
+                spec.assert_true(gone, "entry removed after the exit tween")
             }
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

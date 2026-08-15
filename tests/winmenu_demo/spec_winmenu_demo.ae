@@ -3,35 +3,35 @@
 // (attach_menu_bar_to_window(2, bar)). The menu registers (GET /menus) and its
 // item fires the same closure the native bar would, with the effect observable
 // in the main window's status label.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "per-window menu bar over AetherUIDriver") {
-        aeocha.it("opening window 2 attaches its menu bar") callback {
+    spec.describe(fw, "per-window menu bar over AetherUIDriver") {
+        spec.it("opening window 2 attaches its menu bar") callback {
             o = uidriver.widget_id_by_text("open w2 + menu")
             uidriver.post_ok("/widget/${o}/click", "open w2 + attach menu")
             // The window opened...
             ok = uidriver.wait_body_contains("/windows", "\"title\":\"Window 2\"", 20)
-            aeocha.assert_true(ok, "window 2 opened")
+            spec.assert_true(ok, "window 2 opened")
             // ...and its menu registered (the W2File → W2Save item is reachable).
             m = uidriver.wait_body_contains("/menus", "\"W2Save\"", 20)
-            aeocha.assert_true(m, "the window-2 menu registered")
+            spec.assert_true(m, "the window-2 menu registered")
         }
 
-        aeocha.it("the window-2 menu item fires its closure") callback {
+        spec.it("the window-2 menu item fires its closure") callback {
             h = uidriver.menu_handle_with("W2Save")
-            aeocha.assert_gt(h, 0, "the W2 menu has a handle")
+            spec.assert_gt(h, 0, "the W2 menu has a handle")
             uidriver.menu_activate(h, "W2Save")
             ok = uidriver.wait_body_contains("/widgets", "saved: w2", 20)
-            aeocha.assert_true(ok, "W2Save ran its closure")
+            spec.assert_true(ok, "W2Save ran its closure")
         }
 
-        aeocha.it("closing window 2 leaves the first window live") callback {
+        spec.it("closing window 2 leaves the first window live") callback {
             // This spec used to end with window 2 still open. Nothing broke
             // -- spec_matrix kills the whole process at teardown -- but the
             // suite was relying on that rather than cleaning up after
@@ -42,11 +42,11 @@ main() {
             uidriver.post_ok("/window/2/close", "close window 2")
             ok = uidriver.wait_body_contains("/windows",
                 "\"id\":2,\"title\":\"Window 2\",\"live\":false", 20)
-            aeocha.assert_true(ok, "window 2 is closed")
+            spec.assert_true(ok, "window 2 is closed")
             b = uidriver.get_body("/windows")
-            aeocha.assert_contains(b, "\"live\":true",
+            spec.assert_contains(b, "\"live\":true",
                 "the primary window is still live")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

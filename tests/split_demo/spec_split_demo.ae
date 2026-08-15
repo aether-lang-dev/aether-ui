@@ -7,7 +7,7 @@
 // Run via ci.sh Phase 5i, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/split_demo/bin/split_demo &
 //   UI_SPEC=split_demo/spec_split_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -20,98 +20,98 @@ pane_of(txt: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "splitview over AetherUIDriver") {
-        aeocha.it("both panes render as real widgets") callback {
+    spec.describe(fw, "splitview over AetherUIDriver") {
+        spec.it("both panes render as real widgets") callback {
             // Pin the window size first: GTK4 on a cold Xvfb sometimes maps
             // at NATURAL size (CSD-min 187px wide), ignoring the app's
             // 640x400 default — a startup race, not an app bug. Every
             // geometry assertion below assumes 640, so make it true.
             uidriver.resize_window(640, 400)
             okg = uidriver.wait_body_contains("/widgets", "geometry: 640x", 30)
-            aeocha.assert_true(okg, "window pinned at 640 wide")
+            spec.assert_true(okg, "window pinned at 640 wide")
             lp = pane_of("left pane")
             rp = pane_of("right pane")
-            aeocha.assert_gt(lp, 0, "left pane found")
-            aeocha.assert_gt(rp, 0, "right pane found")
+            spec.assert_gt(lp, 0, "left pane found")
+            spec.assert_gt(rp, 0, "right pane found")
             svl = uidriver.widget_int_field_by_id(lp, "parent")
             svr = uidriver.widget_int_field_by_id(rp, "parent")
-            aeocha.assert_eq(svl, svr, "panes share the splitview parent")
+            spec.assert_eq(svl, svr, "panes share the splitview parent")
             b = uidriver.get_body("/widget/${svl}")
-            aeocha.assert_contains(b, "\"type\":\"splitview\"", "parent is a splitview")
-            aeocha.assert_contains(b, "splitPosition", "splitPosition reported")
+            spec.assert_contains(b, "\"type\":\"splitview\"", "parent is a splitview")
+            spec.assert_contains(b, "splitPosition", "splitPosition reported")
         }
 
-        aeocha.it("split_position route moves the splitter, panes follow") callback {
+        spec.it("split_position route moves the splitter, panes follow") callback {
             lp = pane_of("left pane")
             sv = uidriver.widget_int_field_by_id(lp, "parent")
             uidriver.post_ok("/widget/${sv}/split_position?px=150", "drag to 150")
             ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":150", 20)
-            aeocha.assert_true(ok, "splitter at 150")
+            spec.assert_true(ok, "splitter at 150")
             okw = uidriver.wait_body_contains("/widget/${lp}", "\"w\":150", 20)
-            aeocha.assert_true(okw, "left pane reallocated to 150")
+            spec.assert_true(okw, "left pane reallocated to 150")
             rw = uidriver.widget_int_field_by_id(pane_of("right pane"), "w")
-            aeocha.assert_gt(rw, 300, "right pane grew")
+            spec.assert_gt(rw, 300, "right pane grew")
         }
 
-        aeocha.it("app-side split_position reads the moved splitter") callback {
+        spec.it("app-side split_position reads the moved splitter") callback {
             rb = uidriver.widget_id_by_text("Read position")
             uidriver.post_ok("/widget/${rb}/click", "read position")
             ok = uidriver.wait_body_contains("/widgets", "position: 150", 20)
-            aeocha.assert_true(ok, "status shows position: 150")
+            spec.assert_true(ok, "status shows position: 150")
         }
 
-        aeocha.it("app-side split_set_position moves it back") callback {
+        spec.it("app-side split_set_position moves it back") callback {
             cb = uidriver.widget_id_by_text("Center")
             uidriver.post_ok("/widget/${cb}/click", "center")
             lp = pane_of("left pane")
             sv = uidriver.widget_int_field_by_id(lp, "parent")
             ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":320", 20)
-            aeocha.assert_true(ok, "splitter back at 320")
+            spec.assert_true(ok, "splitter back at 320")
         }
 
-        aeocha.it("weight splits leftover 1:3, fixed child keeps natural size") callback {
+        spec.it("weight splits leftover 1:3, fixed child keeps natural size") callback {
             fx = uidriver.widget_id_by_text("fixed")
             wa = uidriver.widget_id_by_text("one")
             wb = uidriver.widget_id_by_text("three")
             fxw = uidriver.widget_int_field_by_id(fx, "w")
             aw = uidriver.widget_int_field_by_id(wa, "w")
             bw = uidriver.widget_int_field_by_id(wb, "w")
-            aeocha.assert_gt(fxw, 0, "fixed child has natural width")
-            aeocha.assert_gt(100, fxw, "fixed child stays natural (< 100)")
+            spec.assert_gt(fxw, 0, "fixed child has natural width")
+            spec.assert_gt(100, fxw, "fixed child stays natural (< 100)")
             // 1:3 within integer-division slack.
             diff = bw - aw * 3
             if diff < 0 { diff = 0 - diff }
-            aeocha.assert_gt(4, diff, "weighted widths in 1:3 (|b-3a| < 4, a=${aw} b=${bw})")
+            spec.assert_gt(4, diff, "weighted widths in 1:3 (|b-3a| < 4, a=${aw} b=${bw})")
         }
 
-        aeocha.it("wrap flows chips to more lines when narrow") callback {
+        spec.it("wrap flows chips to more lines when narrow") callback {
             ca = uidriver.widget_id_by_text("chip-alpha")
             cz = uidriver.widget_id_by_text("chip-zeta")
             ya0 = uidriver.widget_int_field_by_id(ca, "y")
             yz0 = uidriver.widget_int_field_by_id(cz, "y")
-            aeocha.assert_eq(ya0, yz0, "wide: all chips on one line")
+            spec.assert_eq(ya0, yz0, "wide: all chips on one line")
             uidriver.resize_window(300, 560)
             ok = uidriver.wait_body_contains("/widgets", "geometry: 300x", 30)
-            aeocha.assert_true(ok, "narrow layout settled")
+            spec.assert_true(ok, "narrow layout settled")
             yz1 = uidriver.widget_int_field_by_id(cz, "y")
             ya1 = uidriver.widget_int_field_by_id(ca, "y")
-            aeocha.assert_gt(yz1, ya1, "narrow: last chip wrapped below the first")
+            spec.assert_gt(yz1, ya1, "narrow: last chip wrapped below the first")
         }
 
-        aeocha.it("on_layout fires on window resize (GeometryReader)") callback {
+        spec.it("on_layout fires on window resize (GeometryReader)") callback {
             // The demo mirrors the root stack's size into the geometry
             // label from inside on_layout. The wrap test just left the
             // window at 300 wide — the label must say so — and a resize
             // must re-fire the hook with the new width.
             ok0 = uidriver.wait_body_contains("/widgets", "geometry: 300x", 20)
-            aeocha.assert_true(ok0, "current allocation reported")
+            spec.assert_true(ok0, "current allocation reported")
             uidriver.resize_window(760, 480)
             ok1 = uidriver.wait_body_contains("/widgets", "geometry: 760x", 30)
-            aeocha.assert_true(ok1, "resize re-fired on_layout with the new width")
+            spec.assert_true(ok1, "resize re-fired on_layout with the new width")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

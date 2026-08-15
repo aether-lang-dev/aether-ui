@@ -2,7 +2,7 @@
 // Roots start collapsed; clicking a disclosure (▸) reveals that node's
 // children only; clicking again (▾) hides them. Sibling subtrees are
 // independent.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -12,38 +12,38 @@ disclosure(glyph: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "tree over AetherUIDriver") {
-        aeocha.it("roots render collapsed; children hidden") callback {
+    spec.describe(fw, "tree over AetherUIDriver") {
+        spec.it("roots render collapsed; children hidden") callback {
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"Documents\"", "Documents root")
-            aeocha.assert_contains(b, "\"text\":\"Pictures\"", "Pictures root")
+            spec.assert_contains(b, "\"text\":\"Documents\"", "Documents root")
+            spec.assert_contains(b, "\"text\":\"Pictures\"", "Pictures root")
             hidden = string.contains(b, "\"text\":\"report.pdf\"")
-            aeocha.assert_eq(hidden, 0, "children hidden while collapsed")
+            spec.assert_eq(hidden, 0, "children hidden while collapsed")
         }
 
-        aeocha.it("expanding a node reveals only its children") callback {
+        spec.it("expanding a node reveals only its children") callback {
             d = disclosure("▸")   // first collapsed node = Documents
-            aeocha.assert_gt(d, 0, "a disclosure control exists")
+            spec.assert_gt(d, 0, "a disclosure control exists")
             uidriver.post_ok("/widget/${d}/click", "expand Documents")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"report.pdf\"", 20)
-            aeocha.assert_true(ok, "Documents' children now visible")
+            spec.assert_true(ok, "Documents' children now visible")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"notes.txt\"", "both children shown")
+            spec.assert_contains(b, "\"text\":\"notes.txt\"", "both children shown")
             // Pictures is still collapsed → its child stays hidden.
             sib = string.contains(b, "\"text\":\"vacation.jpg\"")
-            aeocha.assert_eq(sib, 0, "sibling subtree independent (still collapsed)")
+            spec.assert_eq(sib, 0, "sibling subtree independent (still collapsed)")
         }
 
-        aeocha.it("collapsing hides the children again") callback {
+        spec.it("collapsing hides the children again") callback {
             d = disclosure("▾")   // the now-expanded Documents
-            aeocha.assert_gt(d, 0, "the expanded disclosure shows ▾")
+            spec.assert_gt(d, 0, "the expanded disclosure shows ▾")
             uidriver.post_ok("/widget/${d}/click", "collapse Documents")
             gone = uidriver.wait_body_contains("/widgets", "\"text\":\"report.pdf\"", 3)
-            aeocha.assert_eq(gone, 0, "children hidden after collapse")
+            spec.assert_eq(gone, 0, "children hidden after collapse")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

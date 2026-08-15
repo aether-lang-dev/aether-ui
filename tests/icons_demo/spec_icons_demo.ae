@@ -9,34 +9,34 @@
 // Run via ci.sh Phase 5 / tests/spec_matrix.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/icons_demo/bin/icons_demo &
 //   UI_SPEC=icons_demo/spec_icons_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "icons_demo over AetherUIDriver") {
-        aeocha.it("draws every icon as a real widget") callback {
+    spec.describe(fw, "icons_demo over AetherUIDriver") {
+        spec.it("draws every icon as a real widget") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "icons are canvases")
+            spec.assert_contains(body, "\"canvas\"", "icons are canvases")
             // 8 in the vocabulary row + 1 search + 3 sizes = 12 canvases.
             n = count_canvases(body)
-            aeocha.assert_eq(n, 12, "one canvas per icon")
+            spec.assert_eq(n, 12, "one canvas per icon")
         }
 
-        aeocha.it("icons compose with the controls they annotate") callback {
+        spec.it("icons compose with the controls they annotate") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"textfield\"", "search row has its field")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Favourites"), 0,
+            spec.assert_contains(body, "\"textfield\"", "search row has its field")
+            spec.assert_gt(uidriver.widget_id_of("button", "Favourites"), 0,
                 "chip button present")
             // The chip keeps the pill styling from the border/hover layers.
-            aeocha.assert_contains(body, "\"borderWidth\":1", "chip is an outline")
-            aeocha.assert_contains(body, "\"hoverBg\"", "chip reacts to hover")
+            spec.assert_contains(body, "\"borderWidth\":1", "chip is an outline")
+            spec.assert_contains(body, "\"hoverBg\"", "chip reacts to hover")
         }
 
-        aeocha.it("the same icon renders at several sizes") callback {
+        spec.it("the same icon renders at several sizes") callback {
             // Three hearts at 12/20/32. The canvases WIDEN to fill their
             // hstack (that is the layout doing its job), so height is the
             // honest size signal: the row is as tall as the largest icon.
@@ -45,17 +45,17 @@ main() {
             // canvases for three sizes — not specific pixel dimensions.
             body = uidriver.get_body("/widgets")
             n = count_canvases(body)
-            aeocha.assert_eq(n, 12, "all three sizes are separate canvases")
+            spec.assert_eq(n, 12, "all three sizes are separate canvases")
         }
 
-        aeocha.it("icon path data is queryable geometry") callback {
+        spec.it("icon path data is queryable geometry") callback {
             // The heart's 24-grid path, published by the app. Pinning the
             // length catches a silently-changed or emptied glyph.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "heart path length: 97", "heart geometry intact")
+            spec.assert_contains(body, "heart path length: 97", "heart geometry intact")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 count_canvases(body: string) -> int {

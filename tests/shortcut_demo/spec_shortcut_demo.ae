@@ -2,7 +2,7 @@
 //   - shortcut_when: Ctrl+E only fires while an "edit mode" flag is on.
 //   - shortcut_chord: Ctrl+K then Ctrl+S fires "saved".
 // Driven via POST /window/key?combo=…, observed through a status label.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -15,33 +15,33 @@ status() -> string {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "scoped + chorded shortcuts over AetherUIDriver") {
-        aeocha.it("a scoped shortcut is inert while its scope is off") callback {
+    spec.describe(fw, "scoped + chorded shortcuts over AetherUIDriver") {
+        spec.it("a scoped shortcut is inert while its scope is off") callback {
             uidriver.window_key("Ctrl+E")
-            aeocha.assert_str_eq(status(), "idle", "Ctrl+E did nothing (edit mode off)")
+            spec.assert_str_eq(status(), "idle", "Ctrl+E did nothing (edit mode off)")
         }
 
-        aeocha.it("the same shortcut fires once its scope turns on") callback {
+        spec.it("the same shortcut fires once its scope turns on") callback {
             t = uidriver.widget_id_by_text("toggle edit mode")
             uidriver.post_ok("/widget/${t}/click", "turn edit mode on")
             uidriver.window_key("Ctrl+E")
             ok = uidriver.wait_body_contains("/widgets", "status: edit fired", 20)
-            aeocha.assert_true(ok, "Ctrl+E fired while edit mode on")
+            spec.assert_true(ok, "Ctrl+E fired while edit mode on")
         }
 
-        aeocha.it("a chord fires only after both keys in sequence") callback {
+        spec.it("a chord fires only after both keys in sequence") callback {
             // First key alone arms the chord — status must not change yet.
             uidriver.window_key("Ctrl+K")
-            aeocha.assert_true(string.equals(status(), "saved") == 0,
+            spec.assert_true(string.equals(status(), "saved") == 0,
                 "chord not fired on the prefix key alone")
             // Second key completes it.
             uidriver.window_key("Ctrl+S")
             ok = uidriver.wait_body_contains("/widgets", "status: saved", 20)
-            aeocha.assert_true(ok, "Ctrl+K Ctrl+S fired the chord")
+            spec.assert_true(ok, "Ctrl+K Ctrl+S fired the chord")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

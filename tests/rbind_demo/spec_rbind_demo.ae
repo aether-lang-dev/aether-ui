@@ -8,53 +8,53 @@
 // Run via ci.sh / spec_matrix, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/rbind_demo/bin/rbind_demo &
 //   UI_SPEC=rbind_demo/spec_rbind_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "reactive bindings (each_bind + computed) over the driver") {
-        aeocha.it("each_bind seeds the group from the list state") callback {
+    spec.describe(fw, "reactive bindings (each_bind + computed) over the driver") {
+        spec.it("each_bind seeds the group from the list state") callback {
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"alpha\"", "row alpha rendered")
-            aeocha.assert_contains(b, "\"text\":\"beta\"", "row beta rendered")
+            spec.assert_contains(b, "\"text\":\"alpha\"", "row alpha rendered")
+            spec.assert_contains(b, "\"text\":\"beta\"", "row beta rendered")
         }
 
-        aeocha.it("computed_s seeds the derived label from its inputs") callback {
+        spec.it("computed_s seeds the derived label from its inputs") callback {
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"Ada Lovelace\"", "computed full name")
+            spec.assert_contains(b, "\"text\":\"Ada Lovelace\"", "computed full name")
         }
 
-        aeocha.it("ui_set_list re-runs each_update (grow replaces the rows)") callback {
+        spec.it("ui_set_list re-runs each_update (grow replaces the rows)") callback {
             g = uidriver.widget_id_by_text("grow list")
             uidriver.post_ok("/widget/${g}/click", "grow the list")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"epsilon\"", 20)
-            aeocha.assert_true(ok, "new rows rendered")
+            spec.assert_true(ok, "new rows rendered")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"gamma\"", "gamma present")
-            aeocha.assert_contains(b, "\"text\":\"delta\"", "delta present")
+            spec.assert_contains(b, "\"text\":\"gamma\"", "gamma present")
+            spec.assert_contains(b, "\"text\":\"delta\"", "delta present")
             // The old rows are gone (clear+rebuild reconcile).
             gone = string.contains(b, "\"text\":\"alpha\"")
-            aeocha.assert_eq(gone, 0, "old row alpha cleared")
+            spec.assert_eq(gone, 0, "old row alpha cleared")
         }
 
-        aeocha.it("changing a computed input restrings the derived label") callback {
+        spec.it("changing a computed input restrings the derived label") callback {
             r = uidriver.widget_id_by_text("rename")
             uidriver.post_ok("/widget/${r}/click", "rename last → Byron")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"Ada Byron\"", 20)
-            aeocha.assert_true(ok, "computed label recomputed")
+            spec.assert_true(ok, "computed label recomputed")
         }
 
-        aeocha.it("empty list clears the group") callback {
+        spec.it("empty list clears the group") callback {
             e = uidriver.widget_id_by_text("empty list")
             uidriver.post_ok("/widget/${e}/click", "empty the list")
             // After empty, none of the row labels remain.
             gone = uidriver.wait_body_contains("/widgets", "\"text\":\"epsilon\"", 3)
-            aeocha.assert_eq(gone, 0, "rows cleared after empty")
+            spec.assert_eq(gone, 0, "rows cleared after empty")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

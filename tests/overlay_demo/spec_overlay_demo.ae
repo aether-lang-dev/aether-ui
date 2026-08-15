@@ -13,39 +13,39 @@
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/overlay_demo/bin/overlay_demo &
 //   UI_SPEC=overlay_demo/spec_overlay_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 import std.os
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "overlay_demo over AetherUIDriver") {
-        aeocha.it("starts with no overlays") callback {
+    spec.describe(fw, "overlay_demo over AetherUIDriver") {
+        spec.it("starts with no overlays") callback {
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"count\":0", "no overlays at startup")
+            spec.assert_contains(r, "\"count\":0", "no overlays at startup")
         }
 
-        aeocha.it("Show toast opens a live non-modal overlay") callback {
+        spec.it("Show toast opens a live non-modal overlay") callback {
             t = uidriver.widget_id_by_text("Show toast")
-            aeocha.assert_gt(t, 0, "toast button found")
+            spec.assert_gt(t, 0, "toast button found")
             uidriver.post_ok("/widget/${t}/click", "POST show toast")
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"modal\":0", "a non-modal overlay is present")
-            aeocha.assert_contains(r, "\"live\":1", "the toast is live")
+            spec.assert_contains(r, "\"modal\":0", "a non-modal overlay is present")
+            spec.assert_contains(r, "\"live\":1", "the toast is live")
         }
 
-        aeocha.it("the toast auto-dismisses (live → 0)") callback {
+        spec.it("the toast auto-dismisses (live → 0)") callback {
             // The toast opened above with a 1500ms lifetime; wait for expiry.
             ok = uidriver.wait_body_contains("/overlays", "\"live\":0", 30)
-            aeocha.assert_true(ok, "toast auto-dismissed")
+            spec.assert_true(ok, "toast auto-dismissed")
         }
 
-        aeocha.it("a pick at the Bump button hits the button (no modal)") callback {
+        spec.it("a pick at the Bump button hits the button (no modal)") callback {
             b = uidriver.widget_id_by_text("Bump counter")
-            aeocha.assert_gt(b, 0, "bump button found")
+            spec.assert_gt(b, 0, "bump button found")
             // Pick at the button's real center (window coords depend on the
             // banner + layout, so read them rather than hardcode).
             bx = uidriver.widget_int_field_by_id(b, "x")
@@ -55,11 +55,11 @@ main() {
             cx = bx + bw / 2
             cy = by + bh / 2
             r = uidriver.get_body("/window/pick?x=${cx}&y=${cy}")
-            aeocha.assert_contains(r, "\"on_scrim\":0", "no scrim intercepts yet")
-            aeocha.assert_contains(r, "\"type\":\"button\"", "the button is hittable")
+            spec.assert_contains(r, "\"on_scrim\":0", "no scrim intercepts yet")
+            spec.assert_contains(r, "\"type\":\"button\"", "the button is hittable")
         }
 
-        aeocha.it("Confirm opens a MODAL overlay whose scrim eats the click") callback {
+        spec.it("Confirm opens a MODAL overlay whose scrim eats the click") callback {
             b = uidriver.widget_id_by_text("Bump counter")
             bx = uidriver.widget_int_field_by_id(b, "x")
             by = uidriver.widget_int_field_by_id(b, "y")
@@ -69,19 +69,19 @@ main() {
             cy = by + bh / 2
 
             c = uidriver.widget_id_by_text("Confirm")
-            aeocha.assert_gt(c, 0, "confirm button found")
+            spec.assert_gt(c, 0, "confirm button found")
             uidriver.post_ok("/widget/${c}/click", "POST confirm")
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"modal\":1", "a modal overlay is live")
+            spec.assert_contains(r, "\"modal\":1", "a modal overlay is live")
             // The DECISIVE proof: a real hit-test at the SAME point now
             // resolves to the scrim, not the button behind it. Wait for the
             // scrim to be allocated (GtkOverlay lays out on the next frame).
             ok = uidriver.wait_body_contains("/window/pick?x=${cx}&y=${cy}",
                                              "\"on_scrim\":1", 30)
-            aeocha.assert_true(ok, "scrim intercepts the click")
+            spec.assert_true(ok, "scrim intercepts the click")
         }
 
-        aeocha.it("Dismiss closes the modal; the button is reachable again") callback {
+        spec.it("Dismiss closes the modal; the button is reachable again") callback {
             b = uidriver.widget_id_by_text("Bump counter")
             bx = uidriver.widget_int_field_by_id(b, "x")
             by = uidriver.widget_int_field_by_id(b, "y")
@@ -91,16 +91,16 @@ main() {
             cy = by + bh / 2
 
             d = uidriver.widget_id_by_text("Dismiss")
-            aeocha.assert_gt(d, 0, "dismiss button found (inside the modal card)")
+            spec.assert_gt(d, 0, "dismiss button found (inside the modal card)")
             uidriver.post_ok("/widget/${d}/click", "POST dismiss")
             ok = uidriver.wait_body_contains("/window/pick?x=${cx}&y=${cy}",
                                              "\"on_scrim\":0", 30)
-            aeocha.assert_true(ok, "scrim gone")
+            spec.assert_true(ok, "scrim gone")
             p = uidriver.get_body("/window/pick?x=${cx}&y=${cy}")
-            aeocha.assert_contains(p, "\"type\":\"button\"", "button reachable again")
+            spec.assert_contains(p, "\"type\":\"button\"", "button reachable again")
         }
 
-        aeocha.it("Escape dismisses a re-opened modal (item 9 wiring)") callback {
+        spec.it("Escape dismisses a re-opened modal (item 9 wiring)") callback {
             c = uidriver.widget_id_by_text("Confirm")
             uidriver.post_ok("/widget/${c}/click", "open modal again")
             b = uidriver.widget_id_by_text("Bump counter")
@@ -112,13 +112,13 @@ main() {
             cy = by + bh / 2
             okup = uidriver.wait_body_contains("/window/pick?x=${cx}&y=${cy}",
                                                "\"on_scrim\":1", 30)
-            aeocha.assert_true(okup, "modal scrim up again")
+            spec.assert_true(okup, "modal scrim up again")
             fired = uidriver.window_key("Escape")
-            aeocha.assert_eq(fired, 1, "Escape handled by the overlay layer")
+            spec.assert_eq(fired, 1, "Escape handled by the overlay layer")
             okdown = uidriver.wait_body_contains("/window/pick?x=${cx}&y=${cy}",
                                                  "\"on_scrim\":0", 30)
-            aeocha.assert_true(okdown, "scrim gone via Escape")
+            spec.assert_true(okdown, "scrim gone via Escape")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

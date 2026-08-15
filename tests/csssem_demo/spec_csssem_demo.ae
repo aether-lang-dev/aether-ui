@@ -7,7 +7,7 @@
 // Run via ci.sh / spec_matrix, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/csssem_demo/bin/csssem_demo &
 //   UI_SPEC=csssem_demo/spec_csssem_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -18,54 +18,54 @@ fg_of(label: string) -> string {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "AeCS vs CSS semantics (W3C intent-port)") {
-        aeocha.it("type selector applies; LAST declaration wins (CSS2.1 order intent)") callback {
+    spec.describe(fw, "AeCS vs CSS semantics (W3C intent-port)") {
+        spec.it("type selector applies; LAST declaration wins (CSS2.1 order intent)") callback {
             b1 = uidriver.widget_id_by_text("S1")
-            aeocha.assert_gt(b1, 0, "S1 found")
+            spec.assert_gt(b1, 0, "S1 found")
             uidriver.post_ok("/widget/${b1}/click", "apply sheet 1")
             ok = uidriver.wait_body_contains("/widgets", "state: s1", 20)
-            aeocha.assert_true(ok, "sheet 1 applied")
-            aeocha.assert_contains(fg_of("Alpha"), "\"fg\":\"#336699\"",
+            spec.assert_true(ok, "sheet 1 applied")
+            spec.assert_contains(fg_of("Alpha"), "\"fg\":\"#336699\"",
                 "bare text got the type rule — and the LATER of the two writes")
         }
 
-        aeocha.it("class beats type (Selectors L3 specificity intent)") callback {
-            aeocha.assert_contains(fg_of("Beta"), "\"fg\":\"#884422\"",
+        spec.it("class beats type (Selectors L3 specificity intent)") callback {
+            spec.assert_contains(fg_of("Beta"), "\"fg\":\"#884422\"",
                 "class-b text takes the bare-class rule over the type rule")
         }
 
-        aeocha.it("id beats class (Selectors L3 specificity intent)") callback {
-            aeocha.assert_contains(fg_of("Gamma"), "\"fg\":\"#0a6e3c\"",
+        spec.it("id beats class (Selectors L3 specificity intent)") callback {
+            spec.assert_contains(fg_of("Gamma"), "\"fg\":\"#0a6e3c\"",
                 "the #g id rule wins over class AND type")
         }
 
-        aeocha.it("PINNED DIVERGENCE: AeCS does not inherit") callback {
+        spec.it("PINNED DIVERGENCE: AeCS does not inherit") callback {
             b2 = uidriver.widget_id_by_text("S2")
             uidriver.post_ok("/widget/${b2}/click", "container-only sheet")
             ok = uidriver.wait_body_contains("/widgets", "state: s2", 20)
-            aeocha.assert_true(ok, "sheet 2 applied")
+            spec.assert_true(ok, "sheet 2 applied")
             // The container ITSELF took the colour…
             a = uidriver.widget_id_by_text("Alpha")
             parent = uidriver.widget_int_field_by_id(a, "parent")
             pb = uidriver.get_body("/widget/${parent}")
-            aeocha.assert_contains(pb, "\"fg\":\"#aa00aa\"",
+            spec.assert_contains(pb, "\"fg\":\"#aa00aa\"",
                 "the container matched the container rule")
             // …but its child text did NOT inherit it (CSS would inherit color).
-            aeocha.assert_contains(fg_of("Alpha"), "\"fg\":\"#336699\"",
+            spec.assert_contains(fg_of("Alpha"), "\"fg\":\"#336699\"",
                 "child text keeps its own colour — no inheritance, by design")
         }
 
-        aeocha.it("PINNED DIVERGENCE: sheets overwrite, never unset") callback {
+        spec.it("PINNED DIVERGENCE: sheets overwrite, never unset") callback {
             b3 = uidriver.widget_id_by_text("S3")
             uidriver.post_ok("/widget/${b3}/click", "colourless sheet")
             ok = uidriver.wait_body_contains("/widgets", "state: s3", 20)
-            aeocha.assert_true(ok, "sheet 3 applied")
-            aeocha.assert_contains(fg_of("Alpha"), "\"fg\":\"#336699\"",
+            spec.assert_true(ok, "sheet 3 applied")
+            spec.assert_contains(fg_of("Alpha"), "\"fg\":\"#336699\"",
                 "a sheet with no colour leaves the old colour — no CSS-style revert")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

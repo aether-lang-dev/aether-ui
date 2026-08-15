@@ -2,40 +2,40 @@
 // The text widget JSON now carries "wrap" (bool) and "anchor"
 // (start|middle|end); the driver asserts a wrapped paragraph reports
 // wrap:true and three labels report their distinct anchors.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "typography over AetherUIDriver") {
-        aeocha.it("text_wrapped reports wrap:true") callback {
+    spec.describe(fw, "typography over AetherUIDriver") {
+        spec.it("text_wrapped reports wrap:true") callback {
             id = uidriver.widget_id_of("text", "")   // first text = the paragraph
             b = uidriver.get_body("/widget/${id}")
-            aeocha.assert_contains(b, "\"wrap\":true", "the paragraph wraps")
+            spec.assert_contains(b, "\"wrap\":true", "the paragraph wraps")
         }
 
-        aeocha.it("plain labels do not wrap") callback {
+        spec.it("plain labels do not wrap") callback {
             id = uidriver.widget_id_by_text("left label")
             b = uidriver.get_body("/widget/${id}")
-            aeocha.assert_contains(b, "\"wrap\":false", "plain label doesn't wrap")
+            spec.assert_contains(b, "\"wrap\":false", "plain label doesn't wrap")
         }
 
-        aeocha.it("text_anchor sets start / middle / end") callback {
+        spec.it("text_anchor sets start / middle / end") callback {
             l = uidriver.widget_id_by_text("left label")
             bl = uidriver.get_body("/widget/${l}")
-            aeocha.assert_contains(bl, "\"anchor\":\"start\"", "left = start")
+            spec.assert_contains(bl, "\"anchor\":\"start\"", "left = start")
 
             c = uidriver.widget_id_by_text("centered label")
             bc = uidriver.get_body("/widget/${c}")
-            aeocha.assert_contains(bc, "\"anchor\":\"middle\"", "center = middle")
+            spec.assert_contains(bc, "\"anchor\":\"middle\"", "center = middle")
 
             r = uidriver.widget_id_by_text("right label")
             br = uidriver.get_body("/widget/${r}")
-            aeocha.assert_contains(br, "\"anchor\":\"end\"", "right = end")
+            spec.assert_contains(br, "\"anchor\":\"end\"", "right = end")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

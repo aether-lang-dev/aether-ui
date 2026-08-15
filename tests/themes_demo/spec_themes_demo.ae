@@ -12,169 +12,169 @@
 // Run via ci.sh / spec_matrix, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/themes_demo/bin/themes_demo &
 //   UI_SPEC=themes_demo/spec_themes_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "stylesheet theming over AetherUIDriver") {
-        aeocha.it("starts unthemed (no explicit colors)") callback {
+    spec.describe(fw, "stylesheet theming over AetherUIDriver") {
+        spec.it("starts unthemed (no explicit colors)") callback {
             h = uidriver.widget_id_by_text("Accounts")
-            aeocha.assert_gt(h, 0, "heading found")
+            spec.assert_gt(h, 0, "heading found")
             b = uidriver.get_body("/widget/${h}")
             styled = string.contains(b, "\"fg\":")
-            aeocha.assert_eq(styled, 0, "heading has no explicit fg yet")
+            spec.assert_eq(styled, 0, "heading has no explicit fg yet")
         }
 
-        aeocha.it("blue theme: element rule styles plain text (backend readback)") callback {
+        spec.it("blue theme: element rule styles plain text (backend readback)") callback {
             t = uidriver.widget_id_by_text("Blue theme")
             uidriver.post_ok("/widget/${t}/click", "apply blue theme")
             ok = uidriver.wait_body_contains("/widgets", "theme: blue", 20)
-            aeocha.assert_true(ok, "status flipped")
+            spec.assert_true(ok, "status flipped")
             o = uidriver.widget_id_by_text("Owner:")
             b = uidriver.get_body("/widget/${o}")
-            aeocha.assert_contains(b, "\"fg\":\"#5c458a\"",
+            spec.assert_contains(b, "\"fg\":\"#5c458a\"",
                 "plain text carries the blue theme's text color")
         }
 
-        aeocha.it("class rule beats element rule — via the SECOND class token") callback {
+        spec.it("class rule beats element rule — via the SECOND class token") callback {
             // The heading's classes are "banner header": banner has no rules,
             // so this passing proves multi-class resolution reads past the
             // first token (v1.1), as well as class-beats-element.
             h = uidriver.widget_id_by_text("Accounts")
             b = uidriver.get_body("/widget/${h}")
-            aeocha.assert_contains(b, "\"fg\":\"#6030bf\"",
+            spec.assert_contains(b, "\"fg\":\"#6030bf\"",
                 "the header-classed heading gets header.text's color, not text's")
         }
 
-        aeocha.it("id rule beats class and element (#status)") callback {
+        spec.it("id rule beats class and element (#status)") callback {
             s = uidriver.widget_id_by_text("theme: blue")
-            aeocha.assert_gt(s, 0, "status label found")
+            spec.assert_gt(s, 0, "status label found")
             b = uidriver.get_body("/widget/${s}")
-            aeocha.assert_contains(b, "\"fg\":\"#224488\"",
+            spec.assert_contains(b, "\"fg\":\"#224488\"",
                 "the #status id rule wins over text's element color")
         }
 
-        aeocha.it("root font family + weight flow to widgets (readback)") callback {
+        spec.it("root font family + weight flow to widgets (readback)") callback {
             h = uidriver.widget_id_by_text("Accounts")
             b = uidriver.get_body("/widget/${h}")
-            aeocha.assert_contains(b, "\"fontFamily\":\"monospace\"",
+            spec.assert_contains(b, "\"fontFamily\":\"monospace\"",
                 "blue theme's root family reached the heading")
-            aeocha.assert_contains(b, "\"fontWeight\":\"bold\"",
+            spec.assert_contains(b, "\"fontWeight\":\"bold\"",
                 "header.text's weight applied")
         }
 
-        aeocha.it("container rule paints the stacks") callback {
+        spec.it("container rule paints the stacks") callback {
             ok = uidriver.wait_body_contains("/widgets", "\"bg\":\"#d6cfe6\"", 20)
-            aeocha.assert_true(ok, "a container carries the blue theme's bg")
+            spec.assert_true(ok, "a container carries the blue theme's bg")
         }
 
-        aeocha.it("applying another sheet re-themes the LIVE tree") callback {
+        spec.it("applying another sheet re-themes the LIVE tree") callback {
             g = uidriver.widget_id_by_text("Green theme")
             uidriver.post_ok("/widget/${g}/click", "apply green theme")
             ok = uidriver.wait_body_contains("/widgets", "theme: green", 20)
-            aeocha.assert_true(ok, "status flipped")
+            spec.assert_true(ok, "status flipped")
             o = uidriver.widget_id_by_text("Owner:")
             b = uidriver.get_body("/widget/${o}")
-            aeocha.assert_contains(b, "\"fg\":\"#738040\"",
+            spec.assert_contains(b, "\"fg\":\"#738040\"",
                 "the same widget now shows the green theme's color")
             h = uidriver.widget_id_by_text("Accounts")
             b2 = uidriver.get_body("/widget/${h}")
-            aeocha.assert_contains(b2, "\"fg\":\"#a3bf30\"",
+            spec.assert_contains(b2, "\"fg\":\"#a3bf30\"",
                 "the class rule re-resolved too")
         }
 
-        aeocha.it("the reset-sheet convention genuinely reverts (un-bold, family)") callback {
+        spec.it("the reset-sheet convention genuinely reverts (un-bold, family)") callback {
             // green_theme is a FULL restatement: st_weight(...,0) must have
             // UN-bolded the heading and re-familied root — not just recolored.
             h = uidriver.widget_id_by_text("Accounts")
             b = uidriver.get_body("/widget/${h}")
-            aeocha.assert_contains(b, "\"fontWeight\":\"normal\"",
+            spec.assert_contains(b, "\"fontWeight\":\"normal\"",
                 "two-valued weight reverted bold on the re-theme")
-            aeocha.assert_contains(b, "\"fontFamily\":\"serif\"",
+            spec.assert_contains(b, "\"fontFamily\":\"serif\"",
                 "the family followed the new theme")
             s = uidriver.widget_id_by_text("theme: green")
             b2 = uidriver.get_body("/widget/${s}")
-            aeocha.assert_contains(b2, "\"fg\":\"#406030\"",
+            spec.assert_contains(b2, "\"fg\":\"#406030\"",
                 "the id rule re-resolved to the green theme's value")
         }
 
-        aeocha.it("use_styles: widgets built later arrive already themed") callback {
+        spec.it("use_styles: widgets built later arrive already themed") callback {
             u = uidriver.widget_id_by_text("Use blue (live)")
             uidriver.post_ok("/widget/${u}/click", "use blue as current sheet")
             ok = uidriver.wait_body_contains("/widgets", "theme: blue-live", 20)
-            aeocha.assert_true(ok, "current sheet installed")
+            spec.assert_true(ok, "current sheet installed")
             a = uidriver.widget_id_by_text("Add row")
             uidriver.post_ok("/widget/${a}/click", "build NEW widgets")
             ok2 = uidriver.wait_body_contains("/widgets", "Deanna Troi", 20)
-            aeocha.assert_true(ok2, "new row rendered")
+            spec.assert_true(ok2, "new row rendered")
             // The new row's text was styled AT CONSTRUCTION — no apply call.
             d = uidriver.widget_id_by_text("Deanna Troi — 004-5678901-23")
             b = uidriver.get_body("/widget/${d}")
-            aeocha.assert_contains(b, "\"fg\":\"#5c458a\"",
+            spec.assert_contains(b, "\"fg\":\"#5c458a\"",
                 "construction-time styling from the current sheet")
         }
 
-        aeocha.it("st_opacity flows to the backend (readback)") callback {
+        spec.it("st_opacity flows to the backend (readback)") callback {
             hword = uidriver.widget_id_by_text("Themes cascade: id, class.kind, class, kind, container, root.")
-            aeocha.assert_gt(hword, 0, "hint text found")
+            spec.assert_gt(hword, 0, "hint text found")
             b = uidriver.get_body("/widget/${hword}")
-            aeocha.assert_contains(b, "\"opacity\":0.55",
+            spec.assert_contains(b, "\"opacity\":0.55",
                 "hint.text opacity applied for real")
         }
 
-        aeocha.it("load_styles: a theme FILE parses and applies") callback {
+        spec.it("load_styles: a theme FILE parses and applies") callback {
             f = uidriver.widget_id_by_text("File theme")
             uidriver.post_ok("/widget/${f}/click", "load purple.aecs")
             ok = uidriver.wait_body_contains("/widgets", "theme: purple", 20)
-            aeocha.assert_true(ok, "file theme parsed (not file-error)")
+            spec.assert_true(ok, "file theme parsed (not file-error)")
             o = uidriver.widget_id_by_text("Owner:")
             b = uidriver.get_body("/widget/${o}")
-            aeocha.assert_contains(b, "\"fg\":\"#bf608a\"",
+            spec.assert_contains(b, "\"fg\":\"#bf608a\"",
                 "the file's element rule applied")
             h = uidriver.widget_id_by_text("Accounts")
             b2 = uidriver.get_body("/widget/${h}")
-            aeocha.assert_contains(b2, "\"fg\":\"#a6386e\"",
+            spec.assert_contains(b2, "\"fg\":\"#a6386e\"",
                 "the file's class rule applied")
             s = uidriver.widget_id_by_text("theme: purple")
             b3 = uidriver.get_body("/widget/${s}")
-            aeocha.assert_contains(b3, "\"fg\":\"#8a2e5c\"",
+            spec.assert_contains(b3, "\"fg\":\"#8a2e5c\"",
                 "the file's #id rule applied")
         }
 
-        aeocha.it("use_styles_pair re-themes on an appearance flip") callback {
+        spec.it("use_styles_pair re-themes on an appearance flip") callback {
             p = uidriver.widget_id_by_text("Pair (auto)")
             uidriver.post_ok("/widget/${p}/click", "install the pair")
             ok = uidriver.wait_body_contains("/widgets", "theme: pair", 20)
-            aeocha.assert_true(ok, "pair installed")
+            spec.assert_true(ok, "pair installed")
             // Flip to dark via the driver: the registered callback must
             // re-theme to the GREEN sheet (heading = green header color).
             uidriver.post_ok("/appearance?dark=1", "OS goes dark")
             h = uidriver.widget_id_by_text("Accounts")
             ok2 = uidriver.wait_body_contains("/widget/${h}", "\"fg\":\"#a3bf30\"", 20)
-            aeocha.assert_true(ok2, "dark flip re-themed to the green sheet")
+            spec.assert_true(ok2, "dark flip re-themed to the green sheet")
             // And back to light -> blue sheet.
             uidriver.post_ok("/appearance?dark=0", "OS back to light")
             ok3 = uidriver.wait_body_contains("/widget/${h}", "\"fg\":\"#6030bf\"", 20)
-            aeocha.assert_true(ok3, "light flip re-themed to the blue sheet")
+            spec.assert_true(ok3, "light flip re-themed to the blue sheet")
         }
 
-        aeocha.it("styles_for_mode picks a sheet for the OS appearance") callback {
+        spec.it("styles_for_mode picks a sheet for the OS appearance") callback {
             a = uidriver.widget_id_by_text("Auto (mode)")
             uidriver.post_ok("/widget/${a}/click", "apply mode-picked theme")
             ok = uidriver.wait_body_contains("/widgets", "theme: auto", 20)
-            aeocha.assert_true(ok, "auto theme applied")
+            spec.assert_true(ok, "auto theme applied")
             // Whichever mode the box is in, the pick lands on one of the two
             // sheets — the id rule shows blue's or green's value, never stale.
             s = uidriver.widget_id_by_text("theme: auto")
             b = uidriver.get_body("/widget/${s}")
             hitBlue = string.contains(b, "\"fg\":\"#224488\"")
             hitGreen = string.contains(b, "\"fg\":\"#406030\"")
-            aeocha.assert_eq(hitBlue + hitGreen, 1, "exactly one of the pair applied")
+            spec.assert_eq(hitBlue + hitGreen, 1, "exactly one of the pair applied")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

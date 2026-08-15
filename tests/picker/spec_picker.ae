@@ -12,41 +12,41 @@
 //   AETHER_UI_TEST_PORT=9222 [AETHER_UI_PICKER=drawn] \
 //     ./target/build/examples/picker/bin/picker &
 //   UI_SPEC=picker/spec_picker tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "picker ABI over AetherUIDriver (surface-agnostic)") {
-        aeocha.it("the picker exists and starts at index 0 (Red)") callback {
+    spec.describe(fw, "picker ABI over AetherUIDriver (surface-agnostic)") {
+        spec.it("the picker exists and starts at index 0 (Red)") callback {
             p = uidriver.widget_id_of("picker", "")
-            aeocha.assert_gt(p, 0, "a picker widget is present")
+            spec.assert_gt(p, 0, "a picker widget is present")
             sel = uidriver.widget_int_field_by_id(p, "selected")
-            aeocha.assert_eq(sel, 0, "selection starts at 0")
+            spec.assert_eq(sel, 0, "selection starts at 0")
             txt = uidriver.widget_text_by_id(p)
-            aeocha.assert_str_eq(txt, "Red", "label shows the first item")
+            spec.assert_str_eq(txt, "Red", "label shows the first item")
         }
 
-        aeocha.it("selecting index 2 round-trips (selected + label)") callback {
+        spec.it("selecting index 2 round-trips (selected + label)") callback {
             p = uidriver.widget_id_of("picker", "")
             uidriver.post_ok("/widget/${p}/set_value?v=2", "select index 2")
             ok = uidriver.wait_body_contains("/widget/${p}", "\"selected\":2", 20)
-            aeocha.assert_true(ok, "selection is 2")
+            spec.assert_true(ok, "selection is 2")
             txt = uidriver.widget_text_by_id(p)
-            aeocha.assert_str_eq(txt, "Blue", "label tracks the selection")
+            spec.assert_str_eq(txt, "Blue", "label tracks the selection")
         }
 
-        aeocha.it("selecting index 3 round-trips") callback {
+        spec.it("selecting index 3 round-trips") callback {
             p = uidriver.widget_id_of("picker", "")
             uidriver.post_ok("/widget/${p}/set_value?v=3", "select index 3")
             ok = uidriver.wait_body_contains("/widget/${p}", "\"selected\":3", 20)
-            aeocha.assert_true(ok, "selection is 3")
+            spec.assert_true(ok, "selection is 3")
             txt = uidriver.widget_text_by_id(p)
-            aeocha.assert_str_eq(txt, "Yellow", "label shows Yellow")
+            spec.assert_str_eq(txt, "Yellow", "label shows Yellow")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

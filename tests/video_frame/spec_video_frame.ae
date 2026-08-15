@@ -12,22 +12,22 @@
 // composite split -- all of those are properties of the current
 // implementation rather than of "an MP4 plays in a frame", and pinning them
 // would make every rewrite look like a regression.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "video in a ui.frames frame") {
-        aeocha.it("starts and publishes playback status") callback {
+    spec.describe(fw, "video in a ui.frames frame") {
+        spec.it("starts and publishes playback status") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "video: ", "status line present")
-            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
+            spec.assert_contains(body, "video: ", "status line present")
+            spec.assert_contains(body, "\"canvas\"", "has a canvas")
         }
 
-        aeocha.it("puts real pixels on the canvas") callback {
+        spec.it("puts real pixels on the canvas") callback {
             // painted_pixels reads the painter's retained surface. Note it
             // reports what is ON the surface rather than what the last paint
             // drew -- the surface is not cleared between paints, so this
@@ -37,12 +37,12 @@ main() {
             sleep(200)
             px = uidriver.canvas_painted_pixels()
             if px <= 0 {
-                aeocha.assert_true(px <= 0, "no paint surface to sample here")
+                spec.assert_true(px <= 0, "no paint surface to sample here")
             } else {
-                aeocha.assert_gt(px, 500, "the painted surface is not blank")
+                spec.assert_gt(px, 500, "the painted surface is not blank")
             }
         }
-        aeocha.it("presents against the clock, not the paint rate") callback {
+        spec.it("presents against the clock, not the paint rate") callback {
             // The compositor paints far more often than a 15fps clip
             // advances, so a clock-driven player HOLDS the current frame on
             // most paints. held > 0 is the observable that distinguishes
@@ -70,10 +70,10 @@ main() {
                 }
                 i = i + 1
             }
-            aeocha.assert_eq(ok, 1,
+            spec.assert_eq(ok, 1,
                 "frames are held between presentations, not shown per paint")
         }
-        aeocha.it("names the clock driving presentation") callback {
+        spec.it("names the clock driving presentation") callback {
             // Which CLOCK is master is the whole A/V sync claim, and it is
             // observable without asserting drift numbers: with audio loaded
             // the master is the audio device's position, otherwise the scene
@@ -88,8 +88,8 @@ main() {
             has = 0
             if string.contains(body, "clock=audio") == 1 { has = 1 }
             if string.contains(body, "clock=scene") == 1 { has = 1 }
-            aeocha.assert_eq(has, 1, "the presentation clock is reported")
+            spec.assert_eq(has, 1, "the presentation clock is reported")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

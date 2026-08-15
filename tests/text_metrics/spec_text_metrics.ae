@@ -8,38 +8,39 @@
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/calculator/bin/calculator &
 //   UI_SPEC=text_metrics/spec_text_metrics tests/run_spec.sh
-import aeocha
+import std.spec
+import std.http.client.httptest
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "text metrics over AetherUIDriver") {
-        aeocha.it("route responds with a positive width for a real string") callback {
-            aeocha.expect_http_get_status(uidriver.url_of("/text_extent?size=16&s=hello"),
+    spec.describe(fw, "text metrics over AetherUIDriver") {
+        spec.it("route responds with a positive width for a real string") callback {
+            httptest.expect_http_get_status(uidriver.url_of("/text_extent?size=16&s=hello"),
                 200, "GET /text_extent")
             w = uidriver.text_width(16, "hello")
-            aeocha.assert_true(w > 0.0, "hello has positive width")
+            spec.assert_true(w > 0.0, "hello has positive width")
         }
-        aeocha.it("empty string measures zero") callback {
-            aeocha.assert_true(uidriver.text_width(16, "") == 0.0, "empty → 0 width")
+        spec.it("empty string measures zero") callback {
+            spec.assert_true(uidriver.text_width(16, "") == 0.0, "empty → 0 width")
         }
-        aeocha.it("width is monotonic in length") callback {
+        spec.it("width is monotonic in length") callback {
             hi = uidriver.text_width(16, "hi")
             hello = uidriver.text_width(16, "hello")
-            aeocha.assert_true(hello > hi, "hello wider than hi")
+            spec.assert_true(hello > hi, "hello wider than hi")
         }
-        aeocha.it("width scales with font size") callback {
+        spec.it("width scales with font size") callback {
             small = uidriver.text_width(10, "sample")
             large = uidriver.text_width(30, "sample")
-            aeocha.assert_true(large > small, "30px wider than 10px")
+            spec.assert_true(large > small, "30px wider than 10px")
         }
-        aeocha.it("ascent is positive and below the line height") callback {
+        spec.it("ascent is positive and below the line height") callback {
             a = uidriver.font_ascent(16)
-            aeocha.assert_true(a > 0.0, "ascent positive")
+            spec.assert_true(a > 0.0, "ascent positive")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

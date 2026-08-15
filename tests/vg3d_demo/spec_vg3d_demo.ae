@@ -10,66 +10,66 @@
 // Run via tests/spec_matrix.sh vg3d, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vg3d_demo/bin/vg3d_demo &
 //   UI_SPEC=vg3d_demo/spec_vg3d_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "vg3d_demo over AetherUIDriver") {
-        aeocha.it("publishes the initial projection") callback {
+    spec.describe(fw, "vg3d_demo over AetherUIDriver") {
+        spec.it("publishes the initial projection") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "angle: 0", "starts unrotated")
-            aeocha.assert_contains(body, "v0: ", "a projected corner is published")
-            aeocha.assert_false(string.contains(body, "v0: ?"),
+            spec.assert_contains(body, "angle: 0", "starts unrotated")
+            spec.assert_contains(body, "v0: ", "a projected corner is published")
+            spec.assert_false(string.contains(body, "v0: ?"),
                 "projection ran at startup")
         }
 
-        aeocha.it("the wireframe actually rendered (pixel probe)") callback {
+        spec.it("the wireframe actually rendered (pixel probe)") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Probe pixels"))
             ok = uidriver.wait_body_contains("/widgets", "ink: ", 20)
-            aeocha.assert_true(ok, "probe ran")
+            spec.assert_true(ok, "probe ran")
             body0 = uidriver.get_body("/widgets")
             ink0 = ink_count(body0)
             // A 320x240 canvas sampled every 4px is 4800 samples; a cube
             // wireframe inks a small but unmistakable fraction of them.
-            aeocha.assert_true(ink0 > 60, "wireframe ink present (${ink0})")
-            aeocha.assert_true(ink0 < 2400, "not a solid flood (${ink0})")
+            spec.assert_true(ink0 > 60, "wireframe ink present (${ink0})")
+            spec.assert_true(ink0 < 2400, "not a solid flood (${ink0})")
             // The SHADED cube fills its faces, so it inks far more than the
             // wireframe of the same cube — a relational proof that the
             // mesh/render tier (cull + painter sort + Lambert fills) drew
             // solid geometry, not just edges.
             solid0 = solid_count(body0)
-            aeocha.assert_true(solid0 > ink0 * 2,
+            spec.assert_true(solid0 > ink0 * 2,
                 "shaded cube out-inks the wireframe (${solid0} vs ${ink0})")
         }
 
-        aeocha.it("rotating the model moves the projection") callback {
+        spec.it("rotating the model moves the projection") callback {
             before = v0_of(uidriver.get_body("/widgets"))
             uidriver.click_widget(uidriver.widget_id_of("button", "Rotate 15°"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "angle: 15", 20),
                 "angle advanced")
             after = v0_of(uidriver.get_body("/widgets"))
-            aeocha.assert_true(string.length(before) > 0, "had a corner before")
-            aeocha.assert_true(string.length(after) > 0, "have a corner after")
-            aeocha.assert_false(string.equals(before, after) == 1,
+            spec.assert_true(string.length(before) > 0, "had a corner before")
+            spec.assert_true(string.length(after) > 0, "have a corner after")
+            spec.assert_false(string.equals(before, after) == 1,
                 "the projected corner MOVED (${before} -> ${after})")
         }
 
-        aeocha.it("the on-demand repaint really repainted") callback {
+        spec.it("the on-demand repaint really repainted") callback {
             // Probe again after the rotation: the scene is a STATIC region
             // (no timer), so fresh ink here proves scene_refresh re-rendered
             // the region with the new matrix.
             uidriver.click_widget(uidriver.widget_id_of("button", "Probe pixels"))
             b = uidriver.get_body("/widgets")
             ink1 = ink_count(b)
-            aeocha.assert_true(ink1 > 60, "still inked after rotate (${ink1})")
+            spec.assert_true(ink1 > 60, "still inked after rotate (${ink1})")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // The "v0: x,y" payload, or "" if absent.

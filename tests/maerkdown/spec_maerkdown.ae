@@ -19,97 +19,97 @@
 // Run via tests/spec_matrix.sh maerkdown, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/apps/maerkdown/bin/maerkdown &
 //   UI_SPEC=maerkdown/spec_maerkdown tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 extern string_char_at(s: string, index: int) -> int
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "maerkdown over AetherUIDriver") {
-        aeocha.it("opens on an empty document with the caret at home") callback {
+    spec.describe(fw, "maerkdown over AetherUIDriver") {
+        spec.it("opens on an empty document with the caret at home") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "blocks: 1 words: 0",
+            spec.assert_contains(body, "blocks: 1 words: 0",
                 "one empty paragraph")
-            aeocha.assert_contains(body, "caret: 0/0", "caret at 0/0")
-            aeocha.assert_contains(body, "\"canvas\"", "the page canvas exists")
+            spec.assert_contains(body, "caret: 0/0", "caret at 0/0")
+            spec.assert_contains(body, "\"canvas\"", "the page canvas exists")
         }
 
-        aeocha.it("typing builds the live word; space commits it") callback {
+        spec.it("typing builds the live word; space commits it") callback {
             uidriver.key("h")
             uidriver.key("i")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "buf: [hi]", "live word grows")
-            aeocha.assert_contains(body, "words: 0", "not yet committed")
+            spec.assert_contains(body, "buf: [hi]", "live word grows")
+            spec.assert_contains(body, "words: 0", "not yet committed")
             uidriver.key("space")
             body2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body2, "words: 1", "space commits")
-            aeocha.assert_contains(body2, "buf: []", "buffer empty again")
-            aeocha.assert_contains(body2, "caret: 0/1", "caret after the word")
+            spec.assert_contains(body2, "words: 1", "space commits")
+            spec.assert_contains(body2, "buf: []", "buffer empty again")
+            spec.assert_contains(body2, "caret: 0/1", "caret after the word")
         }
 
-        aeocha.it("Enter splits the block; BackSpace merges it back") callback {
+        spec.it("Enter splits the block; BackSpace merges it back") callback {
             uidriver.key("Return")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "blocks: 2", "split made a block")
-            aeocha.assert_contains(body, "caret: 1/0", "caret in the new block")
+            spec.assert_contains(body, "blocks: 2", "split made a block")
+            spec.assert_contains(body, "caret: 1/0", "caret in the new block")
             uidriver.key("BackSpace")
             body2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body2, "blocks: 1", "merge rejoined")
-            aeocha.assert_contains(body2, "caret: 0/1", "caret at the junction")
+            spec.assert_contains(body2, "blocks: 1", "merge rejoined")
+            spec.assert_contains(body2, "caret: 0/1", "caret at the junction")
         }
 
-        aeocha.it("BackSpace lifts the previous word into the buffer") callback {
+        spec.it("BackSpace lifts the previous word into the buffer") callback {
             uidriver.key("BackSpace")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "buf: [hi]", "word lifted, editable")
-            aeocha.assert_contains(body, "words: 0", "and out of the model")
+            spec.assert_contains(body, "buf: [hi]", "word lifted, editable")
+            spec.assert_contains(body, "words: 0", "and out of the model")
             // Re-type the tail and commit a DIFFERENT word: hi → hip.
             uidriver.key("p")
             uidriver.key("space")
             body2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body2, "words: 1", "recommitted")
-            aeocha.assert_contains(body2, "buf: []", "buffer clear")
+            spec.assert_contains(body2, "words: 1", "recommitted")
+            spec.assert_contains(body2, "buf: []", "buffer clear")
         }
 
-        aeocha.it("arrow keys traverse by CHARACTER, through words") callback {
+        spec.it("arrow keys traverse by CHARACTER, through words") callback {
             // Doc holds one word "hip", caret after it. Left ENTERS the
             // word from its right end (lifting it into the buffer), more
             // Lefts walk the cursor, typing inserts at the cursor, and
             // Right off the end re-commits the word.
             uidriver.key("Left")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "buf: [hip] cpos: 2",
+            spec.assert_contains(body, "buf: [hip] cpos: 2",
                 "entered the word, cursor before the last char")
-            aeocha.assert_contains(body, "words: 0", "word lifted while edited")
+            spec.assert_contains(body, "words: 0", "word lifted while edited")
             uidriver.key("Left")
             body2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body2, "cpos: 1", "cursor walks left")
+            spec.assert_contains(body2, "cpos: 1", "cursor walks left")
             uidriver.key("x")
             body3 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body3, "buf: [hxip] cpos: 2",
+            spec.assert_contains(body3, "buf: [hxip] cpos: 2",
                 "typing inserts AT the cursor")
             uidriver.key("BackSpace")
             body4 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body4, "buf: [hip] cpos: 1",
+            spec.assert_contains(body4, "buf: [hip] cpos: 1",
                 "BackSpace deletes AT the cursor")
             uidriver.key("Right")
             uidriver.key("Right")
             uidriver.key("Right")
             body5 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body5, "words: 1", "walking off the end recommits")
-            aeocha.assert_contains(body5, "buf: [] cpos: 0", "buffer empty again")
+            spec.assert_contains(body5, "words: 1", "walking off the end recommits")
+            spec.assert_contains(body5, "buf: [] cpos: 0", "buffer empty again")
         }
 
-        aeocha.it("clicking a word EXPANDS it; B at commit restyles it") callback {
+        spec.it("clicking a word EXPANDS it; B at commit restyles it") callback {
             b = uidriver.widget_id_of("button", "Sample")
-            aeocha.assert_gt(b, 0, "sample button")
+            spec.assert_gt(b, 0, "sample button")
             uidriver.click_widget(b)
             ok = uidriver.wait_body_contains("/widgets", "blocks: 6", 20)
-            aeocha.assert_true(ok, "sample document loaded")
+            spec.assert_true(ok, "sample document loaded")
             // (60, 30) is inside the H1 word "Maerkdown" (first word, first
             // line) on every backend. NOT because the layout is
             // byte-identical — it is not. Measured hit edges for that word:
@@ -123,27 +123,27 @@ main() {
             // direction.
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "click on the title")
             ok1 = uidriver.wait_body_contains("/widgets", "buf: [Maerkdown]", 20)
-            aeocha.assert_true(ok1, "plain word expands to bare text")
+            spec.assert_true(ok1, "plain word expands to bare text")
             bb = uidriver.widget_id_of("button", "B")
             uidriver.click_widget(bb)
             okp = uidriver.wait_body_contains("/widgets", "pend: 1", 20)
-            aeocha.assert_true(okp, "toolbar queues the toggle")
+            spec.assert_true(okp, "toolbar queues the toggle")
             uidriver.key("Escape")
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
             ok2 = uidriver.wait_body_contains("/widgets", "# **Maerkdown**", 20)
-            aeocha.assert_true(ok2, "markdown records the bold word")
+            spec.assert_true(ok2, "markdown records the bold word")
             // THE momentary-source claim: the styled word expands with
             // its markers inline, char-addressable.
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "click the bold title")
             ok3 = uidriver.wait_body_contains("/widgets", "buf: [**Maerkdown**]", 20)
-            aeocha.assert_true(ok3, "bold word expands to **source**")
+            spec.assert_true(ok3, "bold word expands to **source**")
             uidriver.key("Escape")
             ok4 = uidriver.wait_body_contains("/widgets", "buf: [] cpos: 0", 20)
-            aeocha.assert_true(ok4, "commit collapses back, style intact")
+            spec.assert_true(ok4, "commit collapses back, style intact")
         }
 
-        aeocha.it("bold is real ink: it eats the dark page") callback {
+        spec.it("bold is real ink: it eats the dark page") callback {
             // The title is now bold (previous it). The probe counts PAGE-
             // DARK samples (immune to any white-ground replay leak, which
             // near-white glyph ink is not). Bold thickens glyphs, so the
@@ -154,15 +154,15 @@ main() {
             // immediacy. Both probes run with an empty buffer and no
             // overlays — like for like, the lever is bold alone.
             pb = uidriver.widget_id_of("button", "Probe")
-            aeocha.assert_gt(pb, 0, "probe button")
+            spec.assert_gt(pb, 0, "probe button")
             uidriver.click_widget(pb)
             okp1 = uidriver.wait_body_contains("/widgets", "dark: 1", 20)
-            aeocha.assert_true(okp1, "first probe published")
+            spec.assert_true(okp1, "first probe published")
             body = uidriver.get_body("/widgets")
             bold_dark = parse_after(body, "dark: ")
-            aeocha.assert_true(bold_dark > 4000,
+            spec.assert_true(bold_dark > 4000,
                 "the page reads as mostly dark ground (${bold_dark})")
-            aeocha.assert_true(bold_dark < 14900,
+            spec.assert_true(bold_dark < 14900,
                 "but not ALL dark — words exist (${bold_dark} of ~15k)")
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand the title")
             bb = uidriver.widget_id_of("button", "B")
@@ -172,7 +172,7 @@ main() {
             uidriver.click_widget(srcb)
             // "# Maerkdown" (no **) only appears once the un-bold committed.
             okp2 = uidriver.wait_body_contains("/widgets", "# Maerkdown", 20)
-            aeocha.assert_true(okp2, "title back to plain in the markdown")
+            spec.assert_true(okp2, "title back to plain in the markdown")
             uidriver.click_widget(pb)
             // Poll until the dark count MOVES off the bold reading.
             plain_dark = bold_dark
@@ -182,7 +182,7 @@ main() {
                 plain_dark = parse_after(body2, "dark: ")
                 tries = tries + 1
             }
-            aeocha.assert_true(plain_dark > 4000, "plain page still dark ground")
+            spec.assert_true(plain_dark > 4000, "plain page still dark ground")
             // NOT asserting plain > bold. Measured, that lever is far too
             // weak to gate on: bolding ONE word of a full page moves ~30
             // samples out of ~14,200 on GTK4 (0.2%), and the identical edit
@@ -197,11 +197,11 @@ main() {
             // tests/stroker_demo (pixel-equivalence vs native stroking) and
             // in the vg unit suites; it does not need re-proving here
             // through a 15,000-sample lens that cannot resolve it.
-            aeocha.assert_true(plain_dark < 14900,
+            spec.assert_true(plain_dark < 14900,
                 "plain page has ink too (${plain_dark} of ~15k)")
         }
 
-        aeocha.it("block commands retype the caret's block") callback {
+        spec.it("block commands retype the caret's block") callback {
             // Clicking the title expands it (that's the editing model);
             // H3 retypes the block around the edit, Escape commits the
             // word back before we look at the source.
@@ -212,10 +212,10 @@ main() {
             srcb = uidriver.widget_id_of("button", "Source")
             uidriver.click_widget(srcb)
             ok = uidriver.wait_body_contains("/widgets", "### Maerkdown", 20)
-            aeocha.assert_true(ok, "H1 became H3 in the markdown")
+            spec.assert_true(ok, "H1 became H3 in the markdown")
         }
 
-        aeocha.it("extended styles: underline, mark, spoiler, sup/sub") callback {
+        spec.it("extended styles: underline, mark, spoiler, sup/sub") callback {
             // Title is H3 now and (30,30) is still inside it. Walk the
             // extended set through the toolbar, asserting each syntax in
             // the serialized markdown (delimiters per the Extended
@@ -232,10 +232,10 @@ main() {
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok1 = uidriver.wait_body_contains("/widgets", "### ++Maerkdown++", 20)
-            aeocha.assert_true(ok1, "underline serializes as ++ ++")
+            spec.assert_true(ok1, "underline serializes as ++ ++")
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand again")
             okx = uidriver.wait_body_contains("/widgets", "buf: [++Maerkdown++]", 20)
-            aeocha.assert_true(okx, "underlined word expands WITH its markers")
+            spec.assert_true(okx, "underlined word expands WITH its markers")
             uidriver.click_widget(ub)
             uidriver.key("Escape")
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
@@ -243,7 +243,7 @@ main() {
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok2 = uidriver.wait_body_contains("/widgets", "### ==Maerkdown==", 20)
-            aeocha.assert_true(ok2, "highlight serializes as == ==")
+            spec.assert_true(ok2, "highlight serializes as == ==")
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(mb)
             uidriver.key("Escape")
@@ -252,37 +252,37 @@ main() {
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok3 = uidriver.wait_body_contains("/widgets", "### ^Maerkdown^", 20)
-            aeocha.assert_true(ok3, "superscript serializes as ^ ^")
+            spec.assert_true(ok3, "superscript serializes as ^ ^")
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(subb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok4 = uidriver.wait_body_contains("/widgets", "### ~Maerkdown~", 20)
-            aeocha.assert_true(ok4, "sub replaces sup (mutually exclusive)")
+            spec.assert_true(ok4, "sub replaces sup (mutually exclusive)")
             uidriver.post_ok("/canvas/1/click?x=60&y=30", "expand")
             uidriver.click_widget(subb)
             uidriver.key("Escape")
             uidriver.click_widget(srcb)
             ok5 = uidriver.wait_body_contains("/widgets", "### Maerkdown", 20)
-            aeocha.assert_true(ok5, "toggles all the way back to plain")
+            spec.assert_true(ok5, "toggles all the way back to plain")
         }
 
-        aeocha.it("Up and Down move the caret by layout line") callback {
+        spec.it("Up and Down move the caret by layout line") callback {
             // Park the caret in the title line's trailing gap (x well past
             // the word, y in the H3 title band), then walk down into the
             // paragraph block and back up.
             uidriver.post_ok("/canvas/1/click?x=400&y=20", "caret to title gap")
             ok0 = uidriver.wait_body_contains("/widgets", "caret: 0/1", 20)
-            aeocha.assert_true(ok0, "caret after the title")
+            spec.assert_true(ok0, "caret after the title")
             uidriver.key("Down")
             ok1 = uidriver.wait_body_contains("/widgets", "caret: 1/", 20)
-            aeocha.assert_true(ok1, "Down lands in the paragraph block")
+            spec.assert_true(ok1, "Down lands in the paragraph block")
             uidriver.key("Up")
             ok2 = uidriver.wait_body_contains("/widgets", "caret: 0/1", 20)
-            aeocha.assert_true(ok2, "Up returns to the title line")
+            spec.assert_true(ok2, "Up returns to the title line")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // First integer right after `key` in body; -1 if absent.

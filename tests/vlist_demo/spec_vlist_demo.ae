@@ -2,7 +2,7 @@
 // 1000 items but only a window of 10 row widgets is ever realized; scrolling
 // slides the window and recycles the widgets (count stays bounded). The driver
 // counts "row N" widgets and checks which rows are shown.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -20,65 +20,65 @@ row_count() -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "virtualized list over AetherUIDriver") {
-        aeocha.it("only a window of rows is realized, not all 1000") callback {
-            aeocha.assert_eq(row_count(), 10, "exactly the window (10) is realized")
+    spec.describe(fw, "virtualized list over AetherUIDriver") {
+        spec.it("only a window of rows is realized, not all 1000") callback {
+            spec.assert_eq(row_count(), 10, "exactly the window (10) is realized")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"row 0\"", "window starts at row 0")
-            aeocha.assert_contains(b, "\"text\":\"row 9\"", "window ends at row 9")
+            spec.assert_contains(b, "\"text\":\"row 0\"", "window starts at row 0")
+            spec.assert_contains(b, "\"text\":\"row 9\"", "window ends at row 9")
             // Rows far outside the window are NOT realized.
             absent = string.contains(b, "\"text\":\"row 500\"")
-            aeocha.assert_eq(absent, 0, "row 500 is not realized initially")
+            spec.assert_eq(absent, 0, "row 500 is not realized initially")
         }
 
-        aeocha.it("scrolling slides the window and recycles widgets") callback {
+        spec.it("scrolling slides the window and recycles widgets") callback {
             m = uidriver.widget_id_by_text("to 500")
             uidriver.post_ok("/widget/${m}/click", "scroll to 500")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"row 500\"", 20)
-            aeocha.assert_true(ok, "row 500 realized after scroll")
+            spec.assert_true(ok, "row 500 realized after scroll")
             // Still bounded — the old window's rows were recycled, not added to.
-            aeocha.assert_eq(row_count(), 10, "widget count stays bounded (10)")
+            spec.assert_eq(row_count(), 10, "widget count stays bounded (10)")
             b = uidriver.get_body("/widgets")
             gone = string.contains(b, "\"text\":\"row 0\"")
-            aeocha.assert_eq(gone, 0, "row 0 recycled out of the window")
+            spec.assert_eq(gone, 0, "row 0 recycled out of the window")
         }
 
-        aeocha.it("scrolling to the end clamps the window") callback {
+        spec.it("scrolling to the end clamps the window") callback {
             e = uidriver.widget_id_by_text("to end")
             uidriver.post_ok("/widget/${e}/click", "scroll to end")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"row 999\"", 20)
-            aeocha.assert_true(ok, "last item shown")
+            spec.assert_true(ok, "last item shown")
             // Window clamps to [990,999] — still 10 rows, ending at 999.
-            aeocha.assert_eq(row_count(), 10, "clamped window is still 10 rows")
+            spec.assert_eq(row_count(), 10, "clamped window is still 10 rows")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"row 990\"", "window clamped to end")
+            spec.assert_contains(b, "\"text\":\"row 990\"", "window clamped to end")
         }
 
-        aeocha.it("a native scroll step slides + recycles the window") callback {
+        spec.it("a native scroll step slides + recycles the window") callback {
             // Reset to the top, then drive a real scroll step through the
             // container's native-scroll path: POST /widget/{container}/scroll.
             // The container is the vstack parent of the row widgets.
             t = uidriver.widget_id_by_text("top")
             uidriver.post_ok("/widget/${t}/click", "reset to top")
             okt = uidriver.wait_body_contains("/widgets", "\"text\":\"row 0\"", 20)
-            aeocha.assert_true(okt, "back at the top")
+            spec.assert_true(okt, "back at the top")
 
             r0 = uidriver.widget_id_by_text("row 0")
             container = uidriver.widget_int_field_by_id(r0, "parent")
-            aeocha.assert_gt(container, 0, "vlist container found")
+            spec.assert_gt(container, 0, "vlist container found")
 
             // dy=1 → window slides forward one row: 0..9 becomes 1..10.
             uidriver.post_ok("/widget/${container}/scroll?dy=1", "native scroll +1")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"row 10\"", 20)
-            aeocha.assert_true(ok, "row 10 realized after a native scroll step")
-            aeocha.assert_eq(row_count(), 10, "still bounded (10) — recycled, not grown")
+            spec.assert_true(ok, "row 10 realized after a native scroll step")
+            spec.assert_eq(row_count(), 10, "still bounded (10) — recycled, not grown")
             b = uidriver.get_body("/widgets")
             gone = string.contains(b, "\"text\":\"row 0\"")
-            aeocha.assert_eq(gone, 0, "row 0 scrolled out of the window")
+            spec.assert_eq(gone, 0, "row 0 scrolled out of the window")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

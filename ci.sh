@@ -332,28 +332,20 @@ for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))
 done
 
-# Phases 3-6 are Aeocha specs (tests/<app>/spec_*.ae — Aether programs on
+# Phases 3-6 are driver specs (tests/<app>/spec_*.ae — Aether programs on
 # the shared tests/lib/uidriver.ae client; tests/run_spec.sh is launcher
-# glue). They need the aeocha clone. Default to a flat ~/scm/aeocha, but fall
-# back to the sibling checkout beside aether-ui ($ROOT/../aeocha) — that's the
-# layout when both live under an AetherThings/ grouping. An explicit $AEOCHA_DIR
-# still wins over both.
-if [ -z "${AEOCHA_DIR:-}" ]; then
-    if [ -f "$HOME/scm/aeocha/aeocha.ae" ]; then
-        AEOCHA_DIR="$HOME/scm/aeocha"
-    else
-        AEOCHA_DIR="$ROOT/../aeocha"
-    fi
-fi
-export AEOCHA_DIR   # so tests/run_spec.sh (child) inherits the resolved path
-if [ ! -f "$AEOCHA_DIR/aeocha.ae" ]; then
-    echo "NOTICE: aeocha not found at $AEOCHA_DIR — driver spec phases (3-6) FAIL."
-    echo "        (clone github.com/aether-lang-org/aeocha or set AEOCHA_DIR)"
-    FAIL=$((FAIL + 1))
-    AEOCHA_OK=0
-else
-    AEOCHA_OK=1
-fi
+# glue).
+#
+# They used to need an aeocha CHECKOUT, resolved from ~/scm/aeocha or a
+# sibling directory, with a hard FAIL when absent. That requirement is gone:
+# aeocha's core was absorbed into the stdlib as `std.spec` (ae 0.539) and its
+# HTTP matchers as `std.http.client.httptest`, so the framework now ships with
+# the toolchain. Nothing to clone, nothing to locate, and no way for a fresh
+# box to fail these phases for want of a repo.
+#
+# SPEC_OK is kept (rather than deleting ~10 guards) so the phase structure is
+# unchanged; it is simply always satisfied now.
+SPEC_OK=1
 
 # Implicit transitions (item 6) exist now: every DRIVER phase runs with
 # animations OFF so specs assert end states deterministically (house rule).
@@ -362,7 +354,7 @@ export AETHER_UI_NO_ANIMATION=1
 
 echo
 echo "=== Phase 3: AetherUIDriver calculator spec ==="
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=calculator/spec_calculator \
     run_server_test "$(EX_BIN calculator)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" calculator || FAIL=$((FAIL + 1))
@@ -373,7 +365,7 @@ echo "=== Phase 3b: AetherUIDriver text-metrics spec ==="
 # App-agnostic: exercises the GET /text_extent route against the calculator
 # binary (any driver-armed app exposes it). Verifies the cairo text metrics
 # behave over the real HTTP surface (roadmap item 2).
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=text_metrics/spec_text_metrics \
     run_server_test "$(EX_BIN calculator)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" text_metrics || FAIL=$((FAIL + 1))
@@ -381,7 +373,7 @@ fi
 
 echo
 echo "=== Phase 4: AetherUIDriver testable spec ==="
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=testable/spec_testable \
     run_server_test "$(EX_BIN testable)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" testable || FAIL=$((FAIL + 1))
@@ -389,7 +381,7 @@ fi
 
 echo
 echo "=== Phase 5: AetherUIDriver context-menu spec ==="
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=context_menu/spec_context_menu \
     run_server_test "$(EX_BIN context_menu)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" context_menu || FAIL=$((FAIL + 1))
@@ -400,7 +392,7 @@ echo "=== Phase 5b: AetherUIDriver overlay-layer spec ==="
 # In-window overlay layer (roadmap item 1): toast open + auto-dismiss, modal
 # scrim proven by a real /window/pick hit-test (the glass pane resolves ahead
 # of the button beneath it), dismiss restores access.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=overlay_demo/spec_overlay_demo \
     run_server_test "$(EX_BIN overlay_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" overlay_demo || FAIL=$((FAIL + 1))
@@ -411,7 +403,7 @@ echo "=== Phase 5c: AetherUIDriver vg drawn-tooltip spec ==="
 # The drawn-tooltip half of the overlay layer: a vg shape's tooltip() opens a
 # label overlay near the pointer (forced on via AETHER_UI_TOOLTIP=drawn) —
 # hover a shape → tooltip appears; off it → gone. Driven via /canvas/1/move.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     AETHER_UI_TOOLTIP=drawn \
     UI_SPEC=vg_tooltip/spec_vg_tooltip \
     run_server_test "$(EX_BIN vg_tooltip)" \
@@ -424,7 +416,7 @@ echo "=== Phase 5d: AetherUIDriver picker ABI spec (drawn surface) ==="
 # dropdown (a button + in-window overlay list) as on the native GtkDropDown.
 # Run here under the DRAWN surface — the native surface is the everyday path
 # and is smoke-launched in Phase 2.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     AETHER_UI_PICKER=drawn \
     UI_SPEC=picker/spec_picker \
     run_server_test "$(EX_BIN picker)" \
@@ -436,7 +428,7 @@ echo "=== Phase 5e: AetherUIDriver each (dynamic children) spec ==="
 # each (roadmap item 3): Add/Remove/Reset drive each_update; the spec asserts
 # group children appear/disappear in /widgets and per-item closures fire with
 # the RIGHT item (needs aether >= 0.390 closure-capture fixes).
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=each_demo/spec_each_demo \
     run_server_test "$(EX_BIN each_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" each_demo || FAIL=$((FAIL + 1))
@@ -447,7 +439,7 @@ echo "=== Phase 5f: AetherUIDriver listbox spec ==="
 # listbox (item 4 D1): rows are real widgets; the driver clicks a ROW (click
 # falls back to gesture handlers on non-buttons), selection reads back via
 # the tracked "classes" JSON field; 200-row updates stay driver-visible.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=listbox_demo/spec_listbox_demo \
     run_server_test "$(EX_BIN listbox_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" listbox_demo || FAIL=$((FAIL + 1))
@@ -458,7 +450,7 @@ echo "=== Phase 5g: AetherUIDriver table spec ==="
 # table (item 4 D2): header buttons fire on_sort with the right column index,
 # app-side re-sort re-renders row order (asserted via widget creation order),
 # cells render per column, selection delegates to the listbox layer.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=table_demo/spec_table_demo \
     run_server_test "$(EX_BIN table_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" table_demo || FAIL=$((FAIL + 1))
@@ -468,7 +460,7 @@ echo
 echo "=== Phase 5i: AetherUIDriver splitview spec ==="
 # splitview (item 7 D1): panes are real widgets; POST split_position moves
 # the splitter and the pane allocations follow; app-side get/set round-trips.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=split_demo/spec_split_demo \
     run_server_test "$(EX_BIN split_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" split_demo || FAIL=$((FAIL + 1))
@@ -478,7 +470,7 @@ echo
 echo "=== Phase 5j: AetherUIDriver typed-state + bindings spec ==="
 # bindings (item 8): typed /state routes (float byte-compatible), one bool
 # state flipping enabled/enabled-inverted/hidden, driver + app-side sets.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=bindings_demo/spec_bindings_demo \
     run_server_test "$(EX_BIN bindings_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" bindings_demo || FAIL=$((FAIL + 1))
@@ -488,7 +480,7 @@ echo
 echo "=== Phase 5k: AetherUIDriver tabs spec ==="
 # tabs: type "tabs" with tabSelected/tabCount, each tab() page built, the
 # tab_select route + app-side buttons switch pages and fire on_tab_change.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=tabs_demo/spec_tabs_demo \
     run_server_test "$(EX_BIN tabs_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" tabs_demo || FAIL=$((FAIL + 1))
@@ -498,7 +490,7 @@ echo "=== Phase 5k2: AetherUIDriver menu-bar spec ==="
 # menu: GET /menus lists the bar's menus + item labels; POST
 # /menu/{h}/activate fires the item's real closure (native GTK4 GAction /
 # NSMenu / win32), with the effect observable in the bound counter.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=menu/spec_menu \
     run_server_test "$(EX_BIN menu)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" menu || FAIL=$((FAIL + 1))
@@ -507,14 +499,14 @@ fi
 echo "=== Phase 5k3: AetherUIDriver reactive-bindings spec (each_bind + computed) ==="
 # rbind: list-typed state drives each_update via each_bind; computed_s recomputes
 # a derived state when an input changes. Backend-agnostic (state layer).
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=rbind_demo/spec_rbind_demo \
     run_server_test "$(EX_BIN rbind_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" rbind_demo || FAIL=$((FAIL + 1))
 fi
 
 echo "=== Phase 5k4: AetherUIDriver typography / multi-select / double-click specs ==="
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=typo_demo/spec_typo_demo \
     run_server_test "$(EX_BIN typo_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" typo_demo || FAIL=$((FAIL + 1))
@@ -527,7 +519,7 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
 fi
 
 echo "=== Phase 5k5: AetherUIDriver tree + table-delegate/bind specs ==="
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=tree_demo/spec_tree_demo \
     run_server_test "$(EX_BIN tree_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" tree_demo || FAIL=$((FAIL + 1))
@@ -537,7 +529,7 @@ if [ "$AEOCHA_OK" -eq 1 ]; then
 fi
 
 echo "=== Phase 5k6: AetherUIDriver weight-clamp + shortcut-scope/chord specs ==="
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=weightclamp_demo/spec_weightclamp_demo \
     run_server_test "$(EX_BIN weightclamp_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" weightclamp_demo || FAIL=$((FAIL + 1))
@@ -620,7 +612,7 @@ echo "=== Phase 5l: AetherUIDriver app/demo specs (frames / falling_blocks / svg
 # The AeVG games + interactive demos (apps/, not examples/): each drives its
 # buttons and canvas through the driver end-to-end, complementing the pure
 # engine unit tests in Phase 0. AEVG_BIN resolves target/build/apps/<name>/bin/<name>.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=frames_demo/spec_frames_demo \
     run_server_test "$(AEVG_BIN frames_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" frames_demo || FAIL=$((FAIL + 1))
@@ -650,7 +642,7 @@ echo "=== Phase 5h2: overlay entry EXIT transition proof (animations ON) ==="
 # With animation on, dismissing a transitioned overlay must play its exit tween
 # (exiting:1) BEFORE removal — the spec's anim-on branch asserts that. Same
 # binary + spec as the deterministic run above; only the flag differs.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     ( unset AETHER_UI_NO_ANIMATION
       UI_SPEC=overlaytr_demo/spec_overlaytr_demo \
       run_server_test "$(EX_BIN overlaytr_demo)" \
@@ -681,7 +673,7 @@ echo "=== Phase 6: AetherUIDriver grand_perspective tests (Aeocha specs) ==="
 # $GP_FIXTURE. Fixture under $HOME: gio trash refuses /tmp on some OSes
 # (FreeBSD: "Trashing on system internal mounts is not supported").
 # Xvfb runs need the cairo renderer (GTK's NGL on llvmpipe churns memory).
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     case "$LAUNCH_PREFIX" in *xvfb*) export GSK_RENDERER=cairo ;; esac
     for gp_spec in scan_and_list map_nav legend fileops hover_and_resize; do
         GP_FIX=$(mktemp -d "$HOME/.gp-ci-XXXXXX")
@@ -707,7 +699,7 @@ echo "=== Phase 7: AetherUIDriver LisMusic port spec ==="
 # (async search). LIS_OFFLINE=1 forces the deterministic canned search so the
 # spec's assertions don't depend on a live network. AETHER_UI_HEADLESS keeps
 # std.audio on its silent null backend.
-if [ "$AEOCHA_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ]; then
     rm -f "$ROOT/history.db"
     export LIS_OFFLINE=1
     UI_SPEC=LisMusic/spec_lismusic \

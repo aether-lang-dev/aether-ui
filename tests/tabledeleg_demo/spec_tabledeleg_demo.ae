@@ -1,33 +1,33 @@
 // spec_tabledeleg_demo.ae — table delegate column + table_bind.
 // A delegate column renders custom widgets per cell ("usage: N%"); table_bind
 // makes the table track a list state so ui_set_list re-renders it.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "table delegate + table_bind over AetherUIDriver") {
-        aeocha.it("delegate column renders custom widgets per row") callback {
+    spec.describe(fw, "table delegate + table_bind over AetherUIDriver") {
+        spec.it("delegate column renders custom widgets per row") callback {
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"alpha\"", "plain column cell")
-            aeocha.assert_contains(b, "\"text\":\"usage: 30%\"", "delegate cell row 0")
-            aeocha.assert_contains(b, "\"text\":\"usage: 60%\"", "delegate cell row 1")
+            spec.assert_contains(b, "\"text\":\"alpha\"", "plain column cell")
+            spec.assert_contains(b, "\"text\":\"usage: 30%\"", "delegate cell row 0")
+            spec.assert_contains(b, "\"text\":\"usage: 60%\"", "delegate cell row 1")
         }
 
-        aeocha.it("table_bind re-renders when the list state changes") callback {
+        spec.it("table_bind re-renders when the list state changes") callback {
             s = uidriver.widget_id_by_text("swap data")
             uidriver.post_ok("/widget/${s}/click", "swap the bound list")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"gamma\"", 20)
-            aeocha.assert_true(ok, "new rows rendered via table_bind")
+            spec.assert_true(ok, "new rows rendered via table_bind")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "\"text\":\"usage: 90%\"", "delegate re-ran for new data")
+            spec.assert_contains(b, "\"text\":\"usage: 90%\"", "delegate re-ran for new data")
             // Old rows gone.
             gone = string.contains(b, "\"text\":\"alpha\"")
-            aeocha.assert_eq(gone, 0, "old row cleared")
+            spec.assert_eq(gone, 0, "old row cleared")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -9,69 +9,69 @@
 //   AETHER_UI_TEST_PORT=9222 \
 //     ./target/build/examples/disclosure_demo/bin/disclosure_demo &
 //   UI_SPEC=disclosure_demo/spec_disclosure_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "disclosure_demo over AetherUIDriver") {
-        aeocha.it("headers show their state") callback {
+    spec.describe(fw, "disclosure_demo over AetherUIDriver") {
+        spec.it("headers show their state") callback {
             // "v" open, ">" collapsed — the affordance is in the label, so
             // it reads identically on every backend.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "v Filters", "Filters starts open")
-            aeocha.assert_contains(body, "> Metrics", "Metrics starts collapsed")
-            aeocha.assert_contains(body, "> Sort", "Sort starts collapsed")
+            spec.assert_contains(body, "v Filters", "Filters starts open")
+            spec.assert_contains(body, "> Metrics", "Metrics starts collapsed")
+            spec.assert_contains(body, "> Sort", "Sort starts collapsed")
         }
 
-        aeocha.it("a collapsed body is hidden AND takes no space") callback {
+        spec.it("a collapsed body is hidden AND takes no space") callback {
             // The whole point: not just a flag, but reclaimed layout.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"visible\":false", "a body is hidden")
-            aeocha.assert_true(hidden_has_zero_height(body),
+            spec.assert_contains(body, "\"visible\":false", "a body is hidden")
+            spec.assert_true(hidden_has_zero_height(body),
                 "hidden bodies report h=0")
         }
 
-        aeocha.it("clicking a header expands its section") callback {
+        spec.it("clicking a header expands its section") callback {
             m = uidriver.widget_id_of("button", "> Metrics")
-            aeocha.assert_gt(m, 0, "collapsed Metrics header")
+            spec.assert_gt(m, 0, "collapsed Metrics header")
             uidriver.click_widget(m)
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "v Metrics", 20),
                 "header flipped to open")
         }
 
-        aeocha.it("clicking again collapses it") callback {
+        spec.it("clicking again collapses it") callback {
             m = uidriver.widget_id_of("button", "v Metrics")
-            aeocha.assert_gt(m, 0, "open Metrics header")
+            spec.assert_gt(m, 0, "open Metrics header")
             uidriver.click_widget(m)
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "> Metrics", 20),
                 "header flipped back to collapsed")
         }
 
-        aeocha.it("Expand all / Collapse all drive every section") callback {
+        spec.it("Expand all / Collapse all drive every section") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Expand all"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "v Sort", 20),
                 "Sort expanded with the rest")
             b1 = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(b1, "> Filters"),
+            spec.assert_false(string.contains(b1, "> Filters"),
                 "nothing left collapsed")
 
             uidriver.click_widget(uidriver.widget_id_of("button", "Collapse all"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "> Filters", 20),
                 "everything collapsed again")
             b2 = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(b2, "v Metrics"),
+            spec.assert_false(string.contains(b2, "v Metrics"),
                 "no section still open")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // Does at least one widget report BOTH visible:false and h:0? Scans each

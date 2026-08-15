@@ -7,7 +7,7 @@
 //
 // Data: carol 30 / alice 90 / bob 95 — name-asc (alice,bob,carol) differs
 // from size-desc (bob,alice,carol), so the two sorts are distinguishable.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -23,35 +23,35 @@ before(a: string, b: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "table over AetherUIDriver") {
-        aeocha.it("renders cells per column") callback {
+    spec.describe(fw, "table over AetherUIDriver") {
+        spec.it("renders cells per column") callback {
             ok = uidriver.wait_body_contains("/widgets", "95 KB", 20)
-            aeocha.assert_true(ok, "size cell rendered")
+            spec.assert_true(ok, "size cell rendered")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "carol", "name cell rendered")
-            aeocha.assert_contains(b, "\"text\":\"Name\"", "header button Name")
-            aeocha.assert_contains(b, "\"text\":\"Size\"", "header button Size")
+            spec.assert_contains(b, "carol", "name cell rendered")
+            spec.assert_contains(b, "\"text\":\"Name\"", "header button Name")
+            spec.assert_contains(b, "\"text\":\"Size\"", "header button Size")
         }
 
-        aeocha.it("Name header sorts ascending (col 0)") callback {
+        spec.it("Name header sorts ascending (col 0)") callback {
             h = uidriver.widget_id_by_text("Name")
             uidriver.post_ok("/widget/${h}/click", "sort by name")
             ok = uidriver.wait_body_contains("/widgets", "sorted by col 0", 20)
-            aeocha.assert_true(ok, "on_sort fired with col 0")
-            aeocha.assert_true(before("alice", "bob"), "alice before bob")
-            aeocha.assert_true(before("bob", "carol"), "bob before carol")
+            spec.assert_true(ok, "on_sort fired with col 0")
+            spec.assert_true(before("alice", "bob"), "alice before bob")
+            spec.assert_true(before("bob", "carol"), "bob before carol")
         }
 
-        aeocha.it("Size header sorts descending (col 1)") callback {
+        spec.it("Size header sorts descending (col 1)") callback {
             h = uidriver.widget_id_by_text("Size")
             uidriver.post_ok("/widget/${h}/click", "sort by size")
             ok = uidriver.wait_body_contains("/widgets", "sorted by col 1", 20)
-            aeocha.assert_true(ok, "on_sort fired with col 1 (per-header closure index)")
-            aeocha.assert_true(before("bob", "alice"), "bob (95) before alice (90)")
-            aeocha.assert_true(before("alice", "carol"), "alice before carol (30)")
+            spec.assert_true(ok, "on_sort fired with col 1 (per-header closure index)")
+            spec.assert_true(before("bob", "alice"), "bob (95) before alice (90)")
+            spec.assert_true(before("alice", "carol"), "alice before carol (30)")
         }
 
         // ── the built-in sorter (TableRowSorter) ───────────────────────
@@ -59,52 +59,52 @@ main() {
         // deliberately distinct from the upper table's names, so `before`
         // reads unambiguously even though both tables share one /widgets
         // listing and re-rendering moves a table's cells to the end of it.
-        aeocha.it("sorter: first click on a column sorts ascending") callback {
+        spec.it("sorter: first click on a column sorts ascending") callback {
             h = uidriver.widget_id_by_text("SSize")
             uidriver.post_ok("/widget/${h}/click", "sort by size")
             ok = uidriver.wait_body_contains("/widgets", "sorted: col 1 asc", 20)
-            aeocha.assert_true(ok, "sorter reports col 1 ascending")
-            aeocha.assert_true(before("zoe", "yan"), "zoe (30) first")
-            aeocha.assert_true(before("yan", "xu"), "yan (90) then xu (95)")
+            spec.assert_true(ok, "sorter reports col 1 ascending")
+            spec.assert_true(before("zoe", "yan"), "zoe (30) first")
+            spec.assert_true(before("yan", "xu"), "yan (90) then xu (95)")
         }
 
         // THE POINT OF THE NUMERIC BRANCH: as strings "100" sorts BEFORE
         // "95", so a naive cell-text sort puts wu second. Numerically
         // 95 < 100 and wu is last. This is what fails if the sorter ever
         // loses its number detection.
-        aeocha.it("sorter: numeric columns sort numerically, not as text") callback {
-            aeocha.assert_true(before("xu", "wu"),
+        spec.it("sorter: numeric columns sort numerically, not as text") callback {
+            spec.assert_true(before("xu", "wu"),
                 "xu (95) before wu (100) -- a string sort would invert this")
-            aeocha.assert_true(before("yan", "wu"), "yan (90) before wu (100)")
+            spec.assert_true(before("yan", "wu"), "yan (90) before wu (100)")
         }
 
-        aeocha.it("sorter: clicking the same column toggles direction") callback {
+        spec.it("sorter: clicking the same column toggles direction") callback {
             h = uidriver.widget_id_by_text("SSize")
             uidriver.post_ok("/widget/${h}/click", "toggle to descending")
             ok = uidriver.wait_body_contains("/widgets", "sorted: col 1 desc", 20)
-            aeocha.assert_true(ok, "sorter reports col 1 descending")
-            aeocha.assert_true(before("wu", "xu"), "wu (100) first now")
-            aeocha.assert_true(before("yan", "zoe"), "zoe (30) last")
+            spec.assert_true(ok, "sorter reports col 1 descending")
+            spec.assert_true(before("wu", "xu"), "wu (100) first now")
+            spec.assert_true(before("yan", "zoe"), "zoe (30) last")
         }
 
         // Switching columns restarts ascending rather than inheriting the
         // previous direction -- Swing's behaviour, and what a user expects.
-        aeocha.it("sorter: switching columns restarts ascending") callback {
+        spec.it("sorter: switching columns restarts ascending") callback {
             h = uidriver.widget_id_by_text("SName")
             uidriver.post_ok("/widget/${h}/click", "sort by name")
             ok = uidriver.wait_body_contains("/widgets", "sorted: col 0 asc", 20)
-            aeocha.assert_true(ok, "col 0 ascending, not inheriting desc")
-            aeocha.assert_true(before("wu", "xu"), "wu before xu alphabetically")
-            aeocha.assert_true(before("yan", "zoe"), "yan before zoe")
+            spec.assert_true(ok, "col 0 ascending, not inheriting desc")
+            spec.assert_true(before("wu", "xu"), "wu before xu alphabetically")
+            spec.assert_true(before("yan", "zoe"), "yan before zoe")
         }
 
-        aeocha.it("row selection delegates to the listbox layer") callback {
+        spec.it("row selection delegates to the listbox layer") callback {
             lbl = uidriver.widget_id_by_text("alice")
             r = uidriver.widget_int_field_by_id(lbl, "parent")
             uidriver.post_ok("/widget/${r}/click", "click alice row")
             ok = uidriver.wait_body_contains("/widgets", "selected row 1", 20)
-            aeocha.assert_true(ok, "on_select fired with row index 1")
+            spec.assert_true(ok, "on_select fired with row index 1")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -1,49 +1,49 @@
 // spec_map_nav.ae — grand_perspective: map double-click drill + breadcrumb
 // return + keyboard navigation. Run via ci.sh Phase 6, or by hand:
-//   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_map_nav.ae
-import aeocha
+//   GP_FIXTURE=/path ae run spec_map_nav.ae
+import std.spec
 import gp_driver
 import uidriver
 import std.string
 import std.os
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     gp_driver.wait_for_app()
 
-    aeocha.describe(fw, "grand_perspective: map navigation") {
-        aeocha.it("double-click drills into a dir tile; root crumb returns") callback {
+    spec.describe(fw, "grand_perspective: map navigation") {
+        spec.it("double-click drills into a dir tile; root crumb returns") callback {
             // sub's tile sits in the lower-right of the map at the default
             // 1356x600 canvas (big.bin left half, mid.bin top right).
             uidriver.click(580.0, 450.0)
             sleep(120)
             uidriver.click(580.0, 450.0)
             ok = gp_driver.wait_crumbs_contains("sub", 20)
-            aeocha.assert_true(ok, "double-click drilled into sub")
+            spec.assert_true(ok, "double-click drilled into sub")
             rb = uidriver.widget_id_by_text(gp_driver.root_crumb_label())
-            aeocha.assert_gt(rb, 0, "root crumb button found by ~label")
+            spec.assert_gt(rb, 0, "root crumb button found by ~label")
             uidriver.click_widget(rb)
             ok2 = gp_driver.wait_crumbs_gone("sub", 20)
-            aeocha.assert_true(ok2, "root crumb returned to root")
+            spec.assert_true(ok2, "root crumb returned to root")
         }
-        aeocha.it("keyboard: Down selects, Right drills, Left returns") callback {
+        spec.it("keyboard: Down selects, Right drills, Left returns") callback {
             uidriver.key("Escape")
             sleep(150)
             uidriver.key("Down")
             ok = gp_driver.wait_status_contains("big.bin", 20)
-            aeocha.assert_true(ok, "Down selects row 0 (big.bin)")
+            spec.assert_true(ok, "Down selects row 0 (big.bin)")
             uidriver.key("Down")
             sleep(120)
             uidriver.key("Down")
             ok2 = gp_driver.wait_status_contains("sub", 20)
-            aeocha.assert_true(ok2, "Down x3 reaches the dir row")
+            spec.assert_true(ok2, "Down x3 reaches the dir row")
             uidriver.key("Right")
             ok3 = gp_driver.wait_crumbs_contains("sub", 20)
-            aeocha.assert_true(ok3, "Right drills the selected dir")
+            spec.assert_true(ok3, "Right drills the selected dir")
             uidriver.key("Left")
             ok4 = gp_driver.wait_crumbs_gone("sub", 20)
-            aeocha.assert_true(ok4, "Left went back up")
+            spec.assert_true(ok4, "Left went back up")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

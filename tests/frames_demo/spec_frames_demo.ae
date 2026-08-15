@@ -1,23 +1,23 @@
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "ui.frames retained harness") {
-        aeocha.it("starts with two overlapping frames and topmost hit") callback {
+    spec.describe(fw, "ui.frames retained harness") {
+        spec.it("starts with two overlapping frames and topmost hit") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
-            aeocha.assert_contains(body, "bounds: alpha=60,60,460,320 beta=180,110,500,360",
+            spec.assert_contains(body, "\"canvas\"", "has a canvas")
+            spec.assert_contains(body, "bounds: alpha=60,60,460,320 beta=180,110,500,360",
                 "initial frame bounds")
             // Epsilon was created between them, so Beta is z=2 not z=1.
-            aeocha.assert_contains(body, "z: alpha=0 beta=2", "beta starts above alpha")
-            aeocha.assert_contains(body, "hit: Beta at 200,130", "overlap hit is topmost")
+            spec.assert_contains(body, "z: alpha=0 beta=2", "beta starts above alpha")
+            spec.assert_contains(body, "hit: Beta at 200,130", "overlap hit is topmost")
         }
 
-        aeocha.it("reports last repaint area and replay command count") callback {
+        spec.it("reports last repaint area and replay command count") callback {
             // Drive one real paint first. Under AETHER_UI_HEADLESS=1 (which
             // spec_matrix.sh exports on win32 and macOS) the window never
             // maps, so no WM_PAINT/draw arrives on its own and the metrics
@@ -31,13 +31,13 @@ main() {
             cmds = uidriver.canvas_debug_commands()
             w = uidriver.canvas_debug_w()
             h = uidriver.canvas_debug_h()
-            aeocha.assert_gt(area, 0, "last repaint area is positive")
-            aeocha.assert_eq(area, w * h,
+            spec.assert_gt(area, 0, "last repaint area is positive")
+            spec.assert_eq(area, w * h,
                 "immediate mode repaints the whole canvas (${w}x${h})")
-            aeocha.assert_gt(cmds, 20, "cube payload emits a non-trivial command stream")
+            spec.assert_gt(cmds, 20, "cube payload emits a non-trivial command stream")
         }
 
-        aeocha.it("reports current frame composite work") callback {
+        spec.it("reports current frame composite work") callback {
             // Drive a paint with a CLICK on empty canvas, not /screenshot.
             // On macOS (and win32) /screenshot takes the headless
             // canvas_write_png route, which renders the command buffer
@@ -72,15 +72,15 @@ main() {
                 // SOMETHING is served from cache -- if frames were still
                 // coupled, every visible frame would re-render and blit
                 // would be 0.
-                aeocha.assert_false(string.contains(body, "blit=0"),
+                spec.assert_false(string.contains(body, "blit=0"),
                     "cached frames are served from cache, not re-rendered")
             } else {
-                aeocha.assert_contains(body, "composite: rerender=4 blit=0",
+                spec.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend draws every visible frame inline")
             }
         }
 
-        aeocha.it("keeps a static frame valid across repeated paints") callback {
+        spec.it("keeps a static frame valid across repeated paints") callback {
             // Validity must PERSIST. One paint proving blit=1 could be a frame
             // that happens to be valid once; the point of the cache is that it
             // stays valid while nothing touches it.
@@ -91,10 +91,10 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_false(string.contains(body, "blit=0"),
+                spec.assert_false(string.contains(body, "blit=0"),
                     "cached frames stay valid over successive paints")
             } else {
-                aeocha.assert_contains(body, "composite: rerender=4 blit=0",
+                spec.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend redraws every visible frame, every paint")
             }
         }
@@ -116,7 +116,7 @@ main() {
         // before the painter runs. Only a human looking at a PNG caught it.
         // painted_pixels reads the painter's own retained surface, so it
         // sees what actually reached the screen.
-        aeocha.it("the painter actually put frames on the canvas") callback {
+        spec.it("the painter actually put frames on the canvas") callback {
             uidriver.click(900.0, 600.0)
             sleep(120)
             px = uidriver.canvas_painted_pixels()
@@ -128,17 +128,17 @@ main() {
                 // a MISSING json key parses to -- so a backend that stopped
                 // reporting the field would land here rather than failing
                 // with a confusing "blank wash".
-                aeocha.assert_true(px <= 0, "no paint surface to sample here")
+                spec.assert_true(px <= 0, "no paint surface to sample here")
             } else {
                 // Three frames with titles, borders and two cubes over a flat
                 // wash. Thousands of sampled pixels differ; a blank canvas
                 // gives exactly 0.
-                aeocha.assert_gt(px, 500,
+                spec.assert_gt(px, 500,
                     "the painted surface is not a blank wash")
             }
         }
 
-        aeocha.it("static frame is drawn once, not once per paint") callback {
+        spec.it("static frame is drawn once, not once per paint") callback {
             // Force several paints, then read the app's own count of how many
             // times Gamma's content callback actually RAN. That counts pixels
             // being produced, so no bookkeeping in frames_draw can fake it --
@@ -151,20 +151,20 @@ main() {
             sleep(60)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_contains(body, "gdraw=1",
+                spec.assert_contains(body, "gdraw=1",
                     "static frame content produced once, however many paints occur")
             } else {
                 // Uncached backend: the content callback runs every paint.
                 // Pinning THAT is what makes this test meaningful here --
                 // it will go red the moment this backend gains the primitive
                 // and starts caching, which is the signal we want.
-                aeocha.assert_false(string.contains(body, "gdraw=1"),
+                spec.assert_false(string.contains(body, "gdraw=1"),
                     "uncached backend re-runs content every paint")
             }
         }
 
         // ── Stage 4 acceptance ────────────────────────────────────────
-        aeocha.it("a frame behind an opaque frame is skipped entirely") callback {
+        spec.it("a frame behind an opaque frame is skipped entirely") callback {
             // Delta sits wholly inside Gamma's rect and Gamma is opaque, so
             // Delta must be neither re-rendered NOR blitted. ddraw counts
             // actual runs of Delta's content callback -- ground truth, which
@@ -174,13 +174,13 @@ main() {
             uidriver.click(900.0, 600.0)
             sleep(120)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "ddraw=0",
+            spec.assert_contains(body, "ddraw=0",
                 "the hidden frame's content never runs")
-            aeocha.assert_contains(body, "occ=1/",
+            spec.assert_contains(body, "occ=1/",
                 "exactly one frame reported occluded per paint")
         }
 
-        aeocha.it("occlusion needs a genuinely opaque frame") callback {
+        spec.it("occlusion needs a genuinely opaque frame") callback {
             // The honesty check from the design note. Alpha and Beta are
             // 0.42-alpha, so they can occlude NOTHING however much they
             // overlap -- and they do overlap heavily. If occ ever exceeds 1
@@ -195,14 +195,14 @@ main() {
             uidriver.click(900.0, 600.0)
             sleep(120)
             b1 = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(b1, "edraw=0"),
+            spec.assert_false(string.contains(b1, "edraw=0"),
                 "a frame under a TRANSLUCENT cover still draws")
-            aeocha.assert_contains(b1, "occ=1/",
+            spec.assert_contains(b1, "occ=1/",
                 "only the genuinely opaque cover occludes")
         }
 
         // ── Stage 5 acceptance ────────────────────────────────────────
-        aeocha.it("frames animate at their own independent rates") callback {
+        spec.it("frames animate at their own independent rates") callback {
             // THE compositor claim: an animating frame re-renders only
             // ITSELF, at its own rate, while its neighbours stay cached.
             // Alpha invalidates every tick; Beta only every 0.2s.
@@ -217,24 +217,24 @@ main() {
             uidriver.click(900.0, 600.0)
             sleep(150)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "adraw=",
+            spec.assert_contains(body, "adraw=",
                 "per-frame draw counters are published")
-            aeocha.assert_contains(body, "bdraw=",
+            spec.assert_contains(body, "bdraw=",
                 "the slow frame has its own counter")
             // Independence, stated as the thing that would break without it.
             // Gated on cache=1: win32 reports blit=0 LEGITIMATELY (Stage 3
             // is off there, every frame draws inline), so asserting this
             // unconditionally would fail a correctly-gated backend.
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_false(string.contains(body, "blit=0"),
+                spec.assert_false(string.contains(body, "blit=0"),
                     "an animating frame does not force its neighbours to redraw")
             } else {
-                aeocha.assert_contains(body, "blit=0",
+                spec.assert_contains(body, "blit=0",
                     "uncached backend draws every visible frame inline")
             }
         }
 
-        aeocha.it("moving a frame does not invalidate it") callback {
+        spec.it("moving a frame does not invalidate it") callback {
             // The design's least-certain claim, and the whole saving: a
             // dragged frame's PIXELS are unchanged, only its position is.
             // Bake this in now, before surfaces depend on it.
@@ -245,24 +245,24 @@ main() {
             sleep(120)
             body = uidriver.get_body("/widgets")
             if string.contains(body, "cache=1") == 1 {
-                aeocha.assert_false(string.contains(body, "blit=0"),
+                spec.assert_false(string.contains(body, "blit=0"),
                     "a moved frame is still blittable")
             } else {
-                aeocha.assert_contains(body, "composite: rerender=4 blit=0",
+                spec.assert_contains(body, "composite: rerender=4 blit=0",
                     "uncached backend redraws a moved frame inline")
             }
         }
 
-        aeocha.it("clicking alpha raises it above beta") callback {
+        spec.it("clicking alpha raises it above beta") callback {
             uidriver.click(80.0, 70.0)
             body = uidriver.get_body("/widgets")
             // alpha=4, not 1: Epsilon, Delta and Gamma each took a Z slot,
             // so raising Alpha puts it above all four others.
-            aeocha.assert_contains(body, "z: alpha=4 beta=1", "alpha raised")
-            aeocha.assert_contains(body, "hit: Alpha at 80,70", "click hit alpha")
+            spec.assert_contains(body, "z: alpha=4 beta=1", "alpha raised")
+            spec.assert_contains(body, "hit: Alpha at 80,70", "click hit alpha")
         }
 
-        aeocha.it("title-bar drag moves the raised frame") callback {
+        spec.it("title-bar drag moves the raised frame") callback {
             uidriver.click(80.0, 70.0)
             uidriver.move_to(140.0, 100.0)
             _ = uidriver.get_body("/screenshot")
@@ -281,38 +281,38 @@ main() {
             if string.contains(clipping, "clip: on/clipped") == 1 { honest = 1 }
             if string.contains(clipping, "clip: on/full") == 1 { honest = 1 }
             if string.contains(clipping, "clip: off") == 1 { honest = 1 }
-            aeocha.assert_eq(honest, 1,
+            spec.assert_eq(honest, 1,
                 "clip readout reports observed paint mode")
             if string.contains(clipping, "clip: on/clipped") == 1 {
-                aeocha.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
-                aeocha.assert_true(area < w * h, "dirty clip is much smaller than the canvas")
+                spec.assert_gt(area, 50000, "dirty clip covers old and new frame bounds")
+                spec.assert_true(area < w * h, "dirty clip is much smaller than the canvas")
             } else {
-                aeocha.assert_eq(area, w * h,
+                spec.assert_eq(area, w * h,
                     "reported full paint covers the canvas")
             }
             uidriver.post_ok("/canvas/1/release?x=140&y=100", "canvas release")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "bounds: alpha=120,90,460,320",
+            spec.assert_contains(body, "bounds: alpha=120,90,460,320",
                 "alpha moved by drag delta")
         }
 
-        aeocha.it("bottom-right gripper resizes with minimums enforced") callback {
+        spec.it("bottom-right gripper resizes with minimums enforced") callback {
             uidriver.click(575.0, 405.0)
             uidriver.move_to(625.0, 445.0)
             uidriver.post_ok("/canvas/1/release?x=625&y=445", "canvas release")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "bounds: alpha=120,90,510,360",
+            spec.assert_contains(body, "bounds: alpha=120,90,510,360",
                 "alpha resized by gripper delta")
         }
 
-        aeocha.it("close box removes a frame from hit testing") callback {
+        spec.it("close box removes a frame from hit testing") callback {
             uidriver.click(616.0, 100.0)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "z: alpha=-1 beta=1", "alpha closed")
+            spec.assert_contains(body, "z: alpha=-1 beta=1", "alpha closed")
             uidriver.click(200.0, 130.0)
             body2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body2, "hit: Beta at 200,130", "closed alpha no longer hits")
+            spec.assert_contains(body2, "hit: Beta at 200,130", "closed alpha no longer hits")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

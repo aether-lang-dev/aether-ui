@@ -20,37 +20,37 @@
 //   AETHER_UI_TEST_PORT=9222 \
 //     ./target/build/examples/golden_gallery/bin/golden_gallery &
 //   UI_SPEC=golden_gallery/spec_golden_gallery tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "golden gallery over AetherUIDriver") {
-        aeocha.it("shows the gallery unchecked") callback {
+    spec.describe(fw, "golden gallery over AetherUIDriver") {
+        spec.it("shows the gallery unchecked") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "golden: unchecked", "starts unchecked")
-            aeocha.assert_contains(body, "\"canvas\"", "canvases present")
+            spec.assert_contains(body, "golden: unchecked", "starts unchecked")
+            spec.assert_contains(body, "\"canvas\"", "canvases present")
         }
 
-        aeocha.it("every canvas matches its blessed golden") callback {
+        spec.it("every canvas matches its blessed golden") callback {
             b = uidriver.widget_id_of("button", "Check")
-            aeocha.assert_gt(b, 0, "check button")
+            spec.assert_gt(b, 0, "check button")
             uidriver.click_widget(b)
             ok = uidriver.wait_body_contains("/widgets", "golden: ", 30)
-            aeocha.assert_true(ok, "check ran")
+            spec.assert_true(ok, "check ran")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(body, "NO-GOLDEN"),
+            spec.assert_false(string.contains(body, "NO-GOLDEN"),
                 "goldens exist for this backend (bless with GOLDEN_UPDATE=1)")
-            aeocha.assert_false(string.contains(body, "MALFORMED"),
+            spec.assert_false(string.contains(body, "MALFORMED"),
                 "goldens parse")
-            aeocha.assert_false(string.contains(body, "FAIL("),
+            spec.assert_false(string.contains(body, "FAIL("),
                 "no canvas diverged from its golden")
-            aeocha.assert_contains(body, "ALL-GREEN",
+            spec.assert_contains(body, "ALL-GREEN",
                 "all four canvases match their goldens")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

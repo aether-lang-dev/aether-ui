@@ -10,26 +10,26 @@
 //   AEVG_FREEZE=1 AETHER_UI_TEST_PORT=9222 \
 //     ./target/build/apps/tumbling_cube/bin/tumbling_cube &
 //   UI_SPEC=tumbling_cube/spec_tumbling_cube tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "tumbling_cube over AetherUIDriver") {
-        aeocha.it("shows the chrome (canvas + labels + REAL toggles, both on)") callback {
+    spec.describe(fw, "tumbling_cube over AetherUIDriver") {
+        spec.it("shows the chrome (canvas + labels + REAL toggles, both on)") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
-            aeocha.assert_contains(body, "Drags: 0", "no drags yet")
-            aeocha.assert_contains(body, "Drag the cube", "hint present")
+            spec.assert_contains(body, "\"canvas\"", "has a canvas")
+            spec.assert_contains(body, "Drags: 0", "no drags yet")
+            spec.assert_contains(body, "Drag the cube", "hint present")
             // The writing: vg.font parsed the vendored TrueType file and
             // extracted "AeVG" as 6 outline contours (A:2, e:2, V:1, G:1).
-            aeocha.assert_contains(body, "type: 6 contours", "typeface outlines loaded")
-            aeocha.assert_contains(body, "\"text\":\"Spin\"", "Spin toggle present")
-            aeocha.assert_contains(body, "\"text\":\"Glass\"", "Glass toggle present")
-            aeocha.assert_false(string.contains(body, "\"active\":false"),
+            spec.assert_contains(body, "type: 6 contours", "typeface outlines loaded")
+            spec.assert_contains(body, "\"text\":\"Spin\"", "Spin toggle present")
+            spec.assert_contains(body, "\"text\":\"Glass\"", "Glass toggle present")
+            spec.assert_false(string.contains(body, "\"active\":false"),
                 "both toggles start on")
         }
 
@@ -49,16 +49,16 @@ main() {
         // its own and the metrics stay at 0/0/0/0. /screenshot drives one real
         // paint through the same canvas_paint → canvas_replay_to_dc path, so
         // the assertions below hold mapped or unmapped.
-        aeocha.it("the painter runs and replays the whole scene") callback {
+        spec.it("the painter runs and replays the whole scene") callback {
             _ = uidriver.get_body("/screenshot")     // force one real paint
             w = uidriver.canvas_debug_w()
             h = uidriver.canvas_debug_h()
             area = uidriver.canvas_debug_area()
             cmds = uidriver.canvas_debug_commands()
-            aeocha.assert_gt(w, 0, "painter recorded a canvas width")
-            aeocha.assert_gt(h, 0, "painter recorded a canvas height")
-            aeocha.assert_gt(area, 0, "painter recorded a repaint area")
-            aeocha.assert_eq(area, w * h,
+            spec.assert_gt(w, 0, "painter recorded a canvas width")
+            spec.assert_gt(h, 0, "painter recorded a canvas height")
+            spec.assert_gt(area, 0, "painter recorded a repaint area")
+            spec.assert_eq(area, w * h,
                 "immediate mode repaints the whole canvas (${w}x${h})")
             // The floor is the point. `> 0` is NOT enough and must not be
             // weakened back to it: the failure this guards emitted exactly
@@ -69,11 +69,11 @@ main() {
             // frozen-pose stream is ~780: six projected faces (fill + stroke
             // each), the word's 6 glyph contours, and two checkboxes. 100 sits
             // far above the blank-canvas signature and far below the truth.
-            aeocha.assert_gt(cmds, 100,
+            spec.assert_gt(cmds, 100,
                 "the replayed scene carries real path geometry, not just a backdrop")
         }
 
-        aeocha.it("a TAP on the projected Spin checkbox flips the REAL toggle") callback {
+        spec.it("a TAP on the projected Spin checkbox flips the REAL toggle") callback {
             // The Spin box centre at the frozen pose is viewBox (213.7, 214.9);
             // scale to canvas pixels. Click+release at one point = a tap.
             cwf = uidriver.canvas_w() * 1.0
@@ -81,22 +81,22 @@ main() {
             ty = 214.9 * cwf / 420.0
             uidriver.click(tx, ty)
             uidriver.post_ok("/canvas/1/release?x=${tx}&y=${ty}", "tap release")
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "\"active\":false", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "\"active\":false", 20),
                 "the real Spin toggle went off")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "Drags: 0", "a tap is not a drag")
+            spec.assert_contains(body, "Drags: 0", "a tap is not a drag")
         }
 
-        aeocha.it("the chrome Glass toggle drives the glass state") callback {
+        spec.it("the chrome Glass toggle drives the glass state") callback {
             gid = uidriver.widget_id_of("toggle", "Glass")
-            aeocha.assert_gt(gid, 0, "Glass toggle id")
+            spec.assert_gt(gid, 0, "Glass toggle id")
             uidriver.toggle_widget(gid)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(body, "\"active\":true"),
+            spec.assert_false(string.contains(body, "\"active\":true"),
                 "both toggles now off")
         }
 
-        aeocha.it("a press→drag→release tumbles the cube and counts the drag") callback {
+        spec.it("a press→drag→release tumbles the cube and counts the drag") callback {
             cwf = uidriver.canvas_w() * 1.0
             chf = uidriver.canvas_h() * 1.0
             x0 = cwf / 2.0
@@ -105,14 +105,14 @@ main() {
             uidriver.click(x0, y0)                                    // press (grab)
             uidriver.move_to(x1, y0)                                  // drag right
             uidriver.post_ok("/canvas/1/release?x=${x1}&y=${y0}", "canvas release")
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Drags: 1", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Drags: 1", 20),
                 "the drag completed and was counted")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "yaw ", "yaw readout present")
-            aeocha.assert_contains(body, "pitch ", "pitch readout present")
+            spec.assert_contains(body, "yaw ", "yaw readout present")
+            spec.assert_contains(body, "pitch ", "pitch readout present")
         }
 
-        aeocha.it("a second gesture keeps counting") callback {
+        spec.it("a second gesture keeps counting") callback {
             cwf = uidriver.canvas_w() * 1.0
             chf = uidriver.canvas_h() * 1.0
             x0 = cwf / 2.0
@@ -121,9 +121,9 @@ main() {
             uidriver.click(x0, y0)                                    // press
             uidriver.move_to(x0, y1)                                  // drag down
             uidriver.post_ok("/canvas/1/release?x=${x0}&y=${y1}", "canvas release")
-            aeocha.assert_true(uidriver.wait_body_contains("/widgets", "Drags: 2", 20),
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Drags: 2", 20),
                 "second drag counted")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

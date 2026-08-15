@@ -12,75 +12,75 @@
 // Run via ci.sh Phase 5 / tests/spec_matrix.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/pills_demo/bin/pills_demo &
 //   UI_SPEC=pills_demo/spec_pills_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "pills_demo over AetherUIDriver") {
-        aeocha.it("shows the chip rows") callback {
+    spec.describe(fw, "pills_demo over AetherUIDriver") {
+        spec.it("shows the chip rows") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Serif"), 0, "outline chip")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Sans-serif"), 0, "filled chip")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Handwriting"), 0, "sheet chip")
-            aeocha.assert_contains(body, "borderWidth", "border readback present")
+            spec.assert_gt(uidriver.widget_id_of("button", "Serif"), 0, "outline chip")
+            spec.assert_gt(uidriver.widget_id_of("button", "Sans-serif"), 0, "filled chip")
+            spec.assert_gt(uidriver.widget_id_of("button", "Handwriting"), 0, "sheet chip")
+            spec.assert_contains(body, "borderWidth", "border readback present")
         }
 
-        aeocha.it("per-widget style_border sets width AND colour") callback {
+        spec.it("per-widget style_border sets width AND colour") callback {
             body = uidriver.get_body("/widgets")
             // The outline chip: 1px in the accent colour. 0.13/0.45/0.98 →
             // 33/114/249 → #2172f9 (int truncation, not rounding).
-            aeocha.assert_contains(body, "\"borderWidth\":1", "1px border")
-            aeocha.assert_contains(body, "\"borderColor\":\"#2172f9\"", "accent colour")
+            spec.assert_contains(body, "\"borderWidth\":1", "1px border")
+            spec.assert_contains(body, "\"borderColor\":\"#2172f9\"", "accent colour")
         }
 
-        aeocha.it("width 0 records a border explicitly CLEARED") callback {
+        spec.it("width 0 records a border explicitly CLEARED") callback {
             // The filled + cleared chips set width 0: a re-theme must be able
             // to REMOVE a border, not only add one (the two-valued discipline
             // font weight already has). Absent ≠ zero: absent emits nothing.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"borderWidth\":0", "cleared border recorded")
+            spec.assert_contains(body, "\"borderWidth\":0", "cleared border recorded")
         }
 
-        aeocha.it("hover/active states reach the backend") callback {
+        spec.it("hover/active states reach the backend") callback {
             // Without these a control reads as dead; the only previous route
             // was swapping whole sheets from an enter/leave handler.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"hoverBg\"", "hover recorded")
-            aeocha.assert_contains(body, "\"activeBg\"", "active recorded")
+            spec.assert_contains(body, "\"hoverBg\"", "hover recorded")
+            spec.assert_contains(body, "\"activeBg\"", "active recorded")
             // Per-widget (the outline chip) and via the sheet (the class row).
-            aeocha.assert_contains(body, "\"hoverBg\":\"#e8effd\"", "per-widget hover")
-            aeocha.assert_contains(body, "\"hoverBg\":\"#e8f0fe\"", "sheet hover")
-            aeocha.assert_contains(body, "\"activeBg\":\"#2176fe\"", "sheet active")
+            spec.assert_contains(body, "\"hoverBg\":\"#e8effd\"", "per-widget hover")
+            spec.assert_contains(body, "\"hoverBg\":\"#e8f0fe\"", "sheet hover")
+            spec.assert_contains(body, "\"activeBg\":\"#2176fe\"", "sheet active")
         }
 
-        aeocha.it("hover is DRIVABLE — the pointer can be placed by the driver") callback {
+        spec.it("hover is DRIVABLE — the pointer can be placed by the driver") callback {
             // Before this route existed, :hover could only be tested by
             // moving a real pointer (impossible headless, impossible on a
             // session-0 Windows box). Now a spec can hover a widget and
             // assert what the user would see.
             chip = uidriver.widget_id_of("button", "Handwriting")
-            aeocha.assert_gt(chip, 0, "sheet-styled chip")
+            spec.assert_gt(chip, 0, "sheet-styled chip")
             uidriver.hover_widget(chip)
             // The widget reports its hover STATE, so the assertion does not
             // depend on reading pixels.
             hb = uidriver.widget_bool_by_text("Handwriting", "hovered")
-            aeocha.assert_true(hb, "the chip reports itself hovered")
+            spec.assert_true(hb, "the chip reports itself hovered")
             uidriver.unhover()
             hb2 = uidriver.widget_bool_by_text("Handwriting", "hovered")
-            aeocha.assert_false(hb2, "unhover clears it")
+            spec.assert_false(hb2, "unhover clears it")
         }
 
-        aeocha.it("st_border flows through the AeCS cascade") callback {
+        spec.it("st_border flows through the AeCS cascade") callback {
             // The bottom row is styled ONLY by the sheet's `chip` class rule.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"borderWidth\":2", "2px from the sheet")
-            aeocha.assert_contains(body, "\"borderColor\":\"#2176fe\"", "sheet colour")
-            aeocha.assert_contains(body, "\"classes\":\"chip\"", "class carried")
+            spec.assert_contains(body, "\"borderWidth\":2", "2px from the sheet")
+            spec.assert_contains(body, "\"borderColor\":\"#2176fe\"", "sheet colour")
+            spec.assert_contains(body, "\"classes\":\"chip\"", "class carried")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

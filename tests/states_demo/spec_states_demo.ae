@@ -2,7 +2,7 @@
 // Named states are AeCS sheet fragments; set_state applies them to the
 // target subtree and stamps a driver-visible marker class. Asserted from
 // backend readback (fg/bg/fontSize-adjacent fields + classes), not the model.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -13,45 +13,45 @@ body_of(label: string) -> string {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "QML states on AeCS over AetherUIDriver") {
-        aeocha.it("set_state applies the state's sheet to the subtree") callback {
+    spec.describe(fw, "QML states on AeCS over AetherUIDriver") {
+        spec.it("set_state applies the state's sheet to the subtree") callback {
             e = uidriver.widget_id_by_text("Expand")
-            aeocha.assert_gt(e, 0, "Expand button found")
+            spec.assert_gt(e, 0, "Expand button found")
             uidriver.post_ok("/widget/${e}/click", "expand")
             ok = uidriver.wait_body_contains("/widgets", "st: expanded", 20)
-            aeocha.assert_true(ok, "current_state reports expanded")
+            spec.assert_true(ok, "current_state reports expanded")
             t = body_of("Order #4177")
-            aeocha.assert_contains(t, "\"fg\":\"#1e4fa0\"", "title took the expanded blue")
+            spec.assert_contains(t, "\"fg\":\"#1e4fa0\"", "title took the expanded blue")
             d = body_of("3 items - ships tomorrow - paid")
-            aeocha.assert_contains(d, "\"opacity\":1.00", "detail fully visible")
+            spec.assert_contains(d, "\"opacity\":1.00", "detail fully visible")
         }
 
-        aeocha.it("the current state is a driver-visible marker class") callback {
+        spec.it("the current state is a driver-visible marker class") callback {
             t = uidriver.widget_id_by_text("Order #4177")
             card = uidriver.widget_int_field_by_id(t, "parent")
             b = uidriver.get_body("/widget/${card}")
-            aeocha.assert_contains(b, "st-expanded", "card carries st-expanded")
+            spec.assert_contains(b, "st-expanded", "card carries st-expanded")
         }
 
-        aeocha.it("switching states swaps sheet AND marker; declared props re-apply") callback {
+        spec.it("switching states swaps sheet AND marker; declared props re-apply") callback {
             c = uidriver.widget_id_by_text("Collapse")
             uidriver.post_ok("/widget/${c}/click", "collapse")
             ok = uidriver.wait_body_contains("/widgets", "st: collapsed", 20)
-            aeocha.assert_true(ok, "current_state reports collapsed")
+            spec.assert_true(ok, "current_state reports collapsed")
             t = body_of("Order #4177")
-            aeocha.assert_contains(t, "\"fg\":\"#aaaacc\"", "title took the collapsed tint")
+            spec.assert_contains(t, "\"fg\":\"#aaaacc\"", "title took the collapsed tint")
             d = body_of("3 items - ships tomorrow - paid")
-            aeocha.assert_contains(d, "\"opacity\":0.25", "detail dimmed (tweens when animated)")
+            spec.assert_contains(d, "\"opacity\":0.25", "detail dimmed (tweens when animated)")
             tt = uidriver.widget_id_by_text("Order #4177")
             card = uidriver.widget_int_field_by_id(tt, "parent")
             b = uidriver.get_body("/widget/${card}")
-            aeocha.assert_contains(b, "st-collapsed", "marker swapped to st-collapsed")
+            spec.assert_contains(b, "st-collapsed", "marker swapped to st-collapsed")
             gone = string.contains(b, "st-expanded")
-            aeocha.assert_eq(gone, 0, "old marker removed")
+            spec.assert_eq(gone, 0, "old marker removed")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

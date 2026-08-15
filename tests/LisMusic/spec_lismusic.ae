@@ -8,43 +8,43 @@
 // Run via ci.sh / spec_matrix, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/apps/LisMusic/bin/LisMusic &
 //   UI_SPEC=LisMusic/spec_lismusic tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "LisMusic port over AetherUIDriver") {
-        aeocha.it("the three-region shell renders") callback {
+    spec.describe(fw, "LisMusic port over AetherUIDriver") {
+        spec.it("the three-region shell renders") callback {
             b = uidriver.get_body("/widgets")
             // sidebar (translated nav) + tabs + player chrome all present.
-            aeocha.assert_contains(b, "Expedition Music", "sidebar title present")
-            aeocha.assert_contains(b, "Local Music", "sidebar nav present")
-            aeocha.assert_contains(b, "\"type\":\"tabs\"", "right-page tab stack present")
-            aeocha.assert_contains(b, "Lumière", "player shows the now-playing title")
+            spec.assert_contains(b, "Expedition Music", "sidebar title present")
+            spec.assert_contains(b, "Local Music", "sidebar nav present")
+            spec.assert_contains(b, "\"type\":\"tabs\"", "right-page tab stack present")
+            spec.assert_contains(b, "Lumière", "player shows the now-playing title")
             // The album cover is a real image widget decoded from bytes
             // (ui.image_from_bytes, no temp file) — proves the new primitive.
-            aeocha.assert_contains(b, "\"type\":\"image\"", "cover art image (decoded from bytes) present")
+            spec.assert_contains(b, "\"type\":\"image\"", "cover art image (decoded from bytes) present")
         }
 
-        aeocha.it("sidebar nav switches the right-page tab") callback {
+        spec.it("sidebar nav switches the right-page tab") callback {
             tv = uidriver.widget_id_of("tabs", "")
-            aeocha.assert_gt(tv, 0, "tabs composite found")
+            spec.assert_gt(tv, 0, "tabs composite found")
             // "Local Music" nav → page index 2 (My Music).
             lm = uidriver.widget_id_by_text("Local Music")
             uidriver.post_ok("/widget/${lm}/click", "click Local Music")
             ok = uidriver.wait_body_contains("/widget/${tv}", "\"tabSelected\":2", 20)
-            aeocha.assert_true(ok, "right page switched to My Music (tab 2)")
+            spec.assert_true(ok, "right page switched to My Music (tab 2)")
             // "Home" → back to page 0.
             hm = uidriver.widget_id_by_text("Home")
             uidriver.post_ok("/widget/${hm}/click", "click Home")
             ok2 = uidriver.wait_body_contains("/widget/${tv}", "\"tabSelected\":0", 20)
-            aeocha.assert_true(ok2, "right page switched back to Home (tab 0)")
+            spec.assert_true(ok2, "right page switched back to Home (tab 0)")
         }
 
-        aeocha.it("search populates the results list") callback {
+        spec.it("search populates the results list") callback {
             // The search box + results live on the Search tab. With a real tab
             // strip (all three backends now), inactive pages are hidden, so we
             // select the Search tab (index 1) before driving it — otherwise the
@@ -52,39 +52,39 @@ main() {
             // the tabs handle so we don't collide with the two "Search" labels
             // (the strip button and the search-bar button).
             tv = uidriver.widget_id_of("tabs", "")
-            aeocha.assert_gt(tv, 0, "tabs composite found")
+            spec.assert_gt(tv, 0, "tabs composite found")
             uidriver.post_ok("/widget/${tv}/tab_select?i=1", "switch to Search tab")
             // Type a term, click the search-bar Search — the results each-list
             // fills with the canned lis_net songs (title — artist + Play button).
             tf = uidriver.widget_id_of("textfield", "")
-            aeocha.assert_gt(tf, 0, "search textfield found")
+            spec.assert_gt(tf, 0, "search textfield found")
             uidriver.post_ok("/widget/${tf}/set_text?v=lumiere", "type search term")
             // Two buttons read "Search": the tab-strip tab and the search-bar
             // button. The search-bar one is built later, so take the last match.
             sb = uidriver.widget_id_last_of("button", "Search")
             uidriver.post_ok("/widget/${sb}/click", "click Search")
             ok = uidriver.wait_body_contains("/widgets", "Sample Artist", 20)
-            aeocha.assert_true(ok, "a canned result row rendered")
+            spec.assert_true(ok, "a canned result row rendered")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "Midnight City", "the full result set rendered")
-            aeocha.assert_contains(b, "\"text\":\"Play\"", "each result row has a Play button")
+            spec.assert_contains(b, "Midnight City", "the full result set rendered")
+            spec.assert_contains(b, "\"text\":\"Play\"", "each result row has a Play button")
         }
 
-        aeocha.it("a result Play button is clickable (drives the audio seam)") callback {
+        spec.it("a result Play button is clickable (drives the audio seam)") callback {
             // Stay on / return to the Search tab so the result rows are live.
             tv = uidriver.widget_id_of("tabs", "")
             uidriver.post_ok("/widget/${tv}/tab_select?i=1", "switch to Search tab")
             p = uidriver.widget_id_by_text("Play")
-            aeocha.assert_gt(p, 0, "a Play button is present")
+            spec.assert_gt(p, 0, "a Play button is present")
             // Clicking must succeed (200); the seam logs + no-ops (no audio API).
             uidriver.post_ok("/widget/${p}/click", "click a result Play")
         }
 
-        aeocha.it("the transport play/pause toggle is wired") callback {
+        spec.it("the transport play/pause toggle is wired") callback {
             pb = uidriver.widget_id_by_text("▶ / ⏸")
-            aeocha.assert_gt(pb, 0, "transport play/pause found")
+            spec.assert_gt(pb, 0, "transport play/pause found")
             uidriver.post_ok("/widget/${pb}/click", "toggle play/pause")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -1,34 +1,34 @@
 // spec_scan_and_list.ae — grand_perspective: async scan totals + list-pane
 // selection + Zoom In / "..". Run via ci.sh Phase 6 (fresh app + fixture),
 // or by hand:
-//   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_scan_and_list.ae
-import aeocha
+//   GP_FIXTURE=/path ae run spec_scan_and_list.ae
+import std.spec
 import gp_driver
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     gp_driver.wait_for_app()
 
-    aeocha.describe(fw, "grand_perspective: scan + list pane") {
-        aeocha.it("completes the async scan with correct totals") callback {
+    spec.describe(fw, "grand_perspective: scan + list pane") {
+        spec.it("completes the async scan with correct totals") callback {
             s = gp_driver.status_line()
-            aeocha.assert_contains(s, "Scan complete", "scan finished")
-            aeocha.assert_contains(s, "3 files", "sees 3 files")
+            spec.assert_contains(s, "Scan complete", "scan finished")
+            spec.assert_contains(s, "3 files", "sees 3 files")
         }
-        aeocha.it("selects a list row, with %-of-parent in the status") callback {
+        spec.it("selects a list row, with %-of-parent in the status") callback {
             // Rows are ui.table WIDGETS now (item 4 D3): click the row
             // containing the "big.bin" name cell, the way a user does.
             lbl = uidriver.widget_id_by_text("big.bin")
-            aeocha.assert_gt(lbl, 0, "big.bin name cell present")
+            spec.assert_gt(lbl, 0, "big.bin name cell present")
             r = uidriver.widget_int_field_by_id(lbl, "parent")
             uidriver.post_ok("/widget/${r}/click", "click big.bin row")
             ok = gp_driver.wait_status_contains("big.bin", 20)
-            aeocha.assert_true(ok, "row selected (big.bin)")
-            aeocha.assert_contains(gp_driver.status_line(), "% of parent", "shows % of parent")
+            spec.assert_true(ok, "row selected (big.bin)")
+            spec.assert_contains(gp_driver.status_line(), "% of parent", "shows % of parent")
         }
-        aeocha.it("Zoom In drills the selected dir; '..' returns") callback {
+        spec.it("Zoom In drills the selected dir; '..' returns") callback {
             // select the sub dir row via its widget
             lbl = uidriver.widget_id_by_text("sub")
             r = uidriver.widget_int_field_by_id(lbl, "parent")
@@ -37,18 +37,18 @@ main() {
             zi = uidriver.widget_id_by_text("Zoom In")
             uidriver.click_widget(zi)
             ok = gp_driver.wait_crumbs_contains("sub", 20)
-            aeocha.assert_true(ok, "crumbs show root / sub")
+            spec.assert_true(ok, "crumbs show root / sub")
             up = uidriver.widget_id_by_text("..")   // the drill-up button
             uidriver.click_widget(up)
             ok2 = gp_driver.wait_crumbs_gone("sub", 20)
-            aeocha.assert_true(ok2, "'..' returned to root")
+            spec.assert_true(ok2, "'..' returned to root")
         }
 
-        aeocha.it("Ctrl+R rescans and Delete arms the trash flow (shortcuts)") callback {
+        spec.it("Ctrl+R rescans and Delete arms the trash flow (shortcuts)") callback {
             fired = uidriver.window_key("Ctrl+R")
-            aeocha.assert_eq(fired, 1, "Ctrl+R handled")
+            spec.assert_eq(fired, 1, "Ctrl+R handled")
             ok = gp_driver.wait_status_contains("Scan complete", 40)
-            aeocha.assert_true(ok, "rescan completed via shortcut")
+            spec.assert_true(ok, "rescan completed via shortcut")
             // Re-select a row so Delete has a target, then ONE press: the
             // two-click confirm arms and says so (no second press — the
             // spec must not actually trash the fixture here).
@@ -57,10 +57,10 @@ main() {
             uidriver.post_ok("/widget/${r}/click", "select big.bin")
             _w1 = gp_driver.wait_status_contains("big.bin", 20)
             fired2 = uidriver.window_key("Delete")
-            aeocha.assert_eq(fired2, 1, "Delete handled")
+            spec.assert_eq(fired2, 1, "Delete handled")
             ok2 = gp_driver.wait_status_contains("press Delete again to confirm", 20)
-            aeocha.assert_true(ok2, "delete flow armed by the shortcut")
+            spec.assert_true(ok2, "delete flow armed by the shortcut")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -9,7 +9,7 @@
 // Run via ci.sh Phase 5f, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/listbox_demo/bin/listbox_demo &
 //   UI_SPEC=listbox_demo/spec_listbox_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 import std.json
@@ -34,72 +34,72 @@ row_classes(txt: string) -> string {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "listbox over AetherUIDriver") {
-        aeocha.it("Add x3 renders three rows") callback {
+    spec.describe(fw, "listbox over AetherUIDriver") {
+        spec.it("Add x3 renders three rows") callback {
             a = uidriver.widget_id_by_text("Add")
-            aeocha.assert_gt(a, 0, "Add button found")
+            spec.assert_gt(a, 0, "Add button found")
             uidriver.post_ok("/widget/${a}/click", "add 1")
             uidriver.post_ok("/widget/${a}/click", "add 2")
             uidriver.post_ok("/widget/${a}/click", "add 3")
             ok = uidriver.wait_body_contains("/widgets", "person 3", 20)
-            aeocha.assert_true(ok, "person 3 rendered")
+            spec.assert_true(ok, "person 3 rendered")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "rows: 3", "counter reads 3")
-            aeocha.assert_contains(b, "21 KB", "template renders the second cell")
+            spec.assert_contains(b, "rows: 3", "counter reads 3")
+            spec.assert_contains(b, "21 KB", "template renders the second cell")
         }
 
-        aeocha.it("clicking a ROW selects it (classes + on_select)") callback {
+        spec.it("clicking a ROW selects it (classes + on_select)") callback {
             r = row_of("person 2")
-            aeocha.assert_gt(r, 0, "row container of person 2 found")
+            spec.assert_gt(r, 0, "row container of person 2 found")
             uidriver.post_ok("/widget/${r}/click", "click row 2")
             ok = uidriver.wait_body_contains("/widgets", "selected index 1", 20)
-            aeocha.assert_true(ok, "on_select fired with index 1")
+            spec.assert_true(ok, "on_select fired with index 1")
             c = row_classes("person 2")
-            aeocha.assert_contains(c, "aui-row-selected", "row 2 carries the selection class")
+            spec.assert_contains(c, "aui-row-selected", "row 2 carries the selection class")
         }
 
-        aeocha.it("selecting another row moves the class") callback {
+        spec.it("selecting another row moves the class") callback {
             r3 = row_of("person 3")
             uidriver.post_ok("/widget/${r3}/click", "click row 3")
             ok = uidriver.wait_body_contains("/widgets", "selected index 2", 20)
-            aeocha.assert_true(ok, "on_select fired with index 2")
+            spec.assert_true(ok, "on_select fired with index 2")
             c2 = row_classes("person 2")
             c3 = row_classes("person 3")
-            aeocha.assert_contains(c3, "aui-row-selected", "row 3 now selected")
+            spec.assert_contains(c3, "aui-row-selected", "row 3 now selected")
             found = string.contains(c2, "aui-row-selected")
-            aeocha.assert_eq(found, 0, "row 2 deselected")
+            spec.assert_eq(found, 0, "row 2 deselected")
         }
 
-        aeocha.it("programmatic listbox_select takes the same path") callback {
+        spec.it("programmatic listbox_select takes the same path") callback {
             s2 = uidriver.widget_id_by_text("Select #2")
             uidriver.post_ok("/widget/${s2}/click", "programmatic select")
             ok = uidriver.wait_body_contains("/widgets", "selected index 1", 20)
-            aeocha.assert_true(ok, "on_select fired with index 1")
+            spec.assert_true(ok, "on_select fired with index 1")
             c = row_classes("person 2")
-            aeocha.assert_contains(c, "aui-row-selected", "class follows programmatic select")
+            spec.assert_contains(c, "aui-row-selected", "class follows programmatic select")
         }
 
-        aeocha.it("update resets selection (clear+rebuild, no identity)") callback {
+        spec.it("update resets selection (clear+rebuild, no identity)") callback {
             rm = uidriver.widget_id_by_text("Remove last")
             uidriver.post_ok("/widget/${rm}/click", "remove")
             ok = uidriver.wait_body_contains("/widgets", "rows: 2", 20)
-            aeocha.assert_true(ok, "two rows remain")
+            spec.assert_true(ok, "two rows remain")
             b = uidriver.get_body("/widgets")
             found = string.contains(b, "aui-row-selected")
-            aeocha.assert_eq(found, 0, "no row carries the selection class after update")
+            spec.assert_eq(found, 0, "no row carries the selection class after update")
         }
 
-        aeocha.it("200-row update stays driver-visible") callback {
+        spec.it("200-row update stays driver-visible") callback {
             big = uidriver.widget_id_by_text("Add 200")
             uidriver.post_ok("/widget/${big}/click", "add 200")
             ok = uidriver.wait_body_contains("/widgets", "rows: 202", 30)
-            aeocha.assert_true(ok, "counter reads 202")
+            spec.assert_true(ok, "counter reads 202")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "person 203", "last person present in /widgets")
+            spec.assert_contains(b, "person 203", "last person present in /widgets")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

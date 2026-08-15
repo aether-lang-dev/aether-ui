@@ -16,31 +16,31 @@
 //   AETHER_UI_TEST_PORT=9222 \
 //     ./target/build/examples/stroker_demo/bin/stroker_demo &
 //   UI_SPEC=stroker_demo/spec_stroker_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 extern string_substring(s: string, start: int, end: int) -> string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "stroker_demo over AetherUIDriver") {
-        aeocha.it("shows four canvases and the comparison chrome") callback {
+    spec.describe(fw, "stroker_demo over AetherUIDriver") {
+        spec.it("shows four canvases and the comparison chrome") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "canvases present")
-            aeocha.assert_contains(body, "pixels: not compared yet",
+            spec.assert_contains(body, "\"canvas\"", "canvases present")
+            spec.assert_contains(body, "pixels: not compared yet",
                 "comparison label starts idle")
-            aeocha.assert_contains(body, "hits: 0", "hit counter starts at 0")
+            spec.assert_contains(body, "hits: 0", "hit counter starts at 0")
         }
 
-        aeocha.it("geometric outline rasterises like the native stroke") callback {
+        spec.it("geometric outline rasterises like the native stroke") callback {
             b = uidriver.widget_id_of("button", "Compare pixels")
-            aeocha.assert_gt(b, 0, "compare button")
+            spec.assert_gt(b, 0, "compare button")
             uidriver.click_widget(b)
             ok = uidriver.wait_body_contains("/widgets", "agree (", 30)
-            aeocha.assert_true(ok, "comparison ran")
+            spec.assert_true(ok, "comparison ran")
             body = uidriver.get_body("/widgets")
             pct = parse_after(body, "agree (")
             // The two renderers should disagree only in the sub-pixel AA
@@ -48,43 +48,43 @@ main() {
             // at most. Well under this gate = the stroker's geometry is
             // wrong; at it = pixel-equivalent where both can express the
             // stroke.
-            aeocha.assert_true(pct >= 95, "agreement >= 95% (got ${pct}%)")
+            spec.assert_true(pct >= 95, "agreement >= 95% (got ${pct}%)")
             ia = parse_after(body, "inkA=")
             ib = parse_after(body, "inkB=")
-            aeocha.assert_true(ia > 100, "native stroke drew real ink (${ia})")
-            aeocha.assert_true(ib > 100, "outline fill drew real ink (${ib})")
+            spec.assert_true(ia > 100, "native stroke drew real ink (${ia})")
+            spec.assert_true(ib > 100, "outline fill drew real ink (${ib})")
             // Anti-flood bounds (the vg3d lesson): a broken readback that
             // returns bright-everything would sail through the agreement
             // and floor asserts — 2100 samples all-ink means the probe is
             // lying, not that the stroker is right.
-            aeocha.assert_true(ia < 1680, "native ink is not a flood (${ia})")
-            aeocha.assert_true(ib < 1680, "outline ink is not a flood (${ib})")
+            spec.assert_true(ia < 1680, "native ink is not a flood (${ia})")
+            spec.assert_true(ib < 1680, "outline ink is not a flood (${ib})")
             diff = ia - ib
             if diff < 0 { diff = 0 - diff }
-            aeocha.assert_true(diff * 5 <= ia,
+            spec.assert_true(diff * 5 <= ia,
                 "ink coverage within 20% (native ${ia} vs outline ${ib})")
         }
 
-        aeocha.it("clicking ON the fat stroke fires its handler") callback {
+        spec.it("clicking ON the fat stroke fires its handler") callback {
             // Canvas 3 is the hit-test canvas; (120,70) is the midpoint of
             // the stroked line (30,30)->(210,110) — inside the outline.
             uidriver.post_ok("/canvas/3/click?x=120&y=70", "click on stroke")
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "hits: 1", 20),
                 "outline hit-test fired")
         }
 
-        aeocha.it("clicking BESIDE the stroke does not fire") callback {
+        spec.it("clicking BESIDE the stroke does not fire") callback {
             // (120,20) is ~46px from the centreline — far outside the 12px
             // half-width plus round caps.
             uidriver.post_ok("/canvas/3/click?x=120&y=20", "click beside stroke")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "hits: 1", "counter unchanged")
-            aeocha.assert_false(string.contains(body, "hits: 2"),
+            spec.assert_contains(body, "hits: 1", "counter unchanged")
+            spec.assert_false(string.contains(body, "hits: 2"),
                 "no phantom hit")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // First integer right after `key` in body; -1 if absent.

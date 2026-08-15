@@ -5,7 +5,7 @@
 // Run via ci.sh Phase 3, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/calculator/bin/calculator &
 //   UI_SPEC=calculator/spec_calculator tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 import std.os
@@ -15,68 +15,68 @@ import std.os
 // find-by-text would hit it.
 press(label: string) {
     id = uidriver.widget_id_of("button", label)
-    aeocha.assert_gt(id, 0, string.concat("key exists: ", label))
+    spec.assert_gt(id, 0, string.concat("key exists: ", label))
     uidriver.click_widget(id)
 }
 
 display_is(expected: int, msg: string) {
     sleep(120)
-    aeocha.assert_eq(uidriver.state_value_int(1), expected, msg)
+    spec.assert_eq(uidriver.state_value_int(1), expected, msg)
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "calculator over AetherUIDriver") {
-        aeocha.it("enters multi-digit numbers and clears") callback {
+    spec.describe(fw, "calculator over AetherUIDriver") {
+        spec.it("enters multi-digit numbers and clears") callback {
             press("4")
             press("2")
             display_is(42, "4 then 2 = 42")
             press("C")
             display_is(0, "C resets to 0")
         }
-        aeocha.it("adds") callback {
+        spec.it("adds") callback {
             press("7"); press("+"); press("3"); press("=")
             display_is(10, "7 + 3 = 10")
             press("C")
         }
-        aeocha.it("subtracts") callback {
+        spec.it("subtracts") callback {
             press("9"); press("-"); press("4"); press("=")
             display_is(5, "9 - 4 = 5")
             press("C")
         }
-        aeocha.it("multiplies") callback {
+        spec.it("multiplies") callback {
             press("6"); press("*"); press("8"); press("=")
             display_is(48, "6 * 8 = 48")
             press("C")
         }
-        aeocha.it("divides") callback {
+        spec.it("divides") callback {
             press("9"); press("/"); press("3"); press("=")
             display_is(3, "9 / 3 = 3")
             press("C")
         }
-        aeocha.it("handles multi-digit operands") callback {
+        spec.it("handles multi-digit operands") callback {
             press("1"); press("2"); press("+"); press("3"); press("4"); press("=")
             display_is(46, "12 + 34 = 46")
             press("C")
         }
-        aeocha.it("chains operations") callback {
+        spec.it("chains operations") callback {
             press("5"); press("*"); press("3"); press("=")
             display_is(15, "5 * 3 = 15")
             press("+"); press("5"); press("=")
             display_is(20, "15 + 5 = 20")
             press("C")
         }
-        aeocha.it("survives division by zero") callback {
+        spec.it("survives division by zero") callback {
             press("7"); press("/"); press("0"); press("=")
             display_is(7, "7 / 0 = 7 (safe)")
             press("C")
         }
-        aeocha.it("shows the Under Remote Control banner") callback {
-            aeocha.assert_contains(uidriver.get_body("/widgets"), "\"banner\":true",
+        spec.it("shows the Under Remote Control banner") callback {
+            spec.assert_contains(uidriver.get_body("/widgets"), "\"banner\":true",
                 "banner present in the widget tree")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

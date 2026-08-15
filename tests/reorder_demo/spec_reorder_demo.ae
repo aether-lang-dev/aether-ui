@@ -11,7 +11,7 @@
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/reorder_demo/bin/reorder_demo &
 //   UI_SPEC=reorder_demo/spec_reorder_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -23,51 +23,51 @@ row_of(txt: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "listbox drag-reorder over AetherUIDriver") {
-        aeocha.it("rows render in list order A,B,C,D") callback {
+    spec.describe(fw, "listbox drag-reorder over AetherUIDriver") {
+        spec.it("rows render in list order A,B,C,D") callback {
             ok = uidriver.wait_body_contains("/widgets", "order: A > B > C > D", 20)
-            aeocha.assert_true(ok, "initial order label reads A > B > C > D")
+            spec.assert_true(ok, "initial order label reads A > B > C > D")
             a = row_of("A")
-            aeocha.assert_gt(a, 0, "row container of A found")
+            spec.assert_gt(a, 0, "row container of A found")
         }
 
-        aeocha.it("dropping A onto C's slot moves A after B (native-drop path)") callback {
+        spec.it("dropping A onto C's slot moves A after B (native-drop path)") callback {
             // Row at index 2 is C. Drop source index 0 (A) onto it → move(0,2).
             c = row_of("C")
-            aeocha.assert_gt(c, 0, "row container of C found")
+            spec.assert_gt(c, 0, "row container of C found")
             uidriver.post_ok("/widget/${c}/drop?src=0", "drop A onto C")
             ok = uidriver.wait_body_contains("/widgets", "order: B > C > A > D", 20)
-            aeocha.assert_true(ok, "on_reorder ran; order is now B > C > A > D")
+            spec.assert_true(ok, "on_reorder ran; order is now B > C > A > D")
         }
 
-        aeocha.it("dropping D onto the top slot moves D first") callback {
+        spec.it("dropping D onto the top slot moves D first") callback {
             // Order is B,C,A,D — D is at index 3. Drop it onto the top row (B, idx 0).
             b = row_of("B")
             uidriver.post_ok("/widget/${b}/drop?src=3", "drop D onto top")
             ok = uidriver.wait_body_contains("/widgets", "order: D > B > C > A", 20)
-            aeocha.assert_true(ok, "order is now D > B > C > A")
+            spec.assert_true(ok, "order is now D > B > C > A")
         }
 
-        aeocha.it("programmatic 'Move A to end' takes the same path") callback {
+        spec.it("programmatic 'Move A to end' takes the same path") callback {
             // Order is D,B,C,A — A is already last, so move C (idx 2)? No: this
             // button moves index 0 (D) to the end → B,C,A,D.
             m = uidriver.widget_id_by_text("Move A to end")
-            aeocha.assert_gt(m, 0, "move button found")
+            spec.assert_gt(m, 0, "move button found")
             uidriver.post_ok("/widget/${m}/click", "move top to end")
             ok = uidriver.wait_body_contains("/widgets", "order: B > C > A > D", 20)
-            aeocha.assert_true(ok, "top item moved to the end")
+            spec.assert_true(ok, "top item moved to the end")
         }
 
-        aeocha.it("programmatic 'Reverse (D first)' moves index 3 to the front") callback {
+        spec.it("programmatic 'Reverse (D first)' moves index 3 to the front") callback {
             // Order is B,C,A,D — move index 3 (D) to front → D,B,C,A.
             r = uidriver.widget_id_by_text("Reverse (D first)")
             uidriver.post_ok("/widget/${r}/click", "move last to front")
             ok = uidriver.wait_body_contains("/widgets", "order: D > B > C > A", 20)
-            aeocha.assert_true(ok, "last item moved to the front")
+            spec.assert_true(ok, "last item moved to the front")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

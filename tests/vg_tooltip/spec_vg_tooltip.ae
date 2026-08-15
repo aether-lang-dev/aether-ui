@@ -14,11 +14,11 @@
 //   AETHER_UI_TEST_PORT=9222 AETHER_UI_TOOLTIP=drawn \
 //     ./target/build/examples/vg_tooltip/bin/vg_tooltip &
 //   UI_SPEC=vg_tooltip/spec_vg_tooltip tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
     // viewBox is 100×100; map viewBox coords → canvas px via the real size.
@@ -30,32 +30,32 @@ main() {
     sq_x = (cw * 75) / 100
     sq_y = (ch * 39) / 100
 
-    aeocha.describe(fw, "vg_tooltip drawn-tooltip over AetherUIDriver") {
-        aeocha.it("starts with no overlays") callback {
+    spec.describe(fw, "vg_tooltip drawn-tooltip over AetherUIDriver") {
+        spec.it("starts with no overlays") callback {
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"count\":0", "no tooltip at startup")
+            spec.assert_contains(r, "\"count\":0", "no tooltip at startup")
         }
 
-        aeocha.it("hovering the red circle opens a drawn tooltip") callback {
+        spec.it("hovering the red circle opens a drawn tooltip") callback {
             uidriver.post_ok("/canvas/1/move?x=${circ_x}&y=${circ_y}", "hover circle")
             ok = uidriver.wait_body_contains("/overlays", "\"live\":1", 20)
-            aeocha.assert_true(ok, "a drawn tooltip is live over the circle")
+            spec.assert_true(ok, "a drawn tooltip is live over the circle")
         }
 
-        aeocha.it("moving to empty space hides the tooltip") callback {
+        spec.it("moving to empty space hides the tooltip") callback {
             uidriver.post_ok("/canvas/1/move?x=2&y=2", "hover empty")
             // No live overlay remains (the only one flips to live:0).
             ok = uidriver.wait_body_contains("/overlays", "\"live\":0", 20)
-            aeocha.assert_true(ok, "the tooltip hid off the shape")
+            spec.assert_true(ok, "the tooltip hid off the shape")
             r = uidriver.get_body("/overlays")
-            aeocha.assert_contains(r, "\"live\":0", "no live tooltip over blank canvas")
+            spec.assert_contains(r, "\"live\":0", "no live tooltip over blank canvas")
         }
 
-        aeocha.it("hovering the blue square opens a tooltip again") callback {
+        spec.it("hovering the blue square opens a tooltip again") callback {
             uidriver.post_ok("/canvas/1/move?x=${sq_x}&y=${sq_y}", "hover square")
             ok = uidriver.wait_body_contains("/overlays", "\"live\":1", 20)
-            aeocha.assert_true(ok, "a drawn tooltip is live over the square")
+            spec.assert_true(ok, "a drawn tooltip is live over the square")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

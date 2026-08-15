@@ -10,29 +10,29 @@
 // Run via ci.sh / tests/spec_matrix.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/textpath_demo/bin/textpath_demo &
 //   UI_SPEC=textpath_demo/spec_textpath_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "textpath_demo over AetherUIDriver") {
-        aeocha.it("shows the chrome (canvas + caption)") callback {
+    spec.describe(fw, "textpath_demo over AetherUIDriver") {
+        spec.it("shows the chrome (canvas + caption)") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
-            aeocha.assert_contains(body, "text as paths", "caption present")
+            spec.assert_contains(body, "\"canvas\"", "has a canvas")
+            spec.assert_contains(body, "text as paths", "caption present")
         }
 
-        aeocha.it("kerned advance width is exact (pure-Aether font math)") callback {
+        spec.it("kerned advance width is exact (pure-Aether font math)") callback {
             // 'Aether type' at 44px em, DejaVu Sans Bold, kern pairs applied:
             // 294.2 viewBox units → w10=2942. Same bytes on every platform.
             // The face name comes from the font's own `name` table.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "face: DejaVu Sans Bold", "typeface named")
-            aeocha.assert_contains(body, "w10=2942", "width readout exact")
+            spec.assert_contains(body, "face: DejaVu Sans Bold", "typeface named")
+            spec.assert_contains(body, "w10=2942", "width readout exact")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

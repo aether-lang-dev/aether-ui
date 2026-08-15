@@ -2,34 +2,34 @@
 // line; clicks still land after a window resize (px→viewBox unmapping
 // through the live xMidYMid-meet mapping — the maximize/unmaximize
 // regression pin). Run via ci.sh Phase 6, or by hand:
-//   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_hover_and_resize.ae
-import aeocha
+//   GP_FIXTURE=/path ae run spec_hover_and_resize.ae
+import std.spec
 import gp_driver
 import uidriver
 import std.string
 import std.os
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     gp_driver.wait_for_app()
 
-    aeocha.describe(fw, "grand_perspective: hover + resize") {
-        aeocha.it("hover names the tile under the pointer; off-map clears") callback {
+    spec.describe(fw, "grand_perspective: hover + resize") {
+        spec.it("hover names the tile under the pointer; off-map clears") callback {
             uidriver.move_to(120.0, 300.0)
             ok = gp_driver.wait_status_contains("big.bin", 20)
-            aeocha.assert_true(ok, "hover over big.bin names it")
+            spec.assert_true(ok, "hover over big.bin names it")
             uidriver.move_to(1020.0, 550.0)
             ok2 = gp_driver.wait_status_contains("—", 20)
-            aeocha.assert_true(ok2, "hover off-map clears to em-dash")
+            spec.assert_true(ok2, "hover off-map clears to em-dash")
         }
-        aeocha.it("double-click still drills after a window resize") callback {
+        spec.it("double-click still drills after a window resize") callback {
             uidriver.resize_window(1716, 830)
             sleep(1000)
             // Recompute sub's tile position through the same xMidYMid-meet
             // mapping the scene uses: px = vb*s + centered offset.
             cw = uidriver.canvas_w()
             ch = uidriver.canvas_h()
-            aeocha.assert_gt(cw, 1076, "canvas grew with the window")
+            spec.assert_gt(cw, 1076, "canvas grew with the window")
             sx = (cw / 1.0) / 1076.0
             sy = (ch / 1.0) / 600.0
             s = sx
@@ -42,8 +42,8 @@ main() {
             sleep(120)
             uidriver.click(px, py)
             ok = gp_driver.wait_crumbs_contains("sub", 20)
-            aeocha.assert_true(ok, "double-click drills at the new scale")
+            spec.assert_true(ok, "double-click drills at the new scale")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

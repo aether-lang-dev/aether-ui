@@ -35,7 +35,7 @@
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/counter/bin/counter &
 //   UI_SPEC=route_parity/spec_route_parity tests/run_spec.sh
 
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -51,26 +51,26 @@ present(path: string) -> int {
 }
 
 expect_route(fw: ptr, path: string) {
-    aeocha.assert_true(present(path), "GET ${path} must exist on every backend")
+    spec.assert_true(present(path), "GET ${path} must exist on every backend")
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "AetherUIDriver route parity across backends") {
+    spec.describe(fw, "AetherUIDriver route parity across backends") {
 
         // The tree/introspection surface. Every backend's harness depends on
         // these; a missing one turns into a mystery timeout in some other
         // spec rather than an obvious 404 here.
-        aeocha.it("serves the widget-tree routes") callback {
+        spec.it("serves the widget-tree routes") callback {
             expect_route(fw, "/widgets")
             expect_route(fw, "/widget/1")
             expect_route(fw, "/widget/1/children")
             expect_route(fw, "/widget/1/a11y")
         }
 
-        aeocha.it("serves the window routes") callback {
+        spec.it("serves the window routes") callback {
             expect_route(fw, "/windows")
             expect_route(fw, "/window/pick")
         }
@@ -84,7 +84,7 @@ main() {
         // with the same body has the ordering bug even though both "exist",
         // so this checks the SHAPE differs, which is the cheapest available
         // proxy for correct routing.
-        aeocha.it("serves both canvas readback routes, and routes them apart") callback {
+        spec.it("serves both canvas readback routes, and routes them apart") callback {
             expect_route(fw, "/canvas/1/pixel?x=0&y=0&w=8&h=8")
             expect_route(fw, "/canvas/1/pixelgrid?w=8&h=8&step=4")
             expect_route(fw, "/canvas/1/debug")
@@ -95,7 +95,7 @@ main() {
             // 5d0c868.
             one = uidriver.get_body("/canvas/1/pixel?x=0&y=0&w=8&h=8")
             grid = uidriver.get_body("/canvas/1/pixelgrid?w=8&h=8&step=4")
-            aeocha.assert_false(string.equals(one, grid),
+            spec.assert_false(string.equals(one, grid),
                 "/pixelgrid must not be answered by the /pixel arm")
         }
 
@@ -103,24 +103,24 @@ main() {
         // POST; win32/macOS had both. A driver that can list overlays but not
         // dismiss one is half a feature, and no spec noticed for months.
         // POST, so this uses post_status rather than the GET helper.
-        aeocha.it("serves the overlay routes, list AND dismiss") callback {
+        spec.it("serves the overlay routes, list AND dismiss") callback {
             expect_route(fw, "/overlays")
             st = uidriver.post_status("/overlay/1/dismiss")
-            aeocha.assert_false(st == 404,
+            spec.assert_false(st == 404,
                 "POST /overlay/{id}/dismiss must exist on every backend")
         }
 
-        aeocha.it("serves the chrome routes") callback {
+        spec.it("serves the chrome routes") callback {
             expect_route(fw, "/menus")
             expect_route(fw, "/notifications")
             expect_route(fw, "/tray")
             expect_route(fw, "/undo_state")
         }
 
-        aeocha.it("serves the metrics routes") callback {
+        spec.it("serves the metrics routes") callback {
             expect_route(fw, "/text_extent?text=Hg&size=12")
         }
     }
 
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -2,51 +2,51 @@
 // A main window opens a second top-level window; GET /windows lists both,
 // widgets carry a "window":N tag, cross-window state updates both windows, and
 // closing the second leaves the first live (the loop keeps running).
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "multi-window over AetherUIDriver") {
-        aeocha.it("starts with one window") callback {
+    spec.describe(fw, "multi-window over AetherUIDriver") {
+        spec.it("starts with one window") callback {
             b = uidriver.get_body("/windows")
-            aeocha.assert_contains(b, "\"id\":1", "primary window present")
-            aeocha.assert_contains(b, "\"live\":true", "primary is live")
+            spec.assert_contains(b, "\"id\":1", "primary window present")
+            spec.assert_contains(b, "\"live\":true", "primary is live")
             two = string.contains(b, "\"id\":2")
-            aeocha.assert_eq(two, 0, "no second window yet")
+            spec.assert_eq(two, 0, "no second window yet")
         }
 
-        aeocha.it("opening a window adds a co-equal top-level") callback {
+        spec.it("opening a window adds a co-equal top-level") callback {
             o = uidriver.widget_id_by_text("open window 2")
             uidriver.post_ok("/widget/${o}/click", "open window 2")
             ok = uidriver.wait_body_contains("/windows", "\"id\":2", 20)
-            aeocha.assert_true(ok, "second window opened")
+            spec.assert_true(ok, "second window opened")
             b = uidriver.get_body("/windows")
-            aeocha.assert_contains(b, "\"title\":\"Window 2\"", "its title")
+            spec.assert_contains(b, "\"title\":\"Window 2\"", "its title")
         }
 
-        aeocha.it("widgets are tagged with their window") callback {
+        spec.it("widgets are tagged with their window") callback {
             b = uidriver.get_body("/widgets")
             // "Main window" text is window 1; "Second window" text is window 2.
-            aeocha.assert_contains(b, "\"text\":\"Second window\",\"visible\":true", "2nd window's label exists")
+            spec.assert_contains(b, "\"text\":\"Second window\",\"visible\":true", "2nd window's label exists")
             // Its window field is 2 (the tag follows the label in the JSON).
-            aeocha.assert_contains(b, "\"text\":\"Second window\"", "second label present")
+            spec.assert_contains(b, "\"text\":\"Second window\"", "second label present")
             id2 = uidriver.widget_id_by_text("Second window")
             w = uidriver.widget_int_field_by_id(id2, "window")
-            aeocha.assert_eq(w, 2, "Second-window label is in window 2")
+            spec.assert_eq(w, 2, "Second-window label is in window 2")
             id1 = uidriver.widget_id_by_text("Main window")
             w1 = uidriver.widget_int_field_by_id(id1, "window")
-            aeocha.assert_eq(w1, 1, "Main-window label is in window 1")
+            spec.assert_eq(w1, 1, "Main-window label is in window 1")
         }
 
-        aeocha.it("cross-window state updates both windows") callback {
+        spec.it("cross-window state updates both windows") callback {
             bmp = uidriver.widget_id_by_text("bump")
             uidriver.post_ok("/widget/${bmp}/click", "bump the shared counter")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"count: 1\"", 20)
-            aeocha.assert_true(ok, "counter updated")
+            spec.assert_true(ok, "counter updated")
             // Both windows show count: 1 — count how many "count: 1" labels.
             b = uidriver.get_body("/widgets")
             n = 0
@@ -56,26 +56,26 @@ main() {
                 idx = string.string_index_of(rest, "\"text\":\"count: 1\"")
                 rest = string.string_substring(rest, idx + 18, string.length(rest))
             }
-            aeocha.assert_eq(n, 2, "the shared count shows in both windows")
+            spec.assert_eq(n, 2, "the shared count shows in both windows")
         }
 
-        aeocha.it("an overlay opened on window 2 lands in window 2") callback {
+        spec.it("an overlay opened on window 2 lands in window 2") callback {
             t = uidriver.widget_id_by_text("toast in w2")
             uidriver.post_ok("/widget/${t}/click", "toast in window 2")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"w2 toast\"", 20)
-            aeocha.assert_true(ok, "the toast rendered")
+            spec.assert_true(ok, "the toast rendered")
             tid = uidriver.widget_id_by_text("w2 toast")
             w = uidriver.widget_int_field_by_id(tid, "window")
-            aeocha.assert_eq(w, 2, "the toast is in window 2, not the primary")
+            spec.assert_eq(w, 2, "the toast is in window 2, not the primary")
         }
 
-        aeocha.it("closing the second window leaves the first live") callback {
+        spec.it("closing the second window leaves the first live") callback {
             uidriver.post_ok("/window/2/close", "close window 2")
             ok = uidriver.wait_body_contains("/windows", "\"id\":2,\"title\":\"Window 2\",\"live\":false", 20)
-            aeocha.assert_true(ok, "window 2 is closed")
+            spec.assert_true(ok, "window 2 is closed")
             b = uidriver.get_body("/windows")
-            aeocha.assert_contains(b, "\"id\":1,\"title\":\"Multi-window demo\",\"live\":true", "window 1 still live")
+            spec.assert_contains(b, "\"id\":1,\"title\":\"Multi-window demo\",\"live\":true", "window 1 still live")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -2,7 +2,7 @@
 // Clicking rows TOGGLES their selection; several rows can be selected at
 // once. The driver reads each row's "classes" (.aui-row-selected) to count
 // the selected set as it toggles.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -20,30 +20,30 @@ selected_count() -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "multi-select listbox over AetherUIDriver") {
-        aeocha.it("nothing selected initially") callback {
-            aeocha.assert_eq(selected_count(), 0, "no rows selected at start")
+    spec.describe(fw, "multi-select listbox over AetherUIDriver") {
+        spec.it("nothing selected initially") callback {
+            spec.assert_eq(selected_count(), 0, "no rows selected at start")
         }
 
-        aeocha.it("toggling two rows selects both at once") callback {
+        spec.it("toggling two rows selects both at once") callback {
             t0 = uidriver.widget_id_by_text("toggle 0")
             t2 = uidriver.widget_id_by_text("toggle 2")
             uidriver.post_ok("/widget/${t0}/click", "toggle row 0 on")
             uidriver.post_ok("/widget/${t2}/click", "toggle row 2 on")
             ok = uidriver.wait_body_contains("/widgets", "aui-row-selected", 20)
-            aeocha.assert_true(ok, "a row is selected")
-            aeocha.assert_eq(selected_count(), 2, "both rows selected simultaneously")
+            spec.assert_true(ok, "a row is selected")
+            spec.assert_eq(selected_count(), 2, "both rows selected simultaneously")
         }
 
-        aeocha.it("toggling a selected row deselects just that one") callback {
+        spec.it("toggling a selected row deselects just that one") callback {
             t0 = uidriver.widget_id_by_text("toggle 0")
             uidriver.post_ok("/widget/${t0}/click", "toggle row 0 off")
             // Row 2 stays selected; only row 0 cleared.
-            aeocha.assert_eq(selected_count(), 1, "one row remains selected")
+            spec.assert_eq(selected_count(), 1, "one row remains selected")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

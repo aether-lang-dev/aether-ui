@@ -1,48 +1,48 @@
 // spec_legend.ae — grand_perspective: type-legend highlight toggle +
 // colour-scheme radio group + scan-lifecycle button ghosting.
 // Run via ci.sh Phase 6, or by hand:
-//   AETHER_INCLUDE_PATH=~/scm/aeocha GP_FIXTURE=/path ae run spec_legend.ae
-import aeocha
+//   GP_FIXTURE=/path ae run spec_legend.ae
+import std.spec
 import gp_driver
 import uidriver
 import std.string
 import std.os
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     gp_driver.wait_for_app()
 
-    aeocha.describe(fw, "grand_perspective: legend + colour schemes") {
-        aeocha.it("legend row click toggles a type highlight") callback {
+    spec.describe(fw, "grand_perspective: legend + colour schemes") {
+        spec.it("legend row click toggles a type highlight") callback {
             uidriver.click(820.0, 65.0)
             ok = gp_driver.wait_status_contains("Highlighting", 20)
-            aeocha.assert_true(ok, "highlight on")
+            spec.assert_true(ok, "highlight on")
             uidriver.click(820.0, 65.0)
             ok2 = gp_driver.wait_status_contains("Highlight off", 20)
-            aeocha.assert_true(ok2, "highlight off")
+            spec.assert_true(ok2, "highlight off")
         }
-        aeocha.it("colour-scheme toggles behave as a radio group") callback {
-            aeocha.assert_eq(uidriver.widget_bool_by_text("by Type", "active"), 1,
+        spec.it("colour-scheme toggles behave as a radio group") callback {
+            spec.assert_eq(uidriver.widget_bool_by_text("by Type", "active"), 1,
                 "by Type active initially (the default scheme)")
             bd = uidriver.widget_id_by_text("by Depth")
             uidriver.toggle_widget(bd)
             sleep(300)
-            aeocha.assert_eq(uidriver.widget_bool_by_text("by Depth", "active"), 1,
+            spec.assert_eq(uidriver.widget_bool_by_text("by Depth", "active"), 1,
                 "by Depth active after toggle")
-            aeocha.assert_eq(uidriver.widget_bool_by_text("by Type", "active"), 0,
+            spec.assert_eq(uidriver.widget_bool_by_text("by Type", "active"), 0,
                 "by Type deactivated by the group")
             bt = uidriver.widget_id_by_text("by Type")
             uidriver.toggle_widget(bt)     // restore the default
             sleep(300)
-            aeocha.assert_eq(uidriver.widget_bool_by_text("by Type", "active"), 1,
+            spec.assert_eq(uidriver.widget_bool_by_text("by Type", "active"), 1,
                 "by Type active again")
         }
-        aeocha.it("ghosts Stop when idle, Rescan stays live") callback {
-            aeocha.assert_eq(uidriver.widget_bool_by_text("Stop", "enabled"), 0,
+        spec.it("ghosts Stop when idle, Rescan stays live") callback {
+            spec.assert_eq(uidriver.widget_bool_by_text("Stop", "enabled"), 0,
                 "Stop ghosted when idle")
-            aeocha.assert_eq(uidriver.widget_bool_by_text("Rescan", "enabled"), 1,
+            spec.assert_eq(uidriver.widget_bool_by_text("Rescan", "enabled"), 1,
                 "Rescan live when idle")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

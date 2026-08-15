@@ -8,53 +8,53 @@
 // Run via ci.sh / spec_matrix, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/menu/bin/menu &
 //   UI_SPEC=menu/spec_menu tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "menu bar over AetherUIDriver") {
-        aeocha.it("the bar exposes File/Edit/Help with their items") callback {
+    spec.describe(fw, "menu bar over AetherUIDriver") {
+        spec.it("the bar exposes File/Edit/Help with their items") callback {
             b = uidriver.menus_body()
             // The File menu's items are recorded in declaration order.
-            aeocha.assert_contains(b, "\"New\"", "File → New present")
-            aeocha.assert_contains(b, "\"Open...\"", "File → Open present")
-            aeocha.assert_contains(b, "\"Save\"", "File → Save present")
-            aeocha.assert_contains(b, "\"Quit\"", "File → Quit present")
-            aeocha.assert_contains(b, "\"Undo\"", "Edit → Undo present")
-            aeocha.assert_contains(b, "\"About\"", "Help → About present")
+            spec.assert_contains(b, "\"New\"", "File → New present")
+            spec.assert_contains(b, "\"Open...\"", "File → Open present")
+            spec.assert_contains(b, "\"Save\"", "File → Save present")
+            spec.assert_contains(b, "\"Quit\"", "File → Quit present")
+            spec.assert_contains(b, "\"Undo\"", "Edit → Undo present")
+            spec.assert_contains(b, "\"About\"", "Help → About present")
             // Each item resolves to a menu handle.
             fh = uidriver.menu_handle_with("New")
-            aeocha.assert_gt(fh, 0, "the File menu has a handle")
+            spec.assert_gt(fh, 0, "the File menu has a handle")
         }
 
-        aeocha.it("activating File → New fires its closure (counter bumps)") callback {
+        spec.it("activating File → New fires its closure (counter bumps)") callback {
             // Counter starts at 0.
             b0 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b0, "Actions taken: 0", "counter starts at 0")
+            spec.assert_contains(b0, "Actions taken: 0", "counter starts at 0")
             fh = uidriver.menu_handle_with("New")
             uidriver.menu_activate(fh, "New")
             ok = uidriver.wait_body_contains("/widgets", "Actions taken: 1", 20)
-            aeocha.assert_true(ok, "New's closure ran — counter is 1")
+            spec.assert_true(ok, "New's closure ran — counter is 1")
         }
 
-        aeocha.it("a second item on the same menu also fires") callback {
+        spec.it("a second item on the same menu also fires") callback {
             fh = uidriver.menu_handle_with("Save")
             uidriver.menu_activate(fh, "Save")
             ok = uidriver.wait_body_contains("/widgets", "Actions taken: 2", 20)
-            aeocha.assert_true(ok, "Save's closure ran — counter is 2")
+            spec.assert_true(ok, "Save's closure ran — counter is 2")
         }
 
-        aeocha.it("Edit → Undo runs its (decrementing) closure") callback {
+        spec.it("Edit → Undo runs its (decrementing) closure") callback {
             eh = uidriver.menu_handle_with("Undo")
-            aeocha.assert_gt(eh, 0, "the Edit menu has a handle")
+            spec.assert_gt(eh, 0, "the Edit menu has a handle")
             uidriver.menu_activate(eh, "Undo")
             ok = uidriver.wait_body_contains("/widgets", "Actions taken: 1", 20)
-            aeocha.assert_true(ok, "Undo's closure ran — counter back to 1")
+            spec.assert_true(ok, "Undo's closure ran — counter back to 1")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

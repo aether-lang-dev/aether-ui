@@ -14,7 +14,7 @@
 // Run via tests/spec_matrix.sh sketchpad, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/apps/sketchpad/bin/sketchpad &
 //   UI_SPEC=sketchpad/spec_sketchpad tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -27,72 +27,72 @@ stroke1() {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "sketchpad over AetherUIDriver") {
-        aeocha.it("opens an empty board") callback {
+    spec.describe(fw, "sketchpad over AetherUIDriver") {
+        spec.it("opens an empty board") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "strokes: 0", "no strokes yet")
-            aeocha.assert_contains(body, "mode: draw", "starts in draw mode")
-            aeocha.assert_contains(body, "\"canvas\"", "the board exists")
+            spec.assert_contains(body, "strokes: 0", "no strokes yet")
+            spec.assert_contains(body, "mode: draw", "starts in draw mode")
+            spec.assert_contains(body, "\"canvas\"", "the board exists")
         }
 
-        aeocha.it("a synthesized drag becomes a stroke with real ink") callback {
+        spec.it("a synthesized drag becomes a stroke with real ink") callback {
             stroke1()
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "strokes: 1", 20),
                 "stroke counted")
             uidriver.click_widget(uidriver.widget_id_of("button", "Probe"))
             ok = uidriver.wait_body_contains("/widgets", "ink: ", 20)
-            aeocha.assert_true(ok, "probe ran")
+            spec.assert_true(ok, "probe ran")
             ink1 = ink_of(uidriver.get_body("/widgets"))
-            aeocha.assert_true(ink1 > 60, "the ink is on the board (${ink1})")
-            aeocha.assert_true(ink1 < 4800, "and is not a flood (${ink1})")
+            spec.assert_true(ink1 > 60, "the ink is on the board (${ink1})")
+            spec.assert_true(ink1 < 4800, "and is not a flood (${ink1})")
         }
 
-        aeocha.it("a second stroke adds ink") callback {
+        spec.it("a second stroke adds ink") callback {
             ink1 = ink_of(uidriver.get_body("/widgets"))
             uidriver.post_ok("/canvas/1/click?x=360&y=60", "pen down")
             uidriver.post_ok("/canvas/1/move?x=430&y=110", "drag")
             uidriver.post_ok("/canvas/1/release?x=370&y=190", "pen up")
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "strokes: 2", 20),
                 "second stroke counted")
             uidriver.click_widget(uidriver.widget_id_of("button", "Probe"))
             b = uidriver.get_body("/widgets")
             ink2 = ink_of(b)
-            aeocha.assert_true(ink2 > ink1, "more ink than before (${ink1} -> ${ink2})")
+            spec.assert_true(ink2 > ink1, "more ink than before (${ink1} -> ${ink2})")
         }
 
-        aeocha.it("the eraser removes the stroke you point at — and only then") callback {
+        spec.it("the eraser removes the stroke you point at — and only then") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Erase"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "mode: erase", 20),
                 "erase mode armed")
             // Miss first: a bare corner of the board, no ink there.
             uidriver.post_ok("/canvas/1/click?x=60&y=280", "point at nothing")
             b0 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b0, "strokes: 2", "pointing at nothing erases nothing")
+            spec.assert_contains(b0, "strokes: 2", "pointing at nothing erases nothing")
             // Hit: the midpoint of stroke 1's second segment lies ON its ink.
             uidriver.post_ok("/canvas/1/click?x=150&y=120", "point at the ink")
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "strokes: 1", 20),
                 "the pointed-at stroke is gone")
         }
 
-        aeocha.it("Clear empties the board") callback {
+        spec.it("Clear empties the board") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Clear"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "strokes: 0", 20),
                 "count reset")
             uidriver.click_widget(uidriver.widget_id_of("button", "Probe"))
             b = uidriver.get_body("/widgets")
             ink3 = ink_of(b)
-            aeocha.assert_true(ink3 < 60, "the board is dark again (${ink3})")
+            spec.assert_true(ink3 < 60, "the board is dark again (${ink3})")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // The integer after "ink: ", or -1.

@@ -12,7 +12,7 @@
 #
 # Binaries come from `aeb .all.ae` (target/build/...). Run that first.
 #
-# Counting: the number printed is aeocha's own "N passing" — one per it()
+# Counting: the number printed is std.spec's own "N passing" — one per it()
 # block. Failures are counted from its "N failing" tail. Those two numbers
 # come straight from the tool, so the matrix is reproducible rather than
 # hand-tallied (the roadmap's Windows row mixes it-counts and assertion-counts
@@ -232,7 +232,19 @@ teardown() {
     # aborts with "port still busy" — silently truncating the run. Match the
     # basename exactly (-x, not -f) so this never matches our own shell.
     local base; base="$(basename "$bin")"
+    # LINUX TRUNCATES THE PROCESS NAME TO 15 CHARS, and `pkill -x` matches
+    # against that truncated comm — so an exact match on a 16+ char binary
+    # NEVER fires. Eleven binaries in this tree are over the limit
+    # (cmdkind_coverage, transitions_demo, multiwindow_demo,
+    # grand_perspective, svg_transpile_*, ...), which is precisely the class
+    # that leaked: cmdkind_coverage held $PORT after its suite and truncated
+    # a whole matrix run with "port still busy". Try the exact name first,
+    # then the 15-char prefix the kernel actually stores.
     port_free || pkill -x "$base" 2>/dev/null
+    port_free || {
+        local short="${base:0:15}"
+        [ "$short" != "$base" ] && pkill -x "$short" 2>/dev/null
+    }
     wait "$pid" 2>/dev/null
     # pkill only SENDS the signal. Returning here while the process is still
     # dying lets the NEXT suite launch a binary with the same name into the
@@ -240,8 +252,9 @@ teardown() {
     # port, prints "listening", then dies, and the run reports "APP DID NOT
     # START". Observed ~4-in-5 on the macOS VM. Wait for the name to actually
     # clear before handing the port on.
+    local watch="${base:0:15}"    # same truncation as above; pgrep -x sees comm
     for _ in $(seq 1 40); do
-        pgrep -x "$base" >/dev/null 2>&1 || break
+        pgrep -x "$base" >/dev/null 2>&1 || pgrep -x "$watch" >/dev/null 2>&1 || break
         sleep 0.25
     done
 }

@@ -15,7 +15,7 @@
 // Run via ci.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/a11y_demo/bin/a11y_demo &
 //   UI_SPEC=a11y_demo/spec_a11y_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -27,50 +27,50 @@ row_of(txt: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "accessibility semantics over AetherUIDriver") {
-        aeocha.it("a plain button gets role+name for free") callback {
+    spec.describe(fw, "accessibility semantics over AetherUIDriver") {
+        spec.it("a plain button gets role+name for free") callback {
             b = uidriver.widget_id_by_text("Save")
-            aeocha.assert_gt(b, 0, "Save button found")
+            spec.assert_gt(b, 0, "Save button found")
             r = uidriver.get_body("/widget/${b}/a11y")
-            aeocha.assert_contains(r, "\"role\":\"button\"", "auto role is button")
-            aeocha.assert_contains(r, "\"name\":\"Save\"", "auto name is the label")
+            spec.assert_contains(r, "\"role\":\"button\"", "auto role is button")
+            spec.assert_contains(r, "\"name\":\"Save\"", "auto name is the label")
         }
 
-        aeocha.it("a11y_label overrides the accessible name (icon button)") callback {
+        spec.it("a11y_label overrides the accessible name (icon button)") callback {
             g = uidriver.widget_id_by_text("⚙")
-            aeocha.assert_gt(g, 0, "gear button found")
+            spec.assert_gt(g, 0, "gear button found")
             r = uidriver.get_body("/widget/${g}/a11y")
-            aeocha.assert_contains(r, "\"name\":\"Settings\"", "name is the override, not the glyph")
-            aeocha.assert_contains(r, "\"description\":\"Open the settings panel\"",
+            spec.assert_contains(r, "\"name\":\"Settings\"", "name is the override, not the glyph")
+            spec.assert_contains(r, "\"description\":\"Open the settings panel\"",
                 "description is set")
         }
 
-        aeocha.it("a11y_role tags a text as a heading") callback {
+        spec.it("a11y_role tags a text as a heading") callback {
             t = uidriver.widget_id_by_text("Accessibility demo")
-            aeocha.assert_gt(t, 0, "title text found")
+            spec.assert_gt(t, 0, "title text found")
             r = uidriver.get_body("/widget/${t}/a11y")
-            aeocha.assert_contains(r, "\"role\":\"heading\"", "title reports heading role")
+            spec.assert_contains(r, "\"role\":\"heading\"", "title reports heading role")
         }
 
-        aeocha.it("listbox rows are auto-tagged listitem") callback {
+        spec.it("listbox rows are auto-tagged listitem") callback {
             row = row_of("Beta")
-            aeocha.assert_gt(row, 0, "row of Beta found")
+            spec.assert_gt(row, 0, "row of Beta found")
             r = uidriver.get_body("/widget/${row}/a11y")
-            aeocha.assert_contains(r, "\"role\":\"listitem\"", "each row is a listitem")
+            spec.assert_contains(r, "\"role\":\"listitem\"", "each row is a listitem")
         }
 
-        aeocha.it("role + a11y_name also surface in /widgets") callback {
+        spec.it("role + a11y_name also surface in /widgets") callback {
             b = uidriver.widget_id_by_text("Save")
             body = uidriver.get_body("/widgets")
             // The buffer is large; just assert the button's a11y fields appear.
-            aeocha.assert_contains(body, "\"a11y_name\":\"Settings\"",
+            spec.assert_contains(body, "\"a11y_name\":\"Settings\"",
                 "the gear's override name is in /widgets")
-            aeocha.assert_contains(body, "\"role\":\"heading\"",
+            spec.assert_contains(body, "\"role\":\"heading\"",
                 "the heading role is in /widgets")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

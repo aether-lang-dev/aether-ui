@@ -7,72 +7,72 @@
 // Run via ci.sh Phase 5e, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/each_demo/bin/each_demo &
 //   UI_SPEC=each_demo/spec_each_demo tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "each (dynamic children) over AetherUIDriver") {
-        aeocha.it("starts empty") callback {
+    spec.describe(fw, "each (dynamic children) over AetherUIDriver") {
+        spec.it("starts empty") callback {
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "items: 0", "counter starts at 0")
+            spec.assert_contains(b, "items: 0", "counter starts at 0")
         }
 
-        aeocha.it("Add x3 renders three rows") callback {
+        spec.it("Add x3 renders three rows") callback {
             a = uidriver.widget_id_by_text("Add item")
-            aeocha.assert_gt(a, 0, "Add button found")
+            spec.assert_gt(a, 0, "Add button found")
             uidriver.post_ok("/widget/${a}/click", "add 1")
             uidriver.post_ok("/widget/${a}/click", "add 2")
             uidriver.post_ok("/widget/${a}/click", "add 3")
             ok = uidriver.wait_body_contains("/widgets", "row 3 (click me)", 20)
-            aeocha.assert_true(ok, "row 3 rendered")
+            spec.assert_true(ok, "row 3 rendered")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "row 1 (click me)", "row 1 rendered")
-            aeocha.assert_contains(b, "row 2 (click me)", "row 2 rendered")
-            aeocha.assert_contains(b, "items: 3", "counter reads 3")
+            spec.assert_contains(b, "row 1 (click me)", "row 1 rendered")
+            spec.assert_contains(b, "row 2 (click me)", "row 2 rendered")
+            spec.assert_contains(b, "items: 3", "counter reads 3")
         }
 
-        aeocha.it("a per-item closure fires with ITS item") callback {
+        spec.it("a per-item closure fires with ITS item") callback {
             r2 = uidriver.widget_id_by_text("row 2 (click me)")
-            aeocha.assert_gt(r2, 0, "row 2 button found")
+            spec.assert_gt(r2, 0, "row 2 button found")
             uidriver.post_ok("/widget/${r2}/click", "click row 2")
             ok = uidriver.wait_body_contains("/widgets", "clicked row 2", 20)
-            aeocha.assert_true(ok, "status names row 2, not a stale/garbage label")
+            spec.assert_true(ok, "status names row 2, not a stale/garbage label")
         }
 
-        aeocha.it("Remove last drops exactly the last row") callback {
+        spec.it("Remove last drops exactly the last row") callback {
             r = uidriver.widget_id_by_text("Remove last")
             uidriver.post_ok("/widget/${r}/click", "remove")
             ok = uidriver.wait_body_contains("/widgets", "items: 2", 20)
-            aeocha.assert_true(ok, "counter reads 2")
+            spec.assert_true(ok, "counter reads 2")
             b = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b, "row 2 (click me)", "row 2 still present")
+            spec.assert_contains(b, "row 2 (click me)", "row 2 still present")
             r3 = uidriver.widget_id_by_text("row 3 (click me)")
-            aeocha.assert_eq(r3, 0, "row 3 gone from /widgets")
+            spec.assert_eq(r3, 0, "row 3 gone from /widgets")
         }
 
-        aeocha.it("Reset empties the group") callback {
+        spec.it("Reset empties the group") callback {
             z = uidriver.widget_id_by_text("Reset")
             uidriver.post_ok("/widget/${z}/click", "reset")
             ok = uidriver.wait_body_contains("/widgets", "items: 0", 20)
-            aeocha.assert_true(ok, "counter reads 0")
+            spec.assert_true(ok, "counter reads 0")
             r1 = uidriver.widget_id_by_text("row 1 (click me)")
-            aeocha.assert_eq(r1, 0, "no rows remain")
+            spec.assert_eq(r1, 0, "no rows remain")
         }
 
-        aeocha.it("rebuild after reset works (fresh closures)") callback {
+        spec.it("rebuild after reset works (fresh closures)") callback {
             a = uidriver.widget_id_by_text("Add item")
             uidriver.post_ok("/widget/${a}/click", "add again")
             ok = uidriver.wait_body_contains("/widgets", "row 4 (click me)", 20)
-            aeocha.assert_true(ok, "row 4 rendered after reset")
+            spec.assert_true(ok, "row 4 rendered after reset")
             r4 = uidriver.widget_id_by_text("row 4 (click me)")
             uidriver.post_ok("/widget/${r4}/click", "click row 4")
             ok2 = uidriver.wait_body_contains("/widgets", "clicked row 4", 20)
-            aeocha.assert_true(ok2, "fresh per-item closure fires correctly")
+            spec.assert_true(ok2, "fresh per-item closure fires correctly")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

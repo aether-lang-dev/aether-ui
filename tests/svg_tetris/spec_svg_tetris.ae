@@ -5,30 +5,30 @@
 // Run via ci.sh Phase 5, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/apps/svg_tetris/bin/svg_tetris &
 //   UI_SPEC=svg_tetris/spec_svg_tetris tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "svg_tetris over AetherUIDriver") {
-        aeocha.it("shows the game chrome (buttons + canvas + banner)") callback {
+    spec.describe(fw, "svg_tetris over AetherUIDriver") {
+        spec.it("shows the game chrome (buttons + canvas + banner)") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "has a canvas")
-            aeocha.assert_contains(body, "\"banner\":true", "banner present")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "New Game"), 0, "New Game button")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Drop"), 0, "Drop button")
+            spec.assert_contains(body, "\"canvas\"", "has a canvas")
+            spec.assert_contains(body, "\"banner\":true", "banner present")
+            spec.assert_gt(uidriver.widget_id_of("button", "New Game"), 0, "New Game button")
+            spec.assert_gt(uidriver.widget_id_of("button", "Drop"), 0, "Drop button")
         }
 
-        aeocha.it("New Game resets the score to zero") callback {
+        spec.it("New Game resets the score to zero") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "New Game"))
             ok = uidriver.wait_body_contains("/widgets", "Score 0   Lines 0", 20)
-            aeocha.assert_true(ok, "score label reads a fresh game")
+            spec.assert_true(ok, "score label reads a fresh game")
         }
 
-        aeocha.it("the Drop button plays the game to a game over") callback {
+        spec.it("the Drop button plays the game to a game over") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "New Game"))
             dr = uidriver.widget_id_of("button", "Drop")
             i = 0
@@ -37,18 +37,18 @@ main() {
                 i = i + 1
             }
             ok = uidriver.wait_body_contains("/widgets", "Game Over", 20)
-            aeocha.assert_true(ok, "stacking to the top ends the game")
+            spec.assert_true(ok, "stacking to the top ends the game")
         }
 
-        aeocha.it("the canvas P-key pauses (keyboard path is wired)") callback {
+        spec.it("the canvas P-key pauses (keyboard path is wired)") callback {
             // Drive a key through canvas_on_key and observe it in the label.
             // P is deterministic (pause toggles a status the render loop shows);
             // space would be flaky here — a key after game-over restarts.
             uidriver.click_widget(uidriver.widget_id_of("button", "New Game"))
             uidriver.key("p")
             ok = uidriver.wait_body_contains("/widgets", "PAUSED", 20)
-            aeocha.assert_true(ok, "P-key toggles pause via canvas_on_key")
+            spec.assert_true(ok, "P-key toggles pause via canvas_on_key")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }

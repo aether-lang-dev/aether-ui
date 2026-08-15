@@ -12,7 +12,7 @@
 // Run via ci.sh Phase 5l / tests/spec_matrix.sh, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/apps/font_picker/bin/font_picker &
 //   UI_SPEC=font_picker/spec_font_picker tests/run_spec.sh
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
@@ -45,36 +45,36 @@ shown_count(body: string) -> int {
 }
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "font_picker over AetherUIDriver") {
-        aeocha.it("shows the picker chrome and finds real fonts") callback {
+    spec.describe(fw, "font_picker over AetherUIDriver") {
+        spec.it("shows the picker chrome and finds real fonts") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "showing ", "list status reported")
-            aeocha.assert_contains(body, "\"textfield\"", "search field present")
-            aeocha.assert_contains(body, "\"canvas\"", "preview canvas present")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Clear filters"), 0,
+            spec.assert_contains(body, "showing ", "list status reported")
+            spec.assert_contains(body, "\"textfield\"", "search field present")
+            spec.assert_contains(body, "\"canvas\"", "preview canvas present")
+            spec.assert_gt(uidriver.widget_id_of("button", "Clear filters"), 0,
                 "clear-filters button")
-            aeocha.assert_gt(uidriver.widget_id_of("button", "Favourite (f)"), 0,
+            spec.assert_gt(uidriver.widget_id_of("button", "Favourite (f)"), 0,
                 "favourite button")
             // Font discovery must have found the vendored DejaVu at minimum.
-            aeocha.assert_contains(body, "DejaVu", "a real font family is listed")
+            spec.assert_contains(body, "DejaVu", "a real font family is listed")
         }
 
-        aeocha.it("category chips multi-select [upstream: categories list]") callback {
+        spec.it("category chips multi-select [upstream: categories list]") callback {
             // Upstream keeps filters.categories as a LIST; chips are the UI
             // for it. Clicking one narrows the list; the chip fills to show
             // its state (border + hover + fill all came from the toolkit
             // coverage work).
             mono = uidriver.widget_id_of("button", "monospace")
-            aeocha.assert_gt(mono, 0, "monospace chip present")
+            spec.assert_gt(mono, 0, "monospace chip present")
             uidriver.click_widget(mono)
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "monospace", 20),
                 "list narrowed to monospace")
             body = uidriver.get_body("/widgets")
-            aeocha.assert_false(string.contains(body, "DejaVu Serif Bold"),
+            spec.assert_false(string.contains(body, "DejaVu Serif Bold"),
                 "non-monospace families filtered out")
             // A second chip WIDENS (set semantics, not replacement). Assert
             // on the COUNT rather than a family name: which faces exist
@@ -84,21 +84,21 @@ main() {
             serif = uidriver.widget_id_of("button", "serif")
             uidriver.click_widget(serif)
             n2 = shown_count(uidriver.get_body("/widgets"))
-            aeocha.assert_true(n2 > n1, "a second category WIDENS the list")
+            spec.assert_true(n2 > n1, "a second category WIDENS the list")
             // Toggle both off to leave the list unrestricted for later its.
             uidriver.click_widget(mono)
             uidriver.click_widget(serif)
         }
 
-        aeocha.it("per-face categories come from the engine's records") callback {
+        spec.it("per-face categories come from the engine's records") callback {
             // category_for(): "…Sans…" → sans-serif. (Mono/serif faces are
             // present on desktop Linux/BSD but not on every CI box, so the
             // portable assertion is the vendored DejaVu Sans Bold's.)
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "sans-serif", "a sans face categorised")
+            spec.assert_contains(body, "sans-serif", "a sans face categorised")
         }
 
-        aeocha.it("each row is typeset in ITS OWN face") callback {
+        spec.it("each row is typeset in ITS OWN face") callback {
             // The defining feature of a font picker: you choose by SEEING
             // the face. Each row's label carries its family, so the driver
             // can prove the per-row font reached the backend.
@@ -106,83 +106,83 @@ main() {
             // PROPERTY: every row carries a fontFamily, and it equals that
             // row's own family name (the row is typeset in itself).
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"fontFamily\"", "rows carry a family")
-            aeocha.assert_true(count_families(body) > 3,
+            spec.assert_contains(body, "\"fontFamily\"", "rows carry a family")
+            spec.assert_true(count_families(body) > 3,
                 "many rows, each with its own family")
         }
 
-        aeocha.it("fuzzy search filters the list [familyFilter/leven]") callback {
+        spec.it("fuzzy search filters the list [familyFilter/leven]") callback {
             before = uidriver.get_body("/widgets")
-            aeocha.assert_contains(before, "DejaVu", "DejaVu visible first")
+            spec.assert_contains(before, "DejaVu", "DejaVu visible first")
             tf = uidriver.widget_id_of("textfield", "")
-            aeocha.assert_gt(tf, 0, "search field id")
+            spec.assert_gt(tf, 0, "search field id")
             // "DejVu" is leven-1 from "DejaVu…" (inside the threshold, so a
             // genuinely FUZZY hit — a substring test would miss it), and far
             // from any non-DejaVu face. Single word: the GTK4 embedded server
             // does not percent-decode set_text.
             uidriver.post_ok("/widget/${tf}/set_text?v=DejVu", "type into search")
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "DejaVu", 20),
                 "fuzzy 'DejVu' still matches DejaVu")
             // The visible count must have dropped or stayed — never grown.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "showing ", "count reported")
+            spec.assert_contains(body, "showing ", "count reported")
         }
 
-        aeocha.it("clear filters restores the full list") callback {
+        spec.it("clear filters restores the full list") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Clear filters"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "DejaVu", 20),
                 "families back after clearing")
         }
 
-        aeocha.it("selecting a row previews it and names the variant") callback {
+        spec.it("selecting a row previews it and names the variant") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "no selection", "starts unselected")
+            spec.assert_contains(body, "no selection", "starts unselected")
             row = first_row_id()
-            aeocha.assert_gt(row, 0, "found a font row")
+            spec.assert_gt(row, 0, "found a font row")
             uidriver.click_widget(row)
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "selected: ", 20),
                 "selection label updated")
             b2 = uidriver.get_body("/widgets")
-            aeocha.assert_contains(b2, "selected: DejaVu", "…with the family name")
+            spec.assert_contains(b2, "selected: DejaVu", "…with the family name")
         }
 
-        aeocha.it("favouriting marks the row and counts it [sortFamilies hoist]") callback {
+        spec.it("favouriting marks the row and counts it [sortFamilies hoist]") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Favourite (f)"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "favourites 1", 20),
                 "favourite counted")
             // The marker is now a real HEART icon (ui.icons), not a "*",
             // so the row gains an extra canvas rather than a text prefix.
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "\"canvas\"", "rows carry heart icons")
+            spec.assert_contains(body, "\"canvas\"", "rows carry heart icons")
         }
 
-        aeocha.it("Pick reports the chosen font [Font.toString]") callback {
+        spec.it("Pick reports the chosen font [Font.toString]") callback {
             uidriver.click_widget(uidriver.widget_id_of("button", "Pick"))
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "picked: ", 20),
                 "pick recorded")
         }
 
-        aeocha.it("has a dialog frame — title and a working close") callback {
+        spec.it("has a dialog frame — title and a working close") callback {
             body = uidriver.get_body("/widgets")
-            aeocha.assert_contains(body, "Select a font", "dialog title")
+            spec.assert_contains(body, "Select a font", "dialog title")
             // The close is a REAL button (keyboard-reachable, drivable,
             // a11y-labelled), not decoration.
-            aeocha.assert_contains(body, "\"a11y_name\":\"Close\"",
+            spec.assert_contains(body, "\"a11y_name\":\"Close\"",
                 "close is labelled for assistive tech")
             cid = uidriver.widget_id_of("button", "×")
-            aeocha.assert_gt(cid, 0, "close button")
+            spec.assert_gt(cid, 0, "close button")
             uidriver.click_widget(cid)
-            aeocha.assert_true(
+            spec.assert_true(
                 uidriver.wait_body_contains("/widgets", "cancelled", 20),
                 "closing fires the app's handler")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // The first font row. Rows are hstacks inside the listbox whose first

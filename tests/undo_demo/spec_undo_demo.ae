@@ -2,62 +2,62 @@
 // AetherUIDriver. undoable() records real do/undo pairs; the spec steps
 // the SAME stack the app's buttons and Ctrl+Z use, via POST /undo,
 // POST /redo, GET /undo_state — and asserts effects from widget text.
-import aeocha
+import std.spec
 import uidriver
 import std.string
 
 main() {
-    fw = aeocha.init()
+    fw = spec.init()
     uidriver.wait_server()
 
-    aeocha.describe(fw, "undo manager over AetherUIDriver") {
-        aeocha.it("starts with an empty stack") callback {
+    spec.describe(fw, "undo manager over AetherUIDriver") {
+        spec.it("starts with an empty stack") callback {
             b = uidriver.get_body("/undo_state")
-            aeocha.assert_contains(b, "\"undo_depth\":0", "no undoable edits yet")
-            aeocha.assert_contains(b, "\"redo_depth\":0", "no redoable edits yet")
+            spec.assert_contains(b, "\"undo_depth\":0", "no undoable edits yet")
+            spec.assert_contains(b, "\"redo_depth\":0", "no redoable edits yet")
         }
 
-        aeocha.it("undoable() runs the action and records it") callback {
+        spec.it("undoable() runs the action and records it") callback {
             a = uidriver.widget_id_by_text("Add 5")
             uidriver.post_ok("/widget/${a}/click", "add 5")
             uidriver.post_ok("/widget/${a}/click", "add 5 again")
             ok = uidriver.wait_body_contains("/widgets", "total: 10", 20)
-            aeocha.assert_true(ok, "both actions ran")
+            spec.assert_true(ok, "both actions ran")
             b = uidriver.get_body("/undo_state")
-            aeocha.assert_contains(b, "\"undo_depth\":2", "two edits recorded")
-            aeocha.assert_contains(b, "\"label\":\"add 5\"", "next undo is labelled")
+            spec.assert_contains(b, "\"undo_depth\":2", "two edits recorded")
+            spec.assert_contains(b, "\"label\":\"add 5\"", "next undo is labelled")
         }
 
-        aeocha.it("POST /undo reverts; /redo reapplies") callback {
+        spec.it("POST /undo reverts; /redo reapplies") callback {
             r = uidriver.post_body("/undo")
-            aeocha.assert_contains(r, "\"did\":1", "undo stepped")
+            spec.assert_contains(r, "\"did\":1", "undo stepped")
             ok = uidriver.wait_body_contains("/widgets", "total: 5", 20)
-            aeocha.assert_true(ok, "undo reverted the counter")
+            spec.assert_true(ok, "undo reverted the counter")
             b = uidriver.get_body("/undo_state")
-            aeocha.assert_contains(b, "\"redo_depth\":1", "one edit redoable")
+            spec.assert_contains(b, "\"redo_depth\":1", "one edit redoable")
             r2 = uidriver.post_body("/redo")
-            aeocha.assert_contains(r2, "\"did\":1", "redo stepped")
+            spec.assert_contains(r2, "\"did\":1", "redo stepped")
             ok2 = uidriver.wait_body_contains("/widgets", "total: 10", 20)
-            aeocha.assert_true(ok2, "redo reapplied")
+            spec.assert_true(ok2, "redo reapplied")
         }
 
-        aeocha.it("a new edit truncates the redo tail (the classic rule)") callback {
+        spec.it("a new edit truncates the redo tail (the classic rule)") callback {
             _u1 = uidriver.post_body("/undo")
             ren = uidriver.widget_id_by_text("Rename")
             uidriver.post_ok("/widget/${ren}/click", "rename")
             ok = uidriver.wait_body_contains("/widgets", "name: Ripley", 20)
-            aeocha.assert_true(ok, "rename ran")
+            spec.assert_true(ok, "rename ran")
             b = uidriver.get_body("/undo_state")
-            aeocha.assert_contains(b, "\"redo_depth\":0", "redo tail truncated")
-            aeocha.assert_contains(b, "\"label\":\"rename\"", "rename is next undo")
+            spec.assert_contains(b, "\"redo_depth\":0", "redo tail truncated")
+            spec.assert_contains(b, "\"label\":\"rename\"", "rename is next undo")
         }
 
-        aeocha.it("Ctrl+Z routes to undo (enable_undo_shortcuts)") callback {
+        spec.it("Ctrl+Z routes to undo (enable_undo_shortcuts)") callback {
             k = uidriver.post_body("/window/key?combo=Ctrl%2BZ")
-            aeocha.assert_contains(k, "\"fired\":true", "shortcut handled")
+            spec.assert_contains(k, "\"fired\":true", "shortcut handled")
             ok = uidriver.wait_body_contains("/widgets", "name: Ellen", 20)
-            aeocha.assert_true(ok, "Ctrl+Z undid the rename")
+            spec.assert_true(ok, "Ctrl+Z undid the rename")
         }
     }
-    aeocha.run_summary(fw)
+    spec.run_summary(fw)
 }
