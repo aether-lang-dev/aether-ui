@@ -21,6 +21,7 @@
 import ui
 import ui (window, vstack, hstack, text, btn, divider,
     command, command_set_enabled, command_enabled, btn_command,
+    commands, action, does, on_button, command_group_set_enabled,
     enable_test_server)
 import std.os (os_getenv)
 
@@ -45,6 +46,28 @@ main() {
 
             // A button surface. Greys automatically when the command does.
             _b = btn_command(save)
+
+            divider()
+            text("declared, not wired:")
+            // THE DECLARATIVE FORM -- same feature, read as structure. The
+            // action is declared, and what it DOES plus every surface it has
+            // are declared inside it. on_button() takes no command and no
+            // parent. Compare the four imperative lines above, which thread a
+            // handle through three calls.
+            //
+            // NB `commands()` keeps its parentheses: without them the call
+            // compiles to a function-pointer read and pushes no context, so
+            // everything inside silently sees the wrong scope. See the ask in
+            // ~/scm/aether/asks/.
+            _grp = commands() {
+                action("Reload", "Ctrl+R") {
+                    does() callback {
+                        fires = fires + 1
+                        aether_ui_text_set_string(counter, "fired: ${fires}")
+                    }
+                    on_button()
+                }
+            }
 
             divider()
             hstack(8) {

@@ -380,6 +380,16 @@ static void* aecs_current_sheet = NULL;
 void aether_ui_current_sheet_set_impl(void* sheet) { aecs_current_sheet = sheet; }
 void* aether_ui_current_sheet_get_impl(void) { return aecs_current_sheet; }
 
+// The widget scope a `commands() { … }` block was opened in. Held here for the
+// same reason the sheet is: Aether has no top-level mutable module state. An
+// `action { … }` inside captures this so its on_* verbs know which container
+// to attach to -- inside that block the ambient _ctx is the COMMAND, and
+// Aether exposes only builder_context() (top of stack). Single slot because
+// commands scopes do not nest.
+static void* aeui_commands_scope = NULL;
+void aether_ui_commands_scope_set_impl(void* scope) { aeui_commands_scope = scope; }
+void* aether_ui_commands_scope_get_impl(void) { return aeui_commands_scope; }
+
 // Single-slot appearance callback (|dark: int| closure) + the driver's
 // override (-1 = follow the OS; 0/1 forced via POST /appearance).
 static void* appearance_boxed = NULL;

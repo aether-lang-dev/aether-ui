@@ -48,6 +48,8 @@ exports (
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     load_styles,
     ui_states, add_state, set_state, current_state,
+    commands, action, does, on_button, on_menu_item,
+    command_group_set_enabled,
     command, command_fire, command_set_enabled, command_enabled,
     command_label, command_attach, btn_command, menu_item_command,
     undoable, undo, redo, undo_depth, redo_depth, undo_label,
@@ -264,6 +266,8 @@ extern aether_ui_widget_kind_impl(handle: int) -> string
 extern aether_ui_widget_parent_impl(handle: int) -> int
 extern aether_ui_widget_classes_impl(handle: int) -> string
 extern aether_ui_current_sheet_set_impl(sheet: ptr)
+extern aether_ui_commands_scope_set_impl(scope: ptr)
+extern aether_ui_commands_scope_get_impl() -> ptr
 extern aether_ui_current_sheet_get_impl() -> ptr
 extern aether_ui_appearance_register_impl(boxed_closure: ptr)
 extern aether_ui_undo_push_impl(label: string, undo_boxed: ptr, redo_boxed: ptr)
@@ -2147,7 +2151,8 @@ struct Command {
     cb: ptr,          // the app's callback, boxed
     enabled: int,
     n_surfaces: int,
-    surfaces: ptr     // intarr of widget handles to grey/ungrey
+    surfaces: ptr,    // intarr of widget handles to grey/ungrey
+    scope: ptr        // widget parent captured where the action was declared
 }
 
 _command_invoke(cb: fn) {
@@ -2165,13 +2170,14 @@ command_fire(cp: ptr) {
 
 // command(label, accel, cb) — accel may be "" for no keystroke.
 command(label: string, accel: string, cb: fn) -> ptr {
-    c = malloc(48) as *Command
+    c = malloc(56) as *Command
     c.label = label
     c.accel = accel
     c.cb = box_closure(cb)
     c.enabled = 1
     c.n_surfaces = 0
     c.surfaces = intarr_new_raw(CMD_MAX_SURFACES)
+    c.scope = 0
     cp = c as ptr
     // The accelerator fires through the guard, so a disabled command's key is
     // inert without the backend having to unregister anything.
@@ -2211,6 +2217,113 @@ command_attach(cp: ptr, handle: int) {
     intarr_set_raw(c.surfaces, c.n_surfaces, handle)
     c.n_surfaces = c.n_surfaces + 1
     _ = style_enabled(handle, c.enabled)
+}
+
+// ── The DECLARATIVE form: a command is a SCOPE, not a handle ────────
+//
+// The API above reads like plumbing: make a command, hold the handle, pass it
+// to each surface. That is not how this toolkit reads
+// (docs/guide/dsl-with-scope.md) -- widgets attach to their enclosing scope
+// through _ctx and nobody passes a parent. Commands get the same treatment:
+//
+//   vstack(10) {
+//       commands() {
+//           action("Save", "Ctrl+S") {
+//               does() callback { do_save() }   // what the action DOES
+//               on_button()                     // a button, here, in this vstack
+//               on_menu_item(file_menu)         // and an item on that menu
+//           }
+//       }
+//   }
+//
+// `on_button()` needs neither the command nor the parent: the command is the
+// ambient scope, and the widget parent was captured when `commands()` opened.
+//
+// THREE THINGS THIS SHAPE HAD TO WORK AROUND, each worth knowing before
+// editing it:
+//
+//  1. `f(args) callback {…} {…}` is NOT a call shape -- a call takes ONE
+//     trailing block. So the body is a verb INSIDE the block (`does()`), not
+//     an argument before it. It reads better anyway: everything the action is
+//     made of is declared in one place.
+//  2. Two contexts, one slot. Inside `action { … }` the ambient _ctx must be
+//     the COMMAND (or `on_button()` means nothing), but the button also needs
+//     its WIDGET parent, and Aether exposes only builder_context() -- the top
+//     of the stack, with no way to reach one out. So `commands()` records the
+//     widget scope (in C, beside the AeCS current-sheet cell, since Aether has
+//     no top-level mutable module state) and `action()` captures it.
+//  3. `commands` is a plain function, not a `builder`: a builder runs its
+//     block FIRST and its body after, but the scope must be recorded BEFORE
+//     any `action` inside executes.
+//
+// AND THE PARENTHESES ARE LOAD-BEARING: `commands { … }` without them
+// compiles to a function-POINTER read and pushes no context, so everything
+// inside sees the enclosing scope instead. That silently segfaulted; see
+// ~/scm/aether/asks/zero-arg-fn-with-trailing-block-reads-fn-pointer.md.
+struct CommandGroup { cmds: ptr }
+
+_commands_factory() -> ptr {
+    g = malloc(8) as *CommandGroup
+    g.cmds = list.new()
+    return g as ptr
+}
+
+// commands() { … } — a scope holding related actions. Returns the group, so
+// command_group_set_enabled can grey the whole set (a File menu going inert
+// while a modal is up) -- the thing apps want and the thing that is tedious to
+// hand-roll.
+commands(_ctx: ptr) -> ptr {
+    aether_ui_commands_scope_set_impl(_ctx)
+    return _commands_factory()
+}
+
+// action(label, accel) { … } — declare a command inside a `commands()` scope.
+// The block runs with the COMMAND as _ctx.
+action(_ctx: ptr, label: string, accel: string) -> ptr {
+    cp = command(label, accel, || { })   // body supplied by does() in the block
+    c = cp as *Command
+    c.scope = aether_ui_commands_scope_get_impl()
+    if _ctx != 0 {
+        g = _ctx as *CommandGroup
+        _ = list.add(g.cmds, cp)
+    }
+    return cp
+}
+
+// does() callback { … } — what the ambient action actually does.
+does(_ctx: ptr, cb: fn) {
+    if _ctx == 0 { return }
+    c = _ctx as *Command
+    c.cb = box_closure(cb)
+}
+
+// on_button() — a button surface for the ambient command, attached to the
+// widget scope `commands()` was opened in.
+on_button(_ctx: ptr) -> int {
+    if _ctx == 0 { return 0 }
+    c = _ctx as *Command
+    h = btn(c.scope, c.label) callback { command_fire(_ctx) }
+    command_attach(_ctx, h)
+    return h
+}
+
+// on_menu_item(menu) — a menu-item surface for the ambient command.
+on_menu_item(_ctx: ptr, menu_handle: int) {
+    if _ctx == 0 { return }
+    menu_item_command(menu_handle, _ctx)
+}
+
+// command_group_set_enabled(group, 0|1) — grey every command in the group and,
+// through each, every surface it owns.
+command_group_set_enabled(gp: ptr, val: int) {
+    g = gp as *CommandGroup
+    n = list.size(g.cmds)
+    i = 0
+    while i < n {
+        cp, _e = list.get(g.cmds, i)
+        command_set_enabled(cp, val)
+        i = i + 1
+    }
 }
 
 // btn_command(ctx, cmd) — a button labelled and wired from the command.

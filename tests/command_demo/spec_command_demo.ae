@@ -94,6 +94,31 @@ main() {
             ok2 = uidriver.wait_body_contains("/widgets", "fired: 3", 20)
             spec.assert_true(ok2, "the keystroke works again")
         }
+
+        // ── the DECLARATIVE form (docs/guide/dsl-with-scope.md) ─────────
+        // Same feature, declared as structure rather than wired by handle.
+        // These assert the SCOPE resolved correctly: on_button() took the
+        // command's label and attached to the enclosing vstack, with neither
+        // passed to it.
+        spec.it("a declared action's button exists with the right label") callback {
+            h = uidriver.widget_id_by_text("Reload")
+            spec.assert_gt(h, 0, "on_button() built a button in the enclosing scope")
+            b = uidriver.get_body("/widget/${h}")
+            spec.assert_contains(b, "\"enabled\":true", "starts enabled")
+        }
+
+        spec.it("clicking a declared action fires its does() body") callback {
+            h = uidriver.widget_id_by_text("Reload")
+            uidriver.post_ok("/widget/${h}/click", "click Reload")
+            ok = uidriver.wait_body_contains("/widgets", "fired: 4", 20)
+            spec.assert_true(ok, "the does() callback ran")
+        }
+
+        spec.it("a declared action's accelerator fires the same body") callback {
+            _r = uidriver.window_key("Ctrl+R")
+            ok = uidriver.wait_body_contains("/widgets", "fired: 5", 20)
+            spec.assert_true(ok, "Ctrl+R reached the same command")
+        }
     }
     spec.run_summary(fw)
 }
