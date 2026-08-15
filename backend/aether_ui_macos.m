@@ -2152,6 +2152,9 @@ int aether_ui_navstack_depth(int handle) {
     return mac_nav_depth[handle - 1];
 }
 
+/* Defined with the other registry helpers below; navstack_pop needs it. */
+static void unregister_view_tree(NSView* v);
+
 void aether_ui_navstack_pop(int handle) {
     /* Was an empty stub: push replaced the container's subviews, and nothing
        ever put the previous page back, so a navstack could only go forwards.
@@ -2166,6 +2169,14 @@ void aether_ui_navstack_pop(int handle) {
     if (mac_nav_depth[handle - 1] <= 0) return;   // root: no-op, not underflow
     mac_nav_depth[handle - 1]--;
     for (NSView* sub in [[container subviews] copy]) {
+        /* UNREGISTER, not just detach. removeFromSuperview takes the views out
+           of the AppKit tree but leaves them in the widget registry, so
+           /widgets keeps counting a page that is gone and `pop SHRANK the
+           widget tree` fails while the UI looks right. Same defect the spec
+           caught on win32, where the fix was mark_subtree_dead. The AppKit
+           equivalent already existed (unregister_view_tree, written for
+           remove_child) -- pop simply was not calling it. */
+        unregister_view_tree(sub);
         [sub removeFromSuperview];
     }
 }
