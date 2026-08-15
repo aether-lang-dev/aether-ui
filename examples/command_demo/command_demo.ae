@@ -23,7 +23,6 @@ import ui (window, vstack, hstack, text, btn, divider,
     command, command_set_enabled, command_enabled, btn_command,
     enable_test_server)
 import std.os (os_getenv)
-import std.string
 
 extern aether_ui_text_set_string(handle: int, text: string)
 

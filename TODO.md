@@ -176,6 +176,30 @@ all green in 423s**, the first complete green run in a while. Fixed in
 0614443 + 6660265.
 
 
+## win32 cannot link ANY app after the ae 0.541.0 upgrade
+
+Every Aether program aeb links on Windows/MinGW now fails at the link step:
+
+    undefined reference to `__imp_SymFromAddr' / `__imp_SymInitialize' ...
+
+`runtime/aether_panic.c` symbolises panic stack traces through the DbgHelp
+API, so anything linking `libaether.a` needs `-ldbghelp`. Aether's own
+Makefile has it (`WIN_LINK_LIBS`, line 655) — which is why `ae run` works on
+the box — but the link line aeb builds for external programs does not.
+
+Not app-specific and not new code: `table_demo`, which built there before the
+upgrade, fails a clean rebuild the same way. The existing `.exe`s predate the
+upgrade and still RUN, so a matrix can look healthy while nothing can be
+rebuilt. Worth remembering when a "binary older than sources" warning appears
+on Windows — that warning may be the only symptom.
+
+Written up as an ask at `~/scm/aeb/asks/win32-link-needs-ldbghelp-after-0541.md`
+(not committed, per the standing rule on aeb asks).
+
+Blocks: win32 verification of `command` (SWING_ENVY C1), which is 6/0 green on
+GTK4 with its falsification test, and of anything else added from here until
+the flag lands.
+
 ## win32 goldens are stale (and were hiding behind a CRLF bug)
 
 `tests/goldens/win32/*.sig` no longer match what win32 renders. All four
