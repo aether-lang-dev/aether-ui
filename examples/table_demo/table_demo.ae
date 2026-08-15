@@ -10,6 +10,7 @@ import ui
 import ui (window, vstack, hstack, text, btn, divider,
     table_cols, table_col, table, table_update, table_selected, table_count,
     table_on_select, on_sort, table_sorter, table_sort_by, table_sort_col,
+    columns, col,
     table_sort_dir, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -109,9 +110,14 @@ main() {
             // sort + toggle without the app comparing anything. Numeric
             // columns sort numerically -- 30 < 95 < 100 rather than "100"
             // before "95" -- because the sorter parses the cell text.
-            scols = table_cols()
-            table_col(scols, "SName", 220)
-            table_col(scols, "SSize", 90)
+            // The DECLARATIVE form for the lower table's columns
+            // (docs/design/declarative-consistency-audit.md). The upper
+            // table above keeps the handle form -- both work, and having
+            // both here shows the difference in one file.
+            scols = columns() {
+                col("SName", 220)
+                col("SSize", 90)
+            }
             st = table(scols) callback |item: ptr, c: int| {
                 p = item as *Person
                 if c == 1 { return string.from_int(p.kb) }

@@ -33,7 +33,7 @@ to every line to do it. This is the shape `command` had before 2026-08-15.
 |---|---|---|
 | ~~**styles**~~ **DONE** | `s = create_styles(); st_bg(s,"container",0x…); st_color(s,"text",0x…)` | `styles() { bg("container", 0x…); color("text", 0x…) }` |
 | ~~**roles**~~ **DONE** | `sc = color_scheme(); role(sc,"primary",0x…)` | `scheme() { primary(0x…); on_primary(0x…) }` |
-| **table columns** (`table_col*`) | `cols = table_cols(); table_col(cols,"Name",220)` | `columns() { col("Name", 220) }` |
+| ~~**table columns**~~ **DONE** | `cols = table_cols(); table_col(cols,"Name",220)` | `columns() { col("Name", 220) }` |
 | **states** (`ui_states`/`add_state`) | `ws = ui_states(card); add_state(ws,"open",sheet)` | `states(card) { state("open") { … } }` |
 | ~~**menus**~~ **DONE** | `m = menu("File"); menu_item(m,"Save") callback {…}` | `menu("File") { item("Save") callback {…}; separator() }` |
 | **navstack** (`nav_push`) | `nav_push(nav, "Detail", body)` | `nav_page("Detail") { … }` |
@@ -76,7 +76,7 @@ The declarative `command` landed 2026-08-15 and is the template:
    over the same calls. `command` kept `btn_command(save)` alongside
    `on_button()`.
 
-### Four traps, all paid for once already
+### FIVE traps, all paid for once already
 
 * **`f(args) callback {…} {…}` is not a call shape** — one trailing block per
   call. Passing a callback *and* a block compiles and produces a broken call.
@@ -88,6 +88,20 @@ The declarative `command` landed 2026-08-15 and is the template:
   current-sheet cell, since Aether has no top-level mutable module state).
 * **Plain function, not `builder`,** when the scope must be recorded BEFORE
   the block runs — a `builder` runs its block first and its body after.
+* **A SHORT VERB NAME IS ONLY FREE IF NOTHING USES IT AS A LOCAL.** This one
+  cost a pushed regression. The menu scope added a global `item()`, but `item`
+  is the conventional PARAMETER name for a row in this tree — 16 call sites
+  (`table(cols) callback |item: ptr, c: int|`, plus listbox, each, tree). A
+  global function of that name shadows the parameter inside every one of those
+  closures, so `table_demo` read a menu function as a row pointer and
+  segfaulted at startup. Two more in the same batch: `weight` (the layout verb,
+  four real callers) and `font_size` (the ambient-widget styler). Renamed to
+  `menu_entry`, `font_weight`, `font_size_of`.
+
+  Checking `grep -cE "^name\("` on ui/module.ae is NOT enough — that finds
+  duplicate definitions, not parameter shadowing. Grep the examples and apps
+  for `|name:` and `name =` too.
+
 * **THE PARENTHESES ARE LOAD-BEARING.** `scope { … }` without them compiles to
   a function-POINTER read and pushes no context, so everything inside silently
   sees the enclosing scope. That segfaulted for a long bisect. Filed as an ae
@@ -105,5 +119,11 @@ inline (`aether_ui_widget_add_child_ctx` casts `(int)(intptr_t)ctx`). Any
 future scope whose ambient context is a HANDLE rather than a struct needs the
 same helper.
 
-**Remaining:** `columns` next (no widget entanglement). Then `states` and
-`navstack`, which both take a widget handle and will want the same extern.
+**Done 2026-08-15:** `styles`, `scheme`, `menus`, `columns` — four of six.
+
+**Remaining:** `states` and `navstack`, which both take a widget handle and
+will want the `aether_ui_ctx_to_handle_impl` extern the menu scope added.
+
+**Run the FULL matrix before pushing a scope, not just its own suite.** The
+menu scope passed `menu` 5/0 and broke `table_demo` at startup; only the full
+run would have shown it.

@@ -58,11 +58,11 @@ main() {
     // repeating the handle. Compare the File and Edit menus above, which use
     // the handle form -- both work, and both are here on purpose.
     help_menu = ui.menu("Help") {
-        ui.item("About") callback {
+        ui.menu_entry("About") callback {
             ui.alert("About", "Aether UI menu demo")
         }
         ui.separator()
-        ui.item("Shortcuts") callback {
+        ui.menu_entry("Shortcuts") callback {
             ui.alert("Shortcuts", "Ctrl+N new, Ctrl+S save")
         }
     }

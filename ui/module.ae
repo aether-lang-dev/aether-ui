@@ -43,7 +43,7 @@ exports (
     st_radius, st_font_family, st_opacity, st_gradient, st_insets, st_border,
     st_hover, st_active,
     apply_styles, style_id, styles_for_mode,
-    styles, color, bg, font_size, weight, bold, family, radius,
+    styles, color, bg, font_size_of, font_weight, bold, family, radius,
     opacity_of, border, hover, active,
     scheme, primary, on_primary, surface, on_surface, error_role,
     on_error, accent, outline, custom,
@@ -77,6 +77,7 @@ exports (
     on_row_double_click, on_reorder,
     on_select, add_css_class, remove_css_class,
     table_cols, table_col, table_col_delegate, table, table_update,
+    columns, col, col_delegate,
     table_select, table_selected, table_count, table_on_select, table_bind,
     table_sorter, table_sorter_cmp, table_sort_by, table_sort_col,
     table_sort_dir,
@@ -99,7 +100,7 @@ exports (
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
-    item, item_accel, separator, item_command,
+    menu_entry, menu_entry_accel, separator, menu_entry_command,
     menu_bar_add, attach_menu_bar, attach_menu_bar_to_window, menu_popup,
     root_grid, grid, grid_place,
     tray_icon, tray_set_tooltip, tray_set_menu,
@@ -1781,8 +1782,13 @@ styles() -> ptr {
 // scope rather than passed.
 color(_ctx: ptr, sel: string, hex: int)        { st_color(_ctx, sel, hex) }
 bg(_ctx: ptr, sel: string, hex: int)           { st_bg(_ctx, sel, hex) }
-font_size(_ctx: ptr, sel: string, size: float) { st_font_size(_ctx, sel, size) }
-weight(_ctx: ptr, sel: string, bold: int)      { st_weight(_ctx, sel, bold) }
+font_size_of(_ctx: ptr, sel: string, size: float) { st_font_size(_ctx, sel, size) }
+// NB `font_weight`, not `weight`: the layout verb weight(handle, n) already
+// owns that name and has real callers (split_demo, LisMusic). Defining it
+// twice compiled silently and shadowed the layout one -- table_demo segfaulted
+// at startup because its column widths went through a function expecting a
+// selector string. Check for collisions before adding a short verb name.
+font_weight(_ctx: ptr, sel: string, bold: int) { st_weight(_ctx, sel, bold) }
 bold(_ctx: ptr, sel: string)                   { st_bold(_ctx, sel) }
 family(_ctx: ptr, sel: string, fam: string)    { st_font_family(_ctx, sel, fam) }
 radius(_ctx: ptr, sel: string, r: float)       { st_radius(_ctx, sel, r) }
@@ -3205,6 +3211,36 @@ table_col(cols: ptr, title: string, w: int) {
 // table_col_delegate(cols, title, w, render): a column whose cells are built by
 // `render` (|item, i, cell| — build widgets into `cell`, a per-cell hstack)
 // instead of the string cell(). For %-bars, chips, buttons, anything custom.
+// ── DECLARATIVE column scope ────────────────────────────────────────
+// `table_cols()` returns the column list, which Aether pushes as _ctx for a
+// trailing block -- so the columns only need scope-aware verbs:
+//
+//   cols = columns() {
+//       col("Name", 220)
+//       col("Size", 90)
+//       col_delegate("Actions", 120) callback |item: ptr, i: int, cell: int| { … }
+//   }
+//   t = table(cols) callback |item: ptr, c: int| { … }
+//
+// against table_col(cols, "Name", 220) repeating the handle. Same calls; the
+// handle forms stay. NB the PARENTHESES on columns() -- see the audit doc.
+
+// columns() { … } — a column spec, declared.
+columns() -> ptr { return table_cols() }
+
+// col(title, width) — a plain text column on the ambient spec.
+col(_ctx: ptr, title: string, w: int) {
+    if _ctx == 0 { return }
+    table_col(_ctx, title, w)
+}
+
+// col_delegate(title, width) callback |item, i, cell| { … } — a column whose
+// cells are built by the app, on the ambient spec.
+col_delegate(_ctx: ptr, title: string, w: int, render: fn) {
+    if _ctx == 0 { return }
+    table_col_delegate(_ctx, title, w, render)
+}
+
 table_col_delegate(cols: ptr, title: string, w: int, render: fn) {
     c = malloc(24) as *TableCol
     c.title = title
@@ -4007,10 +4043,10 @@ menu_item_accel(menu_handle: int, label: string, accel: string, on_press: fn) {
 //
 //   bar = menu_bar()
 //   f = menu("File") {
-//       item("New")  callback { new_doc() }
-//       item("Save", "Ctrl+S") callback { save() }
+//       menu_entry("New")  callback { new_doc() }
+//       menu_entry_accel("Save", "Ctrl+S") callback { save() }
 //       separator()
-//       item("Quit") callback { quit() }
+//       menu_entry("Quit") callback { quit() }
 //   }
 //   menu_bar_add(bar, f)
 //
@@ -4018,14 +4054,21 @@ menu_item_accel(menu_handle: int, label: string, accel: string, on_press: fn) {
 // handle forms stay. NB `menu("File") { … }` has an argument, so the
 // parens-are-load-bearing trap does not apply here.
 
-// item(label) callback { … } — a menu item on the ambient menu.
-item(_ctx: ptr, label: string, on_press: fn) {
+// menu_entry(label) callback { … } — an item on the ambient menu.
+//
+// NB NOT `item`: that word is the conventional PARAMETER name for a row in
+// this tree (16 call sites -- `table(cols) callback |item: ptr, c: int|`,
+// listbox, each, tree). A global `item()` shadows the parameter inside every
+// one of those closures, so table_demo segfaulted reading a menu function as
+// a row pointer. A short verb name is only free if nothing else already uses
+// it as a local.
+menu_entry(_ctx: ptr, label: string, on_press: fn) {
     if _ctx == 0 { return }
     menu_item(aether_ui_ctx_to_handle_impl(_ctx), label, on_press)
 }
 
-// item_accel(label, accel) callback { … } — an item that also binds its key.
-item_accel(_ctx: ptr, label: string, accel: string, on_press: fn) {
+// menu_entry_accel(label, accel) callback { … } — an entry that also binds its key.
+menu_entry_accel(_ctx: ptr, label: string, accel: string, on_press: fn) {
     if _ctx == 0 { return }
     menu_item_accel(aether_ui_ctx_to_handle_impl(_ctx), label, accel, on_press)
 }
@@ -4036,9 +4079,9 @@ separator(_ctx: ptr) {
     menu_separator(aether_ui_ctx_to_handle_impl(_ctx))
 }
 
-// item_command(cmd) — a menu item wired to a `command`, on the ambient menu.
+// menu_entry_command(cmd) — an entry wired to a `command`, on the ambient menu.
 // The command form of the same verb, so a File menu can mix both.
-item_command(_ctx: ptr, cp: ptr) {
+menu_entry_command(_ctx: ptr, cp: ptr) {
     if _ctx == 0 { return }
     menu_item_command(aether_ui_ctx_to_handle_impl(_ctx), cp)
 }
