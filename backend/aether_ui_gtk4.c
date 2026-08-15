@@ -904,7 +904,11 @@ int aeui_ctx_menu_activate(int handle, int idx) {
     ctx_menu_close(cm);
     AeClosure* c = (AeClosure*)g_ptr_array_index(cm->closures, idx);
     if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
-    return 0;
+    /* 1 = activated. The shared server tests `!act.retval` and 404s on false
+       (win32 sets retval=1 here for exactly that reason), so returning the
+       C-idiomatic 0-for-success reported EVERY successful activation as
+       "no such context menu item" -- the whole of context_menu's 1/3 RED. */
+    return 1;
 }
 
 static void on_ctx_menu_owner_destroy(GtkWidget* owner, gpointer data) {
@@ -6588,6 +6592,53 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             wr.w = ctx->ival; wr.h = ctx->ival2;
             window_resize_idle(&wr);
             ctx->result = wr.result; ctx->done = 1;
+            return;
+        }
+
+        /* The canvas verbs and PICK have their own *_idle handlers too, and
+           were orphaned by the same deletion. Their routes answered
+           "not wired on this backend" / "no such context menu item", which
+           is what kept context_menu, overlay and vg_tooltip red. */
+        case AETHER_DRV_CANVAS_CLICK: {
+            CanvasClickAction ca = {0};
+            ca.canvas_id = ctx->handle; ca.x = ctx->dval; ca.y = ctx->dval2;
+            canvas_click_idle(&ca);
+            ctx->result = ca.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_MOVE: {
+            CanvasClickAction ca = {0};
+            ca.canvas_id = ctx->handle; ca.x = ctx->dval; ca.y = ctx->dval2;
+            canvas_move_idle(&ca);
+            ctx->result = ca.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_RELEASE: {
+            CanvasClickAction ca = {0};
+            ca.canvas_id = ctx->handle; ca.x = ctx->dval; ca.y = ctx->dval2;
+            canvas_release_idle(&ca);
+            ctx->result = ca.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_KEY: {
+            CanvasKeyAction ka = {0};
+            ka.canvas_id = ctx->handle;
+            strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
+            canvas_key_idle(&ka);
+            ctx->result = ka.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_PICK: {
+            /* PICK returns THREE values: handle, the widget type string, and
+               whether an overlay scrim intercepted. ival2 is both an input
+               (y) and an output (on_scrim) -- read y before overwriting. */
+            PickAction pa = {0};
+            pa.x = (double)ctx->ival; pa.y = (double)ctx->ival2;
+            window_pick_idle(&pa);
+            ctx->retval = pa.handle;
+            ctx->ival2  = pa.on_scrim;
+            strncpy(ctx->sval, pa.type, sizeof(ctx->sval) - 1);
+            ctx->result = 0; ctx->done = 1;
             return;
         }
         default:
