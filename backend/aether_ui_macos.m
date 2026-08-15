@@ -2402,6 +2402,7 @@ void aether_ui_set_height(int handle, int height) {
 // Implicit-transition lookups — defined with apply_css, which records them.
 static int aeui_opacity_transition_ms(int handle);
 static int aeui_opacity_transition_ease_out(int handle);
+static int aeui_opacity_transition_spring(int handle);
 static void aeui_start_opacity_tween(NSView* v, int handle,
                                      double from, double to, int ms, int ease_out,
                                      int spring);
