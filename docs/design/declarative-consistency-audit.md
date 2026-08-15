@@ -31,11 +31,11 @@ to every line to do it. This is the shape `command` had before 2026-08-15.
 
 | family | today | wants |
 |---|---|---|
-| **styles** (`st_*`, 13) | `s = create_styles(); st_bg(s,"container",0x…); st_color(s,"text",0x…)` | `styles() { bg("container", 0x…); color("text", 0x…) }` |
-| **roles** (`role`) | `sc = color_scheme(); role(sc,"primary",0x…)` | `scheme() { primary(0x…); on_primary(0x…) }` |
+| ~~**styles**~~ **DONE** | `s = create_styles(); st_bg(s,"container",0x…); st_color(s,"text",0x…)` | `styles() { bg("container", 0x…); color("text", 0x…) }` |
+| ~~**roles**~~ **DONE** | `sc = color_scheme(); role(sc,"primary",0x…)` | `scheme() { primary(0x…); on_primary(0x…) }` |
 | **table columns** (`table_col*`) | `cols = table_cols(); table_col(cols,"Name",220)` | `columns() { col("Name", 220) }` |
 | **states** (`ui_states`/`add_state`) | `ws = ui_states(card); add_state(ws,"open",sheet)` | `states(card) { state("open") { … } }` |
-| **menus** (`menu_item*`) | `m = menu("File"); menu_item(m,"Save") callback {…}` | `menu("File") { item("Save") callback {…} }` |
+| ~~**menus**~~ **DONE** | `m = menu("File"); menu_item(m,"Save") callback {…}` | `menu("File") { item("Save") callback {…}; separator() }` |
 | **navstack** (`nav_push`) | `nav_push(nav, "Detail", body)` | `nav_page("Detail") { … }` |
 
 The pattern is identical in each: a factory returns a handle, and every
@@ -97,8 +97,13 @@ The declarative `command` landed 2026-08-15 and is the template:
 
 ## Sequencing
 
-`styles` and `scheme` first — they are the most-written-by-hand (every themed
-app has one) and have no widget-scope entanglement, so they need neither the
-captured-scope trick nor any C. `columns` next. `menus`, `states` and
-`navstack` involve widget handles and should follow once the simpler three
-have proven the shape a second time.
+**Done 2026-08-15:** `styles`, `scheme`, `menus`. The first two needed no C at
+all. `menus` needed one small extern — a builder `_ctx` is an opaque `void*`
+but a menu handle is an `int`, and Aether will not cast between them, so
+`aether_ui_ctx_to_handle_impl` does in C what the widget path already did
+inline (`aether_ui_widget_add_child_ctx` casts `(int)(intptr_t)ctx`). Any
+future scope whose ambient context is a HANDLE rather than a struct needs the
+same helper.
+
+**Remaining:** `columns` next (no widget entanglement). Then `states` and
+`navstack`, which both take a widget handle and will want the same extern.

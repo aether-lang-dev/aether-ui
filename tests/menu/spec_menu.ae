@@ -55,6 +55,17 @@ main() {
             ok = uidriver.wait_body_contains("/widgets", "Actions taken: 1", 20)
             spec.assert_true(ok, "Undo's closure ran — counter back to 1")
         }
+
+        // The DECLARATIVE menu scope: the Help menu is built with the menu as
+        // ambient context (`menu("Help") { item("About") … }`) rather than by
+        // repeating the handle on every line. This asserts the scope resolved
+        // -- both items reached the right menu with nothing passed to them.
+        spec.it("a DECLARED menu carries its items") callback {
+            b = uidriver.get_body("/menus")
+            spec.assert_contains(b, "\"About\"", "declared item present")
+            spec.assert_contains(b, "\"Shortcuts\"",
+                "the second declared item is on the SAME menu")
+        }
     }
     spec.run_summary(fw)
 }

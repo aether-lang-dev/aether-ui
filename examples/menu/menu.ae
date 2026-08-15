@@ -53,9 +53,18 @@ main() {
     }
     ui.menu_bar_add(bar, edit_menu)
 
-    help_menu = ui.menu("Help")
-    ui.menu_item(help_menu, "About") callback {
-        ui.alert("About", "Aether UI menu demo")
+    // The DECLARATIVE form (docs/design/declarative-consistency-audit.md):
+    // the menu is the ambient scope, so items name themselves rather than
+    // repeating the handle. Compare the File and Edit menus above, which use
+    // the handle form -- both work, and both are here on purpose.
+    help_menu = ui.menu("Help") {
+        ui.item("About") callback {
+            ui.alert("About", "Aether UI menu demo")
+        }
+        ui.separator()
+        ui.item("Shortcuts") callback {
+            ui.alert("Shortcuts", "Ctrl+N new, Ctrl+S save")
+        }
     }
     ui.menu_bar_add(bar, help_menu)
 

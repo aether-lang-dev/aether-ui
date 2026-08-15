@@ -99,6 +99,7 @@ exports (
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
+    item, item_accel, separator, item_command,
     menu_bar_add, attach_menu_bar, attach_menu_bar_to_window, menu_popup,
     root_grid, grid, grid_place,
     tray_icon, tray_set_tooltip, tray_set_menu,
@@ -272,6 +273,7 @@ extern aether_ui_widget_classes_impl(handle: int) -> string
 extern aether_ui_current_sheet_set_impl(sheet: ptr)
 extern aether_ui_commands_scope_set_impl(scope: ptr)
 extern aether_ui_commands_scope_get_impl() -> ptr
+extern aether_ui_ctx_to_handle_impl(ctx: ptr) -> int
 extern aether_ui_current_sheet_get_impl() -> ptr
 extern aether_ui_appearance_register_impl(boxed_closure: ptr)
 extern aether_ui_undo_push_impl(label: string, undo_boxed: ptr, redo_boxed: ptr)
@@ -3997,6 +3999,48 @@ menu_item_accel(menu_handle: int, label: string, accel: string, on_press: fn) {
     boxed = box_closure(on_press)
     aether_ui_menu_add_item(menu_handle, shown, boxed)
     aether_ui_shortcut_impl(accel, boxed)
+}
+
+// ── DECLARATIVE menu scope ──────────────────────────────────────────
+// `menu(label)` already returns the menu handle, which Aether pushes as _ctx
+// for a trailing block — so the items only need scope-aware forms:
+//
+//   bar = menu_bar()
+//   f = menu("File") {
+//       item("New")  callback { new_doc() }
+//       item("Save", "Ctrl+S") callback { save() }
+//       separator()
+//       item("Quit") callback { quit() }
+//   }
+//   menu_bar_add(bar, f)
+//
+// against menu_item(f,"New") callback {…} on every line. Same calls, and the
+// handle forms stay. NB `menu("File") { … }` has an argument, so the
+// parens-are-load-bearing trap does not apply here.
+
+// item(label) callback { … } — a menu item on the ambient menu.
+item(_ctx: ptr, label: string, on_press: fn) {
+    if _ctx == 0 { return }
+    menu_item(aether_ui_ctx_to_handle_impl(_ctx), label, on_press)
+}
+
+// item_accel(label, accel) callback { … } — an item that also binds its key.
+item_accel(_ctx: ptr, label: string, accel: string, on_press: fn) {
+    if _ctx == 0 { return }
+    menu_item_accel(aether_ui_ctx_to_handle_impl(_ctx), label, accel, on_press)
+}
+
+// separator() — a divider on the ambient menu.
+separator(_ctx: ptr) {
+    if _ctx == 0 { return }
+    menu_separator(aether_ui_ctx_to_handle_impl(_ctx))
+}
+
+// item_command(cmd) — a menu item wired to a `command`, on the ambient menu.
+// The command form of the same verb, so a File menu can mix both.
+item_command(_ctx: ptr, cp: ptr) {
+    if _ctx == 0 { return }
+    menu_item_command(aether_ui_ctx_to_handle_impl(_ctx), cp)
 }
 
 // Add a horizontal separator between menu items.

@@ -390,6 +390,13 @@ static void* aeui_commands_scope = NULL;
 void aether_ui_commands_scope_set_impl(void* scope) { aeui_commands_scope = scope; }
 void* aether_ui_commands_scope_get_impl(void) { return aeui_commands_scope; }
 
+// A builder _ctx is an opaque void*, but a widget/menu handle is an int -- and
+// Aether will not cast between ptr and int. The widget path already does this
+// conversion in C (aether_ui_widget_add_child_ctx does `(int)(intptr_t)ctx`);
+// this exposes the same one for DSL scopes whose ambient context is a handle
+// rather than a struct, e.g. `menu("File") { item("Save") … }`.
+int aether_ui_ctx_to_handle_impl(void* ctx) { return (int)(intptr_t)ctx; }
+
 // Single-slot appearance callback (|dark: int| closure) + the driver's
 // override (-1 = follow the OS; 0/1 forced via POST /appearance).
 static void* appearance_boxed = NULL;

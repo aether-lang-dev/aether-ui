@@ -3,9 +3,17 @@
 Tracked items not yet built. Fuller context: the toolkit-inspired backlog in
 roadmap.md.
 
-Spec-matrix state 2026-08-15: **GTK4 303/0 all green** (423s). win32 and macOS
-per their own runs — both were brought to ae 0.541.0 and current aether-ui the
-same day, macOS for the first time in ~60 commits.
+Spec-matrix state 2026-08-15, all on ae 0.541.0:
+
+| backend | result |
+|---|---|
+| GTK4  | **303/0 all green** (423s) |
+| macOS | **312/0 all green** (175s) |
+| win32 | 298/2 — `golden` only (stale goldens, awaiting a human eye on the PNGs) |
+
+macOS ran for the first time in ~60 commits and immediately found a real
+navstack bug (pop detached pages without unregistering them, so the widget
+census never shrank). Worth keeping in the rotation.
 
 ## Golden-image tests (Flutter-style visual regression) — DONE 2026-08-01
 
