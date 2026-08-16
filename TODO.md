@@ -238,6 +238,29 @@ why.** Recorded in full because the next attempt should not re-derive it:
 The imperative API stays and is green (6/0, with its falsification test), so
 this is additive work, not a fix.
 
+## This box builds with 0.543 unless you say otherwise (deliberate)
+
+`~/.local/bin/{ae,aetherc}` is v0.543.0 and comes FIRST on PATH, ahead of
+`/usr/local/bin`'s v0.544.0. `~/.aether/active_version` also pins 0.543.0, and
+the version manager treats that file as authoritative — so `ae --version`
+reports 0.543.0 even from a freshly installed 0.544.0 tree, and every `aeb`
+build silently uses the older compiler.
+
+Left as-is on purpose (2026-08-16). To build with 0.544.0:
+
+    PATH=/usr/local/bin:$PATH aeb <target>
+
+**Why it matters right now:** ae 0.544.0 carries the #1606 fix (a closure
+parameter now shadows a same-named module-level function). Without the
+override, code that relies on it still miscompiles here — the closure passes
+the FUNCTION ADDRESS where the parameter's value belongs, which type-checks
+cleanly and dies later in the string runtime. Verified both ways on
+`examples/table_demo`: `ui__table_invoke_cell(cf, ui_item, cj)` with the old
+compiler, `(cf, item, cj)` with the new one.
+
+Not a blocker for current work: the tree renamed around #1606 (`menu_entry`
+rather than `item`), so nothing in it depends on the fix today.
+
 ## win32 cannot link ANY app after the ae 0.541.0 upgrade
 
 Every Aether program aeb links on Windows/MinGW now fails at the link step:

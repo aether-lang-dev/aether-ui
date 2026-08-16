@@ -88,19 +88,34 @@ The declarative `command` landed 2026-08-15 and is the template:
   current-sheet cell, since Aether has no top-level mutable module state).
 * **Plain function, not `builder`,** when the scope must be recorded BEFORE
   the block runs — a `builder` runs its block first and its body after.
-* **A SHORT VERB NAME IS ONLY FREE IF NOTHING USES IT AS A LOCAL.** This one
-  cost a pushed regression. The menu scope added a global `item()`, but `item`
-  is the conventional PARAMETER name for a row in this tree — 16 call sites
-  (`table(cols) callback |item: ptr, c: int|`, plus listbox, each, tree). A
-  global function of that name shadows the parameter inside every one of those
-  closures, so `table_demo` read a menu function as a row pointer and
-  segfaulted at startup. Two more in the same batch: `weight` (the layout verb,
-  four real callers) and `font_size` (the ambient-widget styler). Renamed to
-  `menu_entry`, `font_weight`, `font_size_of`.
+* **~~A short verb name is only free if nothing uses it as a local~~ — that
+  was an AETHER BUG, fixed in 0.544.0 (#1606).** Recorded because the wrong
+  lesson is worse than none.
 
-  Checking `grep -cE "^name\("` on ui/module.ae is NOT enough — that finds
-  duplicate definitions, not parameter shadowing. Grep the examples and apps
-  for `|name:` and `name =` too.
+  The menu scope added a global `item()`, and `item` is the conventional
+  parameter name for a row here (16 call sites:
+  `table(cols) callback |item: ptr, c: int|`, plus listbox, each, tree).
+  `table_demo` then segfaulted at startup. I called it "a global shadows the
+  parameter" and renamed to `menu_entry` — which fixed the symptom while
+  getting the cause wrong.
+
+  What was actually happening: aetherc's `rename_intra_module_refs` rewrote
+  `item` inside the closure to the namespaced `<ns>_item`, because
+  `collect_local_names` did not recognise `AST_CLOSURE_PARAM` as a local
+  binding and closures established no scope of their own. So the closure passed
+  **the address of the function** where the parameter's value belonged. It
+  compiled and type-checked cleanly, and the callee read a function pointer as
+  data. Closures now establish a scope that extends the enclosing one.
+
+  So a same-named module function and closure parameter is FINE from 0.544.0
+  on. The renames stay (`menu_entry` reads better than `item` anyway, and
+  `weight`/`font_size` were genuine duplicate definitions — a different and
+  still-real problem), but nobody needs to grep for `|name:` before adding a
+  verb.
+
+  The transferable lesson is about method, not naming: **the generated C being
+  byte-identical apart from one identifier is what proved this was not mine.**
+  Reaching for that diff early would have saved a long bisect.
 
 * **THE PARENTHESES ARE LOAD-BEARING.** `scope { … }` without them compiles to
   a function-POINTER read and pushes no context, so everything inside silently
