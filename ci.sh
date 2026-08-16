@@ -237,6 +237,7 @@ if pkg-config --exists gtk4 2>/dev/null; then
         fi
         if ! gcc $(pkg-config --cflags gtk4) "$cfile" \
                 backend/aether_ui_gtk4.c backend/aether_ui_system_extras.c backend/aether_ui_sni.c \
+                backend/aether_ui_test_server.c \
                 $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (link)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
@@ -299,8 +300,18 @@ if [ "$PLATFORM" = "linux" ]; then
     echo "  --- AeVG headless renderers (run → PNG) ---"
     run_png() {  # $1=app $2=desc
         local bin; bin="$(AEVG_BIN "$1")"
+        # HONOUR $LAUNCH_PREFIX like every other runtime phase. "Headless
+        # renderer" means no WINDOW -- GTK still needs a display connection to
+        # initialise, so on a DISPLAY-less box these died with
+        # "Gtk-WARNING: cannot open display" while every other phase was
+        # correctly wrapped in xvfb-run. Found by the first fresh-box run
+        # (asks/ci-sh-on-a-fresh-headless-box.md).
+        if [ "$LAUNCH_PREFIX" = "SKIP_RUNTIME" ]; then
+            echo "  SKIP $1 ($2 — no display, no xvfb-run)"
+            return
+        fi
         if [ -x "$bin" ] \
-                && AEVG_OUT="/tmp/ci_$1.png" "$bin" > "/tmp/ci_run_$1.log" 2>&1 \
+                && AEVG_OUT="/tmp/ci_$1.png" $LAUNCH_PREFIX "$bin" > "/tmp/ci_run_$1.log" 2>&1 \
                 && [ -f "/tmp/ci_$1.png" ]; then
             echo "  OK   $1 ($2)"
         else
