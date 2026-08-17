@@ -18,7 +18,7 @@ main() {
     uidriver.wait_server()
     spec.describe(fw, "auto_hide_demo (ui.edge) over AetherUIDriver") {
         spec.it("title and initial status label are present") callback {
-            title = uidriver.widget_id_by_text("Edge zone demo")
+            title = uidriver.widget_id_by_text("Edge zone demo, move mouse towards left-edge...")
             status = uidriver.widget_id_by_text("(hover the left edge)")
             spec.assert_gt(title, 0, "title found")
             spec.assert_gt(status, 0, "status label found in its initial state")
