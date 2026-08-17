@@ -5265,18 +5265,43 @@ static gboolean fire_appearance_idle(gpointer data) {
 
 // Undo/redo driver fire — marshalled to the GTK thread (edit closures
 // mutate widgets); the HTTP thread spins on done like the other idles.
-typedef struct { int redo; int did; volatile int done; } AeuiUndoReq;
+/* HEAP-allocated, and owned by whoever gives up on it last. The waiter used
+   to pass a STACK struct and spin `while (!r.done)` forever; if the idle never
+   ran, the HTTP thread hung and the app kept the driver port open until
+   killed. Observed 2026-08-17: undo_demo held port 9222 for 15 minutes
+   mid-matrix (main thread in hrtimer_nanosleep, i.e. the g_usleep), which
+   stalls every LATER suite -- the aeci ask filed the same hang from a fresh
+   headless box.
+
+   Bounding the wait means the waiter can return while the callback is still
+   queued, so the request cannot live on the waiter's stack. `abandoned` is the
+   handshake: whichever side finishes second frees it. */
+typedef struct {
+    int redo; int did; volatile int done; volatile int abandoned;
+} AeuiUndoReq;
 static gboolean aeui_undo_idle(gpointer data) {
     AeuiUndoReq* r = (AeuiUndoReq*)data;
+    if (r->abandoned) { g_free(r); return G_SOURCE_REMOVE; }
     r->did = r->redo ? aether_ui_redo_step_impl() : aether_ui_undo_step_impl();
     r->done = 1;
     return G_SOURCE_REMOVE;
 }
 static int aeui_fire_undo_redo(int redo) {
-    AeuiUndoReq r = { redo, 0, 0 };
-    g_idle_add(aeui_undo_idle, &r);
-    while (!r.done) g_usleep(1000);
-    return r.did;
+    AeuiUndoReq* r = g_new0(AeuiUndoReq, 1);
+    r->redo = redo;
+    g_idle_add(aeui_undo_idle, r);
+    /* ~2s at 1ms. An undo step is a closure call on an idle callback; if the
+       loop has not serviced it by then it is not going to, and answering the
+       driver beats hanging it. */
+    int spins = 0;
+    while (!r->done && spins < 2000) { g_usleep(1000); spins++; }
+    if (!r->done) {
+        r->abandoned = 1;      /* the idle frees it if it ever runs */
+        return 0;              /* "nothing was undone" -- honest, and 200s */
+    }
+    int did = r->did;
+    g_free(r);
+    return did;
 }
 int aether_ui_fire_undo(void) { return aeui_fire_undo_redo(0); }
 int aether_ui_fire_redo(void) { return aeui_fire_undo_redo(1); }
