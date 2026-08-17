@@ -1,0 +1,12 @@
+# star — ported from Swiby's demo/turtle/examples/star.turtle
+# (repeat(N){...} -> repeat N [ ... ], otherwise unchanged)
+
+back 70
+
+repeat 12 [
+    repeat 160 [
+        fd 100
+        rt 100
+    ]
+    rt 60
+]

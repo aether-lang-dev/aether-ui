@@ -1,0 +1,98 @@
+// Aether UI edge-zone example — built on ui.edge(): one thin detection zone
+// pinned to an edge, with a status label reflecting its enter/leave events,
+// a handle that fades in over the zone while hovering, and a click-to-open
+// sidebar with its own Close button. All of this — the handle, the click
+// binding, the sidebar — is application-level policy built ON TOP of
+// edge(), not part of the primitive; edge() itself only does enter/leave
+// detection.
+//
+// Try changing "left" below to "right", "top", or "bottom" — that's the
+// whole point of edge() being a self-positioning container: nothing else
+// in this file needs to change for the zone to move to the correct edge.
+//
+// Build and run:
+//   ./build.sh examples/auto_hide_demo/auto_hide_demo.ae build/auto_hide_demo
+
+import ui
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+
+// A malloc'd struct for this state even though this app has no other
+// escaping state: edge()'s callback and the retry timer are both created
+// before the widgets they reference are built. A closure that only reads a
+// not-yet-assigned plain local captures its pre-assignment value
+// permanently — a struct field access is always a live read regardless of
+// build order, which is the only reason to reach for one on something this
+// small.
+struct DemoState {
+    status: int
+    handle_wrap: int
+    retry_timer: int
+    sidebar: int
+}
+
+main() {
+    ui.window("Edge Zone Demo", 420, 300) {
+        d = malloc(32) as *DemoState
+        d.status = 0
+        d.handle_wrap = 0
+        d.retry_timer = 0
+        d.sidebar = 0
+
+        _, content = ui.edge("left", 24) callback |entered: int| {
+            if entered == 1 {
+                ui.set_text(d.status, "enter area")
+                ui.style_opacity(d.handle_wrap, 1.0)
+            } else {
+                ui.set_text(d.status, "exit area")
+                ui.style_opacity(d.handle_wrap, 0.0)
+            }
+        }
+
+        // The handle is a small rounded pill (bg + corner radius)
+        d.handle_wrap = ui.vstack(0)
+        ui.style_bg_color(d.handle_wrap, 0.25, 0.45, 0.85, 1.0)
+        ui.style_corner_radius(d.handle_wrap, 8.0)
+        ui.margin_of(d.handle_wrap, 10, 6, 10, 6)
+        glyph = ui.text(d.handle_wrap, ">")
+        ui.style_font_bold(glyph)
+        ui.style_text_color(glyph, 1.0, 1.0, 1.0)
+        ui.style_opacity(d.handle_wrap, 0.0)
+        ui.transition(d.handle_wrap, "opacity", 220, "ease_out")
+
+        // Click the handle to open the sidebar.
+        d.sidebar = ui.vstack(0)
+        ui.width(d.sidebar, 180)
+        ui.style_bg_color(d.sidebar, 0.12, 0.14, 0.19, 1.0)
+        ui.margin_of(d.sidebar, 16, 16, 16, 16)
+        ui.set_hidden(d.sidebar, 1)
+
+        sb_title = ui.text(d.sidebar, "Sidebar")
+        ui.style_font_bold(sb_title)
+        ui.spacer(d.sidebar)
+        ui.btn(d.sidebar, "Close") callback {
+            ui.set_hidden(d.sidebar, 1)
+        }
+
+        ui.on_click(d.handle_wrap) callback {
+            ui.set_hidden(d.sidebar, 0)
+        }
+
+        d.retry_timer = ui.timer(30) callback {
+            ov = ui.overlay(0, d.handle_wrap, "start", 6, 0)
+            if ov != 0 {
+                _ = ui.overlay(0, d.sidebar, "top-start", 0, 0)
+                _ = ui.overlay(0, d.sidebar, "bottom-start", 0, 0)
+                ui.timer_cancel(d.retry_timer)
+            }
+        }
+
+        title = ui.text(content, "Edge zone demo, move mouse towards left-edge...")
+        ui.style_font_bold(title)
+        d.status = ui.text(content, "(hover the left edge)")
+        ui.margin_of(content, 16, 16, 16, 16)
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { ui.enable_test_server(9222) }
+    }
+}

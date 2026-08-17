@@ -1,0 +1,47 @@
+// Spec for examples/auto_hide_demo — the ui.edge() case with a click-to-open
+// sidebar built on top of it.
+//
+// The hover-driven parts (zone enter/leave, the handle's fade) can't be
+// driven over HTTP — the AetherUIDriver has no route to simulate a pointer
+// enter/leave, only click-style routes (same limitation as every hover-based
+// example in this repo, see TODO.md) — so those stay structural-only: assert
+// the zone/status/handle exist and start in the right state; the real hover
+// interaction needs a human. But the sidebar's open/close IS a click, which
+// the driver CAN simulate end to end — so that part gets a real assertion,
+// not just a presence check.
+
+import std.spec
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "auto_hide_demo (ui.edge) over AetherUIDriver") {
+        spec.it("title and initial status label are present") callback {
+            title = uidriver.widget_id_by_text("Edge zone demo")
+            status = uidriver.widget_id_by_text("(hover the left edge)")
+            spec.assert_gt(title, 0, "title found")
+            spec.assert_gt(status, 0, "status label found in its initial state")
+        }
+
+        spec.it("clicking the handle opens the sidebar; Close hides it again") callback {
+            glyph = uidriver.widget_id_by_text(">")
+            handle = uidriver.widget_int_field_by_id(glyph, "parent")
+            sb_title = uidriver.widget_id_by_text("Sidebar")
+            close_btn = uidriver.widget_id_by_text("Close")
+            sidebar = uidriver.widget_int_field_by_id(sb_title, "parent")
+
+            spec.assert_eq(uidriver.widget_bool_by_id(sidebar, "visible"), 0,
+                "sidebar starts hidden")
+
+            uidriver.click_widget(handle)
+            spec.assert_eq(uidriver.widget_bool_by_id(sidebar, "visible"), 1,
+                "sidebar visible after clicking the handle")
+
+            uidriver.click_widget(close_btn)
+            spec.assert_eq(uidriver.widget_bool_by_id(sidebar, "visible"), 0,
+                "sidebar hidden again after Close")
+        }
+    }
+    spec.run_summary(fw)
+}

@@ -23,7 +23,7 @@ exports (
     nav_push, nav_pop, nav_depth,
     text, text_wrapped, text_anchor, button, btn, spacer, divider,
     textfield, textfield_bound, securefield, toggle, toggle_group, slider, picker, picker_add,
-    textarea, progressbar,
+    textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
     ui_state_b, ui_get_b, ui_set_b,
@@ -69,6 +69,8 @@ exports (
     transition_overlay, overlay_is_exiting,
     overlay_material, overlay_material_effective,
     transition,
+    canvas_on_hover,
+    edge,
     vg_tooltip_show, vg_tooltip_hide, vg_tooltip_drawn,
     each, each_update, each_count, each_parent,
     listbox, listbox_multi, listbox_reorderable, listbox_update, listbox_move,
@@ -980,6 +982,17 @@ textarea(_ctx: ptr, placeholder: string, on_change: fn) {
     }
     _style_on_create(handle)   // use_styles: arrive themed
     return handle
+}
+
+// Programmatic get/set for a textarea's content — the on_change callback
+// already hands back live edits, so these are for the OTHER direction:
+// loading a preset/file into the box, or reading its content outside a
+// change event (e.g. a "Run" button reading the current script).
+textarea_set_text(handle: int, text: string) {
+    aether_ui_textarea_set_text(handle, text)
+}
+textarea_get_text(handle: int) -> string {
+    return aether_ui_textarea_get_text(handle)
 }
 
 progressbar(_ctx: ptr, fraction: float) {
@@ -2708,6 +2721,69 @@ toast(win_handle: int, text: string, ms: int) -> int {
     return aether_ui_toast_impl(win_handle, text, ms)
 }
 
+// ---------------------------------------------------------------------------
+// canvas_on_hover — robust enter/leave detection for a canvas-shaped sensor.
+//
+// Fires cb(1) when the pointer enters `canvas_id`'s bounds, cb(0) when it
+// leaves. That's the same contract as plain `on_hover`, but built on
+// `canvas_on_move` instead: `on_hover`'s AppKit backing (AetherHoverMonitor)
+// captures its NSTrackingArea ONCE at registration and never refreshes it —
+// fine for a widget whose geometry never changes again, but silently stale
+// (and prone to reading spurious enter/exit pairs) for anything shown/
+// hidden/resized/reattached afterward, which is exactly the shape of bug a
+// bundled hover-to-reveal panel widget hit here originally (see git history
+// / TODO.md). `canvas_on_move`'s tracking area IS kept in sync
+// (`updateTrackingAreas` runs on layout, confirmed in aether_ui_macos.m), so
+// building on it sidesteps the whole staleness class rather than working
+// around one instance of it.
+//
+// This is deliberately a bare PRIMITIVE, not a widget: no built-in
+// "hint"/"panel" pairing, no owned show/hide policy, no overlay of its own.
+// You build whatever shape of sensor you want (an edge strip, a corner
+// square, a handle) with a plain `canvas_create`, position it however you
+// like (overlay(), or as a normal child), and decide entirely for yourself
+// what "entered"/"left" means — reveal a hover panel, arm a click-to-open
+// affordance, whatever. See examples/auto_hide_demo for two different
+// compositions on top of this same primitive: a hover-reveal edge zone, and
+// a click-to-open sidebar whose handle follows it.
+//
+// canvas_on_move has no matching "the pointer left" event of its own, so
+// "left" is inferred from a short watchdog timer that every move event
+// resets: if it ever actually fires, no move arrived in time, so the
+// pointer must have gone. 80ms is comfortably above the gap between
+// consecutive move events on a real trackpad/mouse (which fire far more
+// often than that) while still reading as instant to a person.
+struct CanvasHoverState {
+    inside: int
+    watchdog: int
+}
+
+canvas_on_hover(canvas_id: int, cb: fn) {
+    s = malloc(16) as *CanvasHoverState
+    s.inside = 0
+    s.watchdog = 0
+
+    canvas_on_move(canvas_id) callback |x: float, y: float| {
+        if s.inside == 0 {
+            s.inside = 1
+            call(cb, 1)
+        }
+        if s.watchdog > 0 {
+            timer_cancel(s.watchdog)
+        }
+        s.watchdog = timer(80) callback {
+            // timer() is a REPEATING interval, not one-shot (confirmed the
+            // hard way elsewhere in this file) — self-cancel so a single
+            // "no move arrived" tick doesn't keep firing cb(0) every 80ms
+            // after the pointer has already left.
+            timer_cancel(s.watchdog)
+            s.inside = 0
+            s.watchdog = 0
+            call(cb, 0)
+        }
+    }
+}
+
 // vg drawn tooltip — the vg live loop calls these on hover. show near the
 // pointer (canvas-local cx,cy); hide when the pointer leaves a tooltipped
 // element. vg_tooltip_drawn() gates the whole path (native elsewhere).
@@ -3947,6 +4023,97 @@ on_hover(handle: int, handler: fn) -> int {
     boxed = box_closure(handler)
     aether_ui_on_hover_impl(handle, boxed)
     return handle
+}
+
+// edge(side, size, cb) -> (zone, content) — a self-positioning container:
+// a thin, always-present detection zone pinned to `side` of a wrapper it
+// creates internally, plus a `content` area on the other side for the rest
+// of your UI. Fires cb(1) on pointer-enter / cb(0) on pointer-leave. No
+// bundled show/hide policy: the caller's cb decides what "entered" means
+// (reveal something, arm a debounce, whatever).
+//
+// Build your own content into the returned `content` handle with explicit-
+// parent calls (e.g. text(content, "…"), vstack(content, 10) { … }) — NOT
+// by nesting a trailing block on the edge() call itself, since cb already
+// occupies that position. Tint the zone with the existing
+// style_bg_color(zone, r,g,b,a) — no separate color parameter needed.
+//
+// v1 built the zone as a plain in-flow sibling and left it to the CALLER to
+// place it first-or-last within their own hstack/vstack for correct
+// positioning. That was the wrong contract: "left" and "right" (and "top"
+// and "bottom") ran IDENTICAL code, so the `side` string didn't actually
+// control which edge it landed on — only sibling order did, which edge()
+// had no way to see or control. Confirmed the hard way: swapping "left" for
+// "right" in a call site that didn't ALSO reorder its siblings kept
+// rendering on the left, and "top" (built as a fixed-height row inside an
+// hstack meant for "left") rendered vertically centered instead of at the
+// true top. Building both the zone AND the content area here, in whichever
+// order `side` dictates, means edge() controls that order directly instead
+// of hoping the caller's surrounding code matches — `side` alone now fully
+// determines position.
+//
+// Deliberately built on plain on_hover, not canvas_on_hover: the zone never
+// moves, resizes, or gets hidden after creation, so on_hover's one-time
+// tracking-rect capture (its only documented weakness — see its note
+// elsewhere in this file) never goes stale here, and real enter/exit events
+// don't have canvas_on_hover's "held still but still inside" false-leave
+// risk. Also deliberately in-flow, not overlay() content: overlay()'s
+// anchor system is a 9-point grid with no "stretch to fill the cross axis"
+// option, so a floating overlay can't become a true full-height edge strip
+// anyway — and in-flow content attaches synchronously, with none of
+// overlay()'s "called before the window existed" retry-timer need.
+//
+// fill_height/fill_width alone don't stretch an EMPTY container — they only
+// lower its content-hugging priority (stop resisting growth), which does
+// nothing without something else creating the pull. A spacer() child is
+// that pull (confirmed by running this: without it, the zone measured 24x0
+// — width honored, height collapsed to nothing). `content` isn't empty (the
+// caller fills it with real widgets), so it doesn't need the same trick.
+edge(_ctx: ptr, side: string, size: int, cb: fn) -> (int, int) {
+    wrapper = 0
+    zone = 0
+    content = 0
+    if string.equals(side, "left") == 1 {
+        wrapper = hstack(_ctx, 0)
+        zone = vstack(wrapper, 0)
+        width(zone, size)
+        fill_height(zone)
+        spacer(zone)
+        content = vstack(wrapper, 0)
+        fill_width(content)
+    } else if string.equals(side, "right") == 1 {
+        wrapper = hstack(_ctx, 0)
+        content = vstack(wrapper, 0)
+        fill_width(content)
+        zone = vstack(wrapper, 0)
+        width(zone, size)
+        fill_height(zone)
+        spacer(zone)
+    } else if string.equals(side, "top") == 1 {
+        // zone is built as a vstack, not an hstack, even though it's a
+        // horizontal strip: aether_ui_hstack_create hard-codes a low (200)
+        // VERTICAL content-hugging priority (deliberately, for grid-row use
+        // elsewhere), which fights the explicit height() constraint below
+        // and splits the space 50/50 with content instead — confirmed by
+        // running this: zone measured 138 tall instead of the declared 24.
+        // zone has no children of its own, so its container's internal
+        // orientation is irrelevant; vstack just doesn't carry that default.
+        wrapper = vstack(_ctx, 0)
+        zone = vstack(wrapper, 0)
+        height(zone, size)
+        fill_width(zone)
+        content = vstack(wrapper, 0)
+        fill_height(content)
+    } else {
+        wrapper = vstack(_ctx, 0)
+        content = vstack(wrapper, 0)
+        fill_height(content)
+        zone = vstack(wrapper, 0)
+        height(zone, size)
+        fill_width(zone)
+    }
+    on_hover(zone, cb)
+    return zone, content
 }
 
 on_double_click(handle: int, handler: fn) -> int {

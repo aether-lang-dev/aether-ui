@@ -1,0 +1,239 @@
+// turtle_interp.ae — tiny turtle-graphics interpreter.
+//
+// A from-scratch reimplementation of Swiby's demo/turtle/turtle.rb command
+// language (not a line-by-line port — that one leaned on JRuby's dynamic
+// method_missing dispatch, which has no Aether equivalent) over aether-ui's
+// canvas primitives.
+//
+// Grammar (whitespace-separated tokens; `#` starts a comment to end of line):
+//   forward N | fd N          back N | bk N
+//   left DEG | lt DEG          right DEG | rt DEG
+//   penup | pu                  pendown | pd
+//   home                        color R G B        (0-255 each)
+//   repeat N [ ... ]            (brackets are their own tokens, nesting OK)
+//
+// home resets to the canvas center, heading 0 = "up" (screen -Y); positive
+// `right`/`left` turn clockwise/counter-clockwise, matching Swiby's turtle.
+
+exports (run_turtle_script)
+
+import ui
+import std.string
+import std.math
+
+extern malloc(size: int) -> ptr
+
+struct TurtleState {
+    cid: int
+    cx: float       // canvas center — home() returns here
+    cy: float
+    x: float
+    y: float
+    heading: float  // degrees, 0 = up, clockwise-positive
+    pen_down: int
+    r: float
+    g: float
+    b: float
+}
+
+new_turtle(cid: int, canvas_w: float, canvas_h: float) -> *TurtleState {
+    // 9 fields (2 int, 7 float); generously over-allocated rather than
+    // hand-computed — an undersized malloc here is exactly the silent
+    // heap-corruption trap aether-ui/LLM.md warns about on macOS.
+    t = malloc(160) as *TurtleState
+    t.cid = cid
+    t.cx = canvas_w / 2.0
+    t.cy = canvas_h / 2.0
+    t.r = 0.0
+    t.g = 0.0
+    t.b = 0.0
+    home(t)
+    return t
+}
+
+home(t: *TurtleState) {
+    t.x = t.cx
+    t.y = t.cy
+    t.heading = 0.0
+    t.pen_down = 1
+}
+
+// heading 0 = up (screen -Y); positive heading turns clockwise (screen +X
+// at heading 90), matching Swiby's turtle convention.
+move(t: *TurtleState, dist: float) {
+    rad = t.heading * math.pi() / 180.0
+    nx = t.x + math.sin(rad) * dist
+    ny = t.y - math.cos(rad) * dist
+    if t.pen_down == 1 {
+        ui.canvas_begin_path(t.cid)
+        ui.canvas_move_to(t.cid, t.x, t.y)
+        ui.canvas_line_to(t.cid, nx, ny)
+        ui.canvas_stroke(t.cid, t.r, t.g, t.b, 1.0, 2.0)
+    }
+    t.x = nx
+    t.y = ny
+}
+
+// string.to_float/to_int are the Go-style (value, err) fallible-parse
+// convention, not a bare number — these unwrap the value and discard the
+// err (a malformed numeric argument just parses to 0, same "don't abort the
+// run" tolerance as exec_one's unrecognized-token fallthrough).
+tok_float(tokens: ptr, i: int) -> float {
+    v, ok = string.to_float(string_array_get(tokens, i))
+    return v
+}
+tok_int(tokens: ptr, i: int) -> int {
+    v, ok = string.to_int(string_array_get(tokens, i))
+    return v
+}
+
+// Strip a trailing `# comment` from one line.
+strip_comment(line: string) -> string {
+    hash = string.string_index_of(line, "#")
+    if hash >= 0 {
+        return string.string_substring(line, 0, hash)
+    }
+    return line
+}
+
+// Flatten the whole script into one space-delimited token stream: strip
+// per-line comments, join with spaces, split once. Blank/comment-only lines
+// contribute only whitespace, which collapses to empty tokens that the
+// executor below skips.
+tokenize_script(script: string) -> ptr {
+    lines = string_split(script, "\n")
+    n = string_array_size(lines)
+    joined = ""
+    i = 0
+    while i < n {
+        joined = string.concat(joined, " ")
+        joined = string.concat(joined, strip_comment(string_array_get(lines, i)))
+        i = i + 1
+    }
+    string_array_free(lines)
+    return string_split(joined, " ")
+}
+
+// Execute exactly one instruction at tokens[i], return the index just past
+// its arguments. An unrecognized token is skipped (advance by 1) rather than
+// aborting the run, so one bad line doesn't blank the whole canvas.
+exec_one(tokens: ptr, i: int, t: *TurtleState) -> int {
+    tok = string_array_get(tokens, i)
+
+    if string.equals(tok, "forward") == 1 {
+        move(t, tok_float(tokens, i + 1))
+        return i + 2
+    } else if string.equals(tok, "fd") == 1 {
+        move(t, tok_float(tokens, i + 1))
+        return i + 2
+    } else if string.equals(tok, "back") == 1 {
+        move(t, -tok_float(tokens, i + 1))
+        return i + 2
+    } else if string.equals(tok, "bk") == 1 {
+        move(t, -tok_float(tokens, i + 1))
+        return i + 2
+    } else if string.equals(tok, "left") == 1 {
+        t.heading = t.heading - tok_float(tokens, i + 1)
+        return i + 2
+    } else if string.equals(tok, "lt") == 1 {
+        t.heading = t.heading - tok_float(tokens, i + 1)
+        return i + 2
+    } else if string.equals(tok, "right") == 1 {
+        t.heading = t.heading + tok_float(tokens, i + 1)
+        return i + 2
+    } else if string.equals(tok, "rt") == 1 {
+        t.heading = t.heading + tok_float(tokens, i + 1)
+        return i + 2
+    } else if string.equals(tok, "penup") == 1 {
+        t.pen_down = 0
+        return i + 1
+    } else if string.equals(tok, "pu") == 1 {
+        t.pen_down = 0
+        return i + 1
+    } else if string.equals(tok, "pendown") == 1 {
+        t.pen_down = 1
+        return i + 1
+    } else if string.equals(tok, "pd") == 1 {
+        t.pen_down = 1
+        return i + 1
+    } else if string.equals(tok, "home") == 1 {
+        home(t)
+        return i + 1
+    } else if string.equals(tok, "color") == 1 {
+        t.r = tok_float(tokens, i + 1) / 255.0
+        t.g = tok_float(tokens, i + 2) / 255.0
+        t.b = tok_float(tokens, i + 3) / 255.0
+        return i + 4
+    }
+
+    return i + 1
+}
+
+// Scan forward from `start` WITHOUT executing, to find the index of the
+// matching "]" (handles nested repeat blocks by recursing the same way).
+// Only needed for a `repeat 0 [...]` (or negative-count) body: exec_block's
+// own loop below never enters in that case, so nothing would otherwise
+// locate the bracket to resume after it.
+skip_block(tokens: ptr, start: int) -> int {
+    n = string_array_size(tokens)
+    i = start
+    while i < n {
+        tok = string_array_get(tokens, i)
+        if string.equals(tok, "]") == 1 {
+            return i
+        } else if string.equals(tok, "repeat") == 1 {
+            inner_close = skip_block(tokens, i + 3)  // tokens[i + 2] is "["
+            i = inner_close + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return i
+}
+
+// Walk tokens from `start` until a bare "]" (returned, not consumed — the
+// repeat caller re-enters this same start index once per repetition) or the
+// end of the stream. `repeat N [` recurses into its own block N times, then
+// resumes just past the "]" that call returned.
+exec_block(tokens: ptr, start: int, t: *TurtleState) -> int {
+    n = string_array_size(tokens)
+    i = start
+    while i < n {
+        tok = string_array_get(tokens, i)
+        if string.length(tok) == 0 {
+            i = i + 1
+        } else if string.equals(tok, "]") == 1 {
+            return i
+        } else if string.equals(tok, "repeat") == 1 {
+            reps = tok_int(tokens, i + 1)
+            // tokens[i + 2] is expected to be "[".
+            open = i + 3
+            close = open
+            if reps > 0 {
+                r = 0
+                while r < reps {
+                    close = exec_block(tokens, open, t)
+                    r = r + 1
+                }
+            } else {
+                close = skip_block(tokens, open)
+            }
+            i = close + 1
+        } else {
+            i = exec_one(tokens, i, t)
+        }
+    }
+    return i
+}
+
+// Clear `cid`, run `script` against a fresh turtle centered on the canvas,
+// and redraw. canvas_w/canvas_h must match the canvas's actual size (they
+// set where "home" and heading 0 point).
+run_turtle_script(cid: int, canvas_w: float, canvas_h: float, script: string) {
+    ui.canvas_clear(cid)
+    t = new_turtle(cid, canvas_w, canvas_h)
+    tokens = tokenize_script(script)
+    _ = exec_block(tokens, 0, t)
+    string_array_free(tokens)
+    ui.canvas_redraw(cid)
+}

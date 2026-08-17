@@ -1,0 +1,41 @@
+// Spec for apps/turtle — structural smoke test.
+//
+// Correction from the original plan: canvas_read_pixel is an in-process .ae
+// call, NOT exposed as an AetherUIDriver HTTP route (confirmed by grep —
+// there's no /canvas/{id}/pixel or /screenshot route; TODO.md lists
+// golden-image/pixel-level testing as a real, not-yet-built follow-on, same
+// boundary already drawn for auto_hide_demo's hover simulation). So this
+// spec can't assert actual drawn pixels, only structure and that Run
+// doesn't error. Manual QA covers the rendered output.
+
+import std.spec
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "turtle over AetherUIDriver") {
+        spec.it("editor, picker, Run button, and canvas are present") callback {
+            run_btn = uidriver.widget_id_by_text("Run")
+            spec.assert_gt(run_btn, 0, "Run button found")
+            spec.assert_gt(uidriver.canvas_widget_id(), 0, "canvas found")
+        }
+        spec.it("canvas has a real on-screen size") callback {
+            // NOT an exact 560x560 — an hstack canvas expands to absorb
+            // layout slack (confirmed by running this: 552x572, not
+            // 560x560; ui.width/height don't override it), so this only
+            // checks it got a real allocation, not the drawing buffer's
+            // logical size.
+            spec.assert_gt(uidriver.canvas_w(), 0, "canvas width")
+            spec.assert_gt(uidriver.canvas_h(), 0, "canvas height")
+        }
+        spec.it("Run re-executes the current script without error") callback {
+            run_btn = uidriver.widget_id_by_text("Run")
+            uidriver.click_widget(run_btn)
+            uidriver.click_widget(run_btn)
+            still_there = uidriver.widget_id_by_text("Run")
+            spec.assert_gt(still_there, 0, "app still alive after two Run clicks")
+        }
+    }
+    spec.run_summary(fw)
+}

@@ -1,0 +1,11 @@
+# flower — ported from Swiby's demo/turtle/examples/flower.turtle
+# (the `to square { repeat(4) {...} }` procedure is inlined, since v1's
+# grammar has no procedure definitions yet)
+
+repeat 36 [
+    right 10
+    repeat 4 [
+        forward 50
+        right 90
+    ]
+]

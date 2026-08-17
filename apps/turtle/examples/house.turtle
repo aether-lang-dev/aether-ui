@@ -1,0 +1,111 @@
+# house — ported from Swiby's demo/turtle/examples/house.turtle
+#
+# The original defines `to square(:size)` (unused — never called) and
+# `to rectangle(:width, :height)`, then calls `rectangle w, h` four times.
+# v1's grammar has no procedure definitions yet, so each `rectangle w, h`
+# call is inlined here as its body: fd h; rt 90; fd w; rt 90; fd h; rt 90;
+# fd w; rt 90. `up`/`down` become `penup`/`pendown`; `ht` is dropped (no
+# visible turtle cursor to hide).
+
+penup
+back 120
+left 90
+forward 140
+right 90
+pendown
+
+# rectangle 300, 150
+fd 150
+rt 90
+fd 300
+rt 90
+fd 150
+rt 90
+fd 300
+rt 90
+
+penup
+forward 150
+pendown
+right 45
+forward 60
+right 45
+forward 217
+right 45
+forward 60
+
+penup
+right 45
+fd 150
+right 90
+fd 260
+right 90
+pendown
+
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+
+penup
+back 120
+left 90
+back 30
+pendown
+
+# rectangle 30, 60
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+rt 90
+fd 30
+rt 90
+
+penup
+fd 80
+pendown
+
+# rectangle 30, 60
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+rt 90
+fd 30
+rt 90
+
+penup
+fd 80
+pendown
+
+# rectangle 30, 60
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+rt 90
+fd 30
+rt 90
+
+penup
+rt 90
+fd 62
+right 90
+fd 100
+rt 180
+pendown
+
+# rectangle 40, 120
+fd 120
+rt 90
+fd 40
+rt 90
+fd 120
+rt 90
+fd 40
+rt 90

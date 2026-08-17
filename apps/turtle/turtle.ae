@@ -1,0 +1,235 @@
+// turtle.ae — a small turtle-graphics editor: a code editor + canvas + a
+// picker of bundled examples, wired to turtle_interp.ae's interpreter.
+//
+// Ported from Swiby's demo/turtle/ (a JRuby turtle DSL + live editor over
+// Swing) — this is a fresh implementation of the same idea (editor + canvas
+// + "Run") over aether-ui's canvas and textarea widgets, not a line-by-line
+// port. See turtle_interp.ae for the command grammar and what's cut from
+// Swiby's original (procedure definitions, localized command names).
+//
+// Build and run:
+//   ./build.sh apps/turtle/turtle.ae build/turtle
+
+import ui
+import turtle_interp
+import turtle_interp (run_turtle_script)
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+
+CANVAS_W() -> float { return 560.0 }
+CANVAS_H() -> float { return 560.0 }
+
+struct TurtleUiState {
+    editor: int
+    canvas: int
+}
+
+flower_script() -> string {
+    return <<TURTLE
+repeat 36 [
+    right 10
+    repeat 4 [
+        forward 50
+        right 90
+    ]
+]
+TURTLE
+}
+
+star_script() -> string {
+    return <<TURTLE
+back 70
+
+repeat 12 [
+    repeat 160 [
+        fd 100
+        rt 100
+    ]
+    rt 60
+]
+TURTLE
+}
+
+geometric_form_script() -> string {
+    return <<TURTLE
+repeat 8 [
+    repeat 8 [
+        fd 50
+        rt 45
+    ]
+    rt 45
+]
+TURTLE
+}
+
+house_script() -> string {
+    return <<TURTLE
+penup
+back 120
+left 90
+forward 140
+right 90
+pendown
+
+fd 150
+rt 90
+fd 300
+rt 90
+fd 150
+rt 90
+fd 300
+rt 90
+
+penup
+forward 150
+pendown
+right 45
+forward 60
+right 45
+forward 217
+right 45
+forward 60
+
+penup
+right 45
+fd 150
+right 90
+fd 260
+right 90
+pendown
+
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+
+penup
+back 120
+left 90
+back 30
+pendown
+
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+rt 90
+fd 30
+rt 90
+
+penup
+fd 80
+pendown
+
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+rt 90
+fd 30
+rt 90
+
+penup
+fd 80
+pendown
+
+fd 60
+rt 90
+fd 30
+rt 90
+fd 60
+rt 90
+fd 30
+rt 90
+
+penup
+rt 90
+fd 62
+right 90
+fd 100
+rt 180
+pendown
+
+fd 120
+rt 90
+fd 40
+rt 90
+fd 120
+rt 90
+fd 40
+rt 90
+TURTLE
+}
+
+main() {
+    ui.window("Turtle", 920, 620) {
+
+        // A malloc'd struct, not plain locals — `editor`/`canvas` are each
+        // assigned exactly once, but by the time that assignment runs, the
+        // picker's callback (built first, above the textarea) and the Run
+        // button's callback (built inside `left`, before `canvas` is built
+        // in the sibling block after it) have ALREADY been created. A
+        // closure that only READS an outer local captures it BY VALUE at
+        // closure-CREATION time, not live — confirmed by running this: the
+        // picker's callback silently no-opped (editor read as 0) and Run
+        // silently drew nothing (canvas read as 0), because both closures
+        // were created before the real assignment ran. Same fix as
+        // ui.auto_hide's setup_timer bug: field-writes through an
+        // already-valid pointer sidestep the whole issue, since the
+        // POINTER itself is assigned once, before any closure exists.
+        app_state = malloc(32) as *TurtleUiState
+        app_state.editor = 0
+        app_state.canvas = 0
+
+        root = ui.hstack(12) {
+
+            left = ui.vstack(8) {
+                title = ui.text("Turtle")
+                title.style_font_size(16).style_font_bold()
+
+                examples = ui.picker() callback |idx: int| {
+                    if idx == 0 { ui.textarea_set_text(app_state.editor, flower_script()) }
+                    if idx == 1 { ui.textarea_set_text(app_state.editor, star_script()) }
+                    if idx == 2 { ui.textarea_set_text(app_state.editor, geometric_form_script()) }
+                    if idx == 3 { ui.textarea_set_text(app_state.editor, house_script()) }
+                }
+                ui.picker_add(examples, "flower")
+                ui.picker_add(examples, "star")
+                ui.picker_add(examples, "geometric_form")
+                ui.picker_add(examples, "house")
+
+                app_state.editor = ui.textarea("forward 50 ...") callback |val: string| { }
+                ui.width(app_state.editor, 300)
+
+                run = ui.btn("Run") callback {
+                    run_turtle_script(app_state.canvas, CANVAS_W(), CANVAS_H(), ui.textarea_get_text(app_state.editor))
+                }
+            }
+            ui.width(left, 320)
+
+            ui.divider()
+
+            // The DISPLAYED size ends up larger than 560x560 (an hstack
+            // canvas expands to absorb layout slack — confirmed by running
+            // this: 552x572, not 560x560; ui.width/height don't override it,
+            // the same expand-vs-constrain tension grand_perspective's
+            // aeui_mark_expand exists for). Cosmetic only — canvas contents
+            // scale to fit the widget bounds, same as examples/canvas's own
+            // fixed-buffer-in-a-flexible-container precedent, just a slight
+            // aspect-ratio skew rather than a functional bug.
+            app_state.canvas = ui.canvas_create(560, 560)
+            ui.canvas_fill_rect(app_state.canvas, 0.0, 0.0, CANVAS_W(), CANVAS_H(), 1.0, 1.0, 1.0, 1.0)
+            ui.canvas_redraw(app_state.canvas)
+        }
+        ui.margin_of(root, 12, 12, 12, 12)
+
+        ui.textarea_set_text(app_state.editor, flower_script())
+        run_turtle_script(app_state.canvas, CANVAS_W(), CANVAS_H(), flower_script())
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { ui.enable_test_server(9222) }
+    }
+}

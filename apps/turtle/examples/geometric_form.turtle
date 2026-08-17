@@ -1,0 +1,11 @@
+# geometric_form — ported from Swiby's demo/turtle/examples/geometric_form.turtle
+# (repeat(N){...} -> repeat N [ ... ], `hideturtle` dropped: this interpreter
+# has no visible turtle cursor to hide)
+
+repeat 8 [
+    repeat 8 [
+        fd 50
+        rt 45
+    ]
+    rt 45
+]

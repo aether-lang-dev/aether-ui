@@ -79,6 +79,7 @@ SUITES=(
   "testable|examples/testable|testable/spec_testable|"
   "context_menu|examples/context_menu|context_menu/spec_context_menu|"
   "overlay|examples/overlay_demo|overlay_demo/spec_overlay_demo|"
+  "auto_hide|examples/auto_hide_demo|auto_hide_demo/spec_auto_hide_demo|"
   "vg_tooltip|examples/vg_tooltip|vg_tooltip/spec_vg_tooltip|AETHER_UI_TOOLTIP=drawn"
   "picker|examples/picker|picker/spec_picker|AETHER_UI_PICKER=drawn"
   "each|examples/each_demo|each_demo/spec_each_demo|"
@@ -146,6 +147,7 @@ SUITES=(
   "tumbling_cube|apps/tumbling_cube|tumbling_cube/spec_tumbling_cube|AEVG_FREEZE=1"
   "font_picker|apps/font_picker|font_picker/spec_font_picker|"
   "lismusic|apps/LisMusic|LisMusic/spec_lismusic|LIS_OFFLINE=1"
+  "turtle|apps/turtle|turtle/spec_turtle|"
 )
 
 # grand_perspective: one spec per component, each against a FRESH app scanning
