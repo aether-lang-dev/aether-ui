@@ -359,13 +359,24 @@ for row in "${SUITES[@]}"; do
     bin="target/build/$appdir/bin/$base"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
-            # aeb's fan-out can't build UI apps on MSYS yet (the
-            # _orchestrator.c generation bug) — build.sh into build/ is
-            # the Windows path, building on demand.
-            bin="build/$base.exe"
+            # PREFER the aeb fan-out artifact, fall back to build.sh.
+            #
+            # This used to read build/$base.exe unconditionally, because aeb's
+            # fan-out could not build UI apps on MSYS. It can now — so the
+            # unconditional read meant the matrix ran whatever build.sh last
+            # left behind while aeb wrote somewhere else entirely. Measured
+            # 2026-08-17: `golden` was red with build/golden_gallery.exe from
+            # Aug 10 while target/build/'s Aug 14 binary passed ALL-GREEN
+            # against the SAME goldens. That is a false red, and the
+            # neighbouring staleness warning could not see it because it
+            # checks whichever path this line picked.
+            bin="target/build/$appdir/bin/$base.exe"
             if [ ! -x "$bin" ]; then
-                ./build.sh "$appdir/$base.ae" "$base" \
-                    > "/tmp/smx_$base.log" 2>&1 || true
+                bin="build/$base.exe"
+                if [ ! -x "$bin" ]; then
+                    ./build.sh "$appdir/$base.ae" "$base" \
+                        > "/tmp/smx_$base.log" 2>&1 || true
+                fi
             fi
             ;;
         FreeBSD)
