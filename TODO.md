@@ -184,59 +184,25 @@ all green in 423s**, the first complete green run in a while. Fixed in
 0614443 + 6660265.
 
 
-## `command` needs its DECLARATIVE form (docs/guide/dsl-with-scope.md)
+## ~~`command` needs its DECLARATIVE form~~ — DONE 2026-08-15
 
-`command` shipped imperative, and that is not how this toolkit reads:
-
-    save = command("Save", "Ctrl+S") callback { do_save() }
-    b = btn_command(save)              // thread the handle
-    command_set_enabled(save, 0)
-
-Everything else here is a DSL with Scope -- widgets attach to their enclosing
-scope through `_ctx` and nobody passes a parent. Commands should match:
+Shipped in c9751f9:
 
     vstack(10) {
-        commands {
+        commands() {
             action("Save", "Ctrl+S") {
                 does() callback { do_save() }
-                on_button()                  // a button, here, in this vstack
-                on_menu_item(file_menu)      // and an item on that menu
+                on_button()
+                on_menu_item(file_menu)
             }
         }
     }
 
-**Attempted 2026-08-15, REVERTED — it segfaults at startup and I did not find
-why.** Recorded in full because the next attempt should not re-derive it:
-
-* **`f(args) callback {…} {…}` is not a call shape.** A call takes ONE trailing
-  block. Passing a callback AND a block compiled without complaint and produced
-  a broken call. That is why `does()` exists as a verb inside the block rather
-  than an argument before it -- and it reads better anyway, since everything
-  the action is made of ends up declared in one place.
-* **Two contexts, one slot.** Inside `action { … }` the ambient `_ctx` must be
-  the COMMAND (so `on_button()` is meaningful), but the button also needs its
-  WIDGET parent. Aether exposes `builder_context()` (top of stack) and nothing
-  to reach one level out. Workaround that compiled: `commands()` records the
-  widget scope in C (`aether_ui_commands_scope_set/get_impl`, beside the AeCS
-  current-sheet cell, since Aether has no top-level mutable module state) and
-  `action()` captures it before its block runs.
-* **`commands` must be a plain function, not a `builder`.** A builder runs its
-  block FIRST and its body after; the scope has to be recorded BEFORE any
-  `action` inside executes.
-* **Container type follows element type.** A command's surfaces are widget
-  handles (int) so they need an intarr; a group holds commands (ptr) so it
-  needs a std.list. Aether will not cast between ptr and int.
-* **Still crashing after all of the above.** Bisected to: an EMPTY
-  `action("Reload","Ctrl+R") { }` inside `commands { }` segfaults before the
-  window appears. The generated C for `ui_commands`, `ui_action` and
-  `ui_command` all read correctly, so the fault is not obvious there. Next
-  suspect, untested: `command()` registers `shortcut(accel)` with a closure
-  capturing `cp`, and this would be the app's SECOND shortcut -- worth checking
-  the closure/shortcut interaction before anything else. Build with symbols
-  first; a stripped `bt` only said `main`.
-
-The imperative API stays and is green (6/0, with its falsification test), so
-this is additive work, not a fix.
+The segfault that blocked the first attempt was an AETHER bug (#1606, fixed
+in 0.544.0), not a naming problem: a closure parameter was being rewritten to
+a namespaced module function, passing the function ADDRESS where the
+parameter's value belonged. See docs/design/declarative-consistency-audit.md
+for the four traps this shape had to work around.
 
 ## This box builds with 0.543 unless you say otherwise (deliberate)
 
@@ -261,59 +227,27 @@ compiler, `(cf, item, cj)` with the new one.
 Not a blocker for current work: the tree renamed around #1606 (`menu_entry`
 rather than `item`), so nothing in it depends on the fix today.
 
-## win32 cannot link ANY app after the ae 0.541.0 upgrade
+## ~~win32 cannot link ANY app (-ldbghelp)~~ — RESOLVED 2026-08-17
 
-Every Aether program aeb links on Windows/MinGW now fails at the link step:
+aeb's Windows link line now passes -ldbghelp; re-tested by rebuilding
+roles_demo on winbaz from scratch, which links and runs. The ask
+(~/scm/aeb/asks/win32-link-needs-ldbghelp-after-0541.md) can be retired.
 
-    undefined reference to `__imp_SymFromAddr' / `__imp_SymInitialize' ...
+## ~~win32 goldens are stale~~ — DONE 2026-08-17, and the diagnosis was WRONG
 
-`runtime/aether_panic.c` symbolises panic stack traces through the DbgHelp
-API, so anything linking `libaether.a` needs `-ldbghelp`. Aether's own
-Makefile has it (`WIN_LINK_LIBS`, line 655) — which is why `ae run` works on
-the box — but the link line aeb builds for external programs does not.
+Blessed in ea60d04 — but the suite was not failing because the goldens were
+stale. On Windows spec_matrix.sh read `build/$base.exe` unconditionally (from
+an era when aeb's fan-out could not build UI apps on MSYS), so it ran a
+two-month-old binary while aeb wrote to target/build/. The Aug-10 binary
+reports FAIL(95/18/49/14); the current one passes ALL-GREEN against the SAME
+goldens. Now prefers the fan-out artifact.
 
-Not app-specific and not new code: `table_demo`, which built there before the
-upgrade, fails a clean rebuild the same way. The existing `.exe`s predate the
-upgrade and still RUN, so a matrix can look healthy while nothing can be
-rebuilt. Worth remembering when a "binary older than sources" warning appears
-on Windows — that warning may be the only symptom.
-
-Written up as an ask at `~/scm/aeb/asks/win32-link-needs-ldbghelp-after-0541.md`
-(not committed, per the standing rule on aeb asks).
-
-Blocks: win32 verification of `command` (SWING_ENVY C1), which is 6/0 green on
-GTK4 with its falsification test, and of anything else added from here until
-the flag lands.
-
-## win32 goldens are stale (and were hiding behind a CRLF bug)
-
-`tests/goldens/win32/*.sig` no longer match what win32 renders. All four
-canvases fail: prims 62 cells, stroke 18, type 49, cube 14. The differences are
-real scene colours in shifted positions -- on `stroke`, 11 of 16 rows differ,
-starting at row 7 -- i.e. geometry that legitimately moved, not corruption.
-They were blessed 2026-08-01 (prims re-blessed 08-11), and a lot of renderer
-work has landed since: the gradient ellipse across all three backends, stroked
-text via glyph outlines, radial gradient strokes, the font-family stack, and
-the vg-layer serif default.
-
-**This was invisible until 2026-08-14** because `prims.sig` read as MALFORMED
-rather than failing: winbaz has `core.autocrlf=true`, so `git checkout` wrote
-the 2717-byte golden as 2734 bytes of CRLF, and the parser reads cells at
-computed byte offsets. Fixing the reader (tolerate either terminator) and
-pinning `*.sig` to LF in `.gitattributes` did NOT turn win32 green -- it
-revealed the staleness the corruption had been masking. Worth remembering: an
-unreadable golden and a failing golden look similar in a summary line, and only
-one of them is telling you about your renderer.
-
-**Not re-blessed deliberately.** Blessing is a one-line command and would make
-the suite green immediately, but it would also erase the only record of what
-moved. Someone should look at `target/golden_out/*.png` on winbaz against the
-committed signatures first and confirm the new rendering is *better* (the
-stroked-text and gradient work says it should be), because "the goldens
-disagree" is exactly the signal this suite exists to raise. Bless once that is
-confirmed, in its own commit, so the diff is reviewable.
-
-GTK4 goldens are unaffected and green.
+The goldens did also need re-blessing (the renderer moved since Aug 1), and
+that was reviewed as REAL PNGs from target/golden_out/, not as signature
+grids. Worth remembering: a .sig is a 24x16 grid where each cell averages
+~10x10 pixels, so text always looks like mush in it. It is a regression
+tripwire on averaged colour, not a picture. Judging rendering quality from
+one is a mistake I made twice in a row.
 
 ## win32 child-widget opacity (and the capture path that would prove it)
 
