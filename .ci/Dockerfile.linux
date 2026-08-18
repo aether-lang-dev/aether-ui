@@ -23,9 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # on an unrelated PR.
 ARG AETHER_REF=""
 ENV PREFIX=/usr/local
+ARG AEB_REF=""
 RUN curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
     | AETHER_REF="${AETHER_REF}" PREFIX=/usr/local sh \
-    && ae --version
+ && curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aeb/main/install.sh \
+    | AEB_REF="${AEB_REF}" PREFIX=/usr/local sh \
+ && ae --version && aeb --version
 
 WORKDIR /src
 COPY . /src

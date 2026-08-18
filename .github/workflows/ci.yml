@@ -42,17 +42,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-4-dev xvfb
 
+      # Both toolchains, matching bootstrap.sh: ci.sh drives the per-target
+      # .build.ae files through aeb, so ae alone is not enough. Installed
+      # directly rather than via bootstrap.sh, which would also run a build.
       - name: Install the Aether toolchain
         env:
           # Pin to keep a green run reproducible; bump deliberately.
           AETHER_REF: ${{ vars.AETHER_REF }}
+          AEB_REF: ${{ vars.AEB_REF }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
+            | PREFIX="$HOME/.local" sh
+          curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aeb/main/install.sh \
             | PREFIX="$HOME/.local" sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Version check
-        run: ae --version
+        run: |
+          ae --version
+          aeb --version
 
       - name: Run the UI test pipeline
         run: ./ci.sh
