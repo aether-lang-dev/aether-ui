@@ -252,6 +252,9 @@ void aether_ui_window_close_impl(int win_handle);
 /* Unified driver window view: 1 = primary, 2.. = extras. */
 int  aether_ui_window_count_impl(void);
 const char* aether_ui_window_title_impl(int win_handle);
+/* Retitle a live window. Keeps the driver-visible title and the native
+ * window in step, so /windows reports what the title bar shows. */
+void aether_ui_window_set_title_impl(int win_handle, const char* title);
 int  aether_ui_window_is_open_impl(int win_handle);
 int  aether_ui_widget_window_impl(int widget_handle);   /* widget's window, 0=none */
 void aether_ui_close_window_by_handle_impl(int win_handle);

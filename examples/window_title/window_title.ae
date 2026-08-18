@@ -1,0 +1,23 @@
+// Retitle a live window: set_window_title(win_handle, title). Handle 1 is the
+// primary window. The driver's /windows view reports the same string the title
+// bar shows, so a spec can assert on it.
+import ui (window, vstack, text, btn, set_window_title, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("Window Title Demo", 420, 200) {
+        vstack(10) {
+            text("Press a button to retitle this window.")
+            btn("Set: Untitled") callback {
+                set_window_title(1, "Untitled")
+            }
+            btn("Set: notes.md") callback {
+                set_window_title(1, "notes.md - Demo")
+            }
+            btn("Set: empty") callback {
+                set_window_title(1, "")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

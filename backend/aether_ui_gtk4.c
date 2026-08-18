@@ -3594,6 +3594,28 @@ const char* aether_ui_window_title_impl(int win_handle) {
     return extra_windows[idx].title ? extra_windows[idx].title : "";
 }
 
+void aether_ui_window_set_title_impl(int win_handle, const char* title) {
+    const char* t = title ? title : "";
+    GtkWindow* w = NULL;
+    char** slot = NULL;
+    if (win_handle == 1) {
+        w = primary_window;
+        slot = &primary_title;
+    } else {
+        int idx = win_handle - 2;
+        if (idx < 0 || idx >= extra_window_count) return;
+        w = extra_windows[idx].window;
+        slot = &extra_windows[idx].title;
+    }
+    /* The cached copy is what the driver reports, so it is updated even when
+     * the GtkWindow is not up yet (retitle before show). */
+    char* copy = strdup(t);
+    if (!copy) return;
+    free(*slot);
+    *slot = copy;
+    if (w) gtk_window_set_title(w, t);
+}
+
 int aether_ui_window_is_open_impl(int win_handle) {
     if (win_handle == 1) return primary_live;
     int idx = win_handle - 2;
