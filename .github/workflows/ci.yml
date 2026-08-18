@@ -1,0 +1,58 @@
+# Runs ci.sh, which already knows how to build every example, smoke-launch the
+# non-driver ones, and drive the calculator and testable examples over
+# AetherUIDriver. Until now nothing invoked it automatically, so the GTK4
+# backend in particular was only ever compiled by whoever happened to be on
+# Linux that week.
+#
+# Linux and macOS are real gates. Windows is deliberately absent rather than
+# present-and-soft-failing: ci.sh's Windows path needs the aether repo's
+# `make contrib-aether-ui-check`, which is a cross-repo dependency this
+# workflow does not set up. A job that always passed would read as coverage
+# the project does not have.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # A new push supersedes an in-flight run for the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # a GTK4 failure should not hide an AppKit one
+      matrix:
+        include:
+          - name: linux-gtk4
+            os: ubuntu-latest
+          - name: macos-appkit
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK4 and a framebuffer
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev xvfb
+
+      - name: Install the Aether toolchain
+        env:
+          # Pin to keep a green run reproducible; bump deliberately.
+          AETHER_REF: ${{ vars.AETHER_REF }}
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
+            | PREFIX="$HOME/.local" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Version check
+        run: ae --version
+
+      - name: Run the UI test pipeline
+        run: ./ci.sh

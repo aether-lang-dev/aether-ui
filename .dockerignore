@@ -1,0 +1,10 @@
+# Keep the build context to sources. .git alone is most of the tree, and
+# build output from the host is not just dead weight, it is macOS binaries
+# that must not shadow what the Linux image builds.
+.git
+build/
+target/
+*.o
+*.a
+*.dylib
+*.so
