@@ -4312,6 +4312,12 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     cs->on_key = (AeClosure*)boxed_closure;
 }
 
+/* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
+   scroll controller). Stubbed so the ABI stays uniform across backends. */
+void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;

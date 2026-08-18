@@ -5162,6 +5162,36 @@ static gboolean on_vlist_scroll(GtkEventControllerScroll* c, double dx,
     return TRUE;
 }
 
+// ── canvas scroll (wheel / two-finger) ──────────────────────────────
+// Same GtkEventControllerScroll shape as the vlist one below, but on a
+// CANVAS widget and reporting the raw delta rather than a +/-1 step: a zoom
+// wants direction, and a caller that only needs a step can sign it itself.
+static gboolean on_canvas_scroll(GtkEventControllerScroll* c, double dx,
+                                 double dy, gpointer data) {
+    (void)c;
+    AeClosure* cl = (AeClosure*)data;
+    if (cl && cl->fn)
+        ((void(*)(void*, double, double))cl->fn)(cl->env, dx, dy);
+    return TRUE;
+}
+
+void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
+    int wh = aether_ui_canvas_get_widget(canvas_id);
+    GtkWidget* w = aether_ui_get_widget(wh);
+    if (!w || !boxed_closure) return;
+    /* VERTICAL only, matching the vlist controller below.
+       BOTH_AXES was tried first and is WRONG here: it also delivers kinetic
+       (deceleration) deltas, which under Xvfb arrive unprompted -- the turtle
+       app's zoom drifted 100% -> 42.4% in 3 seconds of complete idleness,
+       which is 1.1^-9, i.e. nine phantom callbacks. A zoom is a discrete user
+       gesture; it must not be driven by momentum events nobody asked for. */
+    GtkEventControllerScroll* sc = GTK_EVENT_CONTROLLER_SCROLL(
+        gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL));
+    g_signal_connect(sc, "scroll", G_CALLBACK(on_canvas_scroll), boxed_closure);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(sc));
+    g_object_set_data(G_OBJECT(w), "aeui-canvas-scroll", boxed_closure);
+}
+
 void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
     GtkWidget* box = aether_ui_get_widget(container_handle);
     if (!box) return;

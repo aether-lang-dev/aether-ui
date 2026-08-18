@@ -36,6 +36,57 @@ main() {
             still_there = uidriver.widget_id_by_text("Run")
             spec.assert_gt(still_there, 0, "app still alive after two Run clicks")
         }
+
+        // ── zoom ────────────────────────────────────────────────────────
+        // Zoom is a RE-RUN of the script at a different scale, not a widget
+        // transform (the canvas replays in absolute coordinates, so there is
+        // nothing to transform). The compounding is what these assert: three
+        // 1.25x steps must land on exactly 195.312%, and Reset must return to
+        // exactly 100%.
+        //
+        // NOT asserted here: the painted-pixel count. It DOES change (695 ->
+        // 960 on a single zoom-in, measured by hand repeatedly) and that is
+        // the real proof the canvas re-rendered -- but the reading is not
+        // reliable from inside this suite: after the earlier Run clicks it
+        // stayed at the pre-zoom value while the zoom label advanced
+        // correctly, and I could not reduce that to a rule. Asserting it here
+        // would be a flaky gate, and a flaky gate is worse than an honest gap.
+        // canvas_painted_pixels() is the right instrument; something about the
+        // suite's sequencing defeats it. Worth its own look.
+        spec.it("zoom in compounds exactly") callback {
+            zin = uidriver.widget_id_by_text("+")
+            uidriver.click_widget(zin)
+            _z1 = uidriver.wait_body_contains("/widgets", "zoom: 125%", 20)
+            uidriver.click_widget(zin)
+            _z2 = uidriver.wait_body_contains("/widgets", "zoom: 156.25%", 20)
+            uidriver.click_widget(zin)
+            ok = uidriver.wait_body_contains("/widgets", "zoom: 195.312%", 20)
+            spec.assert_true(ok, "three 1.25x steps compound to 195.312%")
+        }
+
+        spec.it("zoom out and Reset return to 100%") callback {
+            zout = uidriver.widget_id_by_text("-")
+            uidriver.click_widget(zout)
+            _o = uidriver.wait_body_contains("/widgets", "zoom: 156.25%", 20)
+            reset = uidriver.widget_id_by_text("Reset view")
+            uidriver.click_widget(reset)
+            ok = uidriver.wait_body_contains("/widgets", "zoom: 100%", 20)
+            spec.assert_true(ok, "Reset view returns to 100%")
+        }
+
+        // The zoom must not drift on its own. BOTH_AXES on the scroll
+        // controller delivered kinetic (deceleration) deltas that fired
+        // unprompted under Xvfb -- 100% -> 42.4% in three idle seconds, which
+        // is 1.1^-9: nine phantom callbacks. VERTICAL only, matching the vlist
+        // controller, fixed it. This is the regression gate.
+        spec.it("zoom does not drift while idle") callback {
+            b0 = uidriver.get_body("/widgets")
+            spec.assert_contains(b0, "zoom: 100%", "starts at 100%")
+            _w = uidriver.wait_body_contains("/widgets", "NEVER-MATCHES", 14)
+            b1 = uidriver.get_body("/widgets")
+            spec.assert_contains(b1, "zoom: 100%",
+                "still 100% after ~2s of doing nothing")
+        }
     }
     spec.run_summary(fw)
 }

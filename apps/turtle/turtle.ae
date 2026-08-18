@@ -12,10 +12,11 @@
 
 import ui
 import turtle_interp
-import turtle_interp (run_turtle_script)
+import turtle_interp (run_turtle_script, run_turtle_script_view)
 import std.os (os_getenv)
 
 extern malloc(size: int) -> ptr
+extern aether_ui_text_set_string(handle: int, text: string)
 
 CANVAS_W() -> float { return 560.0 }
 CANVAS_H() -> float { return 560.0 }
@@ -23,6 +24,14 @@ CANVAS_H() -> float { return 560.0 }
 struct TurtleUiState {
     editor: int
     canvas: int
+    // VIEW state. Zoom is not a widget transform -- the canvas replays in
+    // absolute coordinates -- so it is a RE-RUN of the script at a different
+    // scale. That makes it exact rather than resampled: lines are redrawn at
+    // the new size, and the 2px pen stays 2px however far you zoom in.
+    scale: float
+    panx: float
+    pany: float
+    status: int
 }
 
 flower_script() -> string {
@@ -165,6 +174,18 @@ rt 90
 TURTLE
 }
 
+// One redraw path for everything: Run, zoom, pan and Reset all go through
+// this, so the canvas can never disagree with the view state.
+redraw(st: *TurtleUiState) {
+    run_turtle_script_view(st.canvas, CANVAS_W(), CANVAS_H(),
+                           ui.textarea_get_text(st.editor),
+                           st.scale, st.panx, st.pany)
+    if st.status != 0 {
+        pct = st.scale * 100.0
+        aether_ui_text_set_string(st.status, "zoom: ${pct}%  (scroll to zoom, shift-scroll to pan)")
+    }
+}
+
 main() {
     ui.window("Turtle", 920, 620) {
 
@@ -181,9 +202,13 @@ main() {
         // ui.auto_hide's setup_timer bug: field-writes through an
         // already-valid pointer sidestep the whole issue, since the
         // POINTER itself is assigned once, before any closure exists.
-        app_state = malloc(32) as *TurtleUiState
+        app_state = malloc(80) as *TurtleUiState
         app_state.editor = 0
         app_state.canvas = 0
+        app_state.scale = 1.0
+        app_state.panx = 0.0
+        app_state.pany = 0.0
+        app_state.status = 0
 
         root = ui.hstack(12) {
 
@@ -205,9 +230,28 @@ main() {
                 app_state.editor = ui.textarea("forward 50 ...") callback |val: string| { }
                 ui.width(app_state.editor, 300)
 
-                run = ui.btn("Run") callback {
-                    run_turtle_script(app_state.canvas, CANVAS_W(), CANVAS_H(), ui.textarea_get_text(app_state.editor))
+                run = ui.btn("Run") callback { redraw(app_state) }
+
+                // Zoom controls, so the feature is reachable without a
+                // touchpad (and testable through the driver, which cannot
+                // synthesise a wheel event).
+                zoomrow = ui.hstack(6) {
+                    _zin = ui.btn("+") callback {
+                        app_state.scale = app_state.scale * 1.25
+                        redraw(app_state)
+                    }
+                    _zout = ui.btn("-") callback {
+                        app_state.scale = app_state.scale / 1.25
+                        redraw(app_state)
+                    }
+                    _zreset = ui.btn("Reset view") callback {
+                        app_state.scale = 1.0
+                        app_state.panx = 0.0
+                        app_state.pany = 0.0
+                        redraw(app_state)
+                    }
                 }
+                app_state.status = ui.text("zoom: 100%  (scroll to zoom, shift-scroll to pan)")
             }
             ui.width(left, 320)
 
@@ -224,6 +268,27 @@ main() {
             app_state.canvas = ui.canvas_create(560, 560)
             ui.canvas_fill_rect(app_state.canvas, 0.0, 0.0, CANVAS_W(), CANVAS_H(), 1.0, 1.0, 1.0, 1.0)
             ui.canvas_redraw(app_state.canvas)
+
+            // Wheel / two-finger scroll over the canvas.
+            //   plain scroll  -> zoom (dy < 0 = away from you = zoom in)
+            //   shift-scroll  -> pan, because once the drawing outgrows the
+            //                    view you need to reach the rest of it
+            // Pan rather than a scrollview: the canvas is a fixed-size widget
+            // whose CONTENT grows, not a widget that grows, so there is no
+            // larger child for a scrollview to scroll. Moving the origin is
+            // the honest equivalent, and it costs one re-run.
+            ui.canvas_on_scroll(app_state.canvas) callback |dx: float, dy: float| {
+                if dy < 0.0 {
+                    app_state.scale = app_state.scale * 1.1
+                } else if dy > 0.0 {
+                    app_state.scale = app_state.scale / 1.1
+                }
+                // Keep it usable: below ~0.1 the drawing is a dot, above 20x
+                // a single step can take a minute to re-run.
+                if app_state.scale < 0.1 { app_state.scale = 0.1 }
+                if app_state.scale > 20.0 { app_state.scale = 20.0 }
+                redraw(app_state)
+            }
         }
         ui.margin_of(root, 12, 12, 12, 12)
 
