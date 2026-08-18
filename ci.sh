@@ -287,7 +287,13 @@ if ( cd "$ROOT" && aeb .all.ae ) > /tmp/ci_build_all.log 2>&1; then
     done
 else
     echo "  FAIL: aeb .all.ae fan-out build failed"
-    tail -25 /tmp/ci_build_all.log | sed 's/^/       /'
+    # The fan-out prints one progress line per app, so a plain tail is all
+    # progress and no diagnostic — the compiler error sits above it. Surface
+    # the matching lines first, then a tail big enough to clear the progress.
+    if grep -nEi "error|failed|undefined|cannot |no such file" /tmp/ci_build_all.log \
+         | grep -viE "^[0-9]+: *build: " | head -40 | sed 's/^/       /'; then :; fi
+    echo "       --- last 60 lines ---"
+    tail -60 /tmp/ci_build_all.log | sed 's/^/       /'
     FAIL=$((FAIL + 1))
 fi
 
