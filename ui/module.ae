@@ -62,7 +62,8 @@ exports (
     a11y_role, a11y_label, a11y_description,
     edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
-    alert, clipboard_write, open_url, open_file, save_file, is_dark_mode,
+    alert, clipboard_write, clipboard_read, open_url, open_file, save_file,
+    is_dark_mode,
     timer, timer_cancel, backend_name,
     window_create, window_set_body, window_show, window_close,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
@@ -312,6 +313,7 @@ const DIST_FILL_EQUALLY = 1
 // Group 5: System integration
 extern aether_ui_alert_impl(title: string, msg: string)
 extern aether_ui_clipboard_write_impl(text: string)
+extern aether_ui_clipboard_read_impl() -> string
 extern aether_ui_file_open(title: string) -> string
 extern aether_ui_file_save(title: string, default_name: string) -> string
 extern aether_ui_open_url_impl(url: string)
@@ -2584,6 +2586,17 @@ alert(title: string, msg: string) {
 
 clipboard_write(text: string) {
     aether_ui_clipboard_write_impl(text)
+}
+
+// Read the clipboard's text, "" when it holds none. Pairs with
+// clipboard_write.
+//   pasted = clipboard_read()
+//
+// On GTK4 the underlying read is asynchronous and is driven to completion
+// before returning, with a bounded wait so an unresponsive clipboard owner
+// cannot hang the caller; it yields "" in that case.
+clipboard_read() -> string {
+    return aether_ui_clipboard_read_impl()
 }
 
 open_url(url: string) {

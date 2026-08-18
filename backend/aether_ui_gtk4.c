@@ -2656,6 +2656,73 @@ void aether_ui_clipboard_write_impl(const char* text) {
     gdk_clipboard_set_text(clipboard, text ? text : "");
 }
 
+/* GTK4 only offers the clipboard as an async read, but the Aether surface is a
+ * plain call, so the read is driven to completion on a nested main loop.
+ *
+ * Two things make that safe rather than a trap:
+ *
+ *   - the wait is bounded. A clipboard whose owner never answers (a dead X11
+ *     client still holding the selection is the classic case) would otherwise
+ *     block the UI thread forever, so a timeout ends the loop.
+ *
+ *   - the context is heap-allocated and ownership moves to whoever runs last.
+ *     If the timeout fires first the caller returns and marks the context
+ *     abandoned; the callback, arriving into a stack frame that no longer
+ *     exists, frees the context instead of writing to it. */
+typedef struct {
+    GMainLoop* loop;
+    char*      text;
+    gboolean   finished;
+    gboolean   abandoned;
+} AeuiClipRead;
+
+static void aeui_clip_read_done(GObject* src, GAsyncResult* res, gpointer data) {
+    AeuiClipRead* c = (AeuiClipRead*)data;
+    GError* err = NULL;
+    char* text = gdk_clipboard_read_text_finish(GDK_CLIPBOARD(src), res, &err);
+    if (err) g_error_free(err);
+    if (c->abandoned) {      /* caller already gave up: we own the context */
+        g_free(text);
+        g_free(c);
+        return;
+    }
+    c->text = text;
+    c->finished = TRUE;
+    if (c->loop && g_main_loop_is_running(c->loop)) g_main_loop_quit(c->loop);
+}
+
+static gboolean aeui_clip_read_timeout(gpointer data) {
+    AeuiClipRead* c = (AeuiClipRead*)data;
+    if (c->loop && g_main_loop_is_running(c->loop)) g_main_loop_quit(c->loop);
+    return G_SOURCE_REMOVE;
+}
+
+char* aether_ui_clipboard_read_impl(void) {
+    ensure_gtk_init();
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display) return strdup("");
+    GdkClipboard* clipboard = gdk_display_get_clipboard(display);
+
+    AeuiClipRead* c = g_new0(AeuiClipRead, 1);
+    c->loop = g_main_loop_new(NULL, FALSE);
+    guint timeout_id = g_timeout_add(500, aeui_clip_read_timeout, c);
+    gdk_clipboard_read_text_async(clipboard, NULL, aeui_clip_read_done, c);
+    g_main_loop_run(c->loop);
+
+    if (!c->finished) {          /* timed out: the callback inherits the context */
+        c->abandoned = TRUE;
+        g_main_loop_unref(c->loop);
+        c->loop = NULL;
+        return strdup("");
+    }
+    g_source_remove(timeout_id);
+    g_main_loop_unref(c->loop);
+    char* out = strdup(c->text ? c->text : "");
+    g_free(c->text);
+    g_free(c);
+    return out;
+}
+
 // Timer — schedule a repeating callback at interval_ms.
 static gboolean on_timer_tick(gpointer data) {
     AeClosure* c = (AeClosure*)data;

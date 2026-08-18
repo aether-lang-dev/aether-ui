@@ -2681,6 +2681,14 @@ void aether_ui_clipboard_write_impl(const char* text) {
           forType:NSPasteboardTypeString];
 }
 
+char* aether_ui_clipboard_read_impl(void) {
+    NSPasteboard* pb = [NSPasteboard generalPasteboard];
+    NSString* s = [pb stringForType:NSPasteboardTypeString];
+    if (!s) return strdup("");
+    const char* u = [s UTF8String];
+    return strdup(u ? u : "");
+}
+
 // Timer — NSTimer scheduled on the main runloop. Fires closure on every tick.
 @interface AetherTimerTarget : NSObject
 @property (assign) AeClosure* closure;
