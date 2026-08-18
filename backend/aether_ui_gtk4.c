@@ -2991,7 +2991,39 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
     gtk_widget_set_margin_end(content, dx < 0 ? -dx : 0);
     gtk_widget_set_margin_top(content, dy > 0 ? dy : 0);
     gtk_widget_set_margin_bottom(content, dy < 0 ? -dy : 0);
-    gtk_overlay_add_overlay(ov, content);
+
+    /* DETACH FIRST. gtk_overlay_add_overlay refuses a widget that already has
+       a parent ("Can't set new parent GtkOverlay ... which already has parent
+       GtkBox") and leaves it where it was -- but this function then returned a
+       non-zero handle anyway, so the DSL and /overlays both reported a live
+       overlay for a widget that never moved. Three of them in
+       examples/auto_hide_demo, whose sidebar and handle come out of ui.edge()
+       already parented into edge's wrapper; the demo carries a retry timer
+       built around the failure.
+
+       Promoting an already-parented widget is the NORMAL case for an overlay
+       built from ordinary DSL widgets -- they have to be created somewhere --
+       so unparent rather than reject. A GtkBox child needs gtk_box_remove;
+       gtk_widget_unparent alone leaves the box's bookkeeping stale. */
+    GtkWidget* old_parent = gtk_widget_get_parent(content);
+    if (old_parent) {
+        g_object_ref(content);
+        if (GTK_IS_BOX(old_parent))      gtk_box_remove(GTK_BOX(old_parent), content);
+        else if (GTK_IS_OVERLAY(old_parent)) gtk_overlay_remove_overlay(GTK_OVERLAY(old_parent), content);
+        else                              gtk_widget_unparent(content);
+        gtk_overlay_add_overlay(ov, content);
+        g_object_unref(content);
+    } else {
+        gtk_overlay_add_overlay(ov, content);
+    }
+
+    /* Report the truth: if the promotion did not take, this is not an
+       overlay. Rolling the entry back keeps /overlays honest rather than
+       listing a live overlay that is still sitting in its old container. */
+    if (gtk_widget_get_parent(content) != GTK_WIDGET(ov)) {
+        overlay_count--;
+        return 0;
+    }
 
     return overlay_count; // 1-based
 }
