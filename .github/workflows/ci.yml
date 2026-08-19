@@ -69,10 +69,11 @@ jobs:
           # in this repo. A default pin means upstream lands in this pipeline
           # when someone bumps this line, not whenever a release is cut.
           #
-          # Currently the merge of aether#1658, which fixes that crash. Move to
-          # the release tag that carries it once one is published. A repository
-          # variable still overrides, for testing a candidate without a commit.
-          AETHER_REF: ${{ vars.AETHER_REF || '1236f11f5362d8eaa8374c9841f60079962f9449' }}
+          # v0.553.0 is the first release carrying the aether#1658 fix, so the
+          # pin is a tag again rather than the commit it was pinned to while
+          # that release was still being cut. A repository variable still
+          # overrides, for testing a candidate without a commit.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.553.0' }}
           AEB_REF: ${{ vars.AEB_REF || 'v0.281' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
