@@ -42,16 +42,17 @@ jobs:
       - name: Install GTK4 and a framebuffer
         if: runner.os == 'Linux'
         env:
-          # Without this apt can stop on a configuration prompt and wait for an
-          # answer that never comes; adding gdb to this line hung the step for
-          # 45 minutes before the run was cancelled.
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo -E apt-get install -y --no-install-recommends libgtk-4-dev xvfb gdb
+          # Do NOT add packages to this line casually. Adding gdb hung this
+          # step for 45 minutes, twice, including with DEBIAN_FRONTEND set,
+          # and cost the whole Linux leg both times. These two install in
+          # about two minutes and are what the pipeline actually needs.
+          sudo -E apt-get install -y --no-install-recommends libgtk-4-dev xvfb
           # A driver spec that dies takes its diagnosis with it: the spec only
-          # sees POSTs that stopped being answered. Put cores somewhere ci.sh
-          # can find so it can print the faulting frame.
+          # sees POSTs that stopped being answered. Cores go somewhere ci.sh
+          # can find, and it prints a backtrace when a debugger is present.
           sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p
 
       # Both toolchains, matching bootstrap.sh: ci.sh drives the per-target
