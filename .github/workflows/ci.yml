@@ -60,8 +60,19 @@ jobs:
       - name: Install the Aether toolchain
         env:
           # Pin to keep a green run reproducible; bump deliberately.
-          AETHER_REF: ${{ vars.AETHER_REF }}
-          AEB_REF: ${{ vars.AEB_REF }}
+          #
+          # These were empty, so get.sh resolved "the latest vX.Y.Z tag" on
+          # every run. That makes this pipeline's colour depend on whatever
+          # upstream published most recently: v0.552.0 shipped the codegen bug
+          # in aether#1657, which crashed apps/rubiks_cube here with no change
+          # in this repo. A default pin means upstream lands in this pipeline
+          # when someone bumps this line, not whenever a release is cut.
+          #
+          # Currently the merge of aether#1658, which fixes that crash. Move to
+          # the release tag that carries it once one is published. A repository
+          # variable still overrides, for testing a candidate without a commit.
+          AETHER_REF: ${{ vars.AETHER_REF || '1236f11f5362d8eaa8374c9841f60079962f9449' }}
+          AEB_REF: ${{ vars.AEB_REF || 'v0.281' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
