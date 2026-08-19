@@ -1,0 +1,30 @@
+// all.ae - build every aether-ui binary buildable from a clean checkout, as a
+// FAN-OUT of cached per-app nodes.
+//
+// CRITICAL: this file must NOT be named with a leading dot. aeb derives the
+// orchestrator entry symbol from the root file's name, and a dot-prefixed root
+// mangles to a symbol it never emits (`.all.ae` -> undefined `__D_all_D_ae` at
+// link time), which fails the whole fan-out. Tracked upstream in aeb.
+//
+// Each app under examples/<app>/ and apps/<app>/ carries its own .build.ae
+// — a cached, individually addressable node. This root just scans + deps them
+// all, so:
+//   aeb all.ae                builds everything (parallel, incrementally cached)
+//   aeb examples/calculator   builds just that one toolkit app
+//   aeb apps/rubiks_cube builds just that one AeVG app
+//
+// Replaces the old 32-call single-node monolith (no caching/addressing/parallel).
+// The shared per-platform backend-link block lives in build_support/aetherui
+// (ui_backend); vg apps add `lib("${root}")` for the vg.* module tree.
+
+import build
+
+main() {
+    b = build.start()
+    // Apps needing contrib archives (sqlite/avcodec) carry .build.contrib.ae
+    // instead of .build.ae, so they stay out of these scans: they cannot link
+    // on a clean checkout. ci.sh builds them when the archives are present.
+    build.scan(b, "examples/**/.build.ae")
+    build.scan(b, "apps/**/.build.ae")
+    return 0
+}

@@ -10,7 +10,7 @@
 #   ./tests/spec_matrix.sh split table  # just these
 #   ./tests/spec_matrix.sh --rebuild    # rebuild each app first (see below)
 #
-# Binaries come from `aeb .all.ae` (target/build/...). Run that first.
+# Binaries come from `aeb all.ae` (target/build/...). Run that first.
 #
 # Counting: the number printed is std.spec's own "N passing" — one per it()
 # block. Failures are counted from its "N failing" tail. Those two numbers
@@ -403,7 +403,7 @@ for row in "${SUITES[@]}"; do
             ;;
     esac
     if [ ! -x "$bin" ]; then
-        printf "%-14s %6s %6s   %s\n" "$name" - - "NO BINARY ($bin) — run: aeb .all.ae (or see /tmp/smx_*.log on Windows)"
+        printf "%-14s %6s %6s   %s\n" "$name" - - "NO BINARY ($bin) — run: aeb all.ae (or see /tmp/smx_*.log on Windows)"
         SUITES_RED=$((SUITES_RED + 1))
         continue
     fi
@@ -561,7 +561,7 @@ esac
 for gp in "${GP_SPECS[@]}"; do
     want_suite "gp_$gp" || continue
     if [ ! -x "$GP_BIN" ]; then
-        printf "%-14s %6s %6s   %s\n" "gp_$gp" - - "NO BINARY — run: aeb .all.ae"
+        printf "%-14s %6s %6s   %s\n" "gp_$gp" - - "NO BINARY — run: aeb all.ae"
         SUITES_RED=$((SUITES_RED + 1))
         continue
     fi
