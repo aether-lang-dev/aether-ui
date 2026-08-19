@@ -5319,6 +5319,21 @@ static gboolean aeui_undo_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 static int aeui_fire_undo_redo(int redo) {
+    /* CRITICAL: never queue-and-wait from the thread that runs the loop.
+     *
+     * This backend supplies run_on_ui_thread, and the driver services the
+     * WHOLE request over there, so /undo already arrives on the GTK thread.
+     * Posting an idle and then blocking here for it cannot complete: the
+     * callback only runs when this thread returns to the main loop, and this
+     * thread is the one sleeping. It spun the full 2s and answered
+     * {"did":0,...} with undo_depth 2, an honest-looking "nothing to undo"
+     * for a stack that had two entries. Ctrl+Z kept working throughout,
+     * because that path never leaves the UI thread.
+     *
+     * Already on the loop's thread means the step can just be taken. */
+    if (g_main_context_is_owner(g_main_context_default())) {
+        return redo ? aether_ui_redo_step_impl() : aether_ui_undo_step_impl();
+    }
     AeuiUndoReq* r = g_new0(AeuiUndoReq, 1);
     r->redo = redo;
     g_idle_add(aeui_undo_idle, r);
