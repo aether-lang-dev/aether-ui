@@ -3720,6 +3720,10 @@ typedef struct {
     // was clipped, else the whole allocation, matching gtk4 and win32.
     int last_paint_w, last_paint_h;
     int last_paint_area, last_paint_count;
+    // Cumulative full/clipped repaint counts and the last clipped paint's
+    // summed area, matching gtk4 and win32 so the Stage-2.5 clip regression
+    // reads the same numbers on all three backends.
+    int paint_full_count, paint_clip_count_total, last_clip_area;
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -4133,8 +4137,15 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
         cs->last_paint_w = pw;
         cs->last_paint_h = ph;
         cs->last_paint_count = cs->count;
-        cs->last_paint_area = (cs->paint_clip_count > 0)
-            ? (int)(a + 0.5) : pw * ph;
+        if (cs->paint_clip_count > 0) {
+            cs->last_clip_area = (int)(a + 0.5);
+            cs->last_paint_area = cs->last_clip_area;
+            cs->paint_clip_count_total++;
+        } else {
+            cs->last_clip_area = 0;
+            cs->last_paint_area = pw * ph;
+            cs->paint_full_count++;
+        }
     }
     if (cs && cs->paint_clip_count > 0) {
         CGContextSaveGState(cg);
@@ -4316,6 +4327,17 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
     cs->on_key = (AeClosure*)boxed_closure;
+}
+
+/* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
+   scroll controller). Stubbed so the ABI stays uniform across backends. */
+/* Gesture probe: GTK4-only diagnostic. Stubbed for ABI uniformity. */
+void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
+void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
 }
 
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
@@ -5886,6 +5908,16 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     return 0;
 }
 
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
+                                      int* clip_paints, int* last_clip_area) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    if (full_paints) *full_paints = cs->paint_full_count;
+    if (clip_paints) *clip_paints = cs->paint_clip_count_total;
+    if (last_clip_area) *last_clip_area = cs->last_clip_area;
+    return 0;
+}
+
 static const AetherDriverHooks macos_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -5906,6 +5938,7 @@ static const AetherDriverHooks macos_driver_hooks = {
     .widget_pressed       = hook_widget_pressed,
     .screenshot_png       = hook_screenshot_png,
     .canvas_debug         = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
 };
 
 // Inject the "Under Remote Control" banner as the first arranged subview.

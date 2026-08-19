@@ -1,0 +1,162 @@
+// gesture_probe — what does this trackpad actually SEND?
+//
+// A diagnostic, not a demo. It wires every touchpad-relevant GTK4 controller
+// to one canvas and prints each event as it arrives: kind, two numbers, and
+// the modifier bitmask. Move/scroll/pinch/rotate/drag over the grey box and
+// read the log.
+//
+// WHY THIS EXISTS. The turtle app's scroll-to-zoom was written against two
+// assumptions, both wrong: that a touchpad pinch arrives as ctrl+scroll (it
+// does not -- GTK4 has GtkGestureZoom, and some stacks deliver a raw
+// GDK_TOUCHPAD_PINCH that never reaches it), and that a scroll callback can
+// see the shift key (canvas_on_scroll passes only dx/dy, so shift-to-pan was
+// advertised in the UI and never implemented). Neither could be settled from
+// documentation, and the driver cannot synthesise touchpad gestures -- so the
+// only way to know is to run this and look.
+//
+// Read the log as: which KINDS fire at all on this hardware, whether pinch
+// arrives as `zoom` (high-level) or `touchpad-pinch` (raw) or as `scroll`
+// with ctrl in mods, and whether mods is ever non-zero.
+//
+// ── WHAT IT FOUND (Chromebook / Crostini, 2026-08-19) ───────────────
+// 96 events captured across several gesture permutations:
+//
+//   drag-begin / drag-update / drag-end   96   clean, real coordinates
+//   scroll                                 0
+//   zoom (GtkGestureZoom)                  0
+//   rotate                                 0
+//   touchpad-pinch / -swipe (raw GdkEvent) 0
+//
+// PINCH DELIVERS NOTHING — not as a high-level zoom gesture, not as a raw
+// GDK_TOUCHPAD_PINCH, not as ctrl+scroll. It is consumed above the app
+// (ChromeOS/Crostini) and never reaches Wayland/X. Neither does plain
+// two-finger scroll. So on this hardware a pinch-to-zoom or scroll-to-zoom
+// CANNOT work, however it is written; only drag is available.
+//
+// MODIFIERS DO ARRIVE, and this is the useful half: an unmodified drag
+// reported mods=256, the same drag with shift held reported mods=257
+// (256 + 1, and 1 is SHIFT). So shift-distinguished gestures are viable —
+// the information exists, it just has to be passed across the ABI.
+// canvas_on_scroll does not pass it, which is why the turtle app advertises
+// a shift-to-pan it never implemented.
+//
+// Not generalisable beyond this box: a Linux laptop with a libinput touchpad
+// would very likely report zoom/rotate normally. That is the point of the
+// probe — run it on the target rather than assume.
+//
+// Build and run — PIPE IT, the interesting output is on stdout:
+//   aeb apps/gesture_probe/.build.ae
+//   ./target/build/apps/gesture_probe/bin/gesture_probe | tee /tmp/gestures.txt
+//
+// Every event prints as "GESTURE <n>. <kind>  a=..  b=..  mods=..". The
+// on-screen label keeps only the last 16 lines; stdout keeps the lot.
+
+import ui
+import std.string
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern aether_ui_text_set_string(handle: int, text: string)
+
+CANVAS_W() -> float { return 520.0 }
+CANVAS_H() -> float { return 360.0 }
+MAX_LINES() -> int { return 16 }
+
+struct ProbeState {
+    canvas: int
+    log: int        // the scrolling text log
+    counts: int     // per-kind tally line
+    n: int          // events seen
+    n_scroll: int
+    n_zoom: int
+    n_rotate: int
+    n_drag: int
+    n_raw: int
+    lines: string   // the last MAX_LINES joined with \n
+}
+
+// Keep only the last N lines, so the label stays a fixed size.
+tail_lines(s: string, keep: int) -> string {
+    n = 0
+    i = string.length(s) - 1
+    while i >= 0 {
+        c = string.string_substring(s, i, i + 1)
+        if string.equals(c, "\n") == 1 {
+            n = n + 1
+            if n >= keep { return string.string_substring(s, i + 1, string.length(s)) }
+        }
+        i = i - 1
+    }
+    return s
+}
+
+main() {
+    st = malloc(96) as *ProbeState
+    st.canvas = 0
+    st.log = 0
+    st.counts = 0
+    st.n = 0
+    st.n_scroll = 0
+    st.n_zoom = 0
+    st.n_rotate = 0
+    st.n_drag = 0
+    st.n_raw = 0
+    st.lines = ""
+
+    ui.window("Gesture probe", 900, 620) {
+        root = ui.vstack(8) {
+            title = ui.text("Gesture probe — scroll, pinch, rotate and drag over the box")
+            title.style_font_size(15).style_font_bold()
+
+            ui.text("mods bitmask: SHIFT=1  CTRL=4  ALT=8")
+
+            st.counts = ui.text("scroll:0  zoom:0  rotate:0  drag:0  raw:0")
+
+            st.canvas = ui.canvas_create(520, 360)
+            ui.canvas_fill_rect(st.canvas, 0.0, 0.0, CANVAS_W(), CANVAS_H(),
+                                0.90, 0.90, 0.92, 1.0)
+            ui.canvas_redraw(st.canvas)
+
+            st.log = ui.text("(no events yet — gesture over the grey box)")
+
+            _clear = ui.btn("Clear") callback {
+                st.lines = ""
+                st.n = 0
+                st.n_scroll = 0
+                st.n_zoom = 0
+                st.n_rotate = 0
+                st.n_drag = 0
+                st.n_raw = 0
+                aether_ui_text_set_string(st.log, "(cleared)")
+                aether_ui_text_set_string(st.counts, "scroll:0  zoom:0  rotate:0  drag:0  raw:0")
+            }
+        }
+        ui.margin_of(root, 12, 12, 12, 12)
+
+        ui.canvas_gesture_probe(st.canvas) callback |kind: string, a: float, b: float, mods: int| {
+            st.n = st.n + 1
+            if string.equals(kind, "scroll") == 1 { st.n_scroll = st.n_scroll + 1 }
+            if string.equals(kind, "zoom") == 1 { st.n_zoom = st.n_zoom + 1 }
+            if string.equals(kind, "rotate") == 1 { st.n_rotate = st.n_rotate + 1 }
+            if string.equals(kind, "touchpad-pinch") == 1 { st.n_raw = st.n_raw + 1 }
+            if string.equals(kind, "touchpad-swipe") == 1 { st.n_raw = st.n_raw + 1 }
+            if string.equals(kind, "drag-begin") == 1 { st.n_drag = st.n_drag + 1 }
+            if string.equals(kind, "drag-update") == 1 { st.n_drag = st.n_drag + 1 }
+            if string.equals(kind, "drag-end") == 1 { st.n_drag = st.n_drag + 1 }
+
+            line = "${st.n}. ${kind}  a=${a}  b=${b}  mods=${mods}"
+            // ALSO to stdout, so the log can be piped to a file and read
+            // by someone who is not sitting at the screen:
+            //   ./gesture_probe | tee /tmp/gestures.txt
+            // The on-screen label only keeps the last 16 lines; stdout keeps
+            // everything, which is what you want when comparing permutations.
+            print("GESTURE ${line}\n")
+            st.lines = tail_lines(string.concat(st.lines, string.concat(line, "\n")), MAX_LINES())
+            aether_ui_text_set_string(st.log, st.lines)
+            aether_ui_text_set_string(st.counts,
+                "scroll:${st.n_scroll}  zoom:${st.n_zoom}  rotate:${st.n_rotate}  drag:${st.n_drag}  raw:${st.n_raw}")
+        }
+
+        if os_getenv("AETHER_UI_TEST_PORT") != null { ui.enable_test_server(9222) }
+    }
+}

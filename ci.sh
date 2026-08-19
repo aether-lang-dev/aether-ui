@@ -76,6 +76,12 @@ case "$OS" in
 esac
 echo "=== aether_ui CI on $OS ($PLATFORM) ==="
 
+# A crashing driver app leaves no explanation in its own output. Allow cores so
+# a failing spec can print the faulting frame instead of a list of POSTs that
+# stopped being answered. Each workflow step is a fresh shell, so this has to
+# be set here rather than beside the core_pattern in the workflow.
+if [ "$PLATFORM" = "linux" ]; then ulimit -c unlimited 2>/dev/null || true; fi
+
 if [ "$PLATFORM" = "windows" ]; then
     echo "NOTICE: Windows backend uses a separate test flow."
     echo "        Run: make contrib-aether-ui-check"
@@ -157,6 +163,38 @@ run_server_test() {
             sleep 0.2
         done
     fi
+    # A spec that fails AFTER the server answered leaves its diagnosis in the
+    # app's own output, which was printed only on the never-responded path.
+    # Without this, a mid-run crash reads as a list of "was not 2xx" lines
+    # with nothing saying the process had died.
+    if [ "$rc" -ne 0 ] && [ -s "/tmp/ci_${name}.app.log" ]; then
+        echo "       --- $name app output (last 30 lines) ---"
+        tail -30 "/tmp/ci_${name}.app.log" | sed 's/^/       /'
+    fi
+    # A crash (SIGBUS/SIGSEGV) leaves nothing useful in the app's own output:
+    # the process is gone before it can say anything, and the spec only sees
+    # POSTs that stopped being answered. macOS files a report naming the
+    # faulting frame, so surface it here rather than leaving the next reader
+    # to guess from "was not 2xx".
+    if [ "$rc" -ne 0 ] && [ "$PLATFORM" = "linux" ] && command -v gdb > /dev/null 2>&1; then
+        local core
+        core="$(ls -t /tmp/core."$(basename "$bin")".* 2>/dev/null | head -1)"
+        if [ -n "$core" ]; then
+            echo "       --- $name backtrace from $core ---"
+            gdb -batch -ex 'thread apply all bt' "$bin" "$core" 2>/dev/null \
+                | head -60 | sed 's/^/       /'
+            rm -f "$core"
+        fi
+    fi
+    if [ "$rc" -ne 0 ] && [ "$PLATFORM" = "macos" ]; then
+        local base report
+        base="$(basename "$bin")"
+        report="$(ls -t "$HOME/Library/Logs/DiagnosticReports/${base}"*.ips 2>/dev/null | head -1)"
+        if [ -n "$report" ]; then
+            echo "       --- $name crash report: $(basename "$report") ---"
+            sed -n '1,80p' "$report" | sed 's/^/       /'
+        fi
+    fi
     return $rc
 }
 
@@ -187,6 +225,11 @@ AEVG_TESTS=(test_font test_text_path test_transform test_normalizer test_easing 
 # Tests that exercise the REAL cairo text metrics — linked against the GTK4
 # backend (the pure-Aether AEVG_TESTS link with $(ae cflags) only).
 AEVG_GTK_TESTS=(test_text_metrics test_group_pixels)
+# test_group_pixels rasterizes through the GTK backend, so it needs a display;
+# test_text_metrics only measures text and does not. Running the display-bound
+# one bare is what failed a headless runner with "Failed to open display" even
+# though the workflow installs xvfb.
+AEVG_GTK_NEEDS_DISPLAY=" test_group_pixels "
 
 # `ae cflags --libs` emits the transitive deps that libaether.a was
 # built with (PCRE2 / OpenSSL / zlib / nghttp2 — see Aether CHANGELOG
@@ -241,11 +284,25 @@ if pkg-config --exists gtk4 2>/dev/null; then
                 $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (link)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
-        if "$bin" > "/tmp/ci_aevg_${t}_run.log" 2>&1; then
+        runner=""
+        case "$AEVG_GTK_NEEDS_DISPLAY" in
+            *" $t "*)
+                if [ "$LAUNCH_PREFIX" = "SKIP_RUNTIME" ]; then
+                    echo "  SKIP $t (needs a display; none available and no xvfb-run)"
+                    continue
+                fi
+                runner="$LAUNCH_PREFIX"
+                # Xvfb runs need the cairo renderer (GTK's NGL on llvmpipe
+                # churns memory), the same reason the GUI spec phases set it.
+                case "$runner" in *xvfb*) export GSK_RENDERER=cairo ;; esac
+                ;;
+        esac
+        if $runner "$bin" > "/tmp/ci_aevg_${t}_run.log" 2>&1; then
             echo "  OK   $t (gtk-linked)"
         else
             echo "  FAIL $t (run)"; tail -15 "/tmp/ci_aevg_${t}_run.log" | sed 's/^/       /'; FAIL=$((FAIL + 1))
         fi
+        unset GSK_RENDERER
     done
 else
     echo "  SKIP AEVG_GTK_TESTS (gtk4 dev libs absent)"
@@ -276,22 +333,56 @@ echo
 
 echo "=== Phase 1: build all aether_ui examples (aeb fan-out) ==="
 # Each example is a per-app .build.ae node under examples/<app>/; the root
-# .all.ae scans + deps them, so this one command builds all 11 (cached,
+# all.ae scans + deps them, so this one command builds all 11 (cached,
 # parallel). Binaries land at target/build/examples/<app>/bin/<app>; EX_BIN
 # resolves that for the smoke/driver phases below.
 EX_BIN() { echo "$ROOT/target/build/examples/$1/bin/$1"; }
-if ( cd "$ROOT" && aeb .all.ae ) > /tmp/ci_build_all.log 2>&1; then
+if ( cd "$ROOT" && aeb all.ae ) > /tmp/ci_build_all.log 2>&1; then
     for ex in "${EXAMPLES[@]}"; do
         if [ -x "$(EX_BIN "$ex")" ]; then echo "  OK   $ex"; else
             echo "  FAIL $ex (no binary)"; FAIL=$((FAIL + 1)); fi
     done
 else
-    echo "  FAIL: aeb .all.ae fan-out build failed"
-    tail -25 /tmp/ci_build_all.log | sed 's/^/       /'
+    echo "  FAIL: aeb all.ae fan-out build failed"
+    # The fan-out prints one progress line per app, so a plain tail is all
+    # progress and no diagnostic. A bare grep is not enough either: a linker
+    # error names the missing symbol on the lines AFTER the match, so print
+    # trailing context or the actual cause is lost (that is how an undefined
+    # symbol reached CI as four unattributed line numbers).
+    grep -nEi -A6 "error|failed|undefined|cannot |no such file" /tmp/ci_build_all.log \
+        | grep -viE "^[0-9]+[:-] *build: " | head -60 | sed 's/^/       /'
+    echo "       --- last 60 lines ---"
+    tail -60 /tmp/ci_build_all.log | sed 's/^/       /'
     FAIL=$((FAIL + 1))
 fi
 
-# Phase 1.5: RUN the headless AeVG renderers (build was done by the .all.ae
+# Contrib-dependent apps are deliberately outside the all.ae fan-out: they link
+# archives (libaether_sqlite, libaether_avcodec) that a clean checkout does not
+# have, so including them would make every fresh clone and every CI run red for
+# a missing optional dependency. Build them only when the archive is actually
+# present, and say plainly when they are skipped rather than passing silently.
+CONTRIB_LIB_DIR="$(ae cflags --libs 2>/dev/null | tr ' ' '\n' | grep -E '^-L' | head -1 | sed 's/^-L//')"
+LISMUSIC_BUILT=0
+echo "=== Phase 1b: contrib apps (built only when their archives exist) ==="
+contrib_app() {
+    app="$1"; archive="$2"
+    if [ -n "$CONTRIB_LIB_DIR" ] && [ -f "$CONTRIB_LIB_DIR/lib$archive.a" ]; then
+        if ( cd "$ROOT" && aeb "apps/$app/.build.contrib.ae" ) > "/tmp/ci_contrib_$app.log" 2>&1; then
+            echo "  OK   $app"
+            return 0
+        fi
+        echo "  FAIL $app (lib$archive.a present but the build failed)"
+        tail -30 "/tmp/ci_contrib_$app.log" | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+        return 1
+    fi
+    echo "  SKIP $app (lib$archive.a not installed; see roadmap.md for its manual build)"
+    return 1
+}
+contrib_app LisMusic    aether_sqlite  && LISMUSIC_BUILT=1
+contrib_app video_frame aether_avcodec || true
+
+# Phase 1.5: RUN the headless AeVG renderers (build was done by the all.ae
 # fan-out in Phase 1 — every vg app is a apps/<name>/ node now). The
 # value here is RUNTIME coverage the build-only fan-out can't give: each writes
 # a PNG, exercising the raster-blit + draw-region compose path. Linux/GTK only.
@@ -631,10 +722,16 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=frames_demo/spec_frames_demo \
     run_server_test "$(AEVG_BIN frames_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" frames_demo || FAIL=$((FAIL + 1))
-    ( unset AETHER_UI_NO_ANIMATION
-      run_server_test "$(AEVG_BIN frames_demo)" \
-                      "$SCRIPT_DIR/tests/frames_demo/test_stage25_clip_surface.sh" \
-                      frames_stage25 ) || FAIL=$((FAIL + 1))
+    # This one runs with animations OFF, unlike the transition proofs below.
+    # It asserts that a drag produces a CLIPPED paint, and frames_demo never
+    # clips while the scene animates (7e1ebd1). It was wired here with
+    # animations forced on a day before that gate landed (d4ca5382), so its
+    # premise has been false ever since: every paint went full-canvas and the
+    # assertion could not pass on any backend. Leaving the global
+    # AETHER_UI_NO_ANIMATION=1 in place is what lets the clip path engage.
+    run_server_test "$(AEVG_BIN frames_demo)" \
+                    "$SCRIPT_DIR/tests/frames_demo/test_stage25_clip_surface.sh" \
+                    frames_stage25 || FAIL=$((FAIL + 1))
     UI_SPEC=falling_blocks/spec_falling_blocks \
     run_server_test "$(AEVG_BIN falling_blocks)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" falling_blocks || FAIL=$((FAIL + 1))
@@ -714,7 +811,7 @@ echo "=== Phase 7: AetherUIDriver LisMusic port spec ==="
 # (async search). LIS_OFFLINE=1 forces the deterministic canned search so the
 # spec's assertions don't depend on a live network. AETHER_UI_HEADLESS keeps
 # std.audio on its silent null backend.
-if [ "$SPEC_OK" -eq 1 ]; then
+if [ "$SPEC_OK" -eq 1 ] && [ "$LISMUSIC_BUILT" -eq 1 ]; then
     rm -f "$ROOT/history.db"
     export LIS_OFFLINE=1
     UI_SPEC=LisMusic/spec_lismusic \
@@ -722,6 +819,8 @@ if [ "$SPEC_OK" -eq 1 ]; then
                     "$SCRIPT_DIR/tests/run_spec.sh" lismusic || FAIL=$((FAIL + 1))
     unset LIS_OFFLINE
     rm -f "$ROOT/history.db"
+elif [ "$SPEC_OK" -eq 1 ]; then
+    echo "  SKIP lismusic spec (LisMusic was not built; libaether_sqlite absent)"
 fi
 
 echo

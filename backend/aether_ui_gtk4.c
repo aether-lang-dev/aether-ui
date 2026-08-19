@@ -5184,6 +5184,130 @@ static gboolean on_vlist_scroll(GtkEventControllerScroll* c, double dx,
     return TRUE;
 }
 
+// ── gesture PROBE (diagnostic; apps/gesture_probe) ──────────────────
+// Wires every touchpad-relevant GTK4 controller to ONE callback that reports
+// what actually arrived: kind, two numbers, and the modifier state. It exists
+// because we could not answer "what does a Chromebook trackpad pinch
+// deliver?" from documentation -- the first zoom attempt assumed a pinch
+// arrives as ctrl+scroll, and it does not.
+//
+// The callback is cb(kind: string, a: float, b: float, mods: int) where
+// `mods` is the GdkModifierType bitmask (SHIFT=1, CTRL=4 on X11/Wayland).
+// kind is one of: scroll, zoom, rotate, drag-begin, drag-update, drag-end,
+// touchpad-raw.
+typedef struct { AeClosure* cl; } AeuiProbe;
+
+static void probe_fire(AeuiProbe* p, const char* kind, double a, double b, int mods) {
+    if (p && p->cl && p->cl->fn)
+        ((void(*)(void*, const char*, double, double, intptr_t))p->cl->fn)
+            (p->cl->env, kind, a, b, (intptr_t)mods);
+}
+
+static gboolean probe_scroll(GtkEventControllerScroll* c, double dx, double dy, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(c));
+    probe_fire((AeuiProbe*)d, "scroll", dx, dy, (int)m);
+    return FALSE;   /* do not consume: let other controllers see it too */
+}
+static void probe_zoom(GtkGestureZoom* g, double scale, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "zoom", scale, 0.0, (int)m);
+}
+static void probe_rotate(GtkGestureRotate* g, double angle, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "rotate", angle, 0.0, (int)m);
+}
+static void probe_drag_begin(GtkGestureDrag* g, double x, double y, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "drag-begin", x, y, (int)m);
+}
+static void probe_drag_update(GtkGestureDrag* g, double x, double y, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "drag-update", x, y, (int)m);
+}
+static void probe_drag_end(GtkGestureDrag* g, double x, double y, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "drag-end", x, y, (int)m);
+}
+
+/* Raw tap: GDK_TOUCHPAD_PINCH / _SWIPE never reach the high-level gestures on
+   some stacks, so report them directly rather than inferring their absence. */
+static gboolean probe_legacy(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer d) {
+    (void)c;
+    GdkEventType t = gdk_event_get_event_type(ev);
+    if (t == GDK_TOUCHPAD_PINCH) {
+        probe_fire((AeuiProbe*)d, "touchpad-pinch",
+                   gdk_touchpad_event_get_pinch_scale(ev),
+                   gdk_touchpad_event_get_pinch_angle_delta(ev), 0);
+    } else if (t == GDK_TOUCHPAD_SWIPE) {
+        double dx = 0, dy = 0;
+        gdk_touchpad_event_get_deltas(ev, &dx, &dy);
+        probe_fire((AeuiProbe*)d, "touchpad-swipe", dx, dy, 0);
+    }
+    return FALSE;
+}
+
+void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    AeuiProbe* p = g_new0(AeuiProbe, 1);
+    p->cl = (AeClosure*)boxed_closure;
+
+    GtkEventControllerScroll* sc = GTK_EVENT_CONTROLLER_SCROLL(
+        gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES));
+    g_signal_connect(sc, "scroll", G_CALLBACK(probe_scroll), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(sc));
+
+    GtkGesture* zm = gtk_gesture_zoom_new();
+    g_signal_connect(zm, "scale-changed", G_CALLBACK(probe_zoom), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(zm));
+
+    GtkGesture* rot = gtk_gesture_rotate_new();
+    g_signal_connect(rot, "angle-changed", G_CALLBACK(probe_rotate), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(rot));
+
+    GtkGesture* drag = gtk_gesture_drag_new();
+    g_signal_connect(drag, "drag-begin",  G_CALLBACK(probe_drag_begin), p);
+    g_signal_connect(drag, "drag-update", G_CALLBACK(probe_drag_update), p);
+    g_signal_connect(drag, "drag-end",    G_CALLBACK(probe_drag_end), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(drag));
+
+    GtkEventController* legacy = gtk_event_controller_legacy_new();
+    g_signal_connect(legacy, "event", G_CALLBACK(probe_legacy), p);
+    gtk_widget_add_controller(w, legacy);
+}
+
+// ── canvas scroll (wheel / two-finger) ──────────────────────────────
+// Same GtkEventControllerScroll shape as the vlist one below, but on a
+// CANVAS widget and reporting the raw delta rather than a +/-1 step: a zoom
+// wants direction, and a caller that only needs a step can sign it itself.
+static gboolean on_canvas_scroll(GtkEventControllerScroll* c, double dx,
+                                 double dy, gpointer data) {
+    (void)c;
+    AeClosure* cl = (AeClosure*)data;
+    if (cl && cl->fn)
+        ((void(*)(void*, double, double))cl->fn)(cl->env, dx, dy);
+    return TRUE;
+}
+
+void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
+    int wh = aether_ui_canvas_get_widget(canvas_id);
+    GtkWidget* w = aether_ui_get_widget(wh);
+    if (!w || !boxed_closure) return;
+    /* VERTICAL only, matching the vlist controller below.
+       BOTH_AXES was tried first and is WRONG here: it also delivers kinetic
+       (deceleration) deltas, which under Xvfb arrive unprompted -- the turtle
+       app's zoom drifted 100% -> 42.4% in 3 seconds of complete idleness,
+       which is 1.1^-9, i.e. nine phantom callbacks. A zoom is a discrete user
+       gesture; it must not be driven by momentum events nobody asked for. */
+    GtkEventControllerScroll* sc = GTK_EVENT_CONTROLLER_SCROLL(
+        gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL));
+    g_signal_connect(sc, "scroll", G_CALLBACK(on_canvas_scroll), boxed_closure);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(sc));
+    g_object_set_data(G_OBJECT(w), "aeui-canvas-scroll", boxed_closure);
+}
+
 void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
     GtkWidget* box = aether_ui_get_widget(container_handle);
     if (!box) return;
@@ -5341,6 +5465,21 @@ static gboolean aeui_undo_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 static int aeui_fire_undo_redo(int redo) {
+    /* CRITICAL: never queue-and-wait from the thread that runs the loop.
+     *
+     * This backend supplies run_on_ui_thread, and the driver services the
+     * WHOLE request over there, so /undo already arrives on the GTK thread.
+     * Posting an idle and then blocking here for it cannot complete: the
+     * callback only runs when this thread returns to the main loop, and this
+     * thread is the one sleeping. It spun the full 2s and answered
+     * {"did":0,...} with undo_depth 2, an honest-looking "nothing to undo"
+     * for a stack that had two entries. Ctrl+Z kept working throughout,
+     * because that path never leaves the UI thread.
+     *
+     * Already on the loop's thread means the step can just be taken. */
+    if (g_main_context_is_owner(g_main_context_default())) {
+        return redo ? aether_ui_redo_step_impl() : aether_ui_undo_step_impl();
+    }
     AeuiUndoReq* r = g_new0(AeuiUndoReq, 1);
     r->redo = redo;
     g_idle_add(aeui_undo_idle, r);
@@ -6586,6 +6725,16 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     return 0;
 }
 
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
+                                      int* clip_paints, int* last_clip_area) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    *full_paints = cs->paint_full_count;
+    *clip_paints = cs->paint_clip_count_total;
+    *last_clip_area = cs->last_clip_area;
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // dispatch_action — BY VERB, never by number
 // ---------------------------------------------------------------------------
@@ -6781,6 +6930,7 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_classes_into  = hook_widget_classes_into,
     .widget_a11y          = hook_widget_a11y,
     .canvas_debug         = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
     .dispatch_action      = hook_dispatch_action,
     .screenshot_png       = hook_screenshot_png,
     // The GTK-specific one macOS and win32 leave NULL.
