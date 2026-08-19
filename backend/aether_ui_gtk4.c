@@ -6564,6 +6564,16 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     return 0;
 }
 
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
+                                      int* clip_paints, int* last_clip_area) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    *full_paints = cs->paint_full_count;
+    *clip_paints = cs->paint_clip_count_total;
+    *last_clip_area = cs->last_clip_area;
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // dispatch_action — BY VERB, never by number
 // ---------------------------------------------------------------------------
@@ -6759,6 +6769,7 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_classes_into  = hook_widget_classes_into,
     .widget_a11y          = hook_widget_a11y,
     .canvas_debug         = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
     .dispatch_action      = hook_dispatch_action,
     .screenshot_png       = hook_screenshot_png,
     // The GTK-specific one macOS and win32 leave NULL.

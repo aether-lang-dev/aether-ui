@@ -622,11 +622,23 @@ static void handle_request_inner(aether_sock_t client_fd,
                 // that is exactly what this metric exists to detect. -1
                 // means "this backend has no retained paint surface".
                 int painted = aether_ui_canvas_painted_pixels_impl(id);
-                char body[256];
+                // Same reasoning as painted_pixels: these keys must be
+                // PRESENT on every backend. They were served only by GTK4's
+                // old private HTTP server, so when GTK4 moved onto this
+                // shared one the Stage-2.5 clip regression started reading a
+                // key that no backend emitted any more.
+                int full_paints = -1, clip_paints = -1, last_clip_area = -1;
+                if (h->canvas_paint_counters) {
+                    h->canvas_paint_counters(id, &full_paints, &clip_paints,
+                                             &last_clip_area);
+                }
+                char body[320];
                 snprintf(body, sizeof(body),
                          "{\"area\":%d,\"commands\":%d,\"w\":%d,\"h\":%d,"
-                         "\"painted_pixels\":%d}",
-                         area, commands, w, ht, painted);
+                         "\"painted_pixels\":%d,\"full_paints\":%d,"
+                         "\"clip_paints\":%d,\"last_clip_area\":%d}",
+                         area, commands, w, ht, painted,
+                         full_paints, clip_paints, last_clip_area);
                 send_http(client_fd, 200, "OK", "application/json", body);
             }
         }
