@@ -1,0 +1,36 @@
+# Linux/GTK4 build+test environment for aether-ui.
+#
+# The GTK4 backend is the one most contributors cannot exercise: development
+# happens largely on macOS, where only the AppKit path compiles. This image
+# gives the GTK4 path a real home, both locally and in CI, so a change to
+# aether_ui_gtk4.c is compiled and run rather than reviewed by eye.
+#
+#   docker build -f .ci/Dockerfile.linux -t aether-ui-linux .
+#   docker run --rm aether-ui-linux            # build + smoke the examples
+#
+# Xvfb is installed because GTK4 refuses to open a window without a display;
+# ci.sh wraps itself in xvfb-run with a sized screen, so CMD does not.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config git curl ca-certificates \
+        libgtk-4-dev xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin the toolchain in CI rather than tracking latest, so a green run stays
+# reproducible and a toolchain regression is a deliberate bump, not a surprise
+# on an unrelated PR.
+ARG AETHER_REF=""
+ENV PREFIX=/usr/local
+ARG AEB_REF=""
+RUN curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
+    | AETHER_REF="${AETHER_REF}" PREFIX=/usr/local sh \
+ && curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aeb/main/install.sh \
+    | AEB_REF="${AEB_REF}" PREFIX=/usr/local sh \
+ && ae --version && aeb --version
+
+WORKDIR /src
+COPY . /src
+
+CMD ["bash", "-lc", "./ci.sh"]

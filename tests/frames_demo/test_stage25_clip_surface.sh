@@ -17,6 +17,19 @@ field() {
 
 sleep 0.25
 before="$(get_json /canvas/1/debug)"
+
+# Dirty-region clipping is a property of the RETAINED compositor. A backend
+# with no retained paint surface reports painted_pixels=-1 and repaints the
+# whole canvas every frame by design, so there is no clipped paint to assert
+# on and this regression does not apply. Gate on the reported capability
+# rather than the platform name, so the assertions below still fail loudly on
+# every backend that does retain a surface.
+painted="$(printf '%s' "$before" | field painted_pixels)"
+if [ "$painted" -lt 0 ]; then
+    echo "SKIP: no retained paint surface on this backend (painted_pixels=$painted)"
+    exit 0
+fi
+
 before_clip="$(printf '%s' "$before" | field clip_paints)"
 post "/canvas/1/click?x=80&y=70"
 post "/canvas/1/move?x=140&y=100"

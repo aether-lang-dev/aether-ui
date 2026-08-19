@@ -15,7 +15,7 @@
 // home resets to the canvas center, heading 0 = "up" (screen -Y); positive
 // `right`/`left` turn clockwise/counter-clockwise, matching Swiby's turtle.
 
-exports (run_turtle_script)
+exports (run_turtle_script, run_turtle_script_view)
 
 import ui
 import std.string
@@ -34,16 +34,28 @@ struct TurtleState {
     r: float
     g: float
     b: float
+    // VIEW transform. The canvas replays its commands in ABSOLUTE
+    // coordinates (there is no cairo_scale in the draw path -- canvas_on_resize
+    // exists precisely so a caller re-renders at the new size), so zoom and pan
+    // cannot be done by the widget. They are applied HERE, as the script runs:
+    // every movement is scaled and the origin is offset. Re-running the same
+    // script at a different `scale` IS the zoom.
+    scale: float
+    panx: float
+    pany: float
 }
 
 new_turtle(cid: int, canvas_w: float, canvas_h: float) -> *TurtleState {
     // 9 fields (2 int, 7 float); generously over-allocated rather than
     // hand-computed — an undersized malloc here is exactly the silent
     // heap-corruption trap aether-ui/LLM.md warns about on macOS.
-    t = malloc(160) as *TurtleState
+    t = malloc(224) as *TurtleState
     t.cid = cid
     t.cx = canvas_w / 2.0
     t.cy = canvas_h / 2.0
+    t.scale = 1.0
+    t.panx = 0.0
+    t.pany = 0.0
     t.r = 0.0
     t.g = 0.0
     t.b = 0.0
@@ -52,8 +64,8 @@ new_turtle(cid: int, canvas_w: float, canvas_h: float) -> *TurtleState {
 }
 
 home(t: *TurtleState) {
-    t.x = t.cx
-    t.y = t.cy
+    t.x = t.cx + t.panx
+    t.y = t.cy + t.pany
     t.heading = 0.0
     t.pen_down = 1
 }
@@ -62,8 +74,9 @@ home(t: *TurtleState) {
 // at heading 90), matching Swiby's turtle convention.
 move(t: *TurtleState, dist: float) {
     rad = t.heading * math.pi() / 180.0
-    nx = t.x + math.sin(rad) * dist
-    ny = t.y - math.cos(rad) * dist
+    d = dist * t.scale
+    nx = t.x + math.sin(rad) * d
+    ny = t.y - math.cos(rad) * d
     if t.pen_down == 1 {
         ui.canvas_begin_path(t.cid)
         ui.canvas_move_to(t.cid, t.x, t.y)
@@ -230,8 +243,26 @@ exec_block(tokens: ptr, start: int, t: *TurtleState) -> int {
 // and redraw. canvas_w/canvas_h must match the canvas's actual size (they
 // set where "home" and heading 0 point).
 run_turtle_script(cid: int, canvas_w: float, canvas_h: float, script: string) {
+    run_turtle_script_view(cid, canvas_w, canvas_h, script, 1.0, 0.0, 0.0)
+}
+
+// run_turtle_script_view(...) — the same run under a VIEW transform: `scale`
+// multiplies every movement, (panx, pany) shifts the origin in canvas pixels.
+// Zoom is re-running the script at a different scale, which is exact rather
+// than resampled: the lines are re-drawn at the new size, not stretched.
+//
+// The scale is applied to DISTANCE only, never to the stroke width, so at 4x
+// the drawing grows but the pen stays 2px -- the behaviour you want from
+// vector zoom.
+run_turtle_script_view(cid: int, canvas_w: float, canvas_h: float,
+                       script: string, scale: float,
+                       panx: float, pany: float) {
     ui.canvas_clear(cid)
     t = new_turtle(cid, canvas_w, canvas_h)
+    t.scale = scale
+    t.panx = panx
+    t.pany = pany
+    home(t)              // re-seat: new_turtle homed before the view was set
     tokens = tokenize_script(script)
     _ = exec_block(tokens, 0, t)
     string_array_free(tokens)
