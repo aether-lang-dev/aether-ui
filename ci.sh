@@ -157,6 +157,14 @@ run_server_test() {
             sleep 0.2
         done
     fi
+    # A spec that fails AFTER the server answered leaves its diagnosis in the
+    # app's own output, which was printed only on the never-responded path.
+    # Without this, a mid-run crash reads as a list of "was not 2xx" lines
+    # with nothing saying the process had died.
+    if [ "$rc" -ne 0 ] && [ -s "/tmp/ci_${name}.app.log" ]; then
+        echo "       --- $name app output (last 30 lines) ---"
+        tail -30 "/tmp/ci_${name}.app.log" | sed 's/^/       /'
+    fi
     return $rc
 }
 
