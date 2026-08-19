@@ -187,6 +187,11 @@ AEVG_TESTS=(test_font test_text_path test_transform test_normalizer test_easing 
 # Tests that exercise the REAL cairo text metrics — linked against the GTK4
 # backend (the pure-Aether AEVG_TESTS link with $(ae cflags) only).
 AEVG_GTK_TESTS=(test_text_metrics test_group_pixels)
+# test_group_pixels rasterizes through the GTK backend, so it needs a display;
+# test_text_metrics only measures text and does not. Running the display-bound
+# one bare is what failed a headless runner with "Failed to open display" even
+# though the workflow installs xvfb.
+AEVG_GTK_NEEDS_DISPLAY=" test_group_pixels "
 
 # `ae cflags --libs` emits the transitive deps that libaether.a was
 # built with (PCRE2 / OpenSSL / zlib / nghttp2 — see Aether CHANGELOG
@@ -241,11 +246,25 @@ if pkg-config --exists gtk4 2>/dev/null; then
                 $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (link)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
-        if "$bin" > "/tmp/ci_aevg_${t}_run.log" 2>&1; then
+        runner=""
+        case "$AEVG_GTK_NEEDS_DISPLAY" in
+            *" $t "*)
+                if [ "$LAUNCH_PREFIX" = "SKIP_RUNTIME" ]; then
+                    echo "  SKIP $t (needs a display; none available and no xvfb-run)"
+                    continue
+                fi
+                runner="$LAUNCH_PREFIX"
+                # Xvfb runs need the cairo renderer (GTK's NGL on llvmpipe
+                # churns memory), the same reason the GUI spec phases set it.
+                case "$runner" in *xvfb*) export GSK_RENDERER=cairo ;; esac
+                ;;
+        esac
+        if $runner "$bin" > "/tmp/ci_aevg_${t}_run.log" 2>&1; then
             echo "  OK   $t (gtk-linked)"
         else
             echo "  FAIL $t (run)"; tail -15 "/tmp/ci_aevg_${t}_run.log" | sed 's/^/       /'; FAIL=$((FAIL + 1))
         fi
+        unset GSK_RENDERER
     done
 else
     echo "  SKIP AEVG_GTK_TESTS (gtk4 dev libs absent)"
