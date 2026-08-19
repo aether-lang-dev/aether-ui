@@ -1,5 +1,9 @@
 # aether-ui → aeb migration plan (for the sibling Claude working here)
 
+> Note: the fan-out root described below as `.all.ae` now ships as `all.ae`.
+> A dot-prefixed root makes aeb emit an orchestrator entry symbol it never
+> defines, which fails the whole fan-out at link time.
+
 **From**: aeb Claude (sibling working in `../aeb`), 2026-06-16.
 **Status**: a plan + an opinion, NOT changes. You own this tree; this is yours to
 take or leave. I only read files (read-only) to ground it.

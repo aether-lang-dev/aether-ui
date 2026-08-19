@@ -5443,6 +5443,21 @@ static gboolean aeui_undo_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 static int aeui_fire_undo_redo(int redo) {
+    /* CRITICAL: never queue-and-wait from the thread that runs the loop.
+     *
+     * This backend supplies run_on_ui_thread, and the driver services the
+     * WHOLE request over there, so /undo already arrives on the GTK thread.
+     * Posting an idle and then blocking here for it cannot complete: the
+     * callback only runs when this thread returns to the main loop, and this
+     * thread is the one sleeping. It spun the full 2s and answered
+     * {"did":0,...} with undo_depth 2, an honest-looking "nothing to undo"
+     * for a stack that had two entries. Ctrl+Z kept working throughout,
+     * because that path never leaves the UI thread.
+     *
+     * Already on the loop's thread means the step can just be taken. */
+    if (g_main_context_is_owner(g_main_context_default())) {
+        return redo ? aether_ui_redo_step_impl() : aether_ui_undo_step_impl();
+    }
     AeuiUndoReq* r = g_new0(AeuiUndoReq, 1);
     r->redo = redo;
     g_idle_add(aeui_undo_idle, r);
@@ -6688,6 +6703,16 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     return 0;
 }
 
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
+                                      int* clip_paints, int* last_clip_area) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    *full_paints = cs->paint_full_count;
+    *clip_paints = cs->paint_clip_count_total;
+    *last_clip_area = cs->last_clip_area;
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // dispatch_action — BY VERB, never by number
 // ---------------------------------------------------------------------------
@@ -6883,6 +6908,7 @@ static const AetherDriverHooks gtk4_driver_hooks = {
     .widget_classes_into  = hook_widget_classes_into,
     .widget_a11y          = hook_widget_a11y,
     .canvas_debug         = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
     .dispatch_action      = hook_dispatch_action,
     .screenshot_png       = hook_screenshot_png,
     // The GTK-specific one macOS and win32 leave NULL.

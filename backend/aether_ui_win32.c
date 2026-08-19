@@ -8199,6 +8199,16 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     return 0;
 }
 
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
+                                      int* clip_paints, int* last_clip_area) {
+    if (canvas_id < 1 || canvas_id > canvas_count) return 1;
+    Canvas* cv = &canvases[canvas_id - 1];
+    if (full_paints) *full_paints = cv->full_paints;
+    if (clip_paints) *clip_paints = cv->clip_paints;
+    if (last_clip_area) *last_clip_area = cv->last_clip_area;
+    return 0;
+}
+
 static const AetherDriverHooks win32_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -8219,6 +8229,7 @@ static const AetherDriverHooks win32_driver_hooks = {
     .widget_pressed       = hook_widget_pressed,
     .screenshot_png       = hook_screenshot_png,
     .canvas_debug         = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
 };
 
 static int test_server_started = 0;

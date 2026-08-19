@@ -140,6 +140,17 @@ typedef struct {
     // are the paint allocation. NULL hook → /canvas/{id}/debug returns 501.
     int (*canvas_debug)(int canvas_id, int* area, int* commands, int* w, int* h);
 
+    // Optional: cumulative dirty-region paint counters for the same canvas.
+    // Kept separate from canvas_debug because that signature is fixed at four
+    // fields and shared by every backend. `full_paints` and `clip_paints`
+    // count whole-canvas versus clipped repaints over the canvas's life;
+    // `last_clip_area` is the summed clip-rect area of the last clipped paint
+    // (0 when the last paint was full). A NULL hook reports -1 for all three
+    // rather than 0: a Stage-2.5 spec compares these numerically, and 0 is a
+    // legitimate reading that must not be confused with "not measured here".
+    int (*canvas_paint_counters)(int canvas_id, int* full_paints,
+                                 int* clip_paints, int* last_clip_area);
+
     // Optional: run `fn(arg)` on the UI thread and BLOCK until it returns.
     //
     // Leave NULL if the backend tolerates read-only introspection from the

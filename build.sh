@@ -30,6 +30,15 @@ OUTPUT_NAME="$(basename "${2:-$(basename "$SOURCE" .ae)}")"
 OUTPUT="build/${OUTPUT_NAME}"
 C_FILE="${OUTPUT}.c"
 
+# `ae cflags --libs` already carries -laether/-pthread/-lm, and each platform
+# branch below also passes them explicitly so the link still works when `ae
+# cflags` is unavailable. Passing both makes ld warn about duplicate libraries,
+# so strip the overlap from the cflags side and keep the explicit baseline.
+ae_libs() {
+    ae cflags --libs 2>/dev/null | tr ' ' '\n' \
+        | grep -vxE '\-laether|\-lm|\-pthread' | tr '\n' ' '
+}
+
 # Contrib archives: `ae cflags --libs` can't emit these (ae doesn't see the
 # program's import graph — upstream ask aether#1201), and aeb knows via the
 # app's .build.ae — but build.sh must detect them itself. Grep the app's dir
@@ -66,7 +75,7 @@ case "$OS" in
         # …) via `ae cflags --libs`. Apps importing std.regex-using modules need
         # -lpcre2-8 at link time; plain -laether doesn't pull it in (same as the
         # Linux branch — falling_blocks / rubiks_cube hit this on the Mac).
-        AETHER_LIBS="$(ae cflags --libs 2>/dev/null || true)"
+        AETHER_LIBS="$(ae_libs)"
         clang -O0 -g -fobjc-arc \
             $AETHER_INCLUDES \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_macos.m" \
@@ -107,7 +116,7 @@ case "$OS" in
         # zlib / nghttp2) via `ae cflags --libs`. Examples that import
         # std.regex-using modules (e.g. the AeVG port's rasterize/parser)
         # need -lpcre2-8 at link time; plain -laether doesn't pull it in.
-        AETHER_LIBS="$(ae cflags --libs 2>/dev/null || true)"
+        AETHER_LIBS="$(ae_libs)"
         "$CC_BIN" -O0 -g -pipe \
             $(pkg-config --cflags gtk4) \
             $AETHER_INCLUDES \
@@ -128,7 +137,7 @@ case "$OS" in
         # archives (-laether_sqlite for LisMusic, ssl/pcre2/...). The
         # explicit -lssl/-lcrypto/-lpcre2-8 stay as a fallback for boxes
         # where `ae cflags` predates --libs.
-        AETHER_LIBS="$(ae cflags --libs 2>/dev/null || true)"
+        AETHER_LIBS="$(ae_libs)"
         gcc -O2 -g -pipe \
             $AETHER_INCLUDES \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_win32.c" \
