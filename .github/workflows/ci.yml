@@ -40,7 +40,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev xvfb
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev xvfb gdb
+          # A driver spec that dies takes its diagnosis with it: the spec only
+          # sees POSTs that stopped being answered. Put cores somewhere ci.sh
+          # can find so it can print the faulting frame.
+          sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p
 
       # Both toolchains, matching bootstrap.sh: ci.sh drives the per-target
       # .build.ae files through aeb, so ae alone is not enough. Installed

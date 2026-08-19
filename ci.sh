@@ -76,6 +76,12 @@ case "$OS" in
 esac
 echo "=== aether_ui CI on $OS ($PLATFORM) ==="
 
+# A crashing driver app leaves no explanation in its own output. Allow cores so
+# a failing spec can print the faulting frame instead of a list of POSTs that
+# stopped being answered. Each workflow step is a fresh shell, so this has to
+# be set here rather than beside the core_pattern in the workflow.
+if [ "$PLATFORM" = "linux" ]; then ulimit -c unlimited 2>/dev/null || true; fi
+
 if [ "$PLATFORM" = "windows" ]; then
     echo "NOTICE: Windows backend uses a separate test flow."
     echo "        Run: make contrib-aether-ui-check"
@@ -164,6 +170,30 @@ run_server_test() {
     if [ "$rc" -ne 0 ] && [ -s "/tmp/ci_${name}.app.log" ]; then
         echo "       --- $name app output (last 30 lines) ---"
         tail -30 "/tmp/ci_${name}.app.log" | sed 's/^/       /'
+    fi
+    # A crash (SIGBUS/SIGSEGV) leaves nothing useful in the app's own output:
+    # the process is gone before it can say anything, and the spec only sees
+    # POSTs that stopped being answered. macOS files a report naming the
+    # faulting frame, so surface it here rather than leaving the next reader
+    # to guess from "was not 2xx".
+    if [ "$rc" -ne 0 ] && [ "$PLATFORM" = "linux" ] && command -v gdb > /dev/null 2>&1; then
+        local core
+        core="$(ls -t /tmp/core."$(basename "$bin")".* 2>/dev/null | head -1)"
+        if [ -n "$core" ]; then
+            echo "       --- $name backtrace from $core ---"
+            gdb -batch -ex 'thread apply all bt' "$bin" "$core" 2>/dev/null \
+                | head -60 | sed 's/^/       /'
+            rm -f "$core"
+        fi
+    fi
+    if [ "$rc" -ne 0 ] && [ "$PLATFORM" = "macos" ]; then
+        local base report
+        base="$(basename "$bin")"
+        report="$(ls -t "$HOME/Library/Logs/DiagnosticReports/${base}"*.ips 2>/dev/null | head -1)"
+        if [ -n "$report" ]; then
+            echo "       --- $name crash report: $(basename "$report") ---"
+            sed -n '1,80p' "$report" | sed 's/^/       /'
+        fi
     fi
     return $rc
 }
@@ -692,10 +722,16 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=frames_demo/spec_frames_demo \
     run_server_test "$(AEVG_BIN frames_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" frames_demo || FAIL=$((FAIL + 1))
-    ( unset AETHER_UI_NO_ANIMATION
-      run_server_test "$(AEVG_BIN frames_demo)" \
-                      "$SCRIPT_DIR/tests/frames_demo/test_stage25_clip_surface.sh" \
-                      frames_stage25 ) || FAIL=$((FAIL + 1))
+    # This one runs with animations OFF, unlike the transition proofs below.
+    # It asserts that a drag produces a CLIPPED paint, and frames_demo never
+    # clips while the scene animates (7e1ebd1). It was wired here with
+    # animations forced on a day before that gate landed (d4ca5382), so its
+    # premise has been false ever since: every paint went full-canvas and the
+    # assertion could not pass on any backend. Leaving the global
+    # AETHER_UI_NO_ANIMATION=1 in place is what lets the clip path engage.
+    run_server_test "$(AEVG_BIN frames_demo)" \
+                    "$SCRIPT_DIR/tests/frames_demo/test_stage25_clip_surface.sh" \
+                    frames_stage25 || FAIL=$((FAIL + 1))
     UI_SPEC=falling_blocks/spec_falling_blocks \
     run_server_test "$(AEVG_BIN falling_blocks)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" falling_blocks || FAIL=$((FAIL + 1))
