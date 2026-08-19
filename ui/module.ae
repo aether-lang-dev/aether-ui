@@ -69,7 +69,7 @@ exports (
     transition_overlay, overlay_is_exiting,
     overlay_material, overlay_material_effective,
     transition,
-    canvas_on_hover, canvas_on_scroll,
+    canvas_on_hover, canvas_on_scroll, canvas_gesture_probe,
     edge,
     vg_tooltip_show, vg_tooltip_hide, vg_tooltip_drawn,
     each, each_update, each_count, each_parent,
@@ -140,6 +140,7 @@ extern aether_ui_canvas_on_move_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_key_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_release_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_scroll_impl(canvas_id: int, boxed_closure: ptr)
+extern aether_ui_canvas_gesture_probe_impl(canvas_id: int, boxed_closure: ptr)
 
 extern aether_ui_text_create(label: string) -> int
 extern aether_ui_text_wrapped_create(label: string, wrap_px: int) -> int
@@ -2764,6 +2765,19 @@ struct CanvasHoverState {
 // conventional zoom-IN direction); the raw deltas are passed through rather
 // than a +/-1 step, because a zoom wants magnitude and a stepper can sign it
 // itself. GTK4 only for now; a no-op elsewhere.
+// canvas_gesture_probe(canvas, cb) — DIAGNOSTIC. Wires every touchpad
+// controller GTK4 offers to one callback:
+//   cb(|kind: string, a: float, b: float, mods: int|)
+// kind: scroll | zoom | rotate | drag-begin | drag-update | drag-end |
+//       touchpad-pinch | touchpad-swipe
+// mods is the modifier bitmask (SHIFT=1, CTRL=4).
+//
+// Exists because "what does this trackpad actually send?" is not answerable
+// from documentation -- see apps/gesture_probe. GTK4 only; no-op elsewhere.
+canvas_gesture_probe(canvas_id: int, cb: fn) {
+    aether_ui_canvas_gesture_probe_impl(canvas_id, box_closure(cb))
+}
+
 canvas_on_scroll(canvas_id: int, cb: fn) {
     aether_ui_canvas_on_scroll_impl(canvas_id, box_closure(cb))
 }

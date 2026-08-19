@@ -4957,6 +4957,11 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
 // Pointer-release on a canvas: WM_LBUTTONUP → (x,y) into the closure.
 /* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
    scroll controller). Stubbed so the ABI stays uniform across backends. */
+/* Gesture probe: GTK4-only diagnostic. Stubbed for ABI uniformity. */
+void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
 void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
     (void)canvas_id; (void)boxed_closure;
 }

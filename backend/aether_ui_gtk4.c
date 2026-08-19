@@ -5162,6 +5162,100 @@ static gboolean on_vlist_scroll(GtkEventControllerScroll* c, double dx,
     return TRUE;
 }
 
+// ── gesture PROBE (diagnostic; apps/gesture_probe) ──────────────────
+// Wires every touchpad-relevant GTK4 controller to ONE callback that reports
+// what actually arrived: kind, two numbers, and the modifier state. It exists
+// because we could not answer "what does a Chromebook trackpad pinch
+// deliver?" from documentation -- the first zoom attempt assumed a pinch
+// arrives as ctrl+scroll, and it does not.
+//
+// The callback is cb(kind: string, a: float, b: float, mods: int) where
+// `mods` is the GdkModifierType bitmask (SHIFT=1, CTRL=4 on X11/Wayland).
+// kind is one of: scroll, zoom, rotate, drag-begin, drag-update, drag-end,
+// touchpad-raw.
+typedef struct { AeClosure* cl; } AeuiProbe;
+
+static void probe_fire(AeuiProbe* p, const char* kind, double a, double b, int mods) {
+    if (p && p->cl && p->cl->fn)
+        ((void(*)(void*, const char*, double, double, intptr_t))p->cl->fn)
+            (p->cl->env, kind, a, b, (intptr_t)mods);
+}
+
+static gboolean probe_scroll(GtkEventControllerScroll* c, double dx, double dy, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(c));
+    probe_fire((AeuiProbe*)d, "scroll", dx, dy, (int)m);
+    return FALSE;   /* do not consume: let other controllers see it too */
+}
+static void probe_zoom(GtkGestureZoom* g, double scale, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "zoom", scale, 0.0, (int)m);
+}
+static void probe_rotate(GtkGestureRotate* g, double angle, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "rotate", angle, 0.0, (int)m);
+}
+static void probe_drag_begin(GtkGestureDrag* g, double x, double y, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "drag-begin", x, y, (int)m);
+}
+static void probe_drag_update(GtkGestureDrag* g, double x, double y, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "drag-update", x, y, (int)m);
+}
+static void probe_drag_end(GtkGestureDrag* g, double x, double y, gpointer d) {
+    GdkModifierType m = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    probe_fire((AeuiProbe*)d, "drag-end", x, y, (int)m);
+}
+
+/* Raw tap: GDK_TOUCHPAD_PINCH / _SWIPE never reach the high-level gestures on
+   some stacks, so report them directly rather than inferring their absence. */
+static gboolean probe_legacy(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer d) {
+    (void)c;
+    GdkEventType t = gdk_event_get_event_type(ev);
+    if (t == GDK_TOUCHPAD_PINCH) {
+        probe_fire((AeuiProbe*)d, "touchpad-pinch",
+                   gdk_touchpad_event_get_pinch_scale(ev),
+                   gdk_touchpad_event_get_pinch_angle_delta(ev), 0);
+    } else if (t == GDK_TOUCHPAD_SWIPE) {
+        double dx = 0, dy = 0;
+        gdk_touchpad_event_get_deltas(ev, &dx, &dy);
+        probe_fire((AeuiProbe*)d, "touchpad-swipe", dx, dy, 0);
+    }
+    return FALSE;
+}
+
+void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    AeuiProbe* p = g_new0(AeuiProbe, 1);
+    p->cl = (AeClosure*)boxed_closure;
+
+    GtkEventControllerScroll* sc = GTK_EVENT_CONTROLLER_SCROLL(
+        gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES));
+    g_signal_connect(sc, "scroll", G_CALLBACK(probe_scroll), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(sc));
+
+    GtkGesture* zm = gtk_gesture_zoom_new();
+    g_signal_connect(zm, "scale-changed", G_CALLBACK(probe_zoom), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(zm));
+
+    GtkGesture* rot = gtk_gesture_rotate_new();
+    g_signal_connect(rot, "angle-changed", G_CALLBACK(probe_rotate), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(rot));
+
+    GtkGesture* drag = gtk_gesture_drag_new();
+    g_signal_connect(drag, "drag-begin",  G_CALLBACK(probe_drag_begin), p);
+    g_signal_connect(drag, "drag-update", G_CALLBACK(probe_drag_update), p);
+    g_signal_connect(drag, "drag-end",    G_CALLBACK(probe_drag_end), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(drag));
+
+    GtkEventController* legacy = gtk_event_controller_legacy_new();
+    g_signal_connect(legacy, "event", G_CALLBACK(probe_legacy), p);
+    gtk_widget_add_controller(w, legacy);
+}
+
 // ── canvas scroll (wheel / two-finger) ──────────────────────────────
 // Same GtkEventControllerScroll shape as the vlist one below, but on a
 // CANVAS widget and reporting the raw delta rather than a +/-1 step: a zoom
