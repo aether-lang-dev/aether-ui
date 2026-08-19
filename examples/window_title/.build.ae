@@ -1,0 +1,17 @@
+// window_title - aether-ui toolkit example, built as its own cached aeb node.
+import build
+import aether
+import aether (source, output, no_closure_regen)
+import build_support.aetherui (ui_backend)
+
+main() {
+    b = build.start()
+    root = build._get(b, "root")
+    aether.program(b) {
+        source("window_title.ae")     // sibling source in this module dir
+        output("window_title")
+        no_closure_regen()
+        ui_backend(root)              // import aether_ui resolves via AEB_COMPILE_LIB (repo root)
+    }
+    return 0
+}

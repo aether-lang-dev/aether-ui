@@ -2903,6 +2903,12 @@ const char* aether_ui_window_title_impl(int win_handle) {
     const char* t = [[w title] UTF8String];
     return t ? t : "";
 }
+
+void aether_ui_window_set_title_impl(int win_handle, const char* title) {
+    NSWindow* w = mac_window_for_handle(win_handle);
+    if (!w) return;
+    [w setTitle:[NSString stringWithUTF8String:title ? title : ""]];
+}
 int aether_ui_window_is_open_impl(int win_handle) {
     NSWindow* w = mac_window_for_handle(win_handle);
     // A closed NSWindow is released/hidden; visible OR the primary counts live.

@@ -3723,6 +3723,17 @@ const char* aether_ui_window_title_impl(int win_handle) {
     if (win_handle < 1 || win_handle > w32_window_count) return "";
     return w32_windows[win_handle - 1].title;
 }
+
+void aether_ui_window_set_title_impl(int win_handle, const char* title) {
+    if (win_handle < 1 || win_handle > w32_window_count) return;
+    W32Window* e = &w32_windows[win_handle - 1];
+    const char* t = title ? title : "";
+    char* copy = _strdup(t);
+    if (!copy) return;
+    free(e->title);
+    e->title = copy;
+    if (e->hwnd) SetWindowTextW(e->hwnd, utf8_to_wide(t));
+}
 int aether_ui_window_is_open_impl(int win_handle) {
     if (win_handle < 1 || win_handle > w32_window_count) return 0;
     return w32_windows[win_handle - 1].live;
