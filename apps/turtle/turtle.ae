@@ -182,7 +182,7 @@ redraw(st: *TurtleUiState) {
                            st.scale, st.panx, st.pany)
     if st.status != 0 {
         pct = st.scale * 100.0
-        aether_ui_text_set_string(st.status, "zoom: ${pct}%  (scroll to zoom, shift-scroll to pan)")
+        aether_ui_text_set_string(st.status, "zoom: ${pct}%  (+ / - to zoom; scroll works where the trackpad sends it)")
     }
 }
 
@@ -251,7 +251,7 @@ main() {
                         redraw(app_state)
                     }
                 }
-                app_state.status = ui.text("zoom: 100%  (scroll to zoom, shift-scroll to pan)")
+                app_state.status = ui.text("zoom: 100%  (+ / - to zoom; scroll works where the trackpad sends it)")
             }
             ui.width(left, 320)
 
@@ -271,8 +271,19 @@ main() {
 
             // Wheel / two-finger scroll over the canvas.
             //   plain scroll  -> zoom (dy < 0 = away from you = zoom in)
-            //   shift-scroll  -> pan, because once the drawing outgrows the
-            //                    view you need to reach the rest of it
+            //
+            // SHIFT-SCROLL TO PAN IS NOT IMPLEMENTED, and the label no longer
+            // claims it: canvas_on_scroll passes only (dx, dy), so the
+            // modifier never crosses the ABI and there is nothing to branch
+            // on. The modifier IS available at the GTK layer --
+            // apps/gesture_probe measured mods=257 (256+SHIFT) on a
+            // shift-held drag -- so this wants canvas_on_scroll widened to
+            // carry mods, not a workaround here.
+            //
+            // NB on a Chromebook trackpad (Crostini) NEITHER pinch NOR
+            // two-finger scroll reaches the app at all; see gesture_probe's
+            // header for the measurements. The +/- buttons are the reliable
+            // path there.
             // Pan rather than a scrollview: the canvas is a fixed-size widget
             // whose CONTENT grows, not a widget that grows, so there is no
             // larger child for a scrollview to scroll. Moving the origin is
