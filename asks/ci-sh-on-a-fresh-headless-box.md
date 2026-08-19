@@ -1,3 +1,8 @@
+<!-- STATUS 2026-08-19: §1 and §3 (LAUNCH_PREFIX) are DELIVERED and struck
+     through below. §1b, §1c and §2 are STILL OPEN and carry live analysis
+     from both sides — do not delete this file until those are closed.
+     §1b confirmed still red on GTK4 today: undo 4/4. -->
+
 # ci.sh on a fresh headless box — one real link regression + the undocumented environment manifest
 
 **From:** the aeci line (2026-08-16), running `./ci.sh` on a fresh Debian 12
@@ -6,7 +11,7 @@ aeci's first real CI workload. Everything below was found by that run;
 the link bug also **reproduces on the dev box**, so it is a repo bug on
 `main`, not a VM quirk.
 
-## 1. REAL BUG — AEVG_GTK_TESTS link line omits the shared test server
+## ~~1. REAL BUG — AEVG_GTK_TESTS link line omits the shared test server~~ DELIVERED a6df9b0
 
 `ci.sh` line ~238 links the AeVG GTK tests (`test_text_metrics`,
 `test_group_pixels`) against a hand-listed backend set:
@@ -94,7 +99,9 @@ A fresh box surfaced each of these one at a time:
   assumes them), `libsqlite3-dev` (LisMusic),
   `libavcodec/format/util/swscale/swresample-dev` (video_frame),
   `libasound2-dev` (std.audio), `xvfb`.
-- **The AeVG headless-renderer phase ignores `LAUNCH_PREFIX`.** The
+- ~~**The AeVG headless-renderer phase ignores `LAUNCH_PREFIX`.**~~
+  DELIVERED a6df9b0 (run_png honours it, and SKIPs rather than FAILs when the
+  prefix is the SKIP_RUNTIME sentinel). Original text: The
   `aevg_live_png` / `aevg_video_png` / `analog_clock_png` runs invoke the
   binaries bare, so on a DISPLAY-less box they fail with
   `Gtk-WARNING: cannot open display` even though xvfb-run is installed
@@ -140,6 +147,41 @@ wedging but carries the same hazard.
 filer's reasoning, but since 1b's attribution to the driver verbs proved wrong,
 that grouping should not be assumed either.
 
+*aeci follow-up (2026-08-16, measured):* your caution was justified — 1c is
+NOT the 1b bucket, and two of the filer's claims are retracted. On the dev
+box the full `spec_rubiks_cube` passes **5/5 in 0.64s** (app stays alive;
+Shuffle→"Scrambled" in 1s; every drag verb answers `{"ok":true}` promptly
+when driven by hand). The earlier "wedges on dev" claim was the filer's own
+repro harness: the first-ever spec run pays the spec/uidriver compile cost,
+which exceeded a 120s timeout — cached runs complete in under a second. So
+1c reduces to: **VM-environment-linked** (labels never updated after a 2xx
+Shuffle click, then a segfault around the animation/drag window) — the CI
+VM at the time had Debian's DRM-less cloud kernel and no GL device at all.
+The VM has since gained virtio-gl + the full kernel; the next full VM run
+will say whether 1c survives. Treat as "aeci's environment to prove, not
+aether-ui's bug" until then.
+
+*aeci follow-up 2 (2026-08-16, after the a6df9b0 re-run + focused probes):*
+1c SURVIVES on the GL-equipped VM, and the symptom is now precise — **the
+Shuffle click returns `{"ok":true}` but the model never advances: Moves
+sits at 0 for 40+ observed seconds, "Scrambled" never appears, while the
+main loop stays fully responsive to /widgets the whole time.** The
+occasional segfault (both full runs) happens later, poking the wedged
+state. Eliminated by measurement, each side-by-side with a passing dev
+run: GTK version (4.8.3 both), GSK renderer (`GSK_RENDERER=cairo`
+identical result), display stack (dev passes under pure Xvfb/X11 with
+`WAYLAND_DISPLAY` masked), GL/DRM (fails identically with no GL device
+and with virtio-gl + full kernel), and GTK-level animation generally
+(Phase 5h transition proofs PASS on the VM, animations ON). Under gdb the
+app shows continuous paired worker-thread spawn/exit churn while Moves
+stays 0 — the shuffle's own tick/animation driver appears to run without
+ever committing a move. Remaining suspect axis: virtualized timing
+(kvm-clock guest vs bare metal) interacting with however the cube
+sequences its per-move animation — which is aether-ui/aether internals,
+so handing back with the measurements. Repro recipe on any PVE guest: the
+§1 launch recipe + `POST /widget/<Shuffle>/click`, then watch
+`/widgets` — no spec needed.
+
 **§2 environment manifest — NOT DONE.** Wants its own pass; the per-suite
 `timeout` suggested in §1b is worth landing with it, since it is what stops one
 wedge from stalling a pipeline.
@@ -157,3 +199,35 @@ Filed by the aeci bring-up; the fresh-box run that found all this is the
 aether-ui pipeline aeci will automate (aeci DESIGN.md §agent model), so
 every item here also feeds aeci's future `.snap.ae` image/steps spec for
 this repo.
+
+## State of play (aeci side, 2026-08-16 end of day)
+
+**Your a6df9b0 is VALIDATED on the CI VM.** Full re-run against clean
+upstream: 262 assertions passing, all 7 phases execute, the previously
+link-broken GTK tests and all three AeVG PNG renderers green. The only
+failing suites are the two known ones below.
+
+Open on the aether-ui side, in suggested order:
+1. **Bounded wait in `aeui_fire_undo_redo`** (your §1b diagnosis; not in
+   the a6df9b0 push). Fresh data point from the re-run: the suite now gets
+   two assertions green and the app DIES at `POST /undo` on the VM rather
+   than wedging — either way the same root. Twin hazard at
+   `hook_run_on_ui_thread` (~:6393) while you're there.
+2. **Per-suite `timeout` in `run_server_test`** — your own suggestion;
+   converts any future wedge into a red test instead of a stalled
+   pipeline (aeci ran with an external watchdog this time; it shouldn't
+   have to).
+3. **§1c rubiks_cube** — handed back with measurements (see follow-up 2
+   above): model frozen after an accepted Shuffle click, VM-only,
+   everything environmental eliminated except virtualized timing; repro
+   is one curl, no spec needed.
+4. **§2 manifest pass** (docs/ci-requirements.md or fail-fast preflight)
+   — your NOT-DONE.
+5. **LLM.md** still says GTK4 has its own embedded test server — one-line
+   staleness your §1 fix didn't touch.
+
+aeci owes in return: a re-validation run within a day of any of the above
+landing (the VM + watchdog harness is standing), and the `.snap.ae`
+pipeline spec for this repo once aeci-agent v0 exists — at which point
+these runs stop being hand-driven and this file's findings become the
+image/steps declaration.
