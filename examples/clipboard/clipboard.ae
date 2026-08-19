@@ -1,0 +1,34 @@
+// clipboard_read() completes the clipboard pair: write puts text on the
+// system clipboard, read takes it back off. The round-trip button writes a
+// known string and reads it straight back, so the label proves both halves.
+import ui (window, vstack, text, btn, clipboard_write, clipboard_read,
+           ui_state_s, ui_set_s, bind_text, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    shown = ui_state_s("clipboard: (not read yet)")
+    window("Clipboard", 460, 220) {
+        vstack(10) {
+            t = text("clipboard: (not read yet)")
+            bind_text(t, shown)
+            btn("Write 'aether'") callback {
+                clipboard_write("aether")
+                _w = ui_set_s(shown, "wrote: aether")
+            }
+            btn("Read") callback {
+                got = clipboard_read()
+                _r = ui_set_s(shown, "read: [${got}]")
+            }
+            btn("Round-trip") callback {
+                clipboard_write("round-trip-ok")
+                back = clipboard_read()
+                if back == "round-trip-ok" {
+                    _o = ui_set_s(shown, "round-trip: OK [${back}]")
+                } else {
+                    _f = ui_set_s(shown, "round-trip: MISMATCH [${back}]")
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

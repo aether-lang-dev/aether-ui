@@ -240,6 +240,9 @@ void aether_ui_alert_impl(const char* title, const char* message);
 char* aether_ui_file_open(const char* title);
 char* aether_ui_file_save(const char* title, const char* default_name);
 void aether_ui_clipboard_write_impl(const char* text);
+/* Read the clipboard's text. Returns a malloc'd string the caller owns,
+ * empty when the clipboard holds no text. Never returns NULL. */
+char* aether_ui_clipboard_read_impl(void);
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure);
 void aether_ui_timer_cancel_impl(int timer_id);
 void aether_ui_open_url_impl(const char* url);

@@ -3602,6 +3602,24 @@ void aether_ui_clipboard_write_impl(const char* text) {
     CloseClipboard();
 }
 
+char* aether_ui_clipboard_read_impl(void) {
+    if (!OpenClipboard(NULL)) return _strdup("");
+    char* out = NULL;
+    HANDLE mem = GetClipboardData(CF_UNICODETEXT);
+    if (mem) {
+        wchar_t* wide = (wchar_t*)GlobalLock(mem);
+        if (wide) {
+            /* wide_to_utf8 hands back a rotating static buffer, so the copy
+             * has to happen before the lock is dropped and before any other
+             * conversion can reuse the slot. */
+            out = _strdup(wide_to_utf8(wide));
+            GlobalUnlock(mem);
+        }
+    }
+    CloseClipboard();
+    return out ? out : _strdup("");
+}
+
 // Timer: each user timer is keyed by (hwnd, id). We use the first live app
 // window as the timer host — but ui.timer is usually called INSIDE the
 // window block, BEFORE app_run creates the hwnd. SetTimer(NULL, id, …)
