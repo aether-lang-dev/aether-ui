@@ -86,6 +86,7 @@ exports (
     table_select, table_selected, table_count, table_on_select, table_bind,
     table_sorter, table_sorter_cmp, table_sort_by, table_sort_col,
     table_sort_dir,
+    table_filter, table_filter_text, table_filter_clear, table_item_at,
     on_sort,
     tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
     tree_visible_count,
@@ -3384,11 +3385,17 @@ remove_css_class(handle: int, cls: string) {
 struct TableCol { title: string, w: int, delegate: ptr }
 // sorter: the built-in TableRowSorter (0 = off, app owns sorting via on_sort).
 // sort_col/sort_dir are the CURRENT sort (dir 1 asc, -1 desc, 0 unsorted);
-// items is the list the sorter re-orders in place; cmp is an optional
-// app-supplied comparator.
+// items is the MODEL list (the sorter re-orders it in place; the filter never
+// touches it); cmp is an optional app-supplied comparator.
+// filter/ftext/fmode are the RowFilter half (see table_filter below):
+// fmode 0 = off, 1 = predicate in `filter`, 2 = text match on `ftext`.
+// view is what the listbox is currently showing — the items pointer itself
+// when unfiltered, else a fresh list of the PASSING item pointers (a view of
+// the model, never a copy of the data).
 struct TableDef {
     cols: ptr, lb: ptr, cell: ptr, sort_cb: ptr,
-    sorter: int, sort_col: int, sort_dir: int, items: ptr, cmp: ptr
+    sorter: int, sort_col: int, sort_dir: int, items: ptr, cmp: ptr,
+    filter: ptr, view: ptr, ftext: string, fmode: int
 }
 
 table_cols() -> ptr { return list.new() }
@@ -3456,7 +3463,7 @@ _table_invoke_sort(cb: fn, c: int) {
 
 // table(cols, cell) -> table-handle. cell = |item, c| -> string.
 table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
-    t = malloc(72) as *TableDef
+    t = malloc(104) as *TableDef
     t.cols = cols
     t.cell = box_closure(cell)
     t.sort_cb = null
@@ -3465,6 +3472,10 @@ table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
     t.sort_dir = 0
     t.items = null
     t.cmp = null
+    t.filter = null
+    t.view = null
+    t.ftext = ""
+    t.fmode = 0
     tp = t as ptr
     // ONE widget into the parent: header + body wrapped in a vstack (a
     // scrollview parent takes a single child; two attachments would clobber).
@@ -3665,9 +3676,132 @@ table_sort_dir(tp: ptr) -> int {
     return t.sort_dir
 }
 
+// ── RowFilter: filtering the table owns ─────────────────────────────────
+// The other half of Swing's TableRowSorter (roadmap said so at the sorter's
+// closeout). Sorting re-orders the MODEL in place, so it never needed a
+// view/model split; filtering is exactly that split, and the design answers
+// the two questions the roadmap left open:
+//
+//   * every row index is a VIEW index — table_count, table_select and
+//     table_selected already delegate to the listbox, which only ever knew
+//     about the rendered rows, so filtering changes what they report without
+//     changing what they mean;
+//   * table_item_at(t, i) is the bridge back to the model — the item behind
+//     visible row i — so `table_item_at(t, table_selected(t))` is the
+//     selected ITEM whether or not a filter is armed.
+//
+//   table_filter(t) callback |item: ptr| -> int { … }   // 1 = keep
+//   table_filter_text(t, "ali")   // any text column contains it, case-folded
+//   table_filter_clear(t)         // show everything again
+//
+// table_update stays the app's one refresh call and is filter-aware: it keeps
+// the model reference and feeds the listbox the view, so re-filtering after a
+// data change is automatic (Swing's behaviour) rather than a second call the
+// app has to remember. The view is a list of the PASSING item pointers — a
+// view of the model, never a copy of the data — and when no filter is armed
+// it is the model list itself.
+//
+// Sorting composes: headers sort the model in place, then the view is
+// re-derived, so a filtered table sorts and a sorted table filters with
+// neither feature knowing about the other.
+//
+// table_filter_text stores the needle in the struct rather than closing over
+// it — the predicate closure is the app's to manage, but the built-in text
+// match has no reason to route a string through a closure environment.
+
+_table_invoke_filter(cb: fn, item: ptr) -> int {
+    return cb(item)
+}
+
+// Does `item` survive the current filter? Text mode matches case-insensitively
+// against every PLAIN column's cell text (a delegate column has no text to
+// match). No filter armed = everything passes.
+_table_filter_pass(t: *TableDef, item: ptr) -> int {
+    if t.fmode == 1 {
+        pf = unbox_closure(t.filter)
+        return _table_invoke_filter(pf, item)
+    }
+    if t.fmode == 2 {
+        cellf = unbox_closure(t.cell)
+        nc = list.size(t.cols)
+        c = 0
+        while c < nc {
+            cp, _e = list.get(t.cols, c)
+            colf = cp as *TableCol
+            if colf.delegate == null {
+                s = _table_invoke_cell(cellf, item, c)
+                if string.contains(string.to_lower(s), t.ftext) != 0 { return 1 }
+            }
+            c = c + 1
+        }
+        return 0
+    }
+    return 1
+}
+
+// table_filter(t) callback |item| -> int — arm a predicate filter (1 = keep).
+table_filter(tp: ptr, pred: fn) {
+    t = tp as *TableDef
+    t.filter = box_closure(pred)
+    t.fmode = 1
+    if t.items != null { table_update(tp, t.items) }
+}
+
+// table_filter_text(t, s) — the search-box filter: keep rows where ANY plain
+// column's cell text contains `s`, case-insensitively. "" clears (emptying
+// the search box shows everything, no separate call needed).
+table_filter_text(tp: ptr, s: string) {
+    t = tp as *TableDef
+    if string.length(s) == 0 {
+        table_filter_clear(tp)
+        return
+    }
+    t.ftext = string.to_lower(s)
+    t.fmode = 2
+    if t.items != null { table_update(tp, t.items) }
+}
+
+// table_filter_clear(t) — drop the filter and show every row.
+table_filter_clear(tp: ptr) {
+    t = tp as *TableDef
+    t.fmode = 0
+    t.filter = null
+    if t.items != null { table_update(tp, t.items) }
+}
+
+// table_item_at(t, i) — the MODEL item behind VISIBLE row i (the view→model
+// bridge; see the design note above). null when out of range.
+table_item_at(tp: ptr, i: int) -> ptr {
+    t = tp as *TableDef
+    v = t.view
+    if v == null { v = t.items }
+    if v == null { return null }
+    if i < 0 { return null }
+    if i >= list.size(v) { return null }
+    ip, _e = list.get(v, i)
+    return ip
+}
+
+// table_update(t, items) — the app's one refresh call. Keeps the model
+// reference and renders the VIEW through the filter (see above).
 table_update(tp: ptr, items: ptr) {
     t = tp as *TableDef
-    listbox_update(t.lb, items)
+    t.items = items
+    if t.fmode == 0 {
+        t.view = items
+        listbox_update(t.lb, items)
+        return
+    }
+    v = list.new()
+    n = list.size(items)
+    i = 0
+    while i < n {
+        ip, _e = list.get(items, i)
+        if _table_filter_pass(t, ip) == 1 { _ = list.add(v, ip) }
+        i = i + 1
+    }
+    t.view = v
+    listbox_update(t.lb, v)
 }
 
 table_select(tp: ptr, i: int) {

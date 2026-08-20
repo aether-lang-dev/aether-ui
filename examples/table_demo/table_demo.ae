@@ -7,11 +7,11 @@
 //   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider,
+import ui (window, vstack, hstack, text, btn, divider, textfield,
     table_cols, table_col, table, table_update, table_selected, table_count,
     table_on_select, on_sort, table_sorter, table_sort_by, table_sort_col,
     columns, col,
-    table_sort_dir, enable_test_server)
+    table_sort_dir, table_filter_text, table_item_at, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -130,7 +130,29 @@ main() {
                 aether_ui_text_set_string(sstatus,
                     "sorted: col ${table_sort_col(st)} ${d}")
             }
+            // Selection under a filter: the row index is a VIEW index, and
+            // table_item_at is the bridge back to the model item -- so this
+            // reports the right person even when visible row 0 is model row 3
+            // (filter "w" below leaves only wu, the LAST model item).
+            table_on_select(st) callback |i: int| {
+                ip = table_item_at(st, i)
+                if ip != null {
+                    p = ip as *Person
+                    aether_ui_text_set_string(sstatus, "picked ${p.name}")
+                }
+            }
             table_update(st, sitems)
+
+            // RowFilter (the other half of Swing's TableRowSorter): type in
+            // the box and the table shows only matching rows. "" clears.
+            // Sorting still works while filtered -- headers sort the model,
+            // the view re-derives.
+            fstatus = text("showing 4 of 4")
+            _fbox = textfield("filter…") callback |val: string| {
+                table_filter_text(st, val)
+                aether_ui_text_set_string(fstatus,
+                    "showing ${table_count(st)} of ${list.size(sitems)}")
+            }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

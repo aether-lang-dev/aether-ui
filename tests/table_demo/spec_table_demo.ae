@@ -105,6 +105,76 @@ main() {
             ok = uidriver.wait_body_contains("/widgets", "selected row 1", 20)
             spec.assert_true(ok, "on_select fired with row index 1")
         }
+
+        // ── RowFilter (the other half of TableRowSorter) ───────────────
+        // Model order at this point: the "switching columns" spec left the
+        // lower table name-ascending — wu, xu, yan, zoe. The filter specs
+        // depend on that (zoe is model row 3), which is exactly what makes
+        // the view→model bridge assertable.
+        spec.it("filter: typing narrows the view to matching rows") callback {
+            tf = uidriver.widget_id_of("textfield", "")
+            spec.assert_gt(tf, 0, "filter textfield found")
+            uidriver.post_ok("/widget/${tf}/set_text?v=u", "type u")
+            ok = uidriver.wait_body_contains("/widgets", "showing 2 of 4", 20)
+            spec.assert_true(ok, "count reports the VIEW (2), not the model (4)")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "wu", "wu matches")
+            spec.assert_contains(b, "xu", "xu matches")
+            nz = string.contains(b, "zoe")
+            spec.assert_eq(nz, 0, "zoe filtered out of the rendered rows")
+            ny = string.contains(b, "yan")
+            spec.assert_eq(ny, 0, "yan filtered out too")
+        }
+
+        spec.it("filter: matching is case-insensitive") callback {
+            tf = uidriver.widget_id_of("textfield", "")
+            uidriver.post_ok("/widget/${tf}/set_text?v=ZO", "type ZO uppercase")
+            ok = uidriver.wait_body_contains("/widgets", "showing 1 of 4", 20)
+            spec.assert_true(ok, "one row survives")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "zoe", "ZO matched zoe")
+            nx = string.contains(b, "xu")
+            spec.assert_eq(nx, 0, "xu gone")
+        }
+
+        // THE POINT OF table_item_at: visible row 0 is zoe, but zoe is MODEL
+        // row 3 (name-asc put wu first). If selection indexed the model this
+        // reports "picked wu"; only the view→model bridge says zoe.
+        spec.it("filter: a visible row maps back to the MODEL item") callback {
+            lbl = uidriver.widget_id_by_text("zoe")
+            r = uidriver.widget_int_field_by_id(lbl, "parent")
+            uidriver.post_ok("/widget/${r}/click", "click the only visible row")
+            ok = uidriver.wait_body_contains("/widgets", "picked zoe", 20)
+            spec.assert_true(ok,
+                "table_item_at resolved view row 0 to model row 3 (zoe)")
+        }
+
+        // Headers sort the MODEL, the view re-derives — so a filtered table
+        // sorts without un-hiding anything.
+        spec.it("filter: sorting composes while filtered") callback {
+            tf = uidriver.widget_id_of("textfield", "")
+            uidriver.post_ok("/widget/${tf}/set_text?v=u", "filter to xu+wu")
+            ok = uidriver.wait_body_contains("/widgets", "showing 2 of 4", 20)
+            spec.assert_true(ok, "two rows visible")
+            h = uidriver.widget_id_by_text("SSize")
+            uidriver.post_ok("/widget/${h}/click", "sort by size while filtered")
+            ok2 = uidriver.wait_body_contains("/widgets", "sorted: col 1 asc", 20)
+            spec.assert_true(ok2, "sorter ran under the filter")
+            spec.assert_true(before("xu", "wu"), "xu (95) before wu (100), numeric")
+            b = uidriver.get_body("/widgets")
+            nz = string.contains(b, "zoe")
+            spec.assert_eq(nz, 0, "sorting did not un-hide zoe")
+        }
+
+        spec.it("filter: emptying the box shows every row again") callback {
+            tf = uidriver.widget_id_of("textfield", "")
+            uidriver.post_ok("/widget/${tf}/set_text?v=", "clear the filter")
+            ok = uidriver.wait_body_contains("/widgets", "showing 4 of 4", 20)
+            spec.assert_true(ok, "\"\" clears — no separate call needed")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "zoe", "zoe back")
+            spec.assert_contains(b, "yan", "yan back")
+        }
     }
     spec.run_summary(fw)
 }

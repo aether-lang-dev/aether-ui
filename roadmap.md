@@ -512,11 +512,23 @@ one file: 24 lines that cannot toggle direction, against one
 `table_sorter()` call. `on_sort` still fires after the built-in sort, so
 an app can react without implementing the ordering.
 
-**Filtering is NOT done** — `RowFilter` is the other half of Swing's
-class and wants its own design pass (does a filtered view change
-`table_count`? what does `table_select` index into?). Sorting re-orders
-the app's list in place, so those questions do not arise; filtering
-would introduce a view/model split that sorting deliberately avoids.
+**Filtering — DONE 2026-08-20** (`RowFilter`, the other half of Swing's
+class). The design pass answered the two open questions the way the
+architecture already leaned: every row index is a VIEW index
+(`table_count`/`table_select`/`table_selected` always delegated to the
+listbox, which only ever knew the rendered rows), and `table_item_at(t, i)`
+is the bridge back to the model item — so
+`table_item_at(t, table_selected(t))` is the selected ITEM with or without
+a filter. `table_filter(t, pred)` arms a predicate; `table_filter_text(t,
+s)` is the search-box case (case-insensitive contains across plain text
+columns; `""` clears); `table_filter_clear(t)` shows all. The view is a
+list of the passing item POINTERS — never a copy of the data — and
+`table_update` is filter-aware, so an app's habitual refresh (and
+`table_bind`) re-filters automatically. Sorting composes: headers sort the
+model in place, the view re-derives, and the spec pins that sorting while
+filtered does not un-hide rows. Pure module.ae (all-backend); table suite
+13/0 GTK4, the bridge pinned by "picked zoe" where zoe is visible row 0 but
+model row 3.
 
 **QML-SpringAnimation-alike easing — DONE 2026-08-14.**
 `transition(h, "opacity", ms, "spring")` now animates a damped spring
