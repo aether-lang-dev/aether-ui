@@ -52,6 +52,23 @@ main() {
             gone = string.contains(b, "st-expanded")
             spec.assert_eq(gone, 0, "old marker removed")
         }
+
+        // The states and their sheets are now DECLARED
+        // (docs/design/declarative-consistency-audit.md): `on_state(name) { … }`
+        // nests the AeCS styles scope inside the state, so bg/color/font_size_of
+        // apply to a sheet nobody named. This asserts a value that ONLY the
+        // nested scope can have produced -- the class-scoped cardtitle rule,
+        // which is the deepest thing in either block.
+        spec.it("a DECLARED state's nested styles reach a class-scoped rule") callback {
+            e = uidriver.widget_id_by_text("Expand")
+            uidriver.post_ok("/widget/${e}/click", "expand")
+            ok = uidriver.wait_body_contains("/widgets", "st-expanded", 20)
+            spec.assert_true(ok, "expanded state applied")
+            t = uidriver.widget_id_by_text("Order #4177")
+            b = uidriver.get_body("/widget/${t}")
+            spec.assert_contains(b, "\"fg\":\"#1e4fa0\"",
+                "cardtitle.text colour came from the declared block")
+        }
     }
     spec.run_summary(fw)
 }

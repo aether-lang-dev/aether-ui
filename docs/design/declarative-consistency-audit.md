@@ -34,9 +34,9 @@ to every line to do it. This is the shape `command` had before 2026-08-15.
 | ~~**styles**~~ **DONE** | `s = create_styles(); st_bg(s,"container",0x…); st_color(s,"text",0x…)` | `styles() { bg("container", 0x…); color("text", 0x…) }` |
 | ~~**roles**~~ **DONE** | `sc = color_scheme(); role(sc,"primary",0x…)` | `scheme() { primary(0x…); on_primary(0x…) }` |
 | ~~**table columns**~~ **DONE** | `cols = table_cols(); table_col(cols,"Name",220)` | `columns() { col("Name", 220) }` |
-| **states** (`ui_states`/`add_state`) | `ws = ui_states(card); add_state(ws,"open",sheet)` | `states(card) { state("open") { … } }` |
+| ~~**states**~~ **DONE** | `ws = ui_states(card); add_state(ws,"open",sheet)` | `states(card) { on_state("open") { bg(…); color(…) } }` |
 | ~~**menus**~~ **DONE** | `m = menu("File"); menu_item(m,"Save") callback {…}` | `menu("File") { item("Save") callback {…}; separator() }` |
-| **navstack** (`nav_push`) | `nav_push(nav, "Detail", body)` | `nav_page("Detail") { … }` |
+| ~~**navstack**~~ **DONE** | `nav_push(nav, "Detail", body)` | `nav_page(nav, "Detail") { … }` |
 
 The pattern is identical in each: a factory returns a handle, and every
 subsequent call repeats it as argument 1.
@@ -134,10 +134,26 @@ inline (`aether_ui_widget_add_child_ctx` casts `(int)(intptr_t)ctx`). Any
 future scope whose ambient context is a HANDLE rather than a struct needs the
 same helper.
 
-**Done 2026-08-15:** `styles`, `scheme`, `menus`, `columns` — four of six.
+**ALL SIX DONE.** `styles`, `scheme`, `menus`, `columns` (2026-08-15);
+`states`, `navstack` (2026-08-17).
 
-**Remaining:** `states` and `navstack`, which both take a widget handle and
-will want the `aether_ui_ctx_to_handle_impl` extern the menu scope added.
+Two things the last pair taught:
+
+* **`state` is a RESERVED KEYWORD** and cannot be an identifier at all, so the
+  verb is `on_state` — which also matches the `on_button`/`on_menu_item`
+  convention the command scope set. Worth noting the compiler says this
+  plainly, unlike the silent shadowing failures elsewhere in this audit; a
+  reserved word is the *good* kind of collision.
+* **`navstack` is the one family that genuinely wants `builder`.** Every other
+  scope needed a plain function because its config object had to exist BEFORE
+  the block ran. Here the opposite holds: a page body must be fully built
+  before it can be pushed, which is exactly what a builder's after-block
+  epilogue provides. `nav_push takes a handle, not a builder block` was a
+  comment in navstackdemo at the call site — that comment is now gone.
+
+Neither needed the `aether_ui_ctx_to_handle_impl` extern after all: `ui_states`
+already returned a ptr, and `nav_page`'s builder threads the nav handle as a
+normal argument.
 
 **Run the FULL matrix before pushing a scope, not just its own suite.** The
 menu scope passed `menu` 5/0 and broke `table_demo` at startup; only the full

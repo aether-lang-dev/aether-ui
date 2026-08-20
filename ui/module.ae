@@ -20,7 +20,7 @@ exports (
     vstack, hstack, scrollview, zstack, form, section, navstack,
     splitview, split_position, split_set_position, on_layout, weight, rtl, wrap,
     tabs, tab, on_tab_change, tab_select, tab_selected,
-    nav_push, nav_pop, nav_depth,
+    nav_push, nav_pop, nav_depth, nav_page,
     text, text_wrapped, text_anchor, button, btn, spacer, divider,
     textfield, textfield_bound, securefield, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
@@ -53,6 +53,7 @@ exports (
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     load_styles,
     ui_states, add_state, set_state, current_state,
+    states, on_state,
     commands, action, does, on_button, on_menu_item,
     command_group_set_enabled,
     command, command_fire, command_set_enabled, command_enabled,
@@ -775,6 +776,36 @@ navstack(_ctx: ptr) {
 
 nav_push(nav_handle: int, title: string, body_handle: int) {
     aether_ui_navstack_push(nav_handle, title, body_handle)
+}
+
+// ── DECLARATIVE navstack page scope ─────────────────────────────────
+// nav_push takes a pre-built body HANDLE, so an app has to build the page
+// first and push it afterwards -- navstackdemo says so in a comment at the
+// call site ("nav_push takes a handle, not a builder block"). This closes
+// that:
+//
+//   nav_page(nav, "Detail") {
+//       text("Detail page")
+//       btn("Back") callback { nav_pop(nav) }
+//   }
+//
+// This is the one family in the audit that genuinely wants `builder`. The
+// others needed a plain function because their scope object had to exist
+// BEFORE the block ran; here the opposite is true -- the page body must be
+// fully built before it can be pushed, which is exactly what a builder's
+// after-block epilogue gives. The `with` factory creates the body container
+// and pushes it as _ctx, so the block's widgets land in the page; the body
+// then pushes that container onto the stack.
+//
+// The nav handle travels through a C cell for the same reason the commands
+// scope does: a `with` factory takes no arguments, and Aether has no
+// top-level mutable module state.
+_nav_page_factory() -> int {
+    return aether_ui_vstack_create(6)
+}
+
+builder nav_page(nav_handle: int, title: string) with _nav_page_factory {
+    aether_ui_navstack_push(nav_handle, title, _builder)
 }
 
 nav_pop(nav_handle: int) {
@@ -2171,6 +2202,53 @@ ui_states(target: int) -> ptr {
     ws.entries = list.new()
     ws.cur = ""
     return ws as ptr
+}
+
+// ── DECLARATIVE states scope ────────────────────────────────────────
+// `ui_states(target)` already returns the WStates, which Aether pushes as
+// _ctx for a trailing block, so states only need scope-aware verbs. And
+// because a state IS a sheet, `state(name) { … }` nests the styles scope
+// inside it -- the whole thing reads as one declaration:
+//
+//   states(card) {
+//       on_state("collapsed") {
+//           bg("container", 0x2B2B33)
+//           color("text", 0x8888AA)
+//           opacity_of("detail.text", 0.25)
+//       }
+//       on_state("expanded") {
+//           bg("container", 0x33334A)
+//           color("text", 0xE8E8FF)
+//       }
+//   }
+//
+// against a named sheet-builder function per state plus an add_state line
+// each. Handle forms stay; states_demo carries both.
+//
+// NB the PARENTHESES on `states(card)` are not optional-looking here because
+// it takes an argument -- but `state("x") { … }` does too, so neither hits
+// the zero-arg trap (see the audit doc).
+
+// states(target) { … } — a state machine for a widget subtree.
+states(target: int) -> ptr {
+    return ui_states(target)
+}
+
+// on_state(name) { … } — one named state. The block runs with a fresh AeCS
+// sheet as _ctx, so the styles verbs (bg/color/font_size_of/...) apply to it
+// and the finished sheet is registered under `name`.
+//
+// A plain function, not a builder: the sheet must exist BEFORE the block runs
+// (a builder runs its block first), and it must be registered on the parent
+// WStates, which is why the parent is captured here rather than read later.
+// NB `on_state`, not `state`: `state` is a RESERVED KEYWORD in Aether and
+// cannot be an identifier at all (the compiler says so plainly, which is the
+// good case -- unlike the silent shadowing bugs elsewhere in this audit).
+on_state(_ctx: ptr, name: string) -> ptr {
+    if _ctx == 0 { return create_styles() }
+    sheet = create_styles()
+    add_state(_ctx, name, sheet)
+    return sheet
 }
 
 add_state(wsp: ptr, name: string, sheet: ptr) {

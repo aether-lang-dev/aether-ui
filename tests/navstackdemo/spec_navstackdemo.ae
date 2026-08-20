@@ -126,6 +126,26 @@ main() {
             b = uidriver.get_body("/widgets")
             spec.assert_contains(b, "depth: 1", "still at depth 1")
         }
+
+        // The page is now built by the DECLARATIVE nav_page scope
+        // (docs/design/declarative-consistency-audit.md): a builder whose
+        // block populates the body and whose epilogue pushes it. This asserts
+        // the scope RESOLVED -- the block's widgets landed inside the pushed
+        // page rather than in the enclosing window, which is the one way this
+        // shape can go wrong and still look plausible.
+        spec.it("a declared page's widgets land INSIDE the page") callback {
+            p = uidriver.widget_id_by_text("Push page")
+            uidriver.post_ok("/widget/${p}/click", "push a page")
+            ok = uidriver.wait_body_contains("/widgets", "pushed onto the navigation stack", 20)
+            spec.assert_true(ok, "the block's text widget exists")
+
+            // Its parent chain must reach the navstack, not the window root.
+            t = uidriver.widget_id_by_text("pushed onto the navigation stack")
+            body = uidriver.widget_int_field_by_id(t, "parent")
+            spec.assert_gt(body, 0, "the text has a container parent")
+            host = uidriver.widget_int_field_by_id(body, "parent")
+            spec.assert_gt(host, 0, "that container is itself parented (into the stack)")
+        }
     }
 
     spec.run_summary(fw)

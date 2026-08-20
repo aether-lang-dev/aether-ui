@@ -9,6 +9,7 @@ import ui
 import ui (window, vstack, hstack, text, btn, divider, add_css_class,
     create_styles, st_color, st_bg, st_font_size, st_opacity,
     ui_states, add_state, set_state, current_state, transition,
+    states, on_state, bg, color, font_size_of, opacity_of,
     enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -49,9 +50,28 @@ main() {
                 _tr = transition(det, "opacity", 400, "ease_out")
             }
             divider()
-            ws = ui_states(card)
-            add_state(ws, "collapsed", collapsed_sheet())
-            add_state(ws, "expanded", expanded_sheet())
+            // DECLARATIVE: the states and their sheets in one declaration.
+            // A state IS a sheet, so on_state() nests the styles scope inside
+            // it and the AeCS verbs apply directly -- no named sheet-builder
+            // function per state, no add_state line each. The handle form
+            // (collapsed_sheet/expanded_sheet above) still works and is kept
+            // for contrast (docs/design/declarative-consistency-audit.md).
+            ws = states(card) {
+                on_state("collapsed") {
+                    bg("container", 0x2B2B33)
+                    color("text", 0x8888AA)
+                    color("cardtitle.text", 0xAAAACC)
+                    font_size_of("cardtitle.text", 12.0)
+                    opacity_of("detail.text", 0.25)
+                }
+                on_state("expanded") {
+                    bg("container", 0xEFF2F8)
+                    color("text", 0x2A3550)
+                    color("cardtitle.text", 0x1E4FA0)
+                    font_size_of("cardtitle.text", 18.0)
+                    opacity_of("detail.text", 1.0)
+                }
+            }
             hstack(8) {
                 _c = btn("Collapse") callback {
                     _s1 = set_state(ws, "collapsed")

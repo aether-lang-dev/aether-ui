@@ -15,7 +15,7 @@
 
 import ui
 import ui (window, vstack, hstack, text, btn, divider, navstack,
-    nav_push, nav_pop, nav_depth, spacer, enable_test_server)
+    nav_push, nav_pop, nav_depth, nav_page, spacer, enable_test_server)
 import std.os (os_getenv)
 import std.string
 
@@ -45,13 +45,15 @@ main() {
                 _push = btn("Push page") callback {
                     depth = depth + 1
                     title = string.concat("Page ", string.from_int(depth))
-                    // The body is built OUTSIDE the stack and handed over --
-                    // nav_push takes a handle, not a builder block.
-                    body = vstack(6) {
+                    // DECLARATIVE: the page IS the scope. nav_page is a
+                    // builder -- the block builds the body, then the body
+                    // pushes it. Compare the handle form this replaced, which
+                    // had to build a vstack outside the stack and hand the
+                    // handle over (docs/design/declarative-consistency-audit.md).
+                    nav_page(nav, title) {
                         _t = text(title)
                         _h = text("pushed onto the navigation stack")
                     }
-                    nav_push(nav, title, body)
                     aether_ui_text_set_string(crumb, title)
                     aether_ui_text_set_string(status,
                         string.concat("depth: ", string.from_int(depth)))
