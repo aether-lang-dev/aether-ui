@@ -74,7 +74,13 @@ jobs:
           # that release was still being cut. A repository variable still
           # overrides, for testing a candidate without a commit.
           AETHER_REF: ${{ vars.AETHER_REF || 'v0.553.0' }}
-          AEB_REF: ${{ vars.AEB_REF || 'v0.281' }}
+          # A commit pin, not a tag, same as AETHER_REF was while v0.553.0
+          # was being cut: no aeb release yet contains b1bfa5e (encode_name
+          # ae-escapes a dot-prefixed fan-out root, so `.all.ae` links —
+          # v0.281 predates it and fails on the root's entry symbol). This is
+          # dde7fbb, b1bfa5e's fix plus its regression test; retag when the
+          # next aeb release is cut.
+          AEB_REF: ${{ vars.AEB_REF || 'dde7fbb2526ee063cb487496f3a574f8b3f66d22' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh

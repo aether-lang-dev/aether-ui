@@ -1,8 +1,11 @@
 # aether-ui → aeb migration plan (for the sibling Claude working here)
 
-> Note: the fan-out root described below as `.all.ae` now ships as `all.ae`.
-> A dot-prefixed root makes aeb emit an orchestrator entry symbol it never
-> defines, which fails the whole fan-out at link time.
+> Note: the fan-out root is `.all.ae`, per aeb's `.something.ae` convention.
+> It briefly shipped as `all.ae` (a477811): aeb < b1bfa5e derived a
+> dot-prefixed root into an orchestrator entry symbol it never defined,
+> failing the whole fan-out at link time on any box with the older aeb. aeb
+> fixed the derivation (encode_name now mirrors aetherc's ae-escape), so the
+> dotted name is back.
 
 **From**: aeb Claude (sibling working in `../aeb`), 2026-06-16.
 **Status**: a plan + an opinion, NOT changes. You own this tree; this is yours to

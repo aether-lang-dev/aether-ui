@@ -333,17 +333,17 @@ echo
 
 echo "=== Phase 1: build all aether_ui examples (aeb fan-out) ==="
 # Each example is a per-app .build.ae node under examples/<app>/; the root
-# all.ae scans + deps them, so this one command builds all 11 (cached,
+# .all.ae scans + deps them, so this one command builds all 11 (cached,
 # parallel). Binaries land at target/build/examples/<app>/bin/<app>; EX_BIN
 # resolves that for the smoke/driver phases below.
 EX_BIN() { echo "$ROOT/target/build/examples/$1/bin/$1"; }
-if ( cd "$ROOT" && aeb all.ae ) > /tmp/ci_build_all.log 2>&1; then
+if ( cd "$ROOT" && aeb .all.ae ) > /tmp/ci_build_all.log 2>&1; then
     for ex in "${EXAMPLES[@]}"; do
         if [ -x "$(EX_BIN "$ex")" ]; then echo "  OK   $ex"; else
             echo "  FAIL $ex (no binary)"; FAIL=$((FAIL + 1)); fi
     done
 else
-    echo "  FAIL: aeb all.ae fan-out build failed"
+    echo "  FAIL: aeb .all.ae fan-out build failed"
     # The fan-out prints one progress line per app, so a plain tail is all
     # progress and no diagnostic. A bare grep is not enough either: a linker
     # error names the missing symbol on the lines AFTER the match, so print
@@ -356,7 +356,7 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Contrib-dependent apps are deliberately outside the all.ae fan-out: they link
+# Contrib-dependent apps are deliberately outside the .all.ae fan-out: they link
 # archives (libaether_sqlite, libaether_avcodec) that a clean checkout does not
 # have, so including them would make every fresh clone and every CI run red for
 # a missing optional dependency. Build them only when the archive is actually
@@ -382,7 +382,7 @@ contrib_app() {
 contrib_app LisMusic    aether_sqlite  && LISMUSIC_BUILT=1
 contrib_app video_frame aether_avcodec || true
 
-# Phase 1.5: RUN the headless AeVG renderers (build was done by the all.ae
+# Phase 1.5: RUN the headless AeVG renderers (build was done by the .all.ae
 # fan-out in Phase 1 — every vg app is a apps/<name>/ node now). The
 # value here is RUNTIME coverage the build-only fan-out can't give: each writes
 # a PNG, exercising the raster-blit + draw-region compose path. Linux/GTK only.

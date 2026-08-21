@@ -39,9 +39,9 @@ nobody looks. What replaces branch review is `./ci.sh` green BEFORE the push.
 - `ci.sh`: The canonical source of truth for the CI test pipeline.
 - `tests/spec_matrix.sh`: Runs every Aeocha suite and tabulates. The platform
   parity baseline in one command — `./tests/spec_matrix.sh [suite...]`.
-  Needs `aeb all.ae` first. macOS is 98/98 green as of 2026-07-17.
+  Needs `aeb .all.ae` first. macOS is 98/98 green as of 2026-07-17.
 - `examples/`: The source of all example apps.
-- **Building**: the real build path is `aeb` (`aeb all.ae`, per-app
+- **Building**: the real build path is `aeb` (`aeb .all.ae`, per-app
   `.build.ae` nodes, backend link block in `build_support/aetherui/module.ae`).
   `./build.sh <src.ae>` is the quick single-app shell twin — if you change how
   a backend links, you must change BOTH.
