@@ -15,17 +15,34 @@
 // The backend C/ObjC/headers live under backend/, addressed absolutely via root.
 
 import std.string
-import std.os (platform)
+import std.os (platform, os_getenv)
 import aether
 import aether (extra_source, link_flag, include_dir)
 
+// The Aether SDK prefix. /usr/local is the Linux/FreeBSD default; macOS
+// installs under ~/.local and any pinned-toolchain box may use another
+// prefix entirely. A hardcoded /usr/local silently version-skews such a
+// box: aeb resolves aetherc/libaether from `command -v ae` (correct), but
+// these -I/-L flags kept pointing at whatever /usr/local held — the class
+// of bug behind "rubiks red on one box, green on another, same version
+// string" (asks/ci-sh-on-a-fresh-headless-box.md §1c) and macvm's contrib
+// archives not resolving at all. Override with AETHER_UI_SDK_PREFIX.
+sdk_prefix() -> string {
+    p = os_getenv("AETHER_UI_SDK_PREFIX")
+    if p != null {
+        if string.length(p) > 0 { return p }
+    }
+    return "/usr/local"
+}
+
 builder ui_backend(root: string) {
     // Aether runtime headers + libaether (+ its transitive deps via ae cflags).
-    include_dir("/usr/local/include/aether/runtime")
-    include_dir("/usr/local/include/aether/runtime/actors")
-    include_dir("/usr/local/include/aether/std")
-    include_dir("/usr/local/include/aether/std/collections")
-    link_flag("-L/usr/local/lib/aether")
+    sdk = sdk_prefix()
+    include_dir("${sdk}/include/aether/runtime")
+    include_dir("${sdk}/include/aether/runtime/actors")
+    include_dir("${sdk}/include/aether/std")
+    include_dir("${sdk}/include/aether/std/collections")
+    link_flag("-L${sdk}/lib/aether")
     link_flag("-laether")
     link_flag("-pthread")
     link_flag("-lm")

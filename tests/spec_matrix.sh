@@ -359,6 +359,15 @@ for row in "${SUITES[@]}"; do
 
     if [ "$REBUILD" = "1" ]; then rebuild_app "$appdir" "$base"; fi
     bin="target/build/$appdir/bin/$base"
+    # .build.contrib.ae nodes emit under target/build.contrib/ — the node
+    # TYPE routes the output tree (filename-is-the-route), so the contrib
+    # apps' binaries never appear under target/build/. Cost a "silent build
+    # failure" diagnosis on macvm that was really this lookup reading the
+    # wrong tree while the binary sat built in the right one.
+    if [ ! -x "$bin" ] && [ -f "$ROOT/$appdir/.build.contrib.ae" ]; then
+        cbin="target/build.contrib/$appdir/bin/$base"
+        [ -x "$cbin" ] && bin="$cbin"
+    fi
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
             # PREFER the aeb fan-out artifact, fall back to build.sh.
@@ -438,7 +447,12 @@ for row in "${SUITES[@]}"; do
         fi
         printf "  \033[33mWARN\033[0m %s: binary older than sources — measuring a STALE build.\n" "$name" >&2
         printf "       %s\n" $newer >&2
-        printf "       rebuild: aeb %s/.build.ae (or pass --rebuild)\n" "$appdir" >&2
+        # Contrib apps (LisMusic, video_frame) carry .build.contrib.ae to stay
+        # out of the .all.ae scan; everything else is .build.ae. Name the file
+        # that exists — a hint naming a missing node cost a debugging loop.
+        node=".build.ae"
+        [ -f "$ROOT/$appdir/.build.contrib.ae" ] && node=".build.contrib.ae"
+        printf "       rebuild: aeb %s/%s (or pass --rebuild)\n" "$appdir" "$node" >&2
     fi
 
     port_free || { echo "port $PORT still busy; aborting"; exit 1; }
