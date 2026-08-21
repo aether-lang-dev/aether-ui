@@ -94,5 +94,12 @@ builder ui_backend(root: string) {
         link_flag("-luxtheme")
         link_flag("-lws2_32")
         link_flag("-lbcrypt")   // libaether crypto: BCryptGenRandom
+        // libaether panic traces: ae >= 0.541 symbolises via the DbgHelp API
+        // (SymInitialize/SymFromAddr in runtime/aether_panic.c). aether's own
+        // Makefile links it (WIN_LINK_LIBS has -ldbghelp); aeb's link line
+        // does not — filed as aeb/asks/win32-link-needs-ldbghelp-after-0541.md.
+        // Until aeb reads aether's published lib list, carry it here like
+        // ws2_32/bcrypt above.
+        link_flag("-ldbghelp")
     }
 }
