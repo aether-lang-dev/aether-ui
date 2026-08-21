@@ -5768,14 +5768,42 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 // field mirrors driver input into its state (setStringValue
                 // alone fires neither controlTextDidChange nor the write-back).
                 aether_ui_textfield_set_text(ctx->handle, ctx->sval);
-                // A programmatic setStringValue does NOT fire the action, so
-                // the app's on-change closure would never see driver input.
+                // A programmatic setStringValue fires neither
+                // controlTextDidChange nor the action — and these fields wire
+                // on_change through the DELEGATE, not target/action, so the
+                // sendAction: this used to do was a no-op against a null
+                // action and driver-typed text never reached the app's
+                // closure. (GTK4 notifies natively; win32 invokes the closure
+                // explicitly for the same reason.) Invoke the delegate's
+                // closure directly, same as a user keystroke would. The
+                // bind_value state write-back already happened inside
+                // set_text, so only the closure is owed here.
                 if (get_widget_type(ctx->handle) != AUI_TEXT) {
-                    [(NSTextField*)v sendAction:[(NSTextField*)v action]
-                                             to:[(NSTextField*)v target]];
+                    id d = [(NSTextField*)v delegate];
+                    if (d && [d isKindOfClass:[AetherTextFieldDelegate class]]) {
+                        AetherTextFieldDelegate* td = (AetherTextFieldDelegate*)d;
+                        if (td.closure && td.closure->fn) {
+                            ((void(*)(void*, const char*))td.closure->fn)(
+                                td.closure->env,
+                                aether_ui_textfield_get_text(ctx->handle));
+                        }
+                    }
                 }
             } else if ([v isKindOfClass:[NSTextView class]]) {
                 [(NSTextView*)v setString:s];
+                // Programmatic setString: does not post
+                // NSTextDidChangeNotification either — same debt as the
+                // textfield above, same repayment (win32 covers WK_TEXTAREA
+                // in its fix for the same reason).
+                id d = [(NSTextView*)v delegate];
+                if (d && [d isKindOfClass:[AetherTextViewDelegate class]]) {
+                    AetherTextViewDelegate* td = (AetherTextViewDelegate*)d;
+                    if (td.closure && td.closure->fn) {
+                        const char* cs = [[(NSTextView*)v string] UTF8String];
+                        ((void(*)(void*, const char*))td.closure->fn)(
+                            td.closure->env, cs ? cs : "");
+                    }
+                }
             }
             break;
         }
