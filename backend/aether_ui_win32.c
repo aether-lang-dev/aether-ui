@@ -4040,8 +4040,18 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
     else if (v == 2) y = H - ch + (dy < 0 ? dy : 0);
     else             y = (H - ch) / 2 + dy;
 
+    // Preserve the content's OWN visibility (its WS_VISIBLE bit — the same
+    // flag hook_widget_visible reports) through the promotion. An app may
+    // build overlay content hidden and show it on a later interaction
+    // (auto_hide_demo's click-to-open sidebar); SWP_SHOWWINDOW here set
+    // WS_VISIBLE unconditionally, so such content arrived in the overlay
+    // layer force-shown — "sidebar starts hidden" read visible:1 on win32
+    // while GTK4's promotion preserves gtk_widget_get_visible.
+    int was_visible =
+        (GetWindowLongPtrW(content->hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
     SetParent(content->hwnd, host);
-    SetWindowPos(content->hwnd, HWND_TOP, x, y, cw, ch, SWP_SHOWWINDOW);
+    SetWindowPos(content->hwnd, HWND_TOP, x, y, cw, ch,
+                 was_visible ? SWP_SHOWWINDOW : SWP_NOACTIVATE);
     e->content = content->hwnd;
     w32_overlay_count++;
     return handle;
