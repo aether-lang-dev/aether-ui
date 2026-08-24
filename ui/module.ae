@@ -99,6 +99,7 @@ exports (
     canvas_set_clip_rects, canvas_reset_clip,
     canvas_clear, canvas_redraw, canvas_write_png,
     canvas_cmd_count, canvas_render_range_rgba, canvas_draw_image_ptr,
+    canvas_draw_image_scaled_ptr,
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
@@ -438,6 +439,8 @@ extern aether_ui_canvas_clear_impl(canvas_id: int)
 extern aether_ui_canvas_redraw_impl(canvas_id: int)
 extern aether_ui_canvas_write_png_impl(canvas_id: int, path: string, width: int, height: int) -> int
 extern aether_ui_canvas_cmd_count_impl(canvas_id: int) -> int
+extern aether_ui_canvas_draw_image_scaled_impl_ptr(canvas_id: int, x: float, y: float,
+        dw: float, dh: float, iw: int, ih: int, rgba: ptr, byte_len: int)
 extern aether_ui_canvas_draw_image_impl_ptr(canvas_id: int, x: float, y: float,
                                             iw: int, ih: int, rgba: ptr, byte_len: int)
 extern aether_ui_canvas_render_range_rgba_impl(canvas_id: int, start: int, end: int,
@@ -4262,6 +4265,14 @@ canvas_write_png(cid: int, path: string, width: int, height: int) -> int {
 canvas_draw_image_ptr(cid: int, x: float, y: float, iw: int, ih: int,
                       rgba: ptr, byte_len: int) {
     aether_ui_canvas_draw_image_impl_ptr(cid, x, y, iw, ih, rgba, byte_len)
+}
+
+// canvas_draw_image_scaled_ptr — ptr-buffer twin of canvas_draw_image_scaled
+// (blit an iw×ih RGBA frame scaled to dw×dh at (x, y)). For engines whose
+// framebuffer lives in a raw malloc'd buffer (the Ebiten port's screen).
+canvas_draw_image_scaled_ptr(cid: int, x: float, y: float, dw: float, dh: float,
+                  iw: int, ih: int, rgba: ptr, byte_len: int) {
+    aether_ui_canvas_draw_image_scaled_impl_ptr(cid, x, y, dw, dh, iw, ih, rgba, byte_len)
 }
 
 canvas_cmd_count(cid: int) -> int {

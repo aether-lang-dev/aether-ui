@@ -4268,6 +4268,14 @@ void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
     aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
 }
 
+/* ptr-typed twin of the scaled blit, mirroring draw_image_impl_ptr: the
+   Aether type system distinguishes string vs ptr, C does not. */
+void aether_ui_canvas_draw_image_scaled_impl_ptr(int canvas_id, double x, double y,
+                                                 double dw, double dh, int iw, int ih,
+                                                 const unsigned char* rgba, int byte_len) {
+    aether_ui_canvas_draw_image_scaled_impl(canvas_id, x, y, dw, dh, iw, ih, rgba, byte_len);
+}
+
 int aether_ui_canvas_cmd_count_impl(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     return cs ? cs->count : -1;
