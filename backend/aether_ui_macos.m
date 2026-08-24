@@ -3718,6 +3718,7 @@ typedef struct {
     AeClosure* on_click;   // press   (canvas-local x,y)
     AeClosure* on_release; // release (canvas-local x,y) — completes a drag
     AeClosure* on_key;     // key-down (key name: "Left", "a", "space", …)
+    AeClosure* on_key_release; // key-up (same key names; driver-driven for now)
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
     int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
     double* paint_clip_rects;
@@ -4335,6 +4336,14 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
     cs->on_key = (AeClosure*)boxed_closure;
+}
+
+// Key-up on a canvas. Stored (and driver-drivable via POST /canvas/{id}/keyup)
+// like on_key; the real NSView keyUp: bridge lands with the keyDown: one.
+void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key_release = (AeClosure*)boxed_closure;
 }
 
 /* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
@@ -5676,17 +5685,20 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_CLICK:
         case AETHER_DRV_CANVAS_MOVE:
         case AETHER_DRV_CANVAS_RELEASE:
-        case AETHER_DRV_CANVAS_KEY: {
+        case AETHER_DRV_CANVAS_KEY:
+        case AETHER_DRV_CANVAS_KEYUP: {
             CanvasState* cs = get_canvas_state(ctx->handle);
             AeClosure* c = NULL;
             if (cs) {
                 c = (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
                   : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
                   : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
+                  : (ctx->action == AETHER_DRV_CANVAS_KEYUP)   ? cs->on_key_release
                                                                : cs->on_key;
             }
             if (!c || !c->fn) { ctx->result = 3; return; }  // 404: unwired, not missed
-            if (ctx->action == AETHER_DRV_CANVAS_KEY) {
+            if (ctx->action == AETHER_DRV_CANVAS_KEY
+                || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
                 ((void(*)(void*, const char*))c->fn)(c->env, ctx->sval);
             } else {
                 ((void(*)(void*, double, double))c->fn)(c->env, ctx->dval, ctx->dval2);

@@ -14,7 +14,7 @@ exports (
     root_vstack, root_hstack,
     window, window_run, render_to, record, surface_diagnostics,
     register_deferred_flush, canvas_on_resize, canvas_on_click, canvas_on_move, canvas_on_key,
-    canvas_on_release,
+    canvas_on_key_release, canvas_on_release,
     _surface_window_factory, _surface_render_factory, _surface_record_factory,
     app_run, app_create, app_start,
     vstack, hstack, scrollview, zstack, form, section, navstack,
@@ -142,6 +142,7 @@ extern aether_ui_canvas_on_resize_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_click_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_move_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_key_impl(canvas_id: int, boxed_closure: ptr)
+extern aether_ui_canvas_on_key_release_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_release_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_scroll_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_gesture_probe_impl(canvas_id: int, boxed_closure: ptr)
@@ -598,6 +599,15 @@ canvas_on_move(cid: int, cb: fn) {
 canvas_on_key(cid: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_canvas_on_key_impl(cid, boxed)
+}
+
+// canvas_on_key_release(cid, cb) — fire cb(key_name) on key-UP, same names as
+// canvas_on_key. Pairs with it for held-key state (games: down sets a key's
+// pressed flag, up clears it). Real on GTK4 and win32 (WM_KEYUP); macOS
+// stores the closure and the driver's POST /canvas/{id}/keyup drives it.
+canvas_on_key_release(cid: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_canvas_on_key_release_impl(cid, boxed)
 }
 
 // canvas_on_release(cid, cb) — fire cb(x, y) (canvas-local px) when the pointer

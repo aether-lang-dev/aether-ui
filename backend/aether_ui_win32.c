@@ -4828,6 +4828,7 @@ typedef struct {
     AeClosure* on_click;   // pointer-press hook (canvas-local x,y)
     AeClosure* on_release; // pointer-release hook (canvas-local x,y)
     AeClosure* on_key;     // key-press hook (GDK key name string)
+    AeClosure* on_key_release; // key-up hook (same key names)
     AeClosure* on_resize;  // |w, h| — fired from WM_SIZE (canvas rescale)
     // Last-paint metrics for the compositor instrumentation
     // (GET /canvas/{id}/debug). `last_paint_area` is the pixel area the
@@ -4991,6 +4992,13 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     // GTK "focus on map" lesson). The window-show path grabs it once the
     // window is up; clicking the canvas also focuses it (WM_LBUTTONDOWN).
     pending_key_canvas = canvas_id;
+}
+
+// Key-up hook: WM_KEYUP → same GDK-style name into the closure. Focus/tab-stop
+// handling lives on the on_key registration (register both for real input).
+void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    canvases[canvas_id - 1].on_key_release = (AeClosure*)boxed_closure;
 }
 
 // Pointer-release on a canvas: WM_LBUTTONUP → (x,y) into the closure.
@@ -7428,6 +7436,23 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
             return 0;
         }
+        case WM_KEYUP: {
+            // Mirror of WM_KEYDOWN for the key-release hook, so held-key
+            // state (down sets, up clears) works with real keyboards.
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                if (cv->on_key_release && cv->on_key_release->fn) {
+                    char buf[8];
+                    const char* name = vk_to_gdk_name(wp, buf, sizeof(buf));
+                    if (name[0]) {
+                        ((void(*)(void*, const char*))cv->on_key_release->fn)(
+                            cv->on_key_release->env, name);
+                    }
+                }
+            }
+            return 0;
+        }
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -7910,7 +7935,8 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
         if (ctx->action == AETHER_DRV_CANVAS_CLICK
             || ctx->action == AETHER_DRV_CANVAS_MOVE
             || ctx->action == AETHER_DRV_CANVAS_RELEASE
-            || ctx->action == AETHER_DRV_CANVAS_KEY) {
+            || ctx->action == AETHER_DRV_CANVAS_KEY
+            || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
             // Drive the canvas hit-test hooks directly, exactly as a real
             // WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_LBUTTONUP / WM_KEYDOWN would
             // (result 3 = "no such handler wired", so a spec can tell a missed
@@ -7934,6 +7960,12 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     if (cv->on_release && cv->on_release->fn) {
                         ((void(*)(void*, double, double))cv->on_release->fn)(
                             cv->on_release->env, ctx->dval, ctx->dval2);
+                        ctx->result = 0;
+                    }
+                } else if (ctx->action == AETHER_DRV_CANVAS_KEYUP) {
+                    if (cv->on_key_release && cv->on_key_release->fn) {
+                        ((void(*)(void*, const char*))cv->on_key_release->fn)(
+                            cv->on_key_release->env, ctx->sval);
                         ctx->result = 0;
                     }
                 } else { // AETHER_DRV_CANVAS_KEY

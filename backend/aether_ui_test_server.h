@@ -54,6 +54,9 @@ typedef enum {
     // gestures on ordinary widgets rather than only canvases.
     AETHER_DRV_PRESS        = 19,  // handle=widget
     AETHER_DRV_RELEASE      = 20,  // handle=widget
+    // Canvas key-UP, pairing AETHER_DRV_CANVAS_KEY so a spec can drive
+    // held-key state (games: press on key-down, clear on key-up).
+    AETHER_DRV_CANVAS_KEYUP = 21,  // handle=canvas, sval=key name
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

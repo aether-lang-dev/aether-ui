@@ -3870,6 +3870,9 @@ typedef struct {
     // keyboard-driven canvases. The scene's event model already has the
     // dispatch side (grammar_events.dispatch_key_down); this bridges real keys.
     AeClosure* on_key;
+    // Key-release hook — same key NAME string, on key-up. Pairs with on_key
+    // so a game can hold per-key pressed state (down sets, up clears).
+    AeClosure* on_key_release;
     // Pointer-release hook — canvas-local (x, y) where the button came up.
     // Pairs with on_click + on_move to form a press→drag→release swipe.
     AeClosure* on_release;
@@ -4597,6 +4600,7 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->on_resize = NULL;
     cs->on_move = NULL;
     cs->on_key = NULL;
+    cs->on_key_release = NULL;
     cs->on_release = NULL;
     cs->on_click = NULL;
     cs->replay_cache = NULL;
@@ -4851,6 +4855,32 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
                                                GTK_PHASE_CAPTURE);
     g_signal_connect(fclick, "pressed", G_CALLBACK(on_canvas_focus_click), w);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(fclick));
+}
+
+// Key-release on the canvas: same key NAME as on_canvas_key, fired on key-up.
+static void on_canvas_key_release(GtkEventControllerKey* ctrl, guint keyval,
+                                  guint keycode, GdkModifierType state, gpointer data) {
+    (void)ctrl; (void)keycode; (void)state;
+    AeClosure* c = (AeClosure*)data;
+    if (c && c->fn) {
+        const char* name = gdk_keyval_name(keyval);
+        ((void(*)(void*, const char*))c->fn)(c->env, name ? name : "");
+    }
+}
+
+// Register a key-UP hook on a canvas. Pairs with canvas_on_key: a game sets a
+// key's pressed flag on key-down and clears it here. Focus handling lives on
+// the on_key registration (register both for real keyboard input).
+void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key_release = (AeClosure*)boxed_closure;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    GtkEventController* keys = gtk_event_controller_key_new();
+    g_signal_connect(keys, "key-released", G_CALLBACK(on_canvas_key_release),
+                     boxed_closure);
+    gtk_widget_add_controller(w, keys);
 }
 
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
@@ -6409,6 +6439,22 @@ static gboolean canvas_key_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// Canvas key release — fires on_key_release, pairing canvas_key_idle so a
+// spec can drive held-key (down…up) sequences deterministically.
+static gboolean canvas_keyup_idle(gpointer data) {
+    CanvasKeyAction* a = (CanvasKeyAction*)data;
+    CanvasState* cs = get_canvas_state(a->canvas_id);
+    if (cs && cs->on_key_release && cs->on_key_release->fn) {
+        ((void(*)(void*, const char*))cs->on_key_release->fn)(
+            cs->on_key_release->env, a->name);
+        a->result = 0;
+    } else {
+        a->result = 3;
+    }
+    a->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 // Shutdown — destroy the top-level window on the GTK thread. GtkApplication
 // ends its run loop when the last window goes, so the process exits by the
 // SAME teardown path as a user closing the window. This is how test
@@ -6920,6 +6966,14 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             ka.canvas_id = ctx->handle;
             strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
             canvas_key_idle(&ka);
+            ctx->result = ka.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_KEYUP: {
+            CanvasKeyAction ka = {0};
+            ka.canvas_id = ctx->handle;
+            strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
+            canvas_keyup_idle(&ka);
             ctx->result = ka.result; ctx->done = 1;
             return;
         }

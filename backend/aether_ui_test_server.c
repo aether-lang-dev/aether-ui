@@ -1048,6 +1048,10 @@ static void handle_request_inner(aether_sock_t client_fd,
         } else if (strstr(path, "/move")) {
             ctx.action = AETHER_DRV_CANVAS_MOVE;
             what = "no canvas move handler";
+        } else if (strstr(path, "/keyup")) {
+            // BEFORE "/key": strstr("/keyup", "/key") also matches.
+            ctx.action = AETHER_DRV_CANVAS_KEYUP;
+            what = "no canvas keyup handler";
         } else if (strstr(path, "/key")) {
             ctx.action = AETHER_DRV_CANVAS_KEY;
             what = "no canvas key handler";
