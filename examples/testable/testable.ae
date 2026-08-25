@@ -54,17 +54,18 @@ main() {
         // and the spec's wait for "up:" would fail.
         kstatus = ui.text("keys: idle")
         cv = ui.canvas_create(120, 60)
-        // A solid-orange frame blitted via the RAW-POINTER scaled blit
-        // (canvas_draw_image_scaled_ptr) — the spec pixel-probes the canvas
-        // centre, which only that blit can colour. The source is the SAME
-        // size as the dest (120x60, an identity scale) deliberately: macOS's
-        // underlying scaled blit is 1:1 for now (ignores dw/dh), and GTK4's
-        // scaling filter fades the edges of a tiny stretched source — an
-        // identity blit renders identically on every backend, and this spec
-        // asserts "the ptr variant draws", not scaling fidelity.
-        fb = malloc(120 * 60 * 4)
+        // A 2x2 solid-orange frame blitted to FILL the canvas via the RAW-
+        // POINTER scaled blit — the spec pixel-probes the canvas centre,
+        // which only a REAL scale can colour (an unscaled 2x2 covers four
+        // corner pixels). This was briefly an identity-size blit while
+        // macOS's scaled path was a documented 1:1 stub; that path scales
+        // for real now on all three backends, so the strong probe is back:
+        // it asserts the ptr variant draws AND that dw/dh mean what they
+        // say. Edge filtering only softens the border; the centre of a
+        // solid stretch is solid everywhere.
+        fb = malloc(16)
         pxi = 0
-        while pxi < 7200 {
+        while pxi < 4 {
             o = pxi * 4
             _m1 = mem.set_byte(fb, o,     255)
             _m2 = mem.set_byte(fb, o + 1, 140)
@@ -72,7 +73,7 @@ main() {
             _m4 = mem.set_byte(fb, o + 3, 255)
             pxi = pxi + 1
         }
-        ui.canvas_draw_image_scaled_ptr(cv, 0.0, 0.0, 120.0, 60.0, 120, 60, fb, 28800)
+        ui.canvas_draw_image_scaled_ptr(cv, 0.0, 0.0, 120.0, 60.0, 2, 2, fb, 16)
         ui.canvas_redraw(cv)
         ui.canvas_on_key(cv) callback |k: string| {
             ui.set_text(kstatus, "down:${k}")

@@ -3947,14 +3947,24 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                         kCGImageAlphaLast | kCGBitmapByteOrderDefault,
                         prov, NULL, false, kCGRenderingIntentDefault);
                     if (img) {
+                        // Dest extent: w/h carry the SCALED size when the
+                        // command came from draw_image_scaled (CGContext-
+                        // DrawImage scales source to dest natively); zero
+                        // means an unscaled draw_image — use pixel dims.
+                        // This is what un-stubbed the "AppKit blits 1:1 for
+                        // now" limitation: ebiten's set_scale presents a
+                        // small logical framebuffer upscaled to the canvas,
+                        // which rendered postage-stamp sized here.
+                        double ddw = c->w > 0 ? c->w : (double)c->iw;
+                        double ddh = c->h > 0 ? c->h : (double)c->ih;
                         // The view isFlipped (top-left origin), so draw
                         // into a rect at (x,y). CGContextDrawImage uses a
                         // bottom-left origin; flip the y within the rect.
                         CGContextSaveGState(cg);
-                        CGContextTranslateCTM(cg, c->x, c->y + c->ih);
+                        CGContextTranslateCTM(cg, c->x, c->y + ddh);
                         CGContextScaleCTM(cg, 1.0, -1.0);
                         CGContextDrawImage(cg,
-                            CGRectMake(0, 0, c->iw, c->ih), img);
+                            CGRectMake(0, 0, ddw, ddh), img);
                         CGContextRestoreGState(cg);
                         CGImageRelease(img);
                     }
@@ -4585,13 +4595,25 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
     });
 }
 
-// Scaled draw — AppKit blits 1:1 for now (ignores dw/dh); the GTK backend
-// scales. Keeps the ABI total; proper AppKit scaling is a later port.
+// Scaled draw — REAL now (was a 1:1 stub that ignored dw/dh, which made
+// every upscaled presentation — the Ebiten port's set_scale framebuffer,
+// video_frame's fitted region — render at source-pixel size on this
+// backend only). The command carries the dest extent in w/h and the
+// executor hands CGContextDrawImage a dest rect of that size; CG scales
+// natively, same as GTK4's cairo path and win32's StretchBlt.
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
-    (void)dw; (void)dh;
-    aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    unsigned char* owned = (unsigned char*)malloc(iw * ih * 4);
+    if (!owned) return;
+    memcpy(owned, rgba, iw * ih * 4);
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .w = dw, .h = dh,
+        .pixels = owned, .iw = iw, .ih = ih
+    });
 }
 
 extern double floatarr_get_unchecked(void* arr, int i);
