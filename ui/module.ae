@@ -94,7 +94,7 @@ exports (
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
     vlist_scrollable, vlist_container,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
-    image, image_from_bytes, image_size,
+    image, image_from_bytes, image_size, file_icon, set_file_icon,
     canvas_widget, canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
     canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
     canvas_set_clip_rects, canvas_reset_clip,
@@ -372,6 +372,8 @@ extern aether_ui_sheet_dismiss_impl(handle: int)
 extern aether_ui_image_create(filepath: string) -> int
 extern aether_ui_image_from_bytes(data: string, length: int) -> int
 extern aether_ui_image_set_size(handle: int, width: int, height: int)
+extern aether_ui_file_icon_create(path: string) -> int
+extern aether_ui_file_icon_set(handle: int, path: string)
 
 // Menus
 extern aether_ui_menu_bar_create() -> int
@@ -4138,6 +4140,26 @@ image_from_bytes(_ctx: ptr, data: string, length: int) {
 
 image_size(handle: int, width: int, height: int) {
     aether_ui_image_set_size(handle, width, height)
+}
+
+// file_icon(path): the icon the OS uses FOR THAT KIND OF FILE, which is a
+// different question from image(path), where the file IS the picture. A
+// folder gets the folder icon, a .md the editor's document icon, and so on.
+// NSWorkspace iconForFile / the GIcon from the content type / SHGetFileInfo.
+// The path need not exist: every backend falls back to the extension, so a
+// listing can draw a row before it has stat'ed it.
+//   icon = file_icon("/home/me/notes")
+//   set_file_icon(icon, "/home/me/notes/todo.md")   // same widget, new path
+file_icon(_ctx: ptr, path: string) {
+    handle = aether_ui_file_icon_create(path)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    return handle
+}
+
+set_file_icon(handle: int, path: string) {
+    aether_ui_file_icon_set(handle, path)
 }
 
 // --- Canvas drawing (Group 6) ---

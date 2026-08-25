@@ -24,7 +24,7 @@ exports (
     widget_bool_by_id, widget_int_field_by_id, field_str, field_int,
     canvas_w, canvas_h, canvas_widget_id, canvas_debug_area, canvas_debug_commands,
     canvas_debug_w, canvas_debug_h, canvas_painted_pixels,
-    wait_server, wait_body_contains,
+    wait_server, wait_body_contains, count_occurrences,
     menus_body, menu_handle_with, menu_activate, menu_activate_item
 )
 
@@ -392,6 +392,24 @@ canvas_field(f: string) -> int {
 // Wait until GET <path>'s body contains `needle`. The universal wait: a
 // widget label change, a state value ("42.000000"), a status line — all
 // are substrings of some GET body.
+// How many times `needle` appears in `hay`. For "exactly N widgets report X"
+// without parsing the whole body: a plain contains() cannot tell one match
+// from five, which is the difference between "an icon resolved" and "every
+// icon resolved".
+count_occurrences(hay: string, needle: string) -> int {
+    n = 0
+    from = 0
+    nlen = string.length(needle)
+    if nlen == 0 { return 0 }
+    i = string.index_of_from(hay, needle, from)
+    while i >= 0 {
+        n = n + 1
+        from = i + nlen
+        i = string.index_of_from(hay, needle, from)
+    }
+    return n
+}
+
 wait_body_contains(path: string, needle: string, tries: int) -> int {
     i = 0
     while i < tries {

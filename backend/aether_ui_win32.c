@@ -4564,6 +4564,55 @@ int aether_ui_image_from_bytes(const char* data, int length) {
     return register_widget_typed(h, WK_IMAGE);
 }
 
+// SHGetFileInfoW with SHGFI_USEFILEATTRIBUTES so a path that does not exist
+// still answers: the shell then resolves by extension alone, which is what a
+// listing needs before it has stat'ed an entry. The STATIC holds an icon
+// rather than a bitmap, so it uses SS_ICON / STM_SETICON.
+static HICON w32_icon_for_path(const char* path) {
+    if (!path || !*path) return NULL;
+    SHFILEINFOW sfi;
+    memset(&sfi, 0, sizeof(sfi));
+    UINT flags = SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES;
+    DWORD attrs = FILE_ATTRIBUTE_NORMAL;
+    DWORD real = GetFileAttributesW(utf8_to_wide(path));
+    if (real != INVALID_FILE_ATTRIBUTES) attrs = real;
+    if (!SHGetFileInfoW(utf8_to_wide(path), attrs, &sfi, sizeof(sfi), flags)) {
+        return NULL;
+    }
+    return sfi.hIcon;
+}
+
+int aether_ui_file_icon_create(const char* path) {
+    ensure_win_init();
+    HWND h = CreateWindowExW(0, L"STATIC", L"",
+        WS_CHILD | WS_VISIBLE | SS_ICON,
+        0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
+    if (!h) return 0;
+    HICON ic = w32_icon_for_path(path);
+    if (ic) SendMessageW(h, STM_SETICON, (WPARAM)ic, 0);
+    return register_widget_typed(h, WK_IMAGE);
+}
+
+void aether_ui_file_icon_set(int handle, const char* path) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
+    HICON ic = w32_icon_for_path(path);
+    if (!ic) return;
+    // The STATIC owns whatever it held; replace and destroy the old one, or a
+    // listing that re-icons its rows on every repaint leaks a handle a row.
+    HICON old = (HICON)SendMessageW(w->hwnd, STM_SETICON, (WPARAM)ic, 0);
+    if (old && old != ic) DestroyIcon(old);
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+int aether_ui_image_has_content(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_IMAGE || !w->hwnd) return 0;
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    UINT kind = (st & SS_ICON) ? IMAGE_ICON : IMAGE_BITMAP;
+    return SendMessageW(w->hwnd, STM_GETIMAGE, kind, 0) ? 1 : 0;
+}
+
 void aether_ui_image_set_size(int handle, int width, int height) {
     Widget* w = widget_at(handle);
     if (w) { w->pref_width = width; w->pref_height = height; }

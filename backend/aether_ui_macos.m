@@ -3707,6 +3707,33 @@ int aether_ui_image_from_bytes(const char* data, int length) {
     return register_widget_typed((__bridge void*)iv, AUI_IMAGE);
 }
 
+// NSWorkspace answers for a path that does not exist too: it falls back to
+// the extension, which is what a directory listing needs before it stats.
+static NSImage* aeui_icon_for_path(const char* path) {
+    if (!path || !*path) return nil;
+    NSString* p = [NSString stringWithUTF8String:path];
+    return [[NSWorkspace sharedWorkspace] iconForFile:p];
+}
+
+int aether_ui_file_icon_create(const char* path) {
+    NSImageView* iv = [[NSImageView alloc] init];
+    NSImage* icon = aeui_icon_for_path(path);
+    if (icon) [iv setImage:icon];
+    return register_widget_typed((__bridge void*)iv, AUI_IMAGE);
+}
+
+void aether_ui_file_icon_set(int handle, const char* path) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSImageView class]]) return;
+    [(NSImageView*)v setImage:aeui_icon_for_path(path)];
+}
+
+int aether_ui_image_has_content(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSImageView class]]) return 0;
+    return [(NSImageView*)v image] != nil ? 1 : 0;
+}
+
 void aether_ui_image_set_size(int handle, int width, int height) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v) {

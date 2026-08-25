@@ -3827,6 +3827,59 @@ int aether_ui_image_from_bytes(const char* data, int length) {
     return aether_ui_register_widget(img);
 }
 
+// The themed icon for a path. Query the file when it exists (so a directory
+// gets the folder icon rather than whatever its name suggests) and fall back
+// to guessing from the name when it does not, which is what a listing needs
+// before it has stat'ed an entry.
+static GIcon* aeui_gicon_for_path(const char* path) {
+    if (!path || !*path) return NULL;
+    GFile* f = g_file_new_for_path(path);
+    GFileInfo* info = g_file_query_info(f, G_FILE_ATTRIBUTE_STANDARD_ICON,
+                                        G_FILE_QUERY_INFO_NONE, NULL, NULL);
+    GIcon* icon = NULL;
+    if (info) {
+        GIcon* got = g_file_info_get_icon(info);
+        if (got) icon = g_object_ref(got);
+        g_object_unref(info);
+    }
+    g_object_unref(f);
+    if (!icon) {
+        gboolean uncertain = FALSE;
+        char* ct = g_content_type_guess(path, NULL, 0, &uncertain);
+        if (ct) { icon = g_content_type_get_icon(ct); g_free(ct); }
+    }
+    return icon;
+}
+
+int aether_ui_file_icon_create(const char* path) {
+    ensure_gtk_init();
+    GtkWidget* img = gtk_image_new();
+    GIcon* icon = aeui_gicon_for_path(path);
+    if (icon) {
+        gtk_image_set_from_gicon(GTK_IMAGE(img), icon);
+        g_object_unref(icon);
+    }
+    return aether_ui_register_widget(img);
+}
+
+void aether_ui_file_icon_set(int handle, const char* path) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_IMAGE(w)) return;
+    GIcon* icon = aeui_gicon_for_path(path);
+    if (icon) {
+        gtk_image_set_from_gicon(GTK_IMAGE(w), icon);
+        g_object_unref(icon);
+    } else {
+        gtk_image_clear(GTK_IMAGE(w));
+    }
+}
+
+int aether_ui_image_has_content(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_IMAGE(w)) return 0;
+    return gtk_image_get_storage_type(GTK_IMAGE(w)) != GTK_IMAGE_EMPTY ? 1 : 0;
+}
+
 void aether_ui_image_set_size(int handle, int width, int height) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_IMAGE(w)) {

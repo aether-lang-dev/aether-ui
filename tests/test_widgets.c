@@ -188,6 +188,20 @@ static void test_system_services(void) {
     char* sv = aether_ui_file_save("headless save", "untitled.txt");
     AE_CASE(sv && sv[0] == '\0', "file_save returns empty headless");
     free(sv);
+
+    // File icons resolve through the OS icon service. A path that does not
+    // exist must still answer (every backend falls back to the extension),
+    // and an empty path must produce a widget rather than a crash, because a
+    // listing builds rows before it has stat'ed them.
+    int ic = aether_ui_file_icon_create("/");
+    AE_CASE(ic >= 1, "file_icon for a directory");
+    int ic2 = aether_ui_file_icon_create("/nowhere/at/all/song.mp3");
+    AE_CASE(ic2 >= 1, "file_icon for a path that does not exist");
+    int ic3 = aether_ui_file_icon_create("");
+    AE_CASE(ic3 >= 1, "file_icon for an empty path still makes a widget");
+    AE_CASE(aether_ui_image_has_content(ic3) == 0, "and it carries no picture");
+    aether_ui_file_icon_set(ic3, "readme.txt");
+    AE_CASE(1, "set_file_icon on a live widget did not crash");
 }
 
 static void test_many_widgets(void) {
