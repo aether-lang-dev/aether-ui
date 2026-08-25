@@ -141,10 +141,16 @@ main() {
         }
 
         // PTR BLIT — canvas_draw_image_scaled_ptr (ad960a8, also landed
-        // spec-less) fills the whole 120x60 canvas from a 2x2 solid-orange
-        // raw-pointer frame. Only that blit can colour the canvas centre;
-        // pixel -1 (no canvas), background, or black means the ptr variant
-        // did not draw. 0xFFFF8C00 packed = opaque orange (255,140,0).
+        // spec-less). testable blits a solid-orange frame whose source size
+        // EQUALS the dest (120x60, identity scale) — deliberately: macOS's
+        // underlying scaled blit is documented 1:1 for now (ignores dw/dh,
+        // "proper AppKit scaling is a later port"), and GTK4's scaling
+        // filter fades the edges of a tiny stretched source, so no single
+        // probe point survives both a real scale and a 1:1 fallback of a
+        // 2x2 frame. An identity blit renders the same everywhere; this
+        // asserts "the ptr variant actually draws", and scaling fidelity
+        // stays the underlying impl's concern, not the ptr alias's.
+        // 0xFFFF8C00 packed = opaque orange (255,140,0) = -29696.
         spec.it("the raw-pointer scaled blit actually reaches pixels") callback {
             v = uidriver.get_body("/canvas/1/pixel?x=60&y=30&w=120&h=60")
             spec.assert_contains(v, "-29696",
