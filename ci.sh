@@ -436,7 +436,11 @@ echo "=== Phase 1c: C-level widget suite (tests/test_widgets.c) ==="
 # while. Building it here is what keeps it honest. It links the same backend
 # as any app, via build.sh, and runs headless.
 if ./build.sh tests/test_widgets.c test_widgets > /tmp/ci_test_widgets_build.log 2>&1; then
-    if AETHER_UI_HEADLESS=1 ./build/test_widgets > /tmp/ci_test_widgets.log 2>&1; then
+    # $LAUNCH_PREFIX, same as every other runtime phase. The suite sets
+    # AETHER_UI_HEADLESS itself, which keeps every modal from blocking, but
+    # GTK still needs a display to OPEN, so on Linux this goes through xvfb
+    # exactly like the smoke launches do.
+    if $LAUNCH_PREFIX ./build/test_widgets > /tmp/ci_test_widgets.log 2>&1; then
         echo "  OK   $(tail -1 /tmp/ci_test_widgets.log)"
     else
         echo "  FAIL test_widgets"

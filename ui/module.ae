@@ -726,10 +726,12 @@ rtl(handle: int, on: int) {
     aether_ui_set_rtl(handle, on)
 }
 
-// wrap { … } — flow container: children lay out left-to-right and wrap
-// to the next line when the width runs out (GtkFlowBox). NB the backend
-// interposes a "wrapitem" wrapper widget between the wrap and each child
-// in the widget tree. win32/macOS: renders as a plain hstack for now.
+// wrap { … } - flow container: children lay out left-to-right and wrap
+// to the next line when the width runs out. Real flow on all three
+// backends: GtkFlowBox on GTK4, AetherWrapView on AppKit, the WK_WRAP
+// branch of stack_do_layout on win32. NB the GTK4 backend interposes a
+// "wrapitem" wrapper widget between the wrap and each child in the widget
+// tree, so the driver sees one more level there than on the others.
 wrap(_ctx: ptr) {
     handle = aether_ui_wrap_create()
     if _ctx != 0 {
