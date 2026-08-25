@@ -4794,7 +4794,8 @@ typedef struct {
     CanvasCmdKind k;
     // p0..p3 carry geometry: x1,y1,x2,y2 for lines; x,y,w,h for rects;
     // line width in p0 for stroke commands; ARC: cx,cy,radius,(unused);
-    // FILL_TEXT: x,y,font_size,(unused); DRAW_IMAGE: x,y,(unused),(unused).
+    // FILL_TEXT: x,y,font_size,(unused); DRAW_IMAGE: x,y,destw,desth
+    // (dest 0 = unscaled draw_image: blit at pixel dims).
     float p0, p1, p2, p3;
     float a0, a1;          // ARC start/end angle (radians)
     float cr, cg, cb, calpha;
@@ -5231,13 +5232,25 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
     canvas_add_cmd(canvas_id, c);
 }
 
-// Scaled draw — Win32 blits 1:1 for now (ignores dw/dh); the GTK backend
-// scales. Keeps the ABI total; proper Win32 scaling is a later port.
+// Scaled draw — REAL now (was a 1:1 stub that ignored dw/dh, same as the
+// macOS one fixed alongside it: an upscaled presentation — the Ebiten
+// port's set_scale framebuffer, video_frame's fitted region — rendered at
+// source-pixel size). Dest extent rides p2/p3 and the executor hands
+// StretchDIBits a dest rect of that size; GDI scales natively, matching
+// GTK4's cairo path.
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
-    (void)dw; (void)dh;
-    aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    unsigned char* owned = (unsigned char*)malloc(iw * ih * 4);
+    if (!owned) return;
+    memcpy(owned, rgba, iw * ih * 4);
+    CanvasCmd c = {0};
+    c.k = CV_DRAW_IMAGE; c.p0 = x; c.p1 = y;
+    c.p2 = (float)dw; c.p3 = (float)dh;
+    c.pixels = owned; c.iw = iw; c.ih = ih;
+    canvas_add_cmd(canvas_id, c);
 }
 
 extern double floatarr_get_unchecked(void* arr, int i);
@@ -5678,8 +5691,15 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
                         bi.bmiHeader.biPlanes = 1;
                         bi.bmiHeader.biBitCount = 32;
                         bi.bmiHeader.biCompression = BI_RGB;
+                        /* Dest extent: p2/p3 carry the SCALED size when
+                           the command came from draw_image_scaled; zero
+                           means an unscaled draw_image. StretchDIBits
+                           scales source to dest natively. */
+                        int ddw = cmd->p2 > 0 ? (int)cmd->p2 : cmd->iw;
+                        int ddh = cmd->p3 > 0 ? (int)cmd->p3 : cmd->ih;
+                        SetStretchBltMode(mem, HALFTONE);
                         StretchDIBits(mem, (int)cmd->p0, (int)cmd->p1,
-                            cmd->iw, cmd->ih, 0, 0, cmd->iw, cmd->ih,
+                            ddw, ddh, 0, 0, cmd->iw, cmd->ih,
                             conv, &bi, DIB_RGB_COLORS, SRCCOPY);
                         free(conv);
                     }
@@ -7155,8 +7175,17 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 if (GdipCreateBitmapFromScan0(cmd->iw, cmd->ih, cmd->iw * 4,
                                               GDIP_FMT_32BPP_ARGB, bgra, &bmp) == 0
                     && bmp) {
+                    /* Dest extent: p2/p3 carry the SCALED size when the
+                       command came from draw_image_scaled; zero means an
+                       unscaled draw_image. GdipDrawImageRectI scales the
+                       source to this rect natively — the same dest-rect
+                       plumbing as the legacy-GDI StretchDIBits arm and the
+                       macOS CGContextDrawImage one, fixed together: all
+                       three executors had the 1:1 stub independently. */
+                    INT ddw = cmd->p2 > 0 ? (INT)cmd->p2 : cmd->iw;
+                    INT ddh = cmd->p3 > 0 ? (INT)cmd->p3 : cmd->ih;
                     GdipDrawImageRectI(g, bmp, (INT)cmd->p0, (INT)cmd->p1,
-                                       cmd->iw, cmd->ih);
+                                       ddw, ddh);
                     GdipDisposeImage(bmp);
                 }
                 /* Freed AFTER the draw: GdipCreateBitmapFromScan0 does not
