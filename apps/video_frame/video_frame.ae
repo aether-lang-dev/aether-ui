@@ -27,7 +27,7 @@ import vg (view_box, rect, text_sized, fill, stroke, vg_root, node_scene,
 import vg.region
 import ui.frames (
     frames, frame, frame_invalidate, frame_set_opacity, frame_bounds,
-    frames_draw, frames_rerender_count, frames_blit_count,
+    frames_draw, frame_attach_region, frames_rerender_count, frames_blit_count,
     frames_on_click, frames_on_move, frames_on_release
 )
 import std.fs
@@ -308,7 +308,14 @@ main() {
                 app.rgn = region.live_raster_new(72.0, 96.0, 456.0, 332.0, VW_of(), VH_of())
                 region.region_set_animated(app.rgn, 1)
                 vg.scene_add_live_region(app.scene, app.rgn)
-                region.region_set_z(app.rgn, 50)
+                // NOT region_set_z(app.rgn, 50): frame surfaces and app
+                // regions share one scene z-domain, and a constant either
+                // floats the video above every frame (a frame dragged over
+                // the MP4 frame rendered BETWEEN its chrome and the pixels)
+                // or sinks it under its own chrome. Attaching hands the Z to
+                // the frames layer, which keeps the blit sandwiched above the
+                // MP4 frame's surface and below anything stacked higher.
+                frame_attach_region(app.vframe, app.rgn)
                 // One decoded frame per tick. The old version computed a
                 // frame INDEX from t*fps and pread it; a decoder has its own
                 // cursor, so advancing it is the whole policy. Presenting at

@@ -73,6 +73,32 @@ main() {
             spec.assert_eq(ok, 1,
                 "frames are held between presentations, not shown per paint")
         }
+        // THE SANDWICH: a frame dragged above the video frame must composite
+        // OVER the raster blit. Frame surfaces and app regions share one
+        // scene z-domain (frame surfaces at z*2, attached companions at
+        // z*2+1 — ui.frames' frame_attach_region), so before that existed a
+        // raised frame rendered BETWEEN the MP4 chrome and the pixels: the
+        // hardcoded region z floated the blit above every frame. This
+        // survives any decode rewrite: it is about compositing, not video.
+        spec.it("a frame dragged over the video composites above the blit") callback {
+            // (250,280) will be inside Notes' body after the drag AND inside
+            // the video rect. Before the drag it must NOT be Notes-coloured
+            // (it is video or chrome), or the assertion below proves nothing.
+            pre = uidriver.get_body("/canvas/1/pixel?x=250&y=280&w=900&h=600")
+            spec.assert_false(string.contains(pre, "-14735049"),
+                "overlap point starts as video/chrome, not Notes bg")
+
+            // Drag Notes (600,80 title bar) left onto the video frame.
+            uidriver.post_ok("/canvas/1/click?x=700&y=90", "grab Notes title")
+            uidriver.post_ok("/canvas/1/move?x=250&y=190", "drag left+down")
+            uidriver.post_ok("/canvas/1/release?x=250&y=190", "drop")
+            sleep(300)
+
+            post = uidriver.get_body("/canvas/1/pixel?x=250&y=280&w=900&h=600")
+            spec.assert_contains(post, "-14735049",
+                "overlap now shows Notes' own bg (#1f2937) — frame above blit")
+        }
+
         spec.it("names the clock driving presentation") callback {
             // Which CLOCK is master is the whole A/V sync claim, and it is
             // observable without asserting drift numbers: with audio loaded

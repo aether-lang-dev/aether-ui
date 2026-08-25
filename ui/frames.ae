@@ -16,7 +16,8 @@ exports (
     frames_total_rerender_count, frames_total_blit_count, frames_reset_totals,
     frames_occluded_count, frames_total_occluded_count,
     frames_dirty_area, frames_dirty_nrects, frames_dirty_rect, frames_clear_dirty,
-    frames_draw, frames_on_click, frames_on_move, frames_on_release
+    frames_draw, frame_attach_region,
+    frames_on_click, frames_on_move, frames_on_release
 )
 
 import std.list
@@ -87,6 +88,14 @@ struct Frame {
     // translucent frame, because you can see through it.
     body_alpha: float
     content: ptr       // boxed |rn, t, x, y, w, h|
+    // An ATTACHED companion live region (e.g. video_frame's raster blit)
+    // that must composite immediately ABOVE this frame's cached surface but
+    // BELOW any frame stacked higher. Frame surfaces sit at z = f.z * 2 and
+    // the companion at f.z * 2 + 1 (the stride exists exactly to make room),
+    // so raising either frame keeps the companion sandwiched correctly.
+    // null = none. The app still owns the companion's RECT (insets are app
+    // policy); the frames layer owns only its Z.
+    att: ptr
 }
 
 // Declarative composition layer:
@@ -161,6 +170,7 @@ frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> p
     f.rgn_ph = 0
     f.body_alpha = 0.42
     f.content = null
+    f.att = null
     _ = list.add(hst.frames, f as ptr)
     hst.active = f as ptr
     _mark_frame_dirty(f)
@@ -437,8 +447,12 @@ _composite_frame(hst: *FrameHost, bf: *Frame, rn: ptr, t: float) {
         if bf.rgn != null {
             // Keep the region tracking the frame: a drag moves the rect
             // WITHOUT re-rendering, since the blit scales source to dest.
+            // z is STRIDED by 2 so an attached companion region (see
+            // frame_attach_region) can sit at 2z+1 — above this frame's
+            // surface, below the next frame's.
             region.region_set_rect(bf.rgn, bf.x, bf.y, bf.w, bf.h)
-            region.region_set_z(bf.rgn, bf.z)
+            region.region_set_z(bf.rgn, bf.z * 2)
+            if bf.att != null { region.region_set_z(bf.att, bf.z * 2 + 1) }
             hst.last_blit_count = hst.last_blit_count + 1
             hst.total_blit_count = hst.total_blit_count + 1
             return
@@ -501,7 +515,8 @@ _composite_frame(hst: *FrameHost, bf: *Frame, rn: ptr, t: float) {
         bf.rgn_ph = ih
     }
     region.region_set_rect(bf.rgn, bf.x, bf.y, bf.w, bf.h)
-    region.region_set_z(bf.rgn, bf.z)
+    region.region_set_z(bf.rgn, bf.z * 2)
+    if bf.att != null { region.region_set_z(bf.att, bf.z * 2 + 1) }
     region.region_push(bf.rgn, px, need)
 }
 
@@ -536,6 +551,28 @@ frames_draw(host: ptr, rn: ptr, t: float) {
         last_z = best_z
         drawn = drawn + 1
     }
+}
+
+// frame_attach_region(frame, rgn) — composite the live region `rgn`
+// immediately ABOVE this frame's cached surface and BELOW any frame stacked
+// higher, forever, including across raises. This is how raster content
+// (video_frame's blit) lives "inside" a frame: frame surfaces and app
+// regions share ONE scene z-domain, so an app picking its own z (the old
+// z=50) either floats above every frame or sinks below its host — there is
+// no correct constant. Frame surfaces sit at z = f.z * 2; the companion
+// rides at f.z * 2 + 1 (the stride exists exactly to make room). The app
+// keeps owning the region's RECT (content insets are app policy); the
+// frames layer owns only its Z. One companion per frame.
+//
+// Limitation: in the no-surface fallback (no scene canvas — headless), all
+// frames render as vector shapes into the app's draw region and the
+// companion still composites above that whole layer; the sandwich needs the
+// Stage-3 surface path, which every windowed backend has.
+frame_attach_region(frame: ptr, rgn: ptr) {
+    if frame == null { return }
+    f = frame as *Frame
+    f.att = rgn
+    if rgn != null { region.region_set_z(rgn, f.z * 2 + 1) }
 }
 
 frames_on_click(host: ptr, x: float, y: float) {
