@@ -5642,6 +5642,26 @@ void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) 
 // widget keeps rendering AND the driver keeps reporting it (the registry slot
 // is cleared by the weak ref on finalize, which never runs while the parent
 // still holds the last reference).
+// Drop `w` and every descendant from the widget registry.
+//
+// CRITICAL: do NOT leave this to the g_object_weak_ref planted at
+// registration. That only fires on finalize, and a removed widget is not
+// necessarily finalized: GTK can still hold a reference (a pending unrealize,
+// the focus chain), and then the driver keeps listing the widget as visible
+// and keeps firing its callback from a stale id. macOS (unregister_view_tree)
+// and win32 (mark_subtree_dead) both do this explicitly; so does this.
+static void unregister_widget_tree(GtkWidget* w) {
+    if (!w) return;
+    for (GtkWidget* c = gtk_widget_get_first_child(w); c; ) {
+        GtkWidget* next = gtk_widget_get_next_sibling(c);
+        unregister_widget_tree(c);
+        c = next;
+    }
+    for (int i = 0; i < widget_count; i++) {
+        if (widgets[i] == w) { widgets[i] = NULL; break; }
+    }
+}
+
 static void aeui_container_remove(GtkWidget* parent, GtkWidget* child) {
     if (GTK_IS_BOX(parent)) {
         gtk_box_remove(GTK_BOX(parent), child);
@@ -5678,6 +5698,7 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     GtkWidget* child = aether_ui_get_widget(child_handle);
     if (!parent || !child) return;
     if (gtk_widget_get_parent(child) != parent) return;
+    unregister_widget_tree(child);
     aeui_container_remove(parent, child);
 }
 
@@ -5686,6 +5707,7 @@ void aether_ui_clear_children_impl(int handle) {
     if (!w) return;
     GtkWidget* child;
     while ((child = gtk_widget_get_first_child(w)) != NULL) {
+        unregister_widget_tree(child);
         aeui_container_remove(w, child);
         // An arm that does not actually unparent would spin here forever.
         if (gtk_widget_get_first_child(w) == child) {
@@ -7413,9 +7435,18 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
     GtkWidget* grid = aether_ui_get_widget(grid_handle);
     GtkWidget* child = aether_ui_get_widget(child_handle);
     if (!grid || !child || !GTK_IS_GRID(grid)) return;
-    // If the child already has a parent, unparent first.
-    GtkWidget* cur_parent = gtk_widget_get_parent(child);
-    if (cur_parent) gtk_widget_unparent(child);
+    // CRITICAL: hold a reference across the reparent. gtk_widget_unparent
+    // drops the parent's reference, and the parent normally holds the LAST
+    // one, so unparenting alone finalizes the child: the attach below then
+    // gets a dead pointer (Gtk-CRITICAL: assertion GTK_IS_WIDGET failed) and
+    // the cell silently never appears. Same idiom as the menubar reparent.
+    if (gtk_widget_get_parent(child)) {
+        g_object_ref(child);
+        gtk_widget_unparent(child);
+        gtk_grid_attach(GTK_GRID(grid), child, col, row, col_span, row_span);
+        g_object_unref(child);
+        return;
+    }
     gtk_grid_attach(GTK_GRID(grid), child, col, row, col_span, row_span);
 }
 
