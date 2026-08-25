@@ -7,8 +7,11 @@
 //   ./test_automation.sh
 
 import ui
+import std.mem
 
 extern println(s: string)
+extern malloc(size: int) -> ptr
+extern aether_ui_text_set_string(handle: int, text: string)
 
 main() {
     counter = ui.ui_state(0)
@@ -43,6 +46,35 @@ main() {
         // entry first). Plain "b" must NOT fire it.
         ui.shortcut("Ctrl+B") callback {
             _sc = ui.ui_set(counter, ui.ui_get(counter) + 10)
+        }
+
+        // Canvas key-down/key-up + the ptr blit, for spec_driver_actions.
+        // The status label DISAMBIGUATES the two key verbs: if /keyup ever
+        // routed into the on_key handler (the wired-to-the-wrong-handler
+        // hazard this suite exists for) the label would read "down:" again
+        // and the spec's wait for "up:" would fail.
+        kstatus = ui.text("keys: idle")
+        cv = ui.canvas_create(120, 60)
+        // A 2x2 solid-orange frame blitted to fill the canvas via the RAW-
+        // POINTER scaled blit (canvas_draw_image_scaled_ptr) — the spec
+        // pixel-probes the canvas centre, which only that blit can colour.
+        fb = malloc(16)
+        pxi = 0
+        while pxi < 4 {
+            o = pxi * 4
+            _m1 = mem.set_byte(fb, o,     255)
+            _m2 = mem.set_byte(fb, o + 1, 140)
+            _m3 = mem.set_byte(fb, o + 2, 0)
+            _m4 = mem.set_byte(fb, o + 3, 255)
+            pxi = pxi + 1
+        }
+        ui.canvas_draw_image_scaled_ptr(cv, 0.0, 0.0, 120.0, 60.0, 2, 2, fb, 16)
+        ui.canvas_redraw(cv)
+        ui.canvas_on_key(cv) callback |k: string| {
+            aether_ui_text_set_string(kstatus, "down:${k}")
+        }
+        ui.canvas_on_key_release(cv) callback |k: string| {
+            aether_ui_text_set_string(kstatus, "up:${k}")
         }
 
         ui.spacer()
