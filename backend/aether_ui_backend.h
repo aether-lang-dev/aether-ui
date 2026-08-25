@@ -274,6 +274,12 @@ int aether_ui_overlay_is_modal_impl(int overlay_handle);
 // plays enter; is_exiting is 1 while the exit tween plays before real removal.
 void aether_ui_overlay_set_transition_impl(int overlay_handle, const char* kind, int ms);
 int aether_ui_overlay_is_exiting_impl(int overlay_handle);
+// Sticky companion to is_exiting: 1 once an exit tween has STARTED for this
+// entry, never cleared. is_exiting is only true while the tween plays, so a
+// spec that samples it by polling can miss the whole window on a loaded
+// machine and then wait forever for a fact that already happened. The overlay
+// table is never compacted, so this stays readable after the entry dies.
+int aether_ui_overlay_exit_played_impl(int overlay_handle);
 // Scrim material: "dim"|"blur"|"tint". Real backdrop blur only on macOS
 // (NSVisualEffectView); win32/GTK4 degrade "blur"→"tint". The _effective getter
 // reports what was actually applied. See docs/design/backdrop-material.md.

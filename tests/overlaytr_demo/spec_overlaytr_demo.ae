@@ -54,11 +54,18 @@ main() {
                 r = uidriver.get_body("/overlays")
                 spec.assert_contains(r, "\"live\":0", "removed at once (no animation)")
                 spec.assert_contains(r, "\"exiting\":0", "no exit tween when animation off")
+                spec.assert_contains(r, "\"exit_played\":0", "no tween ever started")
             } else {
-                // The 200ms slide-down exit tween should be observable before
-                // removal — catch exiting:1, then wait for the entry to go.
-                sawExit = uidriver.wait_body_contains("/overlays", "\"exiting\":1", 10)
-                spec.assert_true(sawExit, "exit tween is playing (exiting:1)")
+                // exit_played, not exiting. Both say a tween ran, but exiting
+                // is only true FOR ITS DURATION (200ms here): a poll that
+                // lands after the tween finished can never see it, and then
+                // no amount of further polling helps. That is a real CI
+                // failure, not a hypothetical - the round trip on a loaded
+                // runner is enough to miss the whole window. exit_played is
+                // sticky, so it answers the question the spec is actually
+                // asking: did the exit animate before the entry was removed?
+                played = uidriver.wait_body_contains("/overlays", "\"exit_played\":1", 10)
+                spec.assert_true(played, "an exit tween played before removal")
                 gone = uidriver.wait_body_contains("/overlays", "\"live\":0", 30)
                 spec.assert_true(gone, "entry removed after the exit tween")
             }
