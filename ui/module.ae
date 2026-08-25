@@ -21,7 +21,7 @@ exports (
     splitview, split_position, split_set_position, on_layout, weight, rtl, wrap,
     tabs, tab, on_tab_change, tab_select, tab_selected,
     nav_push, nav_pop, nav_depth, nav_page,
-    text, text_wrapped, text_anchor, button, btn, spacer, divider,
+    text, text_wrapped, text_anchor, text_truncate, button, btn, spacer, divider,
     textfield, textfield_bound, securefield, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
@@ -152,6 +152,7 @@ extern aether_ui_canvas_gesture_probe_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_text_create(label: string) -> int
 extern aether_ui_text_wrapped_create(label: string, wrap_px: int) -> int
 extern aether_ui_text_set_anchor(handle: int, anchor: int)
+extern aether_ui_text_set_truncate(handle: int, mode: int)
 extern aether_ui_text_set_string(handle: int, text: string)
 extern aether_ui_button_create(label: string, boxed_closure: ptr) -> int
 extern aether_ui_button_create_plain(label: string) -> int
@@ -904,6 +905,19 @@ text_wrapped(_ctx: ptr, label: string, wrap_px: int) {
 
 // text_anchor(label_handle, anchor): "start" | "middle" | "end". Sets the
 // horizontal alignment of a text/label widget.
+// text_truncate(label_handle, mode): "none" | "head" | "middle" | "tail".
+// Ellipsises a label too long for its box instead of letting it overflow.
+// NB win32 has no head ellipsis (a STATIC offers END and PATH only), so
+// "head" is applied as "tail" there; the driver's "truncate" field reports
+// what was actually applied, not what was asked for.
+text_truncate(handle: int, mode: string) {
+    m = 0
+    if string.equals(mode, "head") == 1   { m = 1 }
+    if string.equals(mode, "middle") == 1 { m = 2 }
+    if string.equals(mode, "tail") == 1   { m = 3 }
+    aether_ui_text_set_truncate(handle, m)
+}
+
 text_anchor(handle: int, anchor: string) {
     a = 0
     if string.equals(anchor, "middle") == 1 { a = 1 }

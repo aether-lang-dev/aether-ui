@@ -1,7 +1,8 @@
-// spec_typo_demo.ae — typography: wrapping labels + text anchor.
-// The text widget JSON now carries "wrap" (bool) and "anchor"
-// (start|middle|end); the driver asserts a wrapped paragraph reports
-// wrap:true and three labels report their distinct anchors.
+// spec_typo_demo.ae: typography, wrapping labels + text anchor + truncation.
+// The text widget JSON carries "wrap" (bool), "anchor" (start|middle|end)
+// and "truncate" (none|head|middle|tail). The driver asserts a wrapped
+// paragraph reports wrap:true, three labels report their distinct anchors,
+// and three more report the ellipsis mode actually applied.
 import std.spec
 import uidriver
 import std.string
@@ -35,6 +36,41 @@ main() {
             r = uidriver.widget_id_by_text("right label")
             br = uidriver.get_body("/widget/${r}")
             spec.assert_contains(br, "\"anchor\":\"end\"", "right = end")
+        }
+
+        spec.it("text_truncate sets middle and tail, and leaves others alone") callback {
+            m = uidriver.widget_id_by_text("middle: /opt/aether/share/examples/typo_demo.ae")
+            bm = uidriver.get_body("/widget/${m}")
+            spec.assert_contains(bm, "\"truncate\":\"middle\"", "middle ellipsis")
+
+            t = uidriver.widget_id_by_text("tail: /opt/aether/share/examples/typo_demo.ae")
+            bt = uidriver.get_body("/widget/${t}")
+            spec.assert_contains(bt, "\"truncate\":\"tail\"", "tail ellipsis")
+
+            p = uidriver.widget_id_by_text("plain: /opt/aether/share/examples/typo_demo.ae")
+            bp = uidriver.get_body("/widget/${p}")
+            spec.assert_contains(bp, "\"truncate\":\"none\"",
+                "an untouched label is not ellipsised")
+
+            l = uidriver.widget_id_by_text("left label")
+            bl = uidriver.get_body("/widget/${l}")
+            spec.assert_contains(bl, "\"truncate\":\"none\"",
+                "setting one label does not touch its neighbours")
+        }
+
+        spec.it("head ellipsis reports what the backend can actually do") callback {
+            // The EFFECTIVE mode, not the requested one. A Win32 STATIC has
+            // no head ellipsis (SS_ENDELLIPSIS / SS_PATHELLIPSIS only), so it
+            // applies and reports tail. Anything else must do head properly.
+            h = uidriver.widget_id_by_text("head: /opt/aether/share/examples/typo_demo.ae")
+            bh = uidriver.get_body("/widget/${h}")
+            bk = uidriver.get_body("/widgets")
+            if string.contains(bk, "backend: win32") == 1 {
+                spec.assert_contains(bh, "\"truncate\":\"tail\"",
+                    "win32 degrades head to tail and says so")
+            } else {
+                spec.assert_contains(bh, "\"truncate\":\"head\"", "head ellipsis")
+            }
         }
     }
     spec.run_summary(fw)

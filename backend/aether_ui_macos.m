@@ -797,6 +797,33 @@ int aether_ui_text_get_wrap(int handle) {
     if (!v || ![v isKindOfClass:[NSTextField class]]) return 0;
     return ((NSTextField*)v).tag == 0x57524150 ? 1 : 0;
 }
+
+void aether_ui_text_set_truncate(int handle, int mode) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSTextField class]]) return;
+    NSTextField* tf = (NSTextField*)v;
+    NSLineBreakMode lb = NSLineBreakByClipping;
+    if (mode == 1) lb = NSLineBreakByTruncatingHead;
+    else if (mode == 2) lb = NSLineBreakByTruncatingMiddle;
+    else if (mode == 3) lb = NSLineBreakByTruncatingTail;
+    else if (aether_ui_text_get_wrap(handle)) lb = NSLineBreakByWordWrapping;
+    [[tf cell] setLineBreakMode:lb];
+    // AppKit only ellipsizes when the text is allowed to run past the box.
+    // A wrapped label keeps its line budget; a single-line one gets 1.
+    if (mode != 0 && !aether_ui_text_get_wrap(handle)) [tf setMaximumNumberOfLines:1];
+    [tf setNeedsDisplay:YES];
+}
+
+int aether_ui_text_get_truncate(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSTextField class]]) return 0;
+    switch ([[(NSTextField*)v cell] lineBreakMode]) {
+        case NSLineBreakByTruncatingHead:   return 1;
+        case NSLineBreakByTruncatingMiddle: return 2;
+        case NSLineBreakByTruncatingTail:   return 3;
+        default:                            return 0;
+    }
+}
 int aether_ui_text_get_anchor(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || ![v isKindOfClass:[NSTextField class]]) return 0;

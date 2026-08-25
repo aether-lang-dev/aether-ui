@@ -1,7 +1,7 @@
 // Aether UI typography example — wrapping labels + text anchor.
 import ui
-import ui (window, vstack, text, text_wrapped, text_anchor, divider,
-    enable_test_server)
+import ui (window, vstack, text, text_wrapped, text_anchor, text_truncate,
+    divider, backend_name, enable_test_server)
 import std.os (os_getenv)
 
 main() {
@@ -19,6 +19,23 @@ main() {
             text_anchor(l2, "middle")
             l3 = text("right label")
             text_anchor(l3, "end")
+            divider()
+
+            // Truncation: one overlong path, ellipsised three ways, plus an
+            // untouched control. Each label carries its mode in its own text
+            // so the driver can find it by name.
+            t1 = text("head: /opt/aether/share/examples/typo_demo.ae")
+            text_truncate(t1, "head")
+            t2 = text("middle: /opt/aether/share/examples/typo_demo.ae")
+            text_truncate(t2, "middle")
+            t3 = text("tail: /opt/aether/share/examples/typo_demo.ae")
+            text_truncate(t3, "tail")
+            _t4 = text("plain: /opt/aether/share/examples/typo_demo.ae")
+
+            // Which backend is answering. The head ellipsis is the one mode a
+            // Win32 STATIC cannot do, so a spec has to know who it is talking
+            // to before it can assert the EFFECTIVE mode.
+            _bk = text("backend: ${backend_name()}")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

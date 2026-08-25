@@ -346,10 +346,17 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
 
     if (strcmp(type, "text") == 0) {
         static const char* an[] = {"start", "middle", "end"};
+        static const char* tr[] = {"none", "head", "middle", "tail"};
         int a = aether_ui_text_get_anchor(handle);
         if (a < 0 || a > 2) a = 0;
-        n += snprintf(buf + n, bufsize - n, ",\"wrap\":%s,\"anchor\":\"%s\"",
-                      aether_ui_text_get_wrap(handle) ? "true" : "false", an[a]);
+        // truncate is the EFFECTIVE mode: a backend that cannot do the one
+        // asked for reports the one it actually applied.
+        int t = aether_ui_text_get_truncate(handle);
+        if (t < 0 || t > 3) t = 0;
+        n += snprintf(buf + n, bufsize - n,
+                      ",\"wrap\":%s,\"anchor\":\"%s\",\"truncate\":\"%s\"",
+                      aether_ui_text_get_wrap(handle) ? "true" : "false",
+                      an[a], tr[t]);
     } else if (strcmp(type, "toggle") == 0) {
         n += snprintf(buf + n, bufsize - n, ",\"active\":%s",
                       h->toggle_active(handle) ? "true" : "false");

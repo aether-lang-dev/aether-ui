@@ -60,6 +60,13 @@ int aether_ui_text_wrapped_create(const char* text, int wrap_width_px);
 void aether_ui_text_set_anchor(int handle, int anchor);
 int aether_ui_text_get_wrap(int handle);
 int aether_ui_text_get_anchor(int handle);
+// Ellipsis mode for a label too long for its box: 0 none, 1 head, 2 middle,
+// 3 tail. The getter reports what was actually APPLIED, not what was asked
+// for, in the same spirit as overlay_material_effective: a Win32 STATIC has
+// no head ellipsis (SS_ENDELLIPSIS / SS_PATHELLIPSIS only), so head degrades
+// to tail there and the getter says so rather than lying.
+void aether_ui_text_set_truncate(int handle, int mode);
+int aether_ui_text_get_truncate(int handle);
 // Driver-invoke a widget's double-click closure (headless-safe). 1 if fired.
 int aether_ui_fire_double_click(int handle);
 /* Row drag-reorder: make `row` a drag source (index payload) + drop target;

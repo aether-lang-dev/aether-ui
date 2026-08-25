@@ -245,6 +245,7 @@ typedef struct {
     AeClosure* on_scroll; // vlist native scroll: on_scroll(dy rows)
     int text_wrap;        // WK_TEXT: multi-line wrapping label
     int text_anchor;      // WK_TEXT: 0=start 1=middle 2=end
+    int text_truncate;    // WK_TEXT: EFFECTIVE ellipsis 0=none 2=middle 3=tail
 
     // Per-widget data (union over kind)
     union {
@@ -2000,6 +2001,30 @@ void aether_ui_text_set_anchor(int handle, int anchor) {
 int aether_ui_text_get_wrap(int handle) {
     Widget* w = widget_at(handle);
     return (w && w->kind == WK_TEXT) ? w->text_wrap : 0;
+}
+
+void aether_ui_text_set_truncate(int handle, int mode) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_TEXT || !w->hwnd) return;
+    // A Win32 STATIC ellipsizes through style bits and offers END (tail) and
+    // PATH (middle, path-aware) only. There is no head ellipsis, so head is
+    // applied as tail and RECORDED as tail: get_truncate reports what the
+    // control actually does, the way overlay_material_effective does for a
+    // blur that degraded to a tint.
+    int eff = mode;
+    if (eff == 1) eff = 3;
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    st &= ~(SS_ENDELLIPSIS | SS_PATHELLIPSIS | SS_WORDELLIPSIS);
+    if (eff == 2)      st |= SS_PATHELLIPSIS;
+    else if (eff == 3) st |= SS_ENDELLIPSIS;
+    SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+    w->text_truncate = eff;
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+int aether_ui_text_get_truncate(int handle) {
+    Widget* w = widget_at(handle);
+    return (w && w->kind == WK_TEXT) ? w->text_truncate : 0;
 }
 int aether_ui_text_get_anchor(int handle) {
     Widget* w = widget_at(handle);
