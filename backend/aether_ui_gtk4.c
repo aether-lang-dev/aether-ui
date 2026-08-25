@@ -633,6 +633,27 @@ int aether_ui_text_get_wrap(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     return (w && GTK_IS_LABEL(w) && gtk_label_get_wrap(GTK_LABEL(w))) ? 1 : 0;
 }
+
+void aether_ui_text_set_truncate(int handle, int mode) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return;
+    PangoEllipsizeMode em = PANGO_ELLIPSIZE_NONE;
+    if (mode == 1) em = PANGO_ELLIPSIZE_START;
+    else if (mode == 2) em = PANGO_ELLIPSIZE_MIDDLE;
+    else if (mode == 3) em = PANGO_ELLIPSIZE_END;
+    gtk_label_set_ellipsize(GTK_LABEL(w), em);
+}
+
+int aether_ui_text_get_truncate(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return 0;
+    switch (gtk_label_get_ellipsize(GTK_LABEL(w))) {
+        case PANGO_ELLIPSIZE_START:  return 1;
+        case PANGO_ELLIPSIZE_MIDDLE: return 2;
+        case PANGO_ELLIPSIZE_END:    return 3;
+        default:                     return 0;
+    }
+}
 int aether_ui_text_get_anchor(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return 0;
