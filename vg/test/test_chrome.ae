@@ -1,0 +1,125 @@
+// vg/test/test_chrome.ae — the drawn-chrome substrate, headless (Phase 1 of
+// docs/design/vg-drawn-controls.md). Recording-backend scene, same idiom as
+// test_vg: build chrome pieces, assert the dispatched shapes and the cached
+// element styling. Pixel-level proof belongs to phase 2's driver spec — this
+// pins the STRUCTURE: which shapes, which fills, which order, which states.
+//
+// Runs under text_metrics_stub (all text metrics zero), so measurements are
+// asserted at their documented degenerate value: bare padding.
+
+import ui.chrome
+import vg
+import vg.grammar.element
+import vg.grammar.factories
+import vg.backend.record
+import std.string
+import std.map
+
+extern exit(code: int)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 {
+        println("  PASS: ${label} ('${got}')")
+    } else {
+        println("  FAIL: ${label}: got '${got}' want '${want}'")
+        exit(1)
+    }
+}
+
+assert_near(label: string, got: float, want: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < 0.01 {
+        println("  PASS: ${label} (${got})")
+    } else {
+        println("  FAIL: ${label}: got ${got} want ${want}")
+        exit(1)
+    }
+}
+
+parse_opt(bk: ptr, i: int, key: string) -> float {
+    s = record.backend_opt_get(bk, i, key)
+    v, _e = string.to_float(s)
+    return v
+}
+
+mk_ctx() -> ptr {
+    opts = factories.opts_new()
+    factories.opts_set_view_box(opts, "0 0 400 200")
+    factories.opts_set_width(opts, 400.0)
+    factories.opts_set_height(opts, 200.0)
+    return factories.create_aevg_context(opts)
+}
+
+main() {
+    println("=== test_chrome ===")
+    tokens = chrome.chrome_tokens()
+
+    // ── measure: degenerate-under-stub contract ─────────────────────
+    mw, mh = chrome.chrome_measure("OK", tokens)
+    assert_near("measure w = 2*pad_x under stub", mw, 28.0)
+    assert_near("measure h = 2*pad_y under stub", mh, 14.0)
+
+    // ── normal box: one rounded rect, themed fill, border ───────────
+    ctx = mk_ctx()
+    bk = record.backend_new()
+    scene = vg.scene_new(ctx, bk)
+    root = vg.vg_root(scene)
+
+    body = chrome.chrome_box(root, 10.0, 10.0, 120.0, 32.0,
+                             tokens, chrome.CHROME_NORMAL, 0)
+    // A rounded rect LOWERS TO A PATH in the shapes factory (rx > 0 takes
+    // the rect_via_path route) — the kind assert pins that contract.
+    assert_eq_str("body dispatched as rounded path", record.backend_kind(bk, 0), "path")
+    bel = vg.node_element(body)
+    assert_near("body bounds x", element.element_bounds_x(bel), 10.0)
+    assert_near("body bounds w", element.element_bounds_width(bel), 120.0)
+    assert_eq_str("normal fill", element.element_last_fill(bel), "#F3F4F6")
+    assert_eq_str("border colour", element.element_last_stroke_color(bel), "#9CA3AF")
+    assert_near("border width", element.element_last_stroke_width(bel), 1.0)
+
+    // ── hover / active fills differ from normal ─────────────────────
+    hb = chrome.chrome_box(root, 10.0, 60.0, 120.0, 32.0,
+                           tokens, chrome.CHROME_HOVER, 0)
+    assert_eq_str("hover fill", element.element_last_fill(vg.node_element(hb)), "#E5E7EB")
+    ab = chrome.chrome_box(root, 10.0, 100.0, 120.0, 32.0,
+                           tokens, chrome.CHROME_ACTIVE, 0)
+    assert_eq_str("active fill", element.element_last_fill(vg.node_element(ab)), "#D1D5DB")
+
+    // ── disabled dims the body ──────────────────────────────────────
+    db = chrome.chrome_box(root, 10.0, 140.0, 120.0, 32.0,
+                           tokens, chrome.CHROME_DISABLED, 0)
+    assert_near("disabled opacity", element.element_last_opacity(vg.node_element(db)), 0.55)
+
+    // ── focus ring: drawn FIRST (under the body), haloed, stroked ───
+    fctx = mk_ctx()
+    fbk = record.backend_new()
+    fscene = vg.scene_new(fctx, fbk)
+    froot = vg.vg_root(fscene)
+    fb = chrome.chrome_box(froot, 20.0, 20.0, 100.0, 30.0,
+                           tokens, chrome.CHROME_NORMAL, 1)
+    // call 0 = the ring, call 1 = the body — the under-halo order contract.
+    assert_eq_str("ring dispatched first", record.backend_kind(fbk, 0), "path")
+    assert_eq_str("body dispatched second", record.backend_kind(fbk, 1), "path")
+    rel0 = vg.node_element(fb)
+    assert_near("body bounds x unchanged by the ring", element.element_bounds_x(rel0), 20.0)
+    assert_near("body bounds w unchanged", element.element_bounds_width(rel0), 100.0)
+    assert_eq_str("body fill still themed",
+                  element.element_last_fill(vg.node_element(fb)), "#F3F4F6")
+
+    // ── the one-call control: box + centred label ───────────────────
+    cctx = mk_ctx()
+    cbk = record.backend_new()
+    cscene = vg.scene_new(cctx, cbk)
+    croot = vg.vg_root(cscene)
+    cn, cw, ch = chrome.chrome_control(croot, 0.0, 0.0, "Go",
+                                       tokens, chrome.CHROME_NORMAL, 0)
+    assert_near("control w = measured", cw, 28.0)
+    assert_near("control h = measured", ch, 14.0)
+    assert_eq_str("control body is a rounded path", record.backend_kind(cbk, 0), "path")
+    assert_eq_str("label dispatched as text", record.backend_kind(cbk, 1), "text")
+    assert_eq_str("control body fill themed",
+                  element.element_last_fill(vg.node_element(cn)), "#F3F4F6")
+
+    println("=== test_chrome passed ===")
+}

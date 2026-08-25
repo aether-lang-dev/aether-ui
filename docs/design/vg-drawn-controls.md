@@ -1,11 +1,18 @@
 # vg-drawn controls — the hybrid fork (comparison + verdict)
 
-> **Status: comparison doc, NOT scheduled.** This is the "decide before you
-> build" writeup the roadmap asks for before the vg-drawn-controls fork gets
-> any code. It states the options, compares them against this codebase's real
-> constraints, gives a verdict, and sketches a phased, ci-gated path IF the
-> verdict is ever acted on. Nothing here is implemented. The default remains:
-> native widgets, drawn only where natives fail us.
+> **Status: SCHEDULED (verdict C, hybrid) — Paul, 2026-08-25. Phase 1
+> LANDED the same day**: `ui/chrome.ae` (tokens, state-aware control box
+> with focus ring, measured centred label, one-call `chrome_control`) +
+> `vg.rrect` + `vg/test/test_chrome` (21 asserts, headless recording
+> backend, in ci.sh Phase 0). The semantics bridge shipped as the
+> documented host-widget pattern — zero new code, the drawn control's real
+> host carries the existing `a11y_role/label` — exactly as sketched below.
+> The concrete drivers that tipped the decision: win32's frames-sandwich
+> skip, its GDI-alpha caching gate, and the scaled-blit 1:1 drift found in
+> FOUR independent backend sites in one day — all the same root (backends
+> without a shared drawing path). Native stays the default; every drawn
+> control ships behind a flag with a parity spec. Next: phase 2, drawn
+> button + toggle on this substrate.
 
 ## The question
 

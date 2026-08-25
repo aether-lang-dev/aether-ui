@@ -39,7 +39,7 @@
 
 exports (
     view_box,
-    circle, rect, line, path, text, text_sized, text_anchored, g,
+    circle, rect, rrect, line, path, text, text_sized, text_anchored, g,
     use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
     text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
@@ -381,6 +381,25 @@ rect(_ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
     put_f(a, "y", y)
     put_f(a, "width",  w)
     put_f(a, "height", h)
+    if scene_is_deferred(scene) == 1 {
+        return record_shape(scene, 1, a)
+    }
+    el = shapes.shape_rectangle(scene_ctx(scene), scene_backend(scene), a)
+    return mk_node(scene, el)
+}
+
+// rrect(x, y, w, h, r) — rounded rectangle. The shapes layer has honoured
+// an SVG "rx" attr all along (rendering.parse_len_x reads it); this is the
+// DSL spelling. First consumer: ui.chrome's control box (the vg-drawn
+// controls substrate — docs/design/vg-drawn-controls.md phase 1).
+rrect(_ctx: ptr, x: float, y: float, w: float, h: float, r: float) -> ptr {
+    scene = node_scene(_ctx)
+    a = map.new()
+    put_f(a, "x", x)
+    put_f(a, "y", y)
+    put_f(a, "width",  w)
+    put_f(a, "height", h)
+    put_f(a, "rx", r)
     if scene_is_deferred(scene) == 1 {
         return record_shape(scene, 1, a)
     }

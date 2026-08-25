@@ -1,0 +1,156 @@
+// ui/chrome.ae — the drawn-chrome substrate: vg-drawn controls, Phase 1.
+//
+// docs/design/vg-drawn-controls.md, verdict C (hybrid), scheduled
+// 2026-08-25: chrome (buttons, menus, tabs, toolbars) gets a DRAWN path;
+// text inputs stay NATIVE forever (IME is the disqualifier for going
+// further). This module is the shared "draw a control" kit that phase 2's
+// drawn button/toggle build on, behind a flag, with AETHER_UI_PICKER=drawn
+// as the working pattern. No controls live here — only the drawing.
+//
+// What the kit provides:
+//   tokens  — the theme: colours, radius, padding, border, font size.
+//   box     — the state-aware control body: rounded rect + border, hover/
+//             active fills, disabled dimming, and a focus ring.
+//   label   — a measured, centre-anchored text on the same font the canvas
+//             draws with (vg.text_extent), so labels are optically placed
+//             rather than guessed.
+//   measure — label + padding → the control's natural (w, h).
+//   control — box + label composed in one call, returning the natural size.
+//
+// THE SEMANTICS BRIDGE (doc phase 1) is deliberately ZERO new code: a
+// drawn control keeps a real HOST widget — the drawn-picker pattern — and
+// the existing ui.a11y_role / a11y_label / a11y_description on that host
+// IS the bounded role+name bridge. A screen reader sees a button, not a
+// rectangle, through machinery that already ships on all three backends.
+//
+// PURE vg (no ui import): headless-testable with the Phase-0 recording
+// backend (vg/test/test_chrome.ae), per house rule 4.
+
+exports (
+    ChromeTokens, chrome_tokens,
+    CHROME_NORMAL, CHROME_HOVER, CHROME_ACTIVE, CHROME_DISABLED,
+    chrome_box, chrome_label, chrome_measure, chrome_control
+)
+
+import vg
+import vg (rrect, text_anchored, fill, stroke, opacity,
+           text_extent, font_ascent, font_descent)
+import std.string
+
+extern malloc(size: int) -> ptr
+
+// Interaction states for the control BODY. A plain int, not a bitfield:
+// Aether keeps this simple, and focus is orthogonal (a hovered control can
+// be focused), so `focused` travels as its own flag beside the state.
+// NB the name `st` in signatures — `state` is a reserved word in Aether.
+const CHROME_NORMAL: int = 0
+const CHROME_HOVER: int = 1
+const CHROME_ACTIVE: int = 2
+const CHROME_DISABLED: int = 3
+
+// The theme tokens. Colours are CSS strings (what vg.fill/stroke consume).
+// Defaults echo the roles_demo light palette; a themed app builds its own
+// set (or, later, derives one from an AeCS sheet — that bridge is phase-2+
+// work, deliberately not smuggled in here).
+struct ChromeTokens {
+    bg: string          // control body, normal
+    bg_hover: string    // body under the pointer
+    bg_active: string   // body while pressed
+    fg: string          // label
+    fg_disabled: string // label when disabled
+    border: string      // 1px body outline
+    focus: string       // focus-ring stroke
+    radius: float       // corner radius
+    pad_x: float        // label inset, horizontal
+    pad_y: float        // label inset, vertical
+    border_w: float
+    font_size: float
+}
+
+chrome_tokens() -> ptr {
+    t = malloc(96) as *ChromeTokens
+    t.bg = "#F3F4F6"
+    t.bg_hover = "#E5E7EB"
+    t.bg_active = "#D1D5DB"
+    t.fg = "#1F2937"
+    t.fg_disabled = "#9CA3AF"
+    t.border = "#9CA3AF"
+    t.focus = "#3B82F6"
+    t.radius = 6.0
+    t.pad_x = 14.0
+    t.pad_y = 7.0
+    t.border_w = 1.0
+    t.font_size = 13.0
+    return t as ptr
+}
+
+_bg_for(t: *ChromeTokens, st: int) -> string {
+    if st == CHROME_HOVER { return t.bg_hover }
+    if st == CHROME_ACTIVE { return t.bg_active }
+    return t.bg
+}
+
+// chrome_box(rn, x, y, w, h, tokens, st, focused) — the control body.
+// Draw order matters and is part of the contract: focus ring FIRST (under),
+// then the body over it, so the ring reads as a halo rather than a border
+// on top of the fill. Disabled dims the whole body via opacity — the vg
+// layer composites it, no second colour set needed.
+chrome_box(rn: ptr, x: float, y: float, w: float, h: float,
+           tokens: ptr, st: int, focused: int) -> ptr {
+    t = tokens as *ChromeTokens
+    if focused == 1 {
+        ring = rrect(rn, x - 2.0, y - 2.0, w + 4.0, h + 4.0, t.radius + 2.0)
+        fill(ring, "none")
+        stroke(ring, t.focus, 2.0)
+    }
+    body = rrect(rn, x, y, w, h, t.radius)
+    fill(body, _bg_for(t, st))
+    stroke(body, t.border, t.border_w)
+    if st == CHROME_DISABLED {
+        opacity(body, 0.55)
+    }
+    return body
+}
+
+// chrome_label(rn, cx, cy, label, tokens, st) — the measured, centred
+// label. Horizontal centring is vg's own text_anchored "middle" (real
+// advance-width shifting); vertical centring places the BASELINE at
+// cy + (ascent - descent)/2, the optical-centre formula, using metrics
+// from the same font the canvas draws with.
+chrome_label(rn: ptr, cx: float, cy: float, label: string,
+             tokens: ptr, st: int) -> ptr {
+    t = tokens as *ChromeTokens
+    asc = font_ascent(t.font_size)
+    desc = font_descent(t.font_size)
+    baseline = cy + (asc - desc) / 2.0
+    node = text_anchored(rn, cx, baseline, t.font_size, label, "middle")
+    if st == CHROME_DISABLED {
+        fill(node, t.fg_disabled)
+    } else {
+        fill(node, t.fg)
+    }
+    return node
+}
+
+// chrome_measure(label, tokens) -> (w, h) — the control's natural size:
+// measured label plus padding. Under the headless text-metrics stub the
+// text terms are zero and the result degenerates to bare padding — the
+// unit test asserts exactly that, and real metrics take over on any
+// windowed backend.
+chrome_measure(label: string, tokens: ptr) -> (float, float) {
+    t = tokens as *ChromeTokens
+    tw, lh, _asc = text_extent(t.font_size, label)
+    return tw + t.pad_x * 2.0, lh + t.pad_y * 2.0
+}
+
+// chrome_control(rn, x, y, label, tokens, st, focused) -> (body, w, h) —
+// the one-call composition phase 2's drawn button wraps: measure, box,
+// centred label. Returns the body node (hit-test / interaction target)
+// and the natural size actually used.
+chrome_control(rn: ptr, x: float, y: float, label: string,
+               tokens: ptr, st: int, focused: int) -> (ptr, float, float) {
+    w, h = chrome_measure(label, tokens)
+    body = chrome_box(rn, x, y, w, h, tokens, st, focused)
+    _lbl = chrome_label(rn, x + w / 2.0, y + h / 2.0, label, tokens, st)
+    return body, w, h
+}
