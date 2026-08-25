@@ -65,6 +65,7 @@ exports (
     edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
     alert, clipboard_write, clipboard_read, open_url, open_file, save_file,
+    pick_folder,
     is_dark_mode,
     timer, timer_cancel, backend_name,
     window_create, window_set_body, window_show, window_close,
@@ -321,8 +322,9 @@ const DIST_FILL_EQUALLY = 1
 extern aether_ui_alert_impl(title: string, msg: string)
 extern aether_ui_clipboard_write_impl(text: string)
 extern aether_ui_clipboard_read_impl() -> string
-extern aether_ui_file_open(title: string) -> string
+extern aether_ui_file_open(title: string, start_dir: string) -> string
 extern aether_ui_file_save(title: string, default_name: string) -> string
+extern aether_ui_file_pick_folder(title: string, start_dir: string) -> string
 extern aether_ui_open_url_impl(url: string)
 extern aether_ui_dark_mode_check() -> int
 extern aether_ui_backend_name_impl() -> string
@@ -2715,16 +2717,24 @@ open_url(url: string) {
     aether_ui_open_url_impl(url)
 }
 
-// Native file pickers — block, return the chosen path ("" if cancelled).
-// GtkFileChooserNative / IFileDialog(GetOpenFileName) / NSOpenPanel|NSSavePanel.
-// Headless-no-op (return "") like alert/menu_popup — a modal has no seat on CI.
-//   path = open_file("Choose a song")
+// Native file pickers. They BLOCK and return the chosen path, "" if
+// cancelled. GtkFileChooserNative / GetOpenFileNameW + SHBrowseForFolderW /
+// NSOpenPanel + NSSavePanel. Headless-no-op (return "") like alert and
+// menu_popup: a modal has no seat to dismiss it on CI.
+//
+// start_dir is the folder the chooser opens in; pass "" for the platform
+// default.
+//   path = open_file("Choose a song", "")
 //   path = save_file("Export as", "untitled.txt")
-open_file(title: string) -> string {
-    return aether_ui_file_open(title)
+//   dir  = pick_folder("New file in", "/home/me/notes")
+open_file(title: string, start_dir: string) -> string {
+    return aether_ui_file_open(title, start_dir)
 }
 save_file(title: string, default_name: string) -> string {
     return aether_ui_file_save(title, default_name)
+}
+pick_folder(title: string, start_dir: string) -> string {
+    return aether_ui_file_pick_folder(title, start_dir)
 }
 
 is_dark_mode() {

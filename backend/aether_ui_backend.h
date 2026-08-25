@@ -237,8 +237,13 @@ void aether_ui_enable_test_server_ctx(int port, void* ctx);
 
 // System integration (Group 5)
 void aether_ui_alert_impl(const char* title, const char* message);
-char* aether_ui_file_open(const char* title);
+// start_dir: the folder the chooser opens in; "" or NULL for the platform
+// default. Every one of these is a native MODAL, so all three backends
+// return "" under AETHER_UI_HEADLESS rather than block a machine with no
+// seat to dismiss them.
+char* aether_ui_file_open(const char* title, const char* start_dir);
 char* aether_ui_file_save(const char* title, const char* default_name);
+char* aether_ui_file_pick_folder(const char* title, const char* start_dir);
 void aether_ui_clipboard_write_impl(const char* text);
 /* Read the clipboard's text. Returns a malloc'd string the caller owns,
  * empty when the clipboard holds no text. Never returns NULL. */
