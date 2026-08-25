@@ -1260,7 +1260,9 @@ set_hidden(handle: int, hidden: int) -> int {
 // pre-window registrations attach when the window appears. Driver:
 // POST /window/key?combo= fires the same closure (no fake input
 // events); GET /focus and POST /widget/{id}/focus round out the story.
-// GTK4 only for now; no-op elsewhere.
+// Real keyboard delivery on GTK4 (GtkShortcutController) and macOS (an
+// NSEvent local key monitor). On win32 the registry and the driver route
+// work, but a real keypress is not translated to a combo yet.
 shortcut(combo: string, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_shortcut_impl(combo, boxed)
@@ -1268,17 +1270,19 @@ shortcut(combo: string, cb: fn) {
 
 // shortcut_when(combo, enabled, cb): a conditional/scoped shortcut. `enabled`
 // is a predicate (|-> int); when it returns 0 the combo is inert and the key
-// propagates as if unbound — so the same combo can mean different things (or
-// nothing) depending on app state. GTK4 real; win32 stub; macOS degrades to a
-// plain shortcut for now.
+// propagates as if unbound, so the same combo can mean different things (or
+// nothing) depending on app state. Real on GTK4 and macOS, both gated by
+// tests/shortcut_demo; win32 answers the driver route but has no real
+// keyboard path yet.
 //   shortcut_when("Ctrl+W", || panel_open, || close_panel())
 shortcut_when(combo: string, enabled: fn, cb: fn) {
     aether_ui_shortcut_when_impl(combo, box_closure(cb), box_closure(enabled))
 }
 
 // shortcut_chord(first, second, cb): a two-key sequence (VSCode/Emacs style).
-// Pressing `first` then `second` within ~1.5s fires cb. GTK4 real; win32/macOS
-// stub for now.
+// Pressing `first` then `second` within ~1.5s fires cb. Real on GTK4 and
+// macOS, both gated by tests/shortcut_demo; win32 answers the driver route
+// but has no real keyboard path yet.
 //   shortcut_chord("Ctrl+K", "Ctrl+S", || save_all())
 shortcut_chord(first: string, second: string, cb: fn) {
     aether_ui_shortcut_chord_impl(first, second, box_closure(cb))
