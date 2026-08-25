@@ -1198,8 +1198,22 @@ bind_hidden(widget: int, state_handle: int, invert: int) {
 
 // --- Widget accessors ---
 
+// set_text(handle, text) — set ANY text-bearing widget's text: label,
+// textfield/securefield, or textarea. Dispatch is "call every kind's
+// setter": each backend setter is a self-guarded no-op on the wrong kind
+// (GTK4 checks GTK_IS_LABEL / GTK_IS_ENTRY / GTK_IS_TEXT_VIEW), so exactly
+// one takes effect — the dispatch lives HERE, not in a new kind-query ABI
+// (docs/design/semantics-belong-above-the-abi.md).
+//
+// This used to call ONLY the textfield setter, which on GTK4 silently
+// no-opped for labels — the false-success family: auto_hide's hover
+// status never updated on Linux while win32 (unguarded SetWindowText) and
+// macOS (labels ARE NSTextFields) happened to work. On those two the
+// extra calls are idempotent same-value sets, not double effects.
 set_text(handle: int, text: string) -> int {
+    aether_ui_text_set_string(handle, text)
     aether_ui_textfield_set_text(handle, text)
+    aether_ui_textarea_set_text(handle, text)
     return handle
 }
 

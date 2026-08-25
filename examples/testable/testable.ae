@@ -11,7 +11,6 @@ import std.mem
 
 extern println(s: string)
 extern malloc(size: int) -> ptr
-extern aether_ui_text_set_string(handle: int, text: string)
 
 main() {
     counter = ui.ui_state(0)
@@ -76,10 +75,10 @@ main() {
         ui.canvas_draw_image_scaled_ptr(cv, 0.0, 0.0, 120.0, 60.0, 120, 60, fb, 28800)
         ui.canvas_redraw(cv)
         ui.canvas_on_key(cv) callback |k: string| {
-            aether_ui_text_set_string(kstatus, "down:${k}")
+            ui.set_text(kstatus, "down:${k}")
         }
         ui.canvas_on_key_release(cv) callback |k: string| {
-            aether_ui_text_set_string(kstatus, "up:${k}")
+            ui.set_text(kstatus, "up:${k}")
         }
 
         ui.spacer()
