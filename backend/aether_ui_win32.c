@@ -7989,6 +7989,13 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             return 0;
         }
         Widget* w = widget_at(ctx->handle);
+        /* A dead widget is a MISSING widget to the driver. The registry
+           never shrinks (HWND values recycle), so widget_at still returns
+           the entry after clear_children/remove_child destroyed it — the
+           listing hooks already skip dead, but this dispatch didn't, so a
+           removed cell answered 200 and FIRED ITS CALLBACK (clearchildren
+           spec, first win32 run). Same 404 as a never-existed handle. */
+        if (w && w->dead) { ctx->result = 3; ctx->done = 1; return 0; }
         if (!w) {
             // hover(0) is legitimate: "the pointer is over NOTHING". Clear
             // every hover rather than reporting a missing widget.
