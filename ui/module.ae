@@ -32,7 +32,8 @@ exports (
     set_text, get_text, set_toggle, get_toggle,
     set_button_label, set_hidden, set_window_title,
     context_menu_item, context_menu_item_accel,
-    shortcut, shortcut_when, shortcut_chord, widget_shortcut, focus, focused_widget,
+    shortcut, shortcut_when, shortcut_chord, widget_shortcut,
+    window_on_key, on_key, focus, focused_widget,
     set_slider, get_slider, set_progress,
     bg_color, text_color, font_size, font_bold, corner_radius,
     opacity, enabled, tooltip, onclick,
@@ -177,6 +178,7 @@ extern aether_ui_context_menu_item_impl(handle: int, label: string, closure: ptr
 extern aether_ui_context_menu_item_accel_impl(handle: int, label: string,
                                               accel: string, closure: ptr)
 extern aether_ui_shortcut_impl(combo: string, closure: ptr)
+extern aether_ui_window_on_key_impl(closure: ptr)
 extern aether_ui_shortcut_when_impl(combo: string, closure: ptr, enabled: ptr)
 extern aether_ui_shortcut_chord_impl(first: string, second: string, closure: ptr)
 extern aether_ui_focus_impl(handle: int)
@@ -1286,6 +1288,32 @@ shortcut_when(combo: string, enabled: fn, cb: fn) {
 //   shortcut_chord("Ctrl+K", "Ctrl+S", || save_all())
 shortcut_chord(first: string, second: string, cb: fn) {
     aether_ui_shortcut_chord_impl(first, second, box_closure(cb))
+}
+
+// window_on_key(cb): cb(key_name, mods) for ANY key, not a bound combo.
+// Every shortcut verb answers "was THIS combo pressed"; type-ahead asks
+// "what was pressed", which no number of registered shortcuts can express.
+// Key names match canvas_on_key ("Left", "BackSpace", "Return", "a").
+// mods is a bitmask: 1 shift, 2 ctrl, 4 alt, 8 super/command.
+//
+// Fires only when no shortcut consumed the key, so accelerators keep
+// priority, and never swallows it: the focused widget still receives what
+// was typed. Real keyboard on GTK4 and macOS; on win32 the registration and
+// the driver route work, and the real key path lands with the shortcut one.
+//   window_on_key(|k: string, m: int| { if k == "BackSpace" { go_up() } })
+window_on_key(cb: fn) {
+    aether_ui_window_on_key_impl(box_closure(cb))
+}
+
+// on_key(widget, cb): the same, scoped to while `widget` (or a descendant)
+// has keyboard focus. Built on window_on_key + focused_widget, exactly as
+// widget_shortcut is built on shortcut_when, so there is one key path rather
+// than two that can disagree.
+//   on_key(rows, |k: string, m: int| { if k == "Down" { select_next() } })
+on_key(widget: int, cb: fn) {
+    window_on_key(|k: string, m: int| {
+        if focused_widget() == widget { cb(k, m) }
+    })
 }
 
 // focused_widget() -> the registry handle of the widget with keyboard focus

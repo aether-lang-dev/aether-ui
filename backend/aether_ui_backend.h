@@ -582,6 +582,19 @@ void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert)
 // GTK's default focus chain; that default IS the feature).
 // GTK4 real; win32/macOS no-op stubs.
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure);
+// A handler for ANY key, as opposed to a bound combo. The shortcut verbs all
+// answer the question "was THIS combo pressed"; type-ahead asks "what was
+// pressed", which cannot be built by registering one shortcut per letter.
+//
+// Fires only when no shortcut consumed the key, so accelerators keep
+// priority, and does NOT swallow the key: a handler that ate every keystroke
+// would break typing into whatever has focus. mods is a bitmask:
+// 1 shift, 2 ctrl, 4 alt, 8 super/command.
+void aether_ui_window_on_key_impl(void* boxed_closure);
+// Deliver a key to that handler. Returns 1 if a handler was registered and
+// ran. Both the real key path and the driver's /window/key end up here, so a
+// spec exercises the same closure a keypress would.
+int aether_ui_window_key_deliver(const char* key_name, int mods);
 // Conditional shortcut: enabled_closure (|-> int) gates the combo; 0 = inert
 // (key propagates). NULL predicate = always active.
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,

@@ -1115,6 +1115,60 @@ static int shortcut_dispatch(const char* canonical) {
     return shortcut_fire(canonical);
 }
 
+// The any-key handler (ui.window_on_key). One per window, matching the one
+// shortcut registry above.
+static AeClosure* window_key_closure = NULL;
+static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize);
+
+void aether_ui_window_on_key_impl(void* boxed_closure) {
+    window_key_closure = (AeClosure*)boxed_closure;
+}
+
+int aether_ui_window_key_deliver(const char* key_name, int mods) {
+    if (!window_key_closure || !window_key_closure->fn || !key_name) return 0;
+    ((void(*)(void*, const char*, int))window_key_closure->fn)(
+        window_key_closure->env, key_name, mods);
+    return 1;
+}
+
+// Split a canonical combo ("ctrl+shift+a") into its modifier bits and bare
+// key, so the driver path hands the closure the same two arguments a real
+// keypress does.
+static int aeui_combo_split(const char* canonical, char* name, int namesize) {
+    int mods = 0;
+    const char* p = canonical;
+    while (p && *p) {
+        const char* plus = strchr(p, '+');
+        if (!plus) break;
+        size_t n = (size_t)(plus - p);
+        if      (n == 5 && strncmp(p, "shift", 5) == 0) mods |= 1;
+        else if (n == 4 && strncmp(p, "ctrl",  4) == 0) mods |= 2;
+        else if (n == 3 && strncmp(p, "alt",   3) == 0) mods |= 4;
+        else if (n == 5 && strncmp(p, "super", 5) == 0) mods |= 8;
+        else if (n == 3 && strncmp(p, "cmd",   3) == 0) mods |= 8;
+        else break;   // not a modifier: the rest is the key name
+        p = plus + 1;
+    }
+    // CRITICAL: combo_normalize lower-cases, but the real key path spells
+    // names as aeui_key_name_for_event does ("BackSpace", "Page_Up"). If the
+    // driver delivered "backspace" while a keypress delivered "BackSpace",
+    // every spec would be testing a string the app never actually receives.
+    static const char* canon[] = {
+        "left","Left", "right","Right", "up","Up", "down","Down",
+        "return","Return", "escape","Escape", "tab","Tab", "space","space",
+        "backspace","BackSpace", "delete","Delete", "home","Home", "end","End",
+        "page_up","Page_Up", "page_down","Page_Down", NULL
+    };
+    for (int i = 0; canon[i]; i += 2) {
+        if (strcmp(p, canon[i]) == 0) {
+            snprintf(name, namesize, "%s", canon[i + 1]);
+            return mods;
+        }
+    }
+    snprintf(name, namesize, "%s", p ? p : "");
+    return mods;
+}
+
 // One local key-down monitor serves every accelerator AND the chord layer.
 // Swallow the event when consumed so the key doesn't also reach the focused
 // control (a Ctrl+B accelerator must not type "b" into the focused entry).
@@ -1125,6 +1179,20 @@ static void ensure_shortcut_monitor(void) {
             char canonical[64];
             event_to_combo(ev, canonical, sizeof(canonical));
             if (shortcut_dispatch(canonical)) return nil;  // consumed
+            // No accelerator wanted it: offer it to the any-key handler, and
+            // pass the event on regardless so the focused control still sees
+            // what was typed.
+            if (window_key_closure) {
+                char name[64];
+                aeui_key_name_for_event(ev, name, sizeof(name));
+                NSEventModifierFlags f = [ev modifierFlags];
+                int mods = 0;
+                if (f & NSEventModifierFlagShift)   mods |= 1;
+                if (f & NSEventModifierFlagControl) mods |= 2;
+                if (f & NSEventModifierFlagOption)  mods |= 4;
+                if (f & NSEventModifierFlagCommand) mods |= 8;
+                aether_ui_window_key_deliver(name, mods);
+            }
             return ev;
         }];
 }
@@ -5762,6 +5830,12 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             char canonical[64];
             combo_normalize(ctx->sval, canonical, sizeof(canonical));
             ctx->retval = shortcut_dispatch(canonical) ? 1 : 0;
+            if (!ctx->retval) {
+                // Same fall-through the real key monitor takes.
+                char kname[64];
+                int kmods = aeui_combo_split(canonical, kname, sizeof(kname));
+                ctx->retval = aether_ui_window_key_deliver(kname, kmods);
+            }
             if (!ctx->retval && primary_window) {
                 if (strcmp(canonical, "tab") == 0) {
                     ctx->retval = aeui_tab_move(0);

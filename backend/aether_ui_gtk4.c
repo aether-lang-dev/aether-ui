@@ -3300,6 +3300,65 @@ static void aeui_attach_shortcut(AeuiShortcut* s) {
     s->attached = 1;
 }
 
+// The any-key handler (ui.window_on_key): what was pressed, rather than "was
+// THIS combo pressed". Registered in the BUBBLE phase so the shortcut
+// controller (capture phase) still wins, and it returns FALSE so the key
+// carries on to whatever has focus.
+static AeClosure* aeui_window_key_closure = NULL;
+
+int aether_ui_window_key_deliver(const char* key_name, int mods) {
+    if (!aeui_window_key_closure || !aeui_window_key_closure->fn || !key_name) return 0;
+    ((void(*)(void*, const char*, int))aeui_window_key_closure->fn)(
+        aeui_window_key_closure->env, key_name, mods);
+    return 1;
+}
+
+static gboolean on_window_any_key(GtkEventControllerKey* ctl, guint keyval,
+                                  guint keycode, GdkModifierType state,
+                                  gpointer data) {
+    (void)ctl; (void)keycode; (void)data;
+    if (!aeui_window_key_closure) return FALSE;
+    const char* name = gdk_keyval_name(keyval);
+    int mods = 0;
+    if (state & GDK_SHIFT_MASK)   mods |= 1;
+    if (state & GDK_CONTROL_MASK) mods |= 2;
+    if (state & GDK_ALT_MASK)     mods |= 4;
+    if (state & GDK_SUPER_MASK)   mods |= 8;
+    aether_ui_window_key_deliver(name ? name : "", mods);
+    return FALSE;   // never swallow: the focused widget still gets the key
+}
+
+void aether_ui_window_on_key_impl(void* boxed_closure) {
+    aeui_window_key_closure = (AeClosure*)boxed_closure;
+    if (!primary_window) return;   // attaches when the window appears
+    static int attached = 0;
+    if (attached) return;
+    GtkEventController* key = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(key, GTK_PHASE_BUBBLE);
+    g_signal_connect(key, "key-pressed", G_CALLBACK(on_window_any_key), NULL);
+    gtk_widget_add_controller(GTK_WIDGET(primary_window), key);
+    attached = 1;
+}
+
+// Split a normalized trigger ("<Control>a") into modifier bits and bare key,
+// so the driver path hands the closure what a real keypress would.
+static int aeui_trigger_split(const char* trig, char* name, int namesize) {
+    int mods = 0;
+    const char* p = trig ? trig : "";
+    while (*p == '<') {
+        const char* end = strchr(p, '>');
+        if (!end) break;
+        size_t n = (size_t)(end - p - 1);
+        if      (n == 7 && strncmp(p + 1, "Control", 7) == 0) mods |= 2;
+        else if (n == 5 && strncmp(p + 1, "Shift",   5) == 0) mods |= 1;
+        else if (n == 3 && strncmp(p + 1, "Alt",     3) == 0) mods |= 4;
+        else if (n == 5 && strncmp(p + 1, "Super",   5) == 0) mods |= 8;
+        p = end + 1;
+    }
+    snprintf(name, namesize, "%s", p);
+    return mods;
+}
+
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
     aether_ui_shortcut_when_impl(combo, boxed_closure, NULL);
 }
@@ -3485,6 +3544,12 @@ int aeui_window_key_fire(const char* combo) {
         } else if (strcmp(want, "Escape") == 0) {
             fired = aeui_escape_overlays(NULL, NULL, NULL);
         }
+    }
+    if (!fired) {
+        // Nothing bound wanted it: the same fall-through a real key takes.
+        char kname[64];
+        int kmods = aeui_trigger_split(want, kname, sizeof(kname));
+        fired = aether_ui_window_key_deliver(kname, kmods);
     }
     free(want);
     return fired;

@@ -2127,6 +2127,23 @@ void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
     s->enabled = (AeClosure*)enabled_closure;
 }
 
+// The any-key handler (ui.window_on_key). Registered and reachable from the
+// driver, like this backend's shortcuts: the real WM_KEYDOWN to key-name
+// translation is the same missing piece noted for the shortcut registry
+// above, and lands with it.
+static AeClosure* w32_window_key_closure = NULL;
+
+void aether_ui_window_on_key_impl(void* boxed_closure) {
+    w32_window_key_closure = (AeClosure*)boxed_closure;
+}
+
+int aether_ui_window_key_deliver(const char* key_name, int mods) {
+    if (!w32_window_key_closure || !w32_window_key_closure->fn || !key_name) return 0;
+    ((void(*)(void*, const char*, int))w32_window_key_closure->fn)(
+        w32_window_key_closure->env, key_name, mods);
+    return 1;
+}
+
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
     aether_ui_shortcut_when_impl(combo, boxed_closure, NULL);
 }
