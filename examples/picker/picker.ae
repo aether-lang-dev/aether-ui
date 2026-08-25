@@ -1,7 +1,7 @@
 // Aether UI picker example — dropdown selection.
 //
 // Build and run:
-//   ./build.sh example_picker.ae build/perry_picker
+//   ./build.sh examples/picker/picker.ae
 
 import ui
 import std.list

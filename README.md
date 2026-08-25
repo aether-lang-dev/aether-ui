@@ -3,7 +3,7 @@
 Port of the [Perry](https://github.com/PerryTS/perry) UI framework to Aether.
 Declarative widget DSL backed by GTK4 (Linux and FreeBSD), AppKit (macOS),
 and a native Win32 backend (Windows) — the three backend implementations
-share the same ABI declared in `aether_ui_backend.h`. Uses Aether's
+share the same ABI declared in `backend/aether_ui_backend.h`. Uses Aether's
 trailing-block builder pattern.
 
 ## Credits
@@ -48,7 +48,7 @@ source; the summary:
 
 ```bash
 sudo apt install libgtk-4-dev   # Debian/Ubuntu
-./build.sh example_counter.ae build/counter
+./build.sh examples/counter/counter.ae
 ./build/counter
 ```
 
@@ -58,7 +58,7 @@ Same GTK4 backend as Linux; `build.sh` detects FreeBSD and uses clang.
 
 ```bash
 sudo pkg install gtk4 pkgconf   # ensure a zlib.pc exists for freetype2 -> zlib
-./build.sh example_counter.ae build/counter
+./build.sh examples/counter/counter.ae
 ./build/counter
 ```
 
@@ -69,7 +69,7 @@ private Xvfb (`pkg install xorg-vfbserver`), unprivileged, and any pre-set
 ### macOS (AppKit)
 
 ```bash
-./build.sh example_counter.ae build/counter
+./build.sh examples/counter/counter.ae
 ./build/counter
 ```
 
@@ -79,21 +79,31 @@ Build from an MSYS2 MinGW64 shell (no extra dev libraries — USER32, GDI+
 and Common Controls ship with Windows itself):
 
 ```bash
-./build.sh example_counter.ae build/counter
+./build.sh examples/counter/counter.ae
 ./build/counter.exe
 ```
 
-Backend-level smoke tests (headless, no display needed) for any platform:
+The C-level suites build through the same script (a `.c` source links against
+the platform backend directly), and run headless:
 
 ```bash
-# widget + driver tests for current backend
-gcc tests/test_widgets.c aether_ui_gtk4.c -o build/test_widgets $(pkg-config --cflags --libs gtk4) -I. -Itests -lpthread -lm && ./build/test_widgets    # widget + driver tests for current backend
-# microbenchmarks, CSV to stdout        # microbenchmarks, CSV to stdout
+# widget + driver smoke suite for the current backend
+./build.sh tests/test_widgets.c test_widgets && AETHER_UI_HEADLESS=1 ./build/test_widgets
+
+# microbenchmarks, CSV to stdout
+./build.sh benchmarks/bench_widgets.c bench_widgets && AETHER_UI_HEADLESS=1 ./build/bench_widgets
 ```
 
-See [docs/aether-ui-windows.md](docs/aether-ui-windows.md) for
-Windows-specific details (DPI model, dark mode, widget mappings, known
-limitations).
+The whole pipeline, the way CI runs it:
+
+```bash
+./ci.sh                  # build everything, smoke-launch, run every driver spec
+./tests/spec_matrix.sh   # just the AetherUIDriver specs
+```
+
+See [docs/design/win32-gdiplus-renderer.md](docs/design/win32-gdiplus-renderer.md)
+for the Win32 rendering model, and [docs/README.md](docs/README.md) for the
+rest of the design notes.
 
 ## DSL with Scope
 
@@ -117,18 +127,18 @@ lifecycle (see [Surfaces](#surfaces-window--render_to--record) below):
 import ui
 
 main() {
-    counter = aether_ui.ui_state(0)
+    counter = ui.ui_state(0)
 
-    aether_ui.window("My App", 400, 200) {
-        aether_ui.root_vstack(10) {
-            aether_ui.text("Hello World")
-            aether_ui.text_bound(counter, "Count: ", "")
-            aether_ui.hstack(5) {
-                aether_ui.button("+1") callback {
-                    aether_ui.ui_set(counter, aether_ui.ui_get(counter) + 1)
+    ui.window("My App", 400, 200) {
+        ui.vstack(10) {
+            ui.text("Hello World")
+            ui.text_bound(counter, "Count: ", "")
+            ui.hstack(5) {
+                ui.btn("+1") callback {
+                    ui.ui_set(counter, ui.ui_get(counter) + 1)
                 }
-                aether_ui.button("-1") callback {
-                    aether_ui.ui_set(counter, aether_ui.ui_get(counter) - 1)
+                ui.btn("-1") callback {
+                    ui.ui_set(counter, ui.ui_get(counter) - 1)
                 }
             }
         }
@@ -200,33 +210,33 @@ a live window has "a life of its own" that ends on an external event, so only
 ## Reactive state
 
 ```aether
-counter = aether_ui.ui_state(0)              // create state cell
-aether_ui.text_bound(counter, "Val: ", "")   // auto-updating text
-aether_ui.ui_set(counter, 42)                // triggers re-render
-val = aether_ui.ui_get(counter)              // read current value
+counter = ui.ui_state(0)              // create state cell
+ui.text_bound(counter, "Val: ", "")   // auto-updating text
+ui.ui_set(counter, 42)                // triggers re-render
+val = ui.ui_get(counter)              // read current value
 ```
 
 ## Widget accessors
 
 ```aether
-aether_ui.set_text(handle, "new text")       // set textfield value
-text = aether_ui.get_text(handle)            // get textfield value
-aether_ui.set_toggle(handle, 1)              // set toggle on/off
-aether_ui.set_slider(handle, 75.0)           // set slider position
-aether_ui.set_progress(handle, 0.5)          // set progress bar
+ui.set_text(handle, "new text")       // set textfield value
+text = ui.get_text(handle)            // get textfield value
+ui.set_toggle(handle, 1)              // set toggle on/off
+ui.set_slider(handle, 75.0)           // set slider position
+ui.set_progress(handle, 0.5)          // set progress bar
 ```
 
 ## Examples
 
 | Example | Widgets demonstrated |
 |---------|---------------------|
-| `example_counter.ae` | text, button, hstack, vstack, spacer, divider, reactive state |
-| `example_form.ae` | textfield, securefield, toggle, slider, textarea, progressbar |
-| `example_picker.ae` | picker (dropdown), picker_add |
-| `example_styled.ae` | form, section, zstack, bg_color, bg_gradient, font_size, corner_radius |
-| `example_system.ae` | alert, clipboard, dark mode detection, sheet |
-| `example_canvas.ae` | canvas drawing, fill_rect, stroke, on_hover, on_double_click |
-| `example_testable.ae` | AetherUIDriver test server, sealed widgets, remote control banner |
+| [`examples/counter`](examples/counter) | text, button, hstack, vstack, spacer, divider, reactive state |
+| [`examples/form`](examples/form) | textfield, securefield, toggle, slider, textarea, progressbar |
+| [`examples/picker`](examples/picker) | picker (dropdown), picker_add |
+| [`examples/styled`](examples/styled) | form, section, zstack, bg_color, bg_gradient, font_size, corner_radius |
+| [`examples/system`](examples/system) | alert, clipboard, dark mode detection, sheet |
+| [`examples/canvas`](examples/canvas) | canvas drawing, fill_rect, stroke, on_hover, on_double_click |
+| [`examples/testable`](examples/testable) | AetherUIDriver test server, sealed widgets, remote control banner |
 
 ## AetherUIDriver — automated UI testing, baked in
 
@@ -234,7 +244,7 @@ Aether UI ships with a built-in HTTP test server that lets any language
 with an HTTP client drive the app:
 
 ```aether
-aether_ui.enable_test_server(9222, root)
+ui.enable_test_server(9222)
 ```
 
 Or set `AETHER_UI_TEST_PORT=9222` in the environment before launching —
@@ -245,22 +255,23 @@ The HTTP API exposes `/widgets` (list + filter), `/widget/{id}` (state),
 `/widget/{id}/click | set_text | toggle | set_value` (mutations), and
 `/state/{id}` + `/state/{id}/set` (reactive-state cells). See the full
 reference and end-to-end examples in
-**[docs/aether-ui-testing.md](../../docs/aether-ui-testing.md)** —
-including Bash, Python, and JavaScript test-suite skeletons plus the
-`AETHER_UI_HEADLESS=1` flag for unattended CI.
+[`tests/test_driver.sh`](tests/test_driver.sh) (curl against every route)
+and the Aether specs under [`tests/`](tests) driven by
+[`tests/lib/uidriver.ae`](tests/lib/uidriver.ae). Set `AETHER_UI_HEADLESS=1`
+to run any of them with no window on screen.
 
 For most native UI frameworks you have to bolt on Selenium/Appium. With
-aether_ui it's part of the framework and works identically on macOS,
+Aether UI it's part of the framework and works identically on macOS,
 Linux, FreeBSD, and Windows via the shared
-[`aether_ui_test_server.c`](aether_ui_test_server.c).
+[`backend/aether_ui_test_server.c`](backend/aether_ui_test_server.c).
 
 ### Widget sealing
 
 Mark widgets as non-automatable — the test server returns 403 for sealed widgets:
 
 ```aether
-danger = aether_ui.button("Delete Everything") callback { ... }
-aether_ui.seal_widget(danger)
+danger = ui.btn("Delete Everything") callback { ... }
+ui.seal_widget(danger)
 ```
 
 This maps to Aether's `hide`/`seal` philosophy: the app author declares which
@@ -271,12 +282,12 @@ capabilities the test harness is denied, not the other way around.
 | Layer | File | Role |
 |-------|------|------|
 | Aether DSL | `ui/module.ae` | Builder-pattern wrappers with `_ctx` auto-injection; surface verbs (`window`/`render_to`/`record`) |
-| GTK4 backend | `aether_ui_gtk4.c` | Linux + FreeBSD: GTK4 C API calls, Cairo canvas, test server |
-| macOS backend | `aether_ui_macos.m` | macOS: AppKit Objective-C |
-| Win32 backend | `aether_ui_win32.c` | Windows: USER32 + GDI+ + Common Controls |
-| C header | `aether_ui_backend.h` | Shared backend ABI — implemented by all three backends (four platforms; FreeBSD shares GTK4) |
+| GTK4 backend | `backend/aether_ui_gtk4.c` | Linux + FreeBSD: GTK4 C API calls, Cairo canvas, test server |
+| macOS backend | `backend/aether_ui_macos.m` | macOS: AppKit Objective-C |
+| Win32 backend | `backend/aether_ui_win32.c` | Windows: USER32 + GDI+ + Common Controls |
+| C header | `backend/aether_ui_backend.h` | Shared backend ABI — implemented by all three backends (four platforms; FreeBSD shares GTK4) |
 | Build script | `build.sh` | Auto-detects platform (Darwin/Linux/FreeBSD/MinGW) |
-| Test script | `test_automation.sh` | Example curl-based test suite (17 assertions) |
+| Spec matrix | `tests/spec_matrix.sh` | Runs every AetherUIDriver spec, one app at a time |
 | Widget tests | `tests/test_widgets.c` | Cross-platform C-level smoke suite (40 assertions) |
 | Driver tests | `tests/test_driver.sh` | HTTP integration against the embedded test server |
 | Benchmarks | `benchmarks/bench_widgets.c` | CSV microbenchmarks — widget create, layout, state, canvas |
@@ -285,10 +296,10 @@ capabilities the test harness is denied, not the other way around.
 
 | Platform | Backend                         | Status                                                                             |
 |----------|---------------------------------|------------------------------------------------------------------------------------|
-| Linux    | GTK4  (`aether_ui_gtk4.c`)      | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
-| macOS    | AppKit (`aether_ui_macos.m`)    | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
-| Windows  | Native Win32 (`aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls; per-monitor DPI v2; immersive dark mode; AetherUIDriver via winsock2 |
-| FreeBSD  | GTK4  (`aether_ui_gtk4.c`)      | Full — shares the Linux backend; clang build, private-Xvfb spec runs           |
+| Linux    | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
+| macOS    | AppKit (`backend/aether_ui_macos.m`)    | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
+| Windows  | Native Win32 (`backend/aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls; per-monitor DPI v2; immersive dark mode; AetherUIDriver via winsock2 |
+| FreeBSD  | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — shares the Linux backend; clang build, private-Xvfb spec runs           |
 
 "Full" above means the backend implements the whole widget/canvas/event/
 styling surface plus AetherUIDriver — not that every suite is green on every
@@ -298,8 +309,8 @@ which needs the sqlite contrib archive installed on that host).
 
 ## Status
 
-All groups (1–7) plus AetherUIDriver are implemented on every backend.
-`# widget + driver tests for current backend
-gcc tests/test_widgets.c aether_ui_gtk4.c -o build/test_widgets $(pkg-config --cflags --libs gtk4) -I. -Itests -lpthread -lm && ./build/test_widgets` runs the cross-platform smoke suite and, on
-Windows, the HTTP driver integration. `# microbenchmarks, CSV to stdout` prints a
-CSV of per-operation latencies.
+All groups (1-7) plus AetherUIDriver are implemented on every backend.
+`./build.sh tests/test_widgets.c test_widgets` builds the cross-platform smoke
+suite (47 assertions, headless) and `./build.sh benchmarks/bench_widgets.c
+bench_widgets` builds the microbenchmarks, which print a CSV of per-operation
+latencies. `./ci.sh` runs everything.

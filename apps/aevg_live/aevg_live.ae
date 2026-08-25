@@ -1,4 +1,4 @@
-// example_aevg_live.ae — the TaOS bar, in-scene: a tumbling wireframe cube
+// aevg_live.ae — the TaOS bar, in-scene: a tumbling wireframe cube
 // drawn over a live animated raster, composited glitch-free in one AeVG canvas.
 //
 // A CPU 3D cube (8 verts, rotated by t around X+Y, perspective-projected, 12
@@ -10,7 +10,7 @@
 //
 //   DISPLAY=:0 ./build/aevg_live
 //
-// Headless one-frame proof: example_aevg_live_png. This is the windowed,
+// Headless one-frame proof: apps/aevg_live_png. This is the windowed,
 // continuously-animating version.
 
 import ui

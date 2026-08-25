@@ -1,4 +1,4 @@
-// example_vg.ae — the AeVG drawing DSL on a live window.
+// vg_demo.ae — the AeVG drawing DSL on a live window.
 //
 // A window surface containing a vg scene: shapes read like the SVG they
 // describe — positional geometry, optional trailing config block. This is

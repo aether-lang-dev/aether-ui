@@ -1,7 +1,7 @@
 // Aether UI testable app — enables the AetherUIDriver.
 //
 // Build and run:
-//   ./build.sh example_testable.ae build/perry_testable
+//   ./build.sh examples/testable/testable.ae
 //   ./build/perry_testable &
 //   # Then run the test script:
 //   ./test_automation.sh

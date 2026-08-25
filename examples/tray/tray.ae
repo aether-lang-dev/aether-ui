@@ -1,11 +1,11 @@
 // examples/tray/tray.ae — system-tray + desktop-notifications demo.
 //
 // Build and run (interactive, will sit in the tray):
-//   ./build.sh examples/tray/tray.ae build/example_tray
-//   ./build/example_tray
+//   ./build.sh examples/tray/tray.ae
+//   ./build/tray
 //
 // Headless smoke (used by tests/test_tray_notif_driver.sh):
-//   AETHER_UI_HEADLESS=1 AETHER_UI_TEST_PORT=9233 ./build/example_tray
+//   AETHER_UI_HEADLESS=1 AETHER_UI_TEST_PORT=9233 ./build/tray
 //
 // Phase 1 surface: tray_icon, tray_set_tooltip, tray_set_menu,
 // app_run_headless, notify, notify_full. Real native tray on
@@ -54,7 +54,7 @@ main() {
 
     // Optional driver. Set AETHER_UI_TEST_PORT to enable. The port
     // is currently hard-coded in matched apps (mirror of the
-    // example_calculator pattern); tests/test_tray_notif_driver.sh
+    // examples/calculator pattern); tests/test_tray_notif_driver.sh
     // passes 9234 here.
     test_port = os_getenv("AETHER_UI_TEST_PORT")
     if test_port != null {

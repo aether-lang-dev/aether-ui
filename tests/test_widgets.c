@@ -11,7 +11,7 @@
 // for user input that will never come.
 
 #include "test_framework.h"
-#include "../aether_ui_backend.h"
+#include "../backend/aether_ui_backend.h"
 #include <stdlib.h>  // getenv, setenv / _putenv
 #include <stdio.h>
 
@@ -129,7 +129,7 @@ static void test_canvas(void) {
     aether_ui_canvas_begin_path_impl(c);
     aether_ui_canvas_move_to_impl(c, 10, 10);
     aether_ui_canvas_line_to_impl(c, 50, 50);
-    aether_ui_canvas_stroke_impl(c, 0.0f, 0.0f, 1.0f, 1.0f, 2.0f);
+    aether_ui_canvas_stroke_impl(c, 0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 0, 0);
     aether_ui_canvas_fill_rect_impl(c, 10, 10, 80, 20,
                                      1.0f, 0.5f, 0.0f, 1.0f);
     aether_ui_canvas_clear_impl(c);

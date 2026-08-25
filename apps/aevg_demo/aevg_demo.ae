@@ -1,4 +1,4 @@
-// example_aevg.ae — render an SVG through AeVG onto a real canvas.
+// aevg_demo.ae — render an SVG through AeVG onto a real canvas.
 //
 // Wires the full Phase-1 path: loader parses an SVG string, the
 // shape factories dispatch through the aevg_gtk_backend adapter,

@@ -429,6 +429,27 @@ if [ "$LAUNCH_PREFIX" = "SKIP_RUNTIME" ]; then
 fi
 
 echo
+echo "=== Phase 1c: C-level widget suite (tests/test_widgets.c) ==="
+# Nothing in this repo built this file, so it rotted unnoticed: a stale
+# ../aether_ui_backend.h include (the header moved into backend/) and a 6-arg
+# call to an 8-arg canvas_stroke ABI meant it had not compiled for a long
+# while. Building it here is what keeps it honest. It links the same backend
+# as any app, via build.sh, and runs headless.
+if ./build.sh tests/test_widgets.c test_widgets > /tmp/ci_test_widgets_build.log 2>&1; then
+    if AETHER_UI_HEADLESS=1 ./build/test_widgets > /tmp/ci_test_widgets.log 2>&1; then
+        echo "  OK   $(tail -1 /tmp/ci_test_widgets.log)"
+    else
+        echo "  FAIL test_widgets"
+        tail -20 /tmp/ci_test_widgets.log | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo "  FAIL test_widgets (build)"
+    tail -20 /tmp/ci_test_widgets_build.log | sed 's/^/       /'
+    FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 2: smoke-launch non-driver examples ==="
 for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))

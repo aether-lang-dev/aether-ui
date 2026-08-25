@@ -1,11 +1,11 @@
-// example_aevg_video_png.ae — headless proof of the raw-RGBA frame source.
+// aevg_video_png.ae — headless proof of the raw-RGBA frame source.
 //
 // Self-contained: generates a small multi-frame RGBA clip IN MEMORY (a moving
 // stripe), then plays it through a video_region source and writes one frame to
-// PNG — the same path the windowed example_aevg_video uses with a file, minus
+// PNG — the same path the windowed apps/aevg_video uses with a file, minus
 // the file read. CI build+runs this to exercise the frame-slice + scaled blit.
 //
-//   ./build.sh aevg/example_aevg_video_png.ae build/aevg_video_png && ./build/aevg_video_png
+//   ./build.sh apps/aevg_video_png/aevg_video_png.ae && ./build/aevg_video_png
 
 import ui
 import ui (canvas_create, canvas_write_png, canvas_clear)

@@ -1,12 +1,12 @@
-// example_aevg_live_png.ae — headless one-frame composite of live regions.
+// aevg_live_png.ae — headless one-frame composite of live regions.
 //
 // Proves the in-scene composite: a RASTER live region (filled with a generated
 // pattern) UNDER a DRAW live region (a shape drawn over it), composited into one
 // canvas and written to a PNG — no window, no timer. The live demo
-// (example_aevg_live) does the same each frame on a window; this is the
+// (apps/aevg_live) does the same each frame on a window; this is the
 // verifiable single frame.
 //
-//   ./build.sh aevg/example_aevg_live_png.ae build/aevg_live_png && ./build/aevg_live_png
+//   ./build.sh apps/aevg_live_png/aevg_live_png.ae && ./build/aevg_live_png
 
 import ui
 import ui (canvas_create, canvas_write_png, canvas_clear)

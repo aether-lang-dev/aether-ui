@@ -1,7 +1,7 @@
 // Aether UI styled example — layout containers and styling.
 //
 // Build and run:
-//   ./build.sh example_styled.ae build/perry_styled
+//   ./build.sh examples/styled/styled.ae
 
 import ui
 
