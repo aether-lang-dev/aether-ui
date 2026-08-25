@@ -2057,10 +2057,24 @@ char* aether_ui_textarea_get_text(int handle) {
     return strdup("");
 }
 
+// AppKit's clip view is bottom-left origin, so a document view SMALLER than
+// the viewport sits at the BOTTOM of the scroll area, which for content that
+// reads top-down means it is off the top of what you can see. A flipped clip
+// view puts the origin where every other container in this backend has it.
+@interface AetherFlippedClipView : NSClipView
+@end
+@implementation AetherFlippedClipView
+- (BOOL)isFlipped { return YES; }
+@end
+
 int aether_ui_scrollview_create(void) {
     NSScrollView* sv = [[NSScrollView alloc] init];
     [sv setHasVerticalScroller:YES];
     [sv setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [sv setContentView:[[AetherFlippedClipView alloc] init]];
+    // The scroll view paints its OWN background over any layer colour, so
+    // leave it off until someone asks for one (set_bg_color turns it on).
+    [sv setDrawsBackground:NO];
     return register_widget_typed((__bridge void*)sv, AUI_SCROLLVIEW);
 }
 
@@ -2219,6 +2233,14 @@ void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) 
     v.layer.backgroundColor = [[NSColor colorWithRed:r green:g blue:b alpha:a] CGColor];
     if ([v isKindOfClass:[NSButton class]]) {
         [(NSButton*)v setBordered:NO];
+    }
+    if ([v isKindOfClass:[NSScrollView class]]) {
+        // An NSScrollView draws its own background OVER the layer, so setting
+        // the layer colour alone is invisible. Say it in the scroll view's own
+        // terms, and turn drawing back on (create leaves it off).
+        NSScrollView* sv = (NSScrollView*)v;
+        [sv setBackgroundColor:[NSColor colorWithRed:r green:g blue:b alpha:a]];
+        [sv setDrawsBackground:YES];
     }
     // Stash packed 0xRRGGBB (+ marker bit) for driver readback (styled_bg_impl).
     int packed = (((int)(r * 255) & 255) << 16) | (((int)(g * 255) & 255) << 8)
@@ -5309,7 +5331,18 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
             }
         }
     } else if ([parent isKindOfClass:[NSScrollView class]]) {
-        [(NSScrollView*)parent setDocumentView:child];
+        NSScrollView* sv = (NSScrollView*)parent;
+        [sv setDocumentView:child];
+        // CRITICAL: a document view with translatesAutoresizingMaskIntoConstraints
+        // NO and no constraints of its own gets a ZERO frame, so the content
+        // is not merely misplaced, it has no size at all. Pin it to the clip
+        // view: top-left for position, width for a vertical scroller. Height
+        // is deliberately left to the content, which is what makes it scroll.
+        [child setTranslatesAutoresizingMaskIntoConstraints:NO];
+        NSClipView* clip = [sv contentView];
+        [child.leadingAnchor constraintEqualToAnchor:clip.leadingAnchor].active = YES;
+        [child.topAnchor constraintEqualToAnchor:clip.topAnchor].active = YES;
+        [child.widthAnchor constraintEqualToAnchor:clip.widthAnchor].active = YES;
     } else if ([parent isKindOfClass:[NSBox class]]) {
         // shouldn't happen — section exposes its inner stack via handle+1
         [(NSBox*)parent setContentView:child];
@@ -5488,6 +5521,22 @@ static int aeui_styled_readback(int handle, const char* key) {
 }
 
 int aether_ui_styled_bg_impl(int handle) {
+    // For a scroll view, answer from the property that actually PAINTS rather
+    // than from the stashed request. The two used to disagree: the stash said
+    // the colour had been set while the scroll view drew its own default over
+    // the top, so a readback could report a theme that was not on screen.
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[NSScrollView class]]) {
+        NSScrollView* sv = (NSScrollView*)v;
+        if (![sv drawsBackground]) return -1;
+        NSColor* c = [[sv backgroundColor]
+            colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+        if (!c) return -1;
+        int packed = (((int)([c redComponent]   * 255) & 255) << 16)
+                   | (((int)([c greenComponent] * 255) & 255) << 8)
+                   |  ((int)([c blueComponent]  * 255) & 255);
+        return packed;
+    }
     return aeui_styled_readback(handle, "aeui_styled_bg");
 }
 
