@@ -706,7 +706,7 @@ main() {
         bar = menu_bar()
         fmenu = menu("File")
         menu_item(fmenu, "Open...") callback {
-            path = open_file("Open markdown")
+            path = open_file("Open markdown", "")
             if string.length(path) > 0 {
                 err = load_path(ed, path)
                 if err != "" {

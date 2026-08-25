@@ -2645,18 +2645,34 @@ void aether_ui_alert_impl(const char* title, const char* message) {
     [alert runModal];
 }
 
-char* aether_ui_file_open(const char* title) {
+// One NSOpenPanel drives both the file and the folder picker; the only
+// difference is which of canChooseFiles/canChooseDirectories is set.
+static char* aeui_run_open_panel(const char* title, const char* start_dir,
+                                 BOOL folders) {
     if (aeui_is_headless()) return strdup("");  // runModal would block forever
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     if (title) [panel setTitle:[NSString stringWithUTF8String:title]];
-    [panel setCanChooseFiles:YES];
-    [panel setCanChooseDirectories:NO];
+    [panel setCanChooseFiles:folders ? NO : YES];
+    [panel setCanChooseDirectories:folders ? YES : NO];
     [panel setAllowsMultipleSelection:NO];
+    if (start_dir && *start_dir) {
+        [panel setDirectoryURL:
+            [NSURL fileURLWithPath:[NSString stringWithUTF8String:start_dir]
+                       isDirectory:YES]];
+    }
     if ([panel runModal] == NSModalResponseOK) {
         NSURL* url = [[panel URLs] firstObject];
         if (url) return strdup([[url path] UTF8String]);
     }
     return strdup("");
+}
+
+char* aether_ui_file_open(const char* title, const char* start_dir) {
+    return aeui_run_open_panel(title, start_dir, NO);
+}
+
+char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
+    return aeui_run_open_panel(title, start_dir, YES);
 }
 
 char* aether_ui_file_save(const char* title, const char* default_name) {

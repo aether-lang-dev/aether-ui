@@ -3546,7 +3546,15 @@ void aether_ui_alert_impl(const char* title, const char* message) {
                 MB_OK | MB_ICONINFORMATION);
 }
 
-char* aether_ui_file_open(const char* title) {
+static int CALLBACK w32_browse_init_cb(HWND hwnd, UINT msg, LPARAM lp, LPARAM data) {
+    (void)lp;
+    if (msg == BFFM_INITIALIZED && data) {
+        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
+    }
+    return 0;
+}
+
+char* aether_ui_file_open(const char* title, const char* start_dir) {
     if (aeui_is_headless()) return strdup("");  // modal would block on CI
     ensure_win_init();
     wchar_t file[1024] = L"";
@@ -3557,11 +3565,41 @@ char* aether_ui_file_open(const char* title) {
     ofn.lpstrFile = file;
     ofn.nMaxFile = 1024;
     ofn.lpstrTitle = utf8_to_wide(title ? title : "Open File");
+    if (start_dir && *start_dir) ofn.lpstrInitialDir = utf8_to_wide(start_dir);
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     if (GetOpenFileNameW(&ofn)) {
         return strdup(wide_to_utf8(file));
     }
     return strdup("");
+}
+
+// Folder picker. SHBrowseForFolderW rather than IFileDialog/FOS_PICKFOLDERS:
+// this file speaks the same generation of the API everywhere else
+// (GetOpenFileNameW / GetSaveFileNameW), shlobj.h is already included, and it
+// needs no COM vtable plumbing to stay readable in C. BIF_NEWDIALOGSTYLE is
+// what gives it the resizable modern chooser with a New Folder button.
+char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
+    if (aeui_is_headless()) return strdup("");
+    ensure_win_init();
+    BROWSEINFOW bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.lpszTitle = utf8_to_wide(title ? title : "Choose Folder");
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    // The start folder arrives through the callback: BROWSEINFO has no
+    // "initial directory" field, BFFM_SETSELECTION on init is the documented
+    // way. lParam carries the wide path.
+    wchar_t* wstart = (start_dir && *start_dir) ? utf8_to_wide(start_dir) : NULL;
+    if (wstart) {
+        bi.lpfn = w32_browse_init_cb;
+        bi.lParam = (LPARAM)wstart;
+    }
+    LPITEMIDLIST idl = SHBrowseForFolderW(&bi);
+    if (!idl) return strdup("");
+    wchar_t path[MAX_PATH] = L"";
+    int got = SHGetPathFromIDListW(idl, path);
+    CoTaskMemFree(idl);
+    if (!got) return strdup("");
+    return strdup(wide_to_utf8(path));
 }
 
 char* aether_ui_file_save(const char* title, const char* default_name) {

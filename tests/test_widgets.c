@@ -173,6 +173,21 @@ static void test_system_services(void) {
     // Clipboard write is safe headless — requires no UI thread.
     aether_ui_clipboard_write_impl("aether-ui-test");
     AE_CASE(1, "clipboard write did not crash");
+
+    // The file choosers are native MODALS. Their headless contract is the
+    // whole reason they are callable here at all: every backend must return
+    // an empty string rather than put up a dialog nobody can dismiss. If a
+    // backend ever forgets that guard, this test HANGS instead of failing,
+    // which is the loudest signal available for "CI just lost a seat".
+    char* f = aether_ui_file_open("headless open", "");
+    AE_CASE(f && f[0] == '\0', "file_open returns empty headless");
+    free(f);
+    char* d = aether_ui_file_pick_folder("headless folder", "");
+    AE_CASE(d && d[0] == '\0', "file_pick_folder returns empty headless");
+    free(d);
+    char* sv = aether_ui_file_save("headless save", "untitled.txt");
+    AE_CASE(sv && sv[0] == '\0', "file_save returns empty headless");
+    free(sv);
 }
 
 static void test_many_widgets(void) {

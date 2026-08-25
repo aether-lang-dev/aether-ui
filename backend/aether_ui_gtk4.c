@@ -2621,15 +2621,23 @@ static void on_file_chooser_response(GtkNativeDialog* dlg, int response,
 }
 
 static char* aeui_run_file_chooser(const char* title, GtkFileChooserAction action,
-                                   const char* default_name) {
+                                   const char* default_name,
+                                   const char* start_dir) {
     ensure_gtk_init();
     const char* hl = getenv("AETHER_UI_HEADLESS");
     if (hl && hl[0] && hl[0] != '0') return strdup("");
-    const char* accept = (action == GTK_FILE_CHOOSER_ACTION_SAVE) ? "_Save" : "_Open";
+    const char* accept = "_Open";
+    if (action == GTK_FILE_CHOOSER_ACTION_SAVE) accept = "_Save";
+    else if (action == GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER) accept = "_Select";
     GtkFileChooserNative* dlg = gtk_file_chooser_native_new(
         title ? title : "", primary_window, action, accept, "_Cancel");
     if (default_name && *default_name && action == GTK_FILE_CHOOSER_ACTION_SAVE) {
         gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), default_name);
+    }
+    if (start_dir && *start_dir) {
+        GFile* dir = g_file_new_for_path(start_dir);
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), dir, NULL);
+        g_object_unref(dir);
     }
     AeuiFileResult r = { g_main_loop_new(NULL, FALSE), NULL };
     g_signal_connect(dlg, "response", G_CALLBACK(on_file_chooser_response), &r);
@@ -2640,11 +2648,15 @@ static char* aeui_run_file_chooser(const char* title, GtkFileChooserAction actio
     return r.path ? r.path : strdup("");
 }
 
-char* aether_ui_file_open(const char* title) {
-    return aeui_run_file_chooser(title, GTK_FILE_CHOOSER_ACTION_OPEN, NULL);
+char* aether_ui_file_open(const char* title, const char* start_dir) {
+    return aeui_run_file_chooser(title, GTK_FILE_CHOOSER_ACTION_OPEN, NULL, start_dir);
 }
 char* aether_ui_file_save(const char* title, const char* default_name) {
-    return aeui_run_file_chooser(title, GTK_FILE_CHOOSER_ACTION_SAVE, default_name);
+    return aeui_run_file_chooser(title, GTK_FILE_CHOOSER_ACTION_SAVE, default_name, NULL);
+}
+char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
+    return aeui_run_file_chooser(title, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                                 NULL, start_dir);
 }
 
 // Clipboard read/write
