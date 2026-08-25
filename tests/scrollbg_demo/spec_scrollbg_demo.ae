@@ -1,0 +1,84 @@
+// spec_scrollbg_demo.ae: content smaller than the viewport is VISIBLE inside
+// a scroll area, and the scroll area can be themed (issue #6).
+//
+// Both halves were invisible to a status-code test and to a widget census:
+// the widgets existed and answered, they were simply placed nowhere and
+// sized zero. So this spec reads GEOMETRY. On AppKit before the fix the
+// document view sat at y=360 in a 360-tall window with w=0,h=0, and its
+// cells piled up at one point; the assertions below are exactly the numbers
+// that were wrong.
+//
+// The background half needs a control. The old readback answered from the
+// colour that had been REQUESTED, so it said "themed" while the scroll view
+// painted its own default over the top. An unstyled scroll area beside the
+// styled one is what makes the field mean something.
+//
+// Run via ci.sh Phase 5e4, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/scrollbg_demo/bin/scrollbg_demo &
+//   UI_SPEC=scrollbg_demo/spec_scrollbg_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "scroll area over AetherUIDriver") {
+
+        spec.it("a document view smaller than the viewport is inside it") callback {
+            sv = uidriver.widget_id_of("scrollview", "")
+            spec.assert_gt(sv, 0, "the scroll area is there")
+            sv_y = uidriver.widget_int_field_by_id(sv, "y")
+            sv_h = uidriver.widget_int_field_by_id(sv, "h")
+
+            // The grid is the scroll view's document view.
+            doc = uidriver.widget_id_of("widget", "")
+            spec.assert_gt(doc, 0, "the document view is there")
+            doc_y = uidriver.widget_int_field_by_id(doc, "y")
+            doc_w = uidriver.widget_int_field_by_id(doc, "w")
+            doc_h = uidriver.widget_int_field_by_id(doc, "h")
+
+            spec.assert_gt(doc_w, 0, "the document view has a width")
+            spec.assert_gt(doc_h, 0, "the document view has a height")
+            spec.assert_eq(doc_y, sv_y, "it starts at the TOP of the scroll area")
+            spec.assert_true(doc_y < sv_y + sv_h,
+                "and not below the bottom edge, which is where it used to be")
+        }
+
+        spec.it("its cells are laid out, not piled at one point") callback {
+            c0 = uidriver.widget_id_by_text("cell 0")
+            c1 = uidriver.widget_id_by_text("cell 1")
+            c2 = uidriver.widget_id_by_text("cell 2")
+            spec.assert_gt(c0, 0, "the cells exist")
+
+            spec.assert_gt(uidriver.widget_int_field_by_id(c0, "w"), 0,
+                "a cell has a width")
+            // Column 1 is to the RIGHT of column 0; row 1 is BELOW row 0.
+            spec.assert_gt(uidriver.widget_int_field_by_id(c1, "x"),
+                           uidriver.widget_int_field_by_id(c0, "x"),
+                "cell 1 sits right of cell 0")
+            spec.assert_gt(uidriver.widget_int_field_by_id(c2, "y"),
+                           uidriver.widget_int_field_by_id(c0, "y"),
+                "cell 2 sits below cell 0")
+        }
+
+        spec.it("style_bg_color reaches the scroll area's own background") callback {
+            styled = uidriver.widget_id_of("scrollview", "")
+            plain  = uidriver.widget_id_last_of("scrollview", "")
+            spec.assert_not_eq(styled, plain, "there are two scroll areas")
+
+            bs = uidriver.get_body("/widget/${styled}")
+            spec.assert_contains(bs, "\"bg\":\"#213f60\"",
+                "the styled scroll area reports the colour that paints")
+
+            // The control. If the unstyled one reported the same colour, the
+            // field would prove nothing, which is how the old readback read:
+            // it answered from the request, not from what was painted.
+            bp = uidriver.get_body("/widget/${plain}")
+            spec.assert_eq(string.contains(bp, "#213f60"), 0,
+                "and the unstyled one does NOT report it")
+        }
+    }
+    spec.run_summary(fw)
+}

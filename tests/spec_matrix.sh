@@ -85,6 +85,7 @@ SUITES=(
   "each|examples/each_demo|each_demo/spec_each_demo|"
   "clearchildren|examples/rebuild_demo|rebuild_demo/spec_rebuild_demo|"
   "fileicon|examples/fileicon_demo|fileicon_demo/spec_fileicon_demo|"
+  "scrollbg|examples/scrollbg_demo|scrollbg_demo/spec_scrollbg_demo|"
   "listbox|examples/listbox_demo|listbox_demo/spec_listbox_demo|"
   "navstack|examples/navstackdemo|navstackdemo/spec_navstackdemo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"

@@ -1,0 +1,54 @@
+// Aether UI scrollview example: content SMALLER than the viewport, and a
+// themed scroll area.
+//
+// Both halves of issue #6. A grid of a few cells inside a scrollview has to
+// show at the top-left of the visible area, not be pushed out of the top of
+// a flipped coordinate space; and style_bg_color on the scroll area has to
+// take, rather than being painted over by the scroll view's own background.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). The spec reads back the cells' geometry and the scroll area's
+//   background.
+
+import ui
+import ui (window, vstack, hstack, text, btn, scrollview, grid, grid_place,
+    style_bg_color, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    g = 0
+
+    window("scrollview", 460, 360) {
+        hstack(0) {
+            vstack(6) {
+                text("sidebar")
+                _s1 = btn("one") callback { }
+                _s2 = btn("two") callback { }
+            }
+            // ONLY the grid is a child of the scroll view. A scroll view has
+            // exactly one document view, so a second child would replace the
+            // first; the cells are created detached and grid_place'd in.
+            sc = scrollview() {
+                g = grid(2, 6, 8)
+            }
+            style_bg_color(sc, 0.13, 0.25, 0.38, 1.0)
+
+            // Control: same widget, no style_bg_color. If the styled one and
+            // this one reported the same colour, the readback would be
+            // meaningless, which is exactly how the old stash-based one read.
+            _plain = scrollview() {
+                _pt = text("unstyled scroll area")
+            }
+
+            c0 = btn("cell 0") callback { }
+            c1 = btn("cell 1") callback { }
+            c2 = btn("cell 2") callback { }
+            c3 = btn("cell 3") callback { }
+            grid_place(g, c0, 0, 0, 1, 1)
+            grid_place(g, c1, 0, 1, 1, 1)
+            grid_place(g, c2, 1, 0, 1, 1)
+            grid_place(g, c3, 1, 1, 1, 1)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
