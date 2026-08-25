@@ -1,0 +1,91 @@
+// Aether UI dynamic-rebuild example: clear_children + remove_child.
+//
+// The pattern every data view uses: a container whose cells are thrown away
+// and rebuilt when the data behind them changes (a file grid on a directory
+// change, a search result set, a data table on a new query). Two containers
+// are on screen because the backends take different code paths for them:
+// the GRID is not a box (GtkGrid / NSView / plain HWND children), the STACK
+// is (GtkBox / NSStackView).
+//
+// What the spec pins down is that removal is REAL, the cleared widgets
+// leave the AetherUIDriver registry, so /widgets stops listing them and
+// POST /widget/<stale id>/click answers 404 instead of firing a callback
+// for a cell that is no longer on screen (issue #1).
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, grid, grid_place,
+    clear_children, remove_child, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+// Fill `g` with one button per row, labelled by generation so a rebuilt cell
+// is never confusable with the cell it replaced. Returns the first cell's
+// handle, which is what "Remove first cell" needs.
+fill_grid(g: int, gen: int, status: int) -> int {
+    first = 0
+    i = 0
+    while i < 3 {
+        nm = "grid g${gen} #${i}"
+        b = btn(nm) callback {
+            aether_ui_text_set_string(status, string.concat("clicked ", nm))
+        }
+        grid_place(g, b, i, 0, 1, 1)
+        if i == 0 { first = b }
+        i = i + 1
+    }
+    return first
+}
+
+main() {
+    gen = 0
+    grid_cells = 0
+    first_cell = 0
+    stack_cell = 0
+    status = 0
+
+    window("rebuild demo", 480, 420) {
+        vstack(8) {
+            status = text("status: idle")
+            divider()
+
+            grid_cells = grid(1, 6, 8)
+            first_cell = fill_grid(grid_cells, gen, status)
+
+            divider()
+            rows = vstack(4) {
+                stack_cell = btn("stack row A") callback {
+                    aether_ui_text_set_string(status, "clicked stack row A")
+                }
+                _b = btn("stack row B") callback {
+                    aether_ui_text_set_string(status, "clicked stack row B")
+                }
+            }
+            divider()
+
+            hstack(10) {
+                _r = btn("Rebuild grid") callback {
+                    clear_children(grid_cells)
+                    gen = gen + 1
+                    first_cell = fill_grid(grid_cells, gen, status)
+                    aether_ui_text_set_string(status, "rebuilt g${gen}")
+                }
+                _d = btn("Remove first cell") callback {
+                    remove_child(grid_cells, first_cell)
+                    first_cell = 0
+                    aether_ui_text_set_string(status, "removed grid cell")
+                }
+                _s = btn("Remove stack row") callback {
+                    remove_child(rows, stack_cell)
+                    stack_cell = 0
+                    aether_ui_text_set_string(status, "removed stack row")
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

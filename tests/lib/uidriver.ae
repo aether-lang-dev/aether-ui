@@ -29,6 +29,7 @@ exports (
 )
 
 import std.string
+import std.math
 import std.list
 import std.os
 import std.json
@@ -97,8 +98,11 @@ post_body(path: string) -> string {
 
 // ─── Driver actions (all assert via std.spec) ──────────────────────
 
-extern lrint(x: float) -> long
-f_to_i(x: float) -> int { return lrint(x) }
+// std.math, not a bare `extern lrint`: the C prototype aether emits for that
+// extern is int64_t lrint(double), which clang rejects as an incompatible
+// redeclaration of its own builtin (long lrint(double)), so every spec build
+// carried a warning.
+f_to_i(x: float) -> int { return math.round(x) as int }
 
 click(x: float, y: float) {
     xi = f_to_i(x)
