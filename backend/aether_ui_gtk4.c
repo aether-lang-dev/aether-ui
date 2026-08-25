@@ -5635,23 +5635,62 @@ void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) 
     gtk_widget_set_opacity(w, target);
 }
 
-// Widget removal
+// Widget removal: the mirror of aether_ui_widget_add_child_ctx / grid_place.
+//
+// CRITICAL: every container arm that can ADD a child needs a removal arm here.
+// A missing arm is silent: the child stays parented and stays alive, so the
+// widget keeps rendering AND the driver keeps reporting it (the registry slot
+// is cleared by the weak ref on finalize, which never runs while the parent
+// still holds the last reference).
+static void aeui_container_remove(GtkWidget* parent, GtkWidget* child) {
+    if (GTK_IS_BOX(parent)) {
+        gtk_box_remove(GTK_BOX(parent), child);
+    } else if (GTK_IS_GRID(parent)) {
+        gtk_grid_remove(GTK_GRID(parent), child);
+    } else if (GTK_IS_FLOW_BOX(parent)) {
+        // gtk_flow_box_insert wraps each child in a GtkFlowBoxChild, so the
+        // widget walked out of the parent is the wrapper, not the handle's
+        // widget. gtk_flow_box_remove accepts either.
+        gtk_flow_box_remove(GTK_FLOW_BOX(parent), child);
+    } else if (GTK_IS_SCROLLED_WINDOW(parent)) {
+        if (gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(parent)) == child) {
+            gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), NULL);
+        }
+    } else if (GTK_IS_OVERLAY(parent)) {
+        if (gtk_overlay_get_child(GTK_OVERLAY(parent)) == child) {
+            gtk_overlay_set_child(GTK_OVERLAY(parent), NULL);
+        } else {
+            gtk_overlay_remove_overlay(GTK_OVERLAY(parent), child);
+        }
+    } else if (GTK_IS_PANED(parent)) {
+        if (gtk_paned_get_start_child(GTK_PANED(parent)) == child) {
+            gtk_paned_set_start_child(GTK_PANED(parent), NULL);
+        } else if (gtk_paned_get_end_child(GTK_PANED(parent)) == child) {
+            gtk_paned_set_end_child(GTK_PANED(parent), NULL);
+        }
+    } else {
+        gtk_widget_unparent(child);
+    }
+}
+
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     GtkWidget* parent = aether_ui_get_widget(parent_handle);
     GtkWidget* child = aether_ui_get_widget(child_handle);
     if (!parent || !child) return;
-    if (GTK_IS_BOX(parent)) {
-        gtk_box_remove(GTK_BOX(parent), child);
-    }
+    if (gtk_widget_get_parent(child) != parent) return;
+    aeui_container_remove(parent, child);
 }
 
 void aether_ui_clear_children_impl(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return;
-    if (GTK_IS_BOX(w)) {
-        GtkWidget* child;
-        while ((child = gtk_widget_get_first_child(w)) != NULL) {
-            gtk_box_remove(GTK_BOX(w), child);
+    GtkWidget* child;
+    while ((child = gtk_widget_get_first_child(w)) != NULL) {
+        aeui_container_remove(w, child);
+        // An arm that does not actually unparent would spin here forever.
+        if (gtk_widget_get_first_child(w) == child) {
+            gtk_widget_unparent(child);
+            if (gtk_widget_get_first_child(w) == child) return;
         }
     }
 }

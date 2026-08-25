@@ -7513,7 +7513,16 @@ void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) 
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     Widget* c = widget_at(child_handle);
     Widget* p = widget_at(parent_handle);
-    if (c && c->hwnd) DestroyWindow(c->hwnd);
+    if (c && c->hwnd) {
+        /* mark_subtree_dead FIRST, exactly as clear_children and navstack_pop
+           do: the registry never shrinks and Windows recycles HWND values, so
+           the `dead` flag is the only thing that tells the driver a widget is
+           gone. It must run BEFORE DestroyWindow, because afterwards GetWindow
+           can no longer enumerate the children to mark them. Without it a
+           removed widget keeps reporting a live type and stays clickable. */
+        mark_subtree_dead(c->hwnd);
+        DestroyWindow(c->hwnd);
+    }
     if (p && (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK)) {
         stack_do_layout(p->hwnd);
     }

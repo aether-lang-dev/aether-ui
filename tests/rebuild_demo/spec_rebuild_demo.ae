@@ -1,0 +1,104 @@
+// spec_rebuild_demo.ae: clear_children / remove_child really remove, on
+// every backend (issue #1).
+//
+// Detaching a widget from its parent is the easy half. The half that was
+// wrong is the REGISTRY: a container rebuilt behind the driver's back left
+// its old children listed in /widgets as visible, and POST /widget/<id>/click
+// still answered {"ok":true} and fired the callback of a cell that no longer
+// exists on screen. Automation against a data view (a file grid, a search
+// result set, a table on a new query) could then act on phantom rows.
+//
+// So each case asserts BOTH halves: the widget is gone from /widgets, AND
+// its stale id is refused, AND no callback ran (the status line, which every
+// cell's closure writes to, must not name the removed cell).
+//
+// Both container shapes are covered because the backends route them
+// differently: a GRID is not a box (GtkGrid / NSView / plain HWND children),
+// a STACK is (GtkBox / NSStackView).
+//
+// Run via ci.sh Phase 5m, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/rebuild_demo/bin/rebuild_demo &
+//   UI_SPEC=rebuild_demo/spec_rebuild_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "clear_children / remove_child over AetherUIDriver") {
+
+        spec.it("starts with three grid cells and two stack rows") callback {
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "grid g0 #0", "first grid cell rendered")
+            spec.assert_contains(b, "grid g0 #2", "last grid cell rendered")
+            spec.assert_contains(b, "stack row A", "first stack row rendered")
+            spec.assert_contains(b, "stack row B", "second stack row rendered")
+        }
+
+        spec.it("clear_children drops every cell from /widgets") callback {
+            stale = uidriver.widget_id_by_text("grid g0 #0")
+            spec.assert_gt(stale, 0, "grid cell has a driver id before the rebuild")
+
+            r = uidriver.widget_id_by_text("Rebuild grid")
+            uidriver.post_ok("/widget/${r}/click", "rebuild")
+            ok = uidriver.wait_body_contains("/widgets", "grid g1 #0", 20)
+            spec.assert_true(ok, "the rebuilt generation rendered")
+
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "grid g1 #2", "every rebuilt cell rendered")
+            g0 = uidriver.widget_id_by_text("grid g0 #0")
+            spec.assert_eq(g0, 0, "cleared cell gone from /widgets")
+
+            // The reported defect: the stale id stayed clickable and its old
+            // callback still ran.
+            st = uidriver.post_status("/widget/${stale}/click")
+            spec.assert_eq(st, 404, "clicking a cleared cell is refused")
+            b2 = uidriver.get_body("/widgets")
+            spec.assert_eq(string.contains(b2, "clicked grid g0 #0"), 0,
+                "no callback fired for the cleared cell")
+        }
+
+        spec.it("remove_child drops one grid cell, and only that one") callback {
+            stale = uidriver.widget_id_by_text("grid g1 #0")
+            spec.assert_gt(stale, 0, "the cell to remove has a driver id")
+
+            r = uidriver.widget_id_by_text("Remove first cell")
+            uidriver.post_ok("/widget/${r}/click", "remove grid cell")
+            ok = uidriver.wait_body_contains("/widgets", "removed grid cell", 20)
+            spec.assert_true(ok, "the remove ran")
+
+            gone = uidriver.widget_id_by_text("grid g1 #0")
+            spec.assert_eq(gone, 0, "removed grid cell gone from /widgets")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "grid g1 #1", "its siblings are untouched")
+            spec.assert_contains(b, "grid g1 #2", "its siblings are untouched")
+
+            st = uidriver.post_status("/widget/${stale}/click")
+            spec.assert_eq(st, 404, "clicking a removed cell is refused")
+            b2 = uidriver.get_body("/widgets")
+            spec.assert_eq(string.contains(b2, "clicked grid g1 #0"), 0,
+                "no callback fired for the removed cell")
+        }
+
+        spec.it("remove_child drops a stack row too") callback {
+            stale = uidriver.widget_id_by_text("stack row A")
+            spec.assert_gt(stale, 0, "the row to remove has a driver id")
+
+            r = uidriver.widget_id_by_text("Remove stack row")
+            uidriver.post_ok("/widget/${r}/click", "remove stack row")
+            ok = uidriver.wait_body_contains("/widgets", "removed stack row", 20)
+            spec.assert_true(ok, "the remove ran")
+
+            gone = uidriver.widget_id_by_text("stack row A")
+            spec.assert_eq(gone, 0, "removed stack row gone from /widgets")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "stack row B", "its sibling is untouched")
+
+            st = uidriver.post_status("/widget/${stale}/click")
+            spec.assert_eq(st, 404, "clicking a removed row is refused")
+        }
+    }
+    spec.run_summary(fw)
+}
