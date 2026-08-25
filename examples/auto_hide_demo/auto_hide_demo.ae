@@ -19,25 +19,22 @@ import std.os (os_getenv)
 extern malloc(size: int) -> ptr
 
 // A malloc'd struct for this state even though this app has no other
-// escaping state: edge()'s callback and the retry timer are both created
-// before the widgets they reference are built. A closure that only reads a
-// not-yet-assigned plain local captures its pre-assignment value
-// permanently — a struct field access is always a live read regardless of
-// build order, which is the only reason to reach for one on something this
-// small.
+// escaping state: edge()'s callback is created before the widgets it
+// references are built. A closure that only reads a not-yet-assigned plain
+// local captures its pre-assignment value permanently — a struct field
+// access is always a live read regardless of build order, which is the
+// only reason to reach for one on something this small.
 struct DemoState {
     status: int
     handle_wrap: int
-    retry_timer: int
     sidebar: int
 }
 
 main() {
     ui.window("Edge Zone Demo", 420, 300) {
-        d = malloc(32) as *DemoState
+        d = malloc(24) as *DemoState
         d.status = 0
         d.handle_wrap = 0
-        d.retry_timer = 0
         d.sidebar = 0
 
         _, content = ui.edge("left", 24) callback |entered: int| {
@@ -79,14 +76,17 @@ main() {
             ui.set_hidden(d.sidebar, 0)
         }
 
-        d.retry_timer = ui.timer(30) callback {
-            ov = ui.overlay(0, d.handle_wrap, "start", 6, 0)
-            if ov != 0 {
-                _ = ui.overlay(0, d.sidebar, "top-start", 0, 0)
-                _ = ui.overlay(0, d.sidebar, "bottom-start", 0, 0)
-                ui.timer_cancel(d.retry_timer)
-            }
-        }
+        // Promote the handle and the sidebar into the overlay layer.
+        // Direct calls: ui.overlay accepts an already-parented widget now
+        // (it detaches before promoting and rolls back on failure), so the
+        // retry timer this app used to carry -- poll every 30ms until the
+        // promotion stopped failing, then also overlay the sidebar TWICE
+        // while experimenting with anchors -- is workaround archaeology.
+        // "bottom-start" is the anchor the old double-call effectively
+        // landed on (the second overlay of the same widget repositions it),
+        // so the visible layout is unchanged.
+        _oh = ui.overlay(0, d.handle_wrap, "start", 6, 0)
+        _os = ui.overlay(0, d.sidebar, "bottom-start", 0, 0)
 
         title = ui.text(content, "Edge zone demo, move mouse towards left-edge...")
         ui.style_font_bold(title)
