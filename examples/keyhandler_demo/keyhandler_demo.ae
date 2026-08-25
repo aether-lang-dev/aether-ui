@@ -1,0 +1,62 @@
+// Aether UI any-key example: type-ahead, which no shortcut can express.
+//
+// shortcut("Ctrl+R") answers "was THIS combo pressed". A file list that jumps
+// to the first row starting with whatever letter you type asks the other
+// question, "what was pressed", and you cannot build it by registering one
+// shortcut per letter. window_on_key delivers the key name and modifiers.
+//
+// The demo keeps two lines: the last key seen (with its modifier bitmask),
+// and a fake "type-ahead" that accumulates letters and reports the row it
+// would jump to. Backspace clears, which is the shape a real listing wants.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). POST /window/key?combo=<key> delivers the SAME closure a real
+//   keypress does, so the spec exercises the real path.
+
+import ui
+import ui (window, vstack, text, divider, shortcut, window_on_key,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    typed = ""
+    fired = 0
+
+    window("key handler", 420, 260) {
+        vstack(8) {
+            text("Type anything. Ctrl+R is bound as a shortcut and must NOT reach the key handler.")
+            divider()
+            last = text("last key: none")
+            ahead = text("type-ahead: (empty)")
+            hits = text("shortcut fired: 0")
+            divider()
+            text("BackSpace clears the type-ahead buffer")
+
+            shortcut("Ctrl+R") callback {
+                fired = fired + 1
+                aether_ui_text_set_string(hits,
+                    "shortcut fired: ${fired}")
+            }
+
+            window_on_key(|k: string, m: int| {
+                aether_ui_text_set_string(last, "last key: ${k} mods: ${m}")
+                if string.equals(k, "BackSpace") == 1 {
+                    typed = ""
+                } else {
+                    if string.length(k) == 1 {
+                        typed = string.concat(typed, k)
+                    }
+                }
+                if string.length(typed) == 0 {
+                    aether_ui_text_set_string(ahead, "type-ahead: (empty)")
+                } else {
+                    aether_ui_text_set_string(ahead, "type-ahead: ${typed}")
+                }
+            })
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

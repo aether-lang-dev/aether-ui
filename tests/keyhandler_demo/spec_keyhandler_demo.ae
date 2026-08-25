@@ -1,0 +1,69 @@
+// spec_keyhandler_demo.ae: window_on_key delivers ANY key, and accelerators
+// still win (issue #18).
+//
+// Every shortcut verb answers "was THIS combo pressed". Type-ahead asks the
+// other question and cannot be built from registered combos, so what this
+// pins down is: an unbound key reaches the handler with its name and
+// modifiers, a BOUND combo does NOT (or an accelerator would fire twice, once
+// as itself and once as raw input), and the names match the ones a real
+// keypress produces rather than a lower-cased driver spelling.
+//
+// POST /window/key ends in the same closure a keypress does, so this is the
+// real path, not a test-only door.
+//
+// Run via ci.sh Phase 5e5, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/keyhandler_demo/bin/keyhandler_demo &
+//   UI_SPEC=keyhandler_demo/spec_keyhandler_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "any-key handler over AetherUIDriver") {
+
+        spec.it("an unbound key arrives with its name") callback {
+            uidriver.post_ok("/window/key?combo=a", "press a")
+            ok = uidriver.wait_body_contains("/widgets", "last key: a mods: 0", 20)
+            spec.assert_true(ok, "the handler saw 'a' with no modifiers")
+        }
+
+        spec.it("letters accumulate, which is what type-ahead needs") callback {
+            uidriver.post_ok("/window/key?combo=b", "press b")
+            ok = uidriver.wait_body_contains("/widgets", "type-ahead: ab", 20)
+            spec.assert_true(ok, "'a' then 'b' read as 'ab'")
+        }
+
+        spec.it("a BOUND combo fires its shortcut and not the key handler") callback {
+            uidriver.post_ok("/window/key?combo=Ctrl%2BR", "press Ctrl+R")
+            ok = uidriver.wait_body_contains("/widgets", "shortcut fired: 1", 20)
+            spec.assert_true(ok, "the accelerator ran")
+
+            b = uidriver.get_body("/widgets")
+            // Still 'b': had the key handler also seen Ctrl+R, the last-key
+            // line would have moved and 'r' would have joined the buffer.
+            spec.assert_contains(b, "last key: b mods: 0",
+                "the key handler did NOT also see the bound combo")
+            spec.assert_contains(b, "type-ahead: ab",
+                "and the bound key did not enter the buffer")
+        }
+
+        spec.it("named keys keep the spelling a real keypress uses") callback {
+            // Not "backspace". The driver lower-cases combos internally, so
+            // without canonicalisation a spec would assert a string the app
+            // never receives from an actual key.
+            uidriver.post_ok("/window/key?combo=BackSpace", "press BackSpace")
+            ok = uidriver.wait_body_contains("/widgets", "last key: BackSpace", 20)
+            spec.assert_true(ok, "BackSpace arrives spelled as the key path spells it")
+            cleared = uidriver.wait_body_contains("/widgets", "type-ahead: (empty)", 20)
+            spec.assert_true(cleared, "and the app's BackSpace branch ran")
+
+            uidriver.post_ok("/window/key?combo=Left", "press Left")
+            ok2 = uidriver.wait_body_contains("/widgets", "last key: Left", 20)
+            spec.assert_true(ok2, "arrow keys arrive by name too")
+        }
+    }
+    spec.run_summary(fw)
+}
