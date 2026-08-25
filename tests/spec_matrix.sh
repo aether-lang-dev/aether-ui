@@ -383,6 +383,13 @@ for row in "${SUITES[@]}"; do
             # neighbouring staleness warning could not see it because it
             # checks whichever path this line picked.
             bin="target/build/$appdir/bin/$base.exe"
+            # Same contrib-tree fallback as the default branch: this
+            # unconditional reset used to skip it, so winbaz measured a
+            # build.sh-era exe so stale it predated the /pixel route.
+            if [ ! -x "$bin" ] && [ -f "$ROOT/$appdir/.build.contrib.ae" ]; then
+                cbin="target/build.contrib/$appdir/bin/$base.exe"
+                [ -x "$cbin" ] && bin="$cbin"
+            fi
             if [ ! -x "$bin" ]; then
                 bin="build/$base.exe"
                 if [ ! -x "$bin" ]; then
@@ -403,6 +410,10 @@ for row in "${SUITES[@]}"; do
             # each rebuild had in fact succeeded ("Built: build/icons_demo").
             if [ "$REBUILD" = "1" ] && [ -x "build/$base" ]; then
                 bin="build/$base"
+            fi
+            if [ ! -x "$bin" ] && [ -f "$ROOT/$appdir/.build.contrib.ae" ]; then
+                cbin="target/build.contrib/$appdir/bin/$base"
+                [ -x "$cbin" ] && bin="$cbin"
             fi
             if [ ! -x "$bin" ]; then
                 bin="build/$base"
