@@ -32,6 +32,11 @@ exports (
 )
 
 import std.bytes
+// Pixel writes go through std.mem's INLINED accessors (aether >= 0.579,
+// #1733) on the buffer's raw data pointer, hoisted once per fill —
+// bytes.set is an extern call per byte and dominated the span loops.
+// Full rationale + measurements in vg/raster/blur.ae's import note.
+import std.mem
 import std.floatarr
 import std.string
 import std.math
@@ -202,12 +207,14 @@ parse_color_to_rgba(css_color: string) -> *RGBA {
 
 // ─── Pixel write helper ──────────────────────────────────────────
 
-write_px(buf: ptr, w: int, x: int, y: int, r: int, g: int, b: int, a: int) {
+// `bd` is the buffer's RAW data pointer (bytes.data), fetched once by each
+// fill entry — the callers' clamps already bound x/y to the buffer.
+write_px(bd: ptr, w: int, x: int, y: int, r: int, g: int, b: int, a: int) {
     idx = (y * w + x) * 4
-    bytes.set(buf, idx,     r)
-    bytes.set(buf, idx + 1, g)
-    bytes.set(buf, idx + 2, b)
-    bytes.set(buf, idx + 3, a)
+    _e1 = mem.set_byte(bd, idx,     r)
+    _e2 = mem.set_byte(bd, idx + 1, g)
+    _e3 = mem.set_byte(bd, idx + 2, b)
+    _e4 = mem.set_byte(bd, idx + 3, a)
 }
 
 clamp_int(x: int, lo: int, hi: int) -> int {
@@ -227,6 +234,7 @@ fround(f: float) -> int {
 fill_rect_in_buffer(buf: ptr, buf_w: int, buf_h: int,
                     x: float, y: float, w: float, h: float,
                     r: int, g: int, b: int, a: int) {
+    bd = bytes.data(buf)
     x0 = clamp_int(fround(x), 0, buf_w)
     y0 = clamp_int(fround(y), 0, buf_h)
     x1 = clamp_int(fround(x + w), 0, buf_w)
@@ -235,7 +243,7 @@ fill_rect_in_buffer(buf: ptr, buf_w: int, buf_h: int,
     while py < y1 {
         px = x0
         while px < x1 {
-            write_px(buf, buf_w, px, py, r, g, b, a)
+            write_px(bd, buf_w, px, py, r, g, b, a)
             px = px + 1
         }
         py = py + 1
@@ -247,6 +255,7 @@ fill_rect_in_buffer(buf: ptr, buf_w: int, buf_h: int,
 fill_circle_in_buffer(buf: ptr, buf_w: int, buf_h: int,
                       cx: float, cy: float, radius: float,
                       r: int, g: int, b: int, a: int) {
+    bd = bytes.data(buf)
     // Bounding box: floor(cx-rad-1) .. ceil(cx+rad+1)
     x0 = clamp_int(fround(math.floor(cx - radius - 1.0)), 0, buf_w)
     y0 = clamp_int(fround(math.floor(cy - radius - 1.0)), 0, buf_h)
@@ -261,7 +270,7 @@ fill_circle_in_buffer(buf: ptr, buf_w: int, buf_h: int,
             dy = py + 0.5 - cy
             d2 = dx * dx + dy * dy
             if d2 <= r2 {
-                write_px(buf, buf_w, px, py, r, g, b, a)
+                write_px(bd, buf_w, px, py, r, g, b, a)
             }
             px = px + 1
         }
@@ -538,6 +547,7 @@ fill_path_in_buffer_scaled(buf: ptr, buf_w: int, buf_h: int,
                     path_str: string, off_x: float, off_y: float, scale: float,
                     r: int, g: int, b: int, a: int,
                     fill_rule: int) {
+    bd = bytes.data(buf)
     count_out = mk_cell(0)
     edges = path_to_edges_scaled(path_str, off_x, off_y, scale, count_out)
     n_floats = count_out.v
@@ -594,7 +604,7 @@ fill_path_in_buffer_scaled(buf: ptr, buf_w: int, buf_h: int,
                 x1i = math.clamp_int(fround(floatarr.get_unchecked(cr, (i + 1) * 2)), 0, buf_w)
                 px = x0i
                 while px < x1i {
-                    write_px(buf, buf_w, px, y, r, g, b, a)
+                    write_px(bd, buf_w, px, y, r, g, b, a)
                     px = px + 1
                 }
                 i = i + 2
@@ -623,7 +633,7 @@ fill_path_in_buffer_scaled(buf: ptr, buf_w: int, buf_h: int,
                             x1i = math.clamp_int(fround(cx), 0, buf_w)
                             px = x0i
                             while px < x1i {
-                                write_px(buf, buf_w, px, y, r, g, b, a)
+                                write_px(bd, buf_w, px, y, r, g, b, a)
                                 px = px + 1
                             }
                             in_span = 0
@@ -647,15 +657,17 @@ fill_path_in_buffer_scaled(buf: ptr, buf_w: int, buf_h: int,
 // pixels. Both buffers RGBA, 4 bytes per pixel.
 
 apply_clip_mask(target: ptr, mask: ptr, pixel_count: int) {
+    td = bytes.data(target)
+    md = bytes.data(mask)
     i = 0
     while i < pixel_count {
         ti = i * 4 + 3
-        ta = bytes.get(target, ti)
-        ma = bytes.get(mask, ti)
+        ta = mem.get_byte(td, ti)
+        ma = mem.get_byte(md, ti)
         // (ta * ma) / 255, rounded.
         product = ta * ma
         new_alpha = lrint(product / 255.0)
-        bytes.set(target, ti, new_alpha)
+        _e = mem.set_byte(td, ti, new_alpha)
         i = i + 1
     }
 }

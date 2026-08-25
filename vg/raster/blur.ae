@@ -20,6 +20,15 @@
 exports ( gaussian_blur, build_kernel )
 
 import std.bytes
+// The kernel loops read/write through std.mem's accessors on the buffers'
+// raw data pointers, NOT bytes.get/set: mem's scalar accessors are lowered
+// INLINE from aether 0.579 (#1733), while bytes.get/set is an extern call
+// into libaether per byte (plus a bounds check) — and at ~4 reads per
+// kernel tap + 4 writes per pixel that call cost dominated the blur.
+// Measured on the 640x480 composite shape: bytes.set 307ms vs
+// mem.set_byte 9ms for the same loop. Bounds stay the loops' own
+// responsibility, exactly as they already were ("index is bounded by n").
+import std.mem
 import std.floatarr
 import std.math
 
@@ -122,6 +131,12 @@ gaussian_blur(pixels: ptr, w: int, h: int, sigma_x: float, sigma_y: float) {
 
     n = w * h * 4
     temp = mk_buf(n)
+    // Raw data pointers for the inlined accessors (see the import note).
+    // Neither buffer is appended to below, so the pointers stay valid.
+    // `px` is pixels' data: read by the horizontal pass, written by the
+    // vertical one (the passes ping-pong pixels -> temp -> pixels).
+    px = bytes.data(pixels)
+    tmp = bytes.data(temp)
 
     // ─── Horizontal pass: pixels → temp ──────────────────────────
     if sigma_x > 0.0 {
@@ -143,18 +158,17 @@ gaussian_blur(pixels: ptr, w: int, h: int, sigma_x: float, sigma_y: float) {
                     sx = clamp_int(x + k, 0, w - 1)
                     idx = (y * w + sx) * 4
                     weight = floatarr.get_unchecked(kx, k + rx)
-                    rr = rr + bytes.get(pixels, idx)     * weight
-                    gg = gg + bytes.get(pixels, idx + 1) * weight
-                    bb = bb + bytes.get(pixels, idx + 2) * weight
-                    aa = aa + bytes.get(pixels, idx + 3) * weight
+                    rr = rr + mem.get_byte(px, idx)     * weight
+                    gg = gg + mem.get_byte(px, idx + 1) * weight
+                    bb = bb + mem.get_byte(px, idx + 2) * weight
+                    aa = aa + mem.get_byte(px, idx + 3) * weight
                     k = k + 1
                 }
                 oi = (y * w + x) * 4
-                e1 = bytes.set(temp, oi,     round_clamp_byte(rr))
-                e2 = bytes.set(temp, oi + 1, round_clamp_byte(gg))
-                e3 = bytes.set(temp, oi + 2, round_clamp_byte(bb))
-                e4 = bytes.set(temp, oi + 3, round_clamp_byte(aa))
-                if e1 + e2 + e3 + e4 < 0 { } // unreachable: index is bounded by n above
+                _e1 = mem.set_byte(tmp, oi,     round_clamp_byte(rr))
+                _e2 = mem.set_byte(tmp, oi + 1, round_clamp_byte(gg))
+                _e3 = mem.set_byte(tmp, oi + 2, round_clamp_byte(bb))
+                _e4 = mem.set_byte(tmp, oi + 3, round_clamp_byte(aa))
                 x = x + 1
             }
             y = y + 1
@@ -186,18 +200,17 @@ gaussian_blur(pixels: ptr, w: int, h: int, sigma_x: float, sigma_y: float) {
                     sy2 = clamp_int(y + k, 0, h - 1)
                     idx = (sy2 * w + x) * 4
                     weight = floatarr.get_unchecked(ky, k + ry)
-                    rr = rr + bytes.get(temp, idx)     * weight
-                    gg = gg + bytes.get(temp, idx + 1) * weight
-                    bb = bb + bytes.get(temp, idx + 2) * weight
-                    aa = aa + bytes.get(temp, idx + 3) * weight
+                    rr = rr + mem.get_byte(tmp, idx)     * weight
+                    gg = gg + mem.get_byte(tmp, idx + 1) * weight
+                    bb = bb + mem.get_byte(tmp, idx + 2) * weight
+                    aa = aa + mem.get_byte(tmp, idx + 3) * weight
                     k = k + 1
                 }
                 oi = (y * w + x) * 4
-                e1 = bytes.set(pixels, oi,     round_clamp_byte(rr))
-                e2 = bytes.set(pixels, oi + 1, round_clamp_byte(gg))
-                e3 = bytes.set(pixels, oi + 2, round_clamp_byte(bb))
-                e4 = bytes.set(pixels, oi + 3, round_clamp_byte(aa))
-                if e1 + e2 + e3 + e4 < 0 { } // unreachable
+                _e1 = mem.set_byte(px, oi,     round_clamp_byte(rr))
+                _e2 = mem.set_byte(px, oi + 1, round_clamp_byte(gg))
+                _e3 = mem.set_byte(px, oi + 2, round_clamp_byte(bb))
+                _e4 = mem.set_byte(px, oi + 3, round_clamp_byte(aa))
                 x = x + 1
             }
             y = y + 1

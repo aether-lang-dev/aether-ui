@@ -37,6 +37,7 @@ exports (
 
 import std.string
 import std.bytes
+import std.mem
 
 extern malloc(size: int) -> ptr
 extern string_retain(s: string)
@@ -130,12 +131,18 @@ new_frame_buffer(w: int, h: int) -> ptr {
 }
 
 // Write one RGBA pixel into a frame buffer (from new_frame_buffer) at pixel px.
+// One extern call (bytes.data) + four INLINED stores (std.mem, aether >=
+// 0.579) instead of four extern bytes.set calls — this is boing's whole-
+// canvas-per-frame write path. Callers passing a raw pointer can't happen:
+// the API takes the bytes handle, so the fetch stays inside. See
+// vg/raster/blur.ae's import note for the measurements.
 buf_set_px(buf: ptr, px: int, rr: int, gg: int, bb: int, aa: int) {
+    d = bytes.data(buf)
     i = px * 4
-    _ = bytes.set(buf, i,     rr)
-    _ = bytes.set(buf, i + 1, gg)
-    _ = bytes.set(buf, i + 2, bb)
-    _ = bytes.set(buf, i + 3, aa)
+    _e1 = mem.set_byte(d, i,     rr)
+    _e2 = mem.set_byte(d, i + 1, gg)
+    _e3 = mem.set_byte(d, i + 2, bb)
+    _e4 = mem.set_byte(d, i + 3, aa)
 }
 
 // frame_finish(buf, w, h) -> (string, len): consume the bytes buffer into a
