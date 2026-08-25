@@ -3,7 +3,7 @@
 // visible in the app body.
 //
 // Build and run:
-//   ./build.sh example_menu.ae build/menu
+//   ./build.sh examples/menu/menu.ae
 //   ./build/menu          (Linux/macOS)
 //   ./build/menu.exe      (Windows)
 

@@ -1,4 +1,4 @@
-// example_aevg_interactive.ae — click a shape, it changes colour.
+// aevg_interactive.ae — click a shape, it changes colour.
 //
 // Demonstrates the AeVG interaction loop on a live window: a vg{} scene with
 // shapes carrying on_click handlers that recolor the element (vg.element_set_fill)

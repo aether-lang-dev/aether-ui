@@ -1,4 +1,4 @@
-// example_aevg_video.ae — play a raw-RGBA clip in a live region.
+// aevg_video.ae — play a raw-RGBA clip in a live region.
 //
 // A real frame source: read a file of concatenated RGBA8888 frames
 // (w*h*4 bytes each — the form `ffmpeg -f rawvideo -pix_fmt rgba` emits) once
@@ -9,7 +9,7 @@
 //   AEVG_CLIP=/path/clip.rgba AEVG_CLIP_W=64 AEVG_CLIP_H=64 \
 //     DISPLAY=:0 ./build/aevg_video
 //
-// Headless one-frame proof: example_aevg_video_png (writes a frame to PNG).
+// Headless one-frame proof: apps/aevg_video_png (writes a frame to PNG).
 
 import ui
 import ui (window, enable_test_server)

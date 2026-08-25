@@ -1,4 +1,4 @@
-// example_aevg_anim.ae — continuous animation on a live window.
+// aevg_anim.ae — continuous animation on a live window.
 //
 // A ~60fps timer (started by vg()) drives the scene's animations: a circle
 // pulses its opacity (yoyo loop) and a rect sweeps left↔right. The animate

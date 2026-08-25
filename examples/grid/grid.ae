@@ -5,7 +5,7 @@
 // of which label is longer. The "Sign In" button spans both columns.
 //
 // Build and run:
-//   ./build.sh example_grid.ae build/grid
+//   ./build.sh examples/grid/grid.ae
 //   ./build/grid          (Linux/macOS)
 //   ./build/grid.exe      (Windows)
 

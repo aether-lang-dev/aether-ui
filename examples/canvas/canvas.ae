@@ -1,7 +1,7 @@
 // Aether UI canvas example — drawing primitives and event handlers.
 //
 // Build and run:
-//   ./build.sh example_canvas.ae build/perry_canvas
+//   ./build.sh examples/canvas/canvas.ae
 
 import ui
 

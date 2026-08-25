@@ -1,4 +1,4 @@
-// example_aevg_clip.ae — viewport clipping (SVG overflow:hidden).
+// aevg_clip.ae — viewport clipping (SVG overflow:hidden).
 //
 // The viewBox is 0..100 but the canvas is square; shapes extending past the
 // viewBox edge must be clipped at the viewport boundary, not drawn over the

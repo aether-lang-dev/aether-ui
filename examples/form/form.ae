@@ -1,7 +1,7 @@
 // Aether UI form example — input widgets with callbacks.
 //
 // Build and run:
-//   ./build.sh example_form.ae build/perry_form
+//   ./build.sh examples/form/form.ae
 
 import ui
 

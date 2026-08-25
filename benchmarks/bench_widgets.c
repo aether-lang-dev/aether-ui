@@ -9,7 +9,7 @@
 // All benchmarks run headless (no message pump) so they measure pure
 // backend overhead without display compositor interaction.
 
-#include "../aether_ui_backend.h"
+#include "../backend/aether_ui_backend.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

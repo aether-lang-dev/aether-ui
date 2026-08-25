@@ -1,11 +1,11 @@
-// example_vg_png.ae — render a vg scene to a PNG, headless (no window).
+// vg_png.ae — render a vg scene to a PNG, headless (no window).
 //
-// Self-snapshot: builds the same scene as example_vg, then writes it to a PNG
+// Self-snapshot: builds the same scene as apps/vg_demo, then writes it to a PNG
 // via canvas_write_png — works without a display (pure cairo image surface).
 // This is the debugging / parity-harness primitive: capture what the canvas
 // drew, headless, and inspect it.
 //
-//   ./build.sh aevg/example_vg_png.ae build/vg_png && ./build/vg_png /tmp/vg.png
+//   ./build.sh apps/vg_png/vg_png.ae && ./build/vg_png /tmp/vg.png
 
 import ui
 import ui (canvas_create, canvas_write_png, canvas_redraw)

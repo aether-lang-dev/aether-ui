@@ -1,4 +1,4 @@
-// example_raster.ae — exercise canvas_raster (render_as_raster → blit).
+// raster_demo.ae — exercise canvas_raster (render_as_raster → blit).
 //
 // render_as_raster isn't auto-routed from the SVG pipeline yet (the
 // shape factories don't delegate on filter=/clip-path= attrs — a

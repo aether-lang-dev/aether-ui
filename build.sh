@@ -55,17 +55,40 @@ if grep -rqs "import contrib.avcodec" "$(dirname "$SOURCE")"; then
     CONTRIB_LIBS="$CONTRIB_LIBS -laether_avcodec -lavcodec -lavformat -lavutil -lswscale -lswresample"
 fi
 
+# A missing source used to reach aetherc and come back as a bare "Error opening
+# input file: No such file or directory", with no hint that the tree is one
+# directory per example. Say which path was tried, and name the real one when a
+# same-named example or app exists (issue #24).
+if [ ! -f "$SOURCE" ]; then
+    echo "Error: no such source file: $SOURCE" >&2
+    base="$(basename "$SOURCE" .ae)"
+    base="${base#example_}"
+    for guess in "examples/$base/$base.ae" "apps/$base/$base.ae"; do
+        if [ -f "$SCRIPT_DIR/$guess" ]; then
+            echo "  Did you mean: ./build.sh $guess" >&2
+            exit 1
+        fi
+    done
+    echo "  Every example and app lives in its own directory:" >&2
+    echo "    ./build.sh examples/<name>/<name>.ae" >&2
+    echo "    ./build.sh apps/<name>/<name>.ae" >&2
+    exit 1
+fi
+
 mkdir -p "$(dirname "$C_FILE")"
-echo "Compiling $SOURCE -> $C_FILE"
-# An app moved under aevg/apps/<name>/ imports sibling modules (vg, vg_live,
-# loader, …) that live in aevg/ — give aetherc that dir on its --lib search
-# path (the shell twin of the aeb per-node lib() setter). Harmless for sources
-# that don't import them.
-LIB_FLAGS=()
 case "$SOURCE" in
-    */aevg/apps/*|aevg/apps/*) LIB_FLAGS=(--lib "$SCRIPT_DIR/aevg") ;;
+    # Already C: the C-level suites (tests/test_widgets.c,
+    # benchmarks/bench_widgets.c) link against the very same backend and libs
+    # as an app, so they go through this script rather than a hand-rolled gcc
+    # line in the README that nothing keeps honest.
+    *.c|*.m)
+        echo "Building $SOURCE (already C)"
+        C_FILE="$SOURCE"; EXTRA_INCLUDES="-I$SCRIPT_DIR/tests" ;;
+    *)
+        echo "Compiling $SOURCE -> $C_FILE"
+        "$AETHERC" "$SOURCE" "$C_FILE" ;;
 esac
-"$AETHERC" "${LIB_FLAGS[@]}" "$SOURCE" "$C_FILE"
+EXTRA_INCLUDES="${EXTRA_INCLUDES:-}"
 
 OS="$(uname -s)"
 case "$OS" in
@@ -77,7 +100,7 @@ case "$OS" in
         # Linux branch — falling_blocks / rubiks_cube hit this on the Mac).
         AETHER_LIBS="$(ae_libs)"
         clang -O0 -g -fobjc-arc \
-            $AETHER_INCLUDES \
+            $AETHER_INCLUDES $EXTRA_INCLUDES \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_macos.m" \
             "$SCRIPT_DIR/backend/aether_ui_test_server.c" \
             "$SCRIPT_DIR/backend/aether_ui_system_extras.c" \
@@ -119,9 +142,10 @@ case "$OS" in
         AETHER_LIBS="$(ae_libs)"
         "$CC_BIN" -O0 -g -pipe \
             $(pkg-config --cflags gtk4) \
-            $AETHER_INCLUDES \
+            $AETHER_INCLUDES $EXTRA_INCLUDES \
             $LIBNOTIFY_CFLAGS \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_gtk4.c" \
+            "$SCRIPT_DIR/backend/aether_ui_test_server.c" \
             "$SCRIPT_DIR/backend/aether_ui_system_extras.c" \
             "$SCRIPT_DIR/backend/aether_ui_sni.c" \
             -L"$AETHER_LIB_PATH" -laether \
@@ -139,7 +163,7 @@ case "$OS" in
         # where `ae cflags` predates --libs.
         AETHER_LIBS="$(ae_libs)"
         gcc -O2 -g -pipe \
-            $AETHER_INCLUDES \
+            $AETHER_INCLUDES $EXTRA_INCLUDES \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_win32.c" \
             "$SCRIPT_DIR/backend/aether_ui_test_server.c" \
             "$SCRIPT_DIR/backend/aether_ui_system_extras.c" \
