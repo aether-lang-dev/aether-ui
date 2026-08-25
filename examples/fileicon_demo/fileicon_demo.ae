@@ -1,0 +1,61 @@
+// Aether UI file-icon example: the icon the OS uses FOR A KIND OF FILE.
+//
+// image(path) loads a picture from disk, which only works when the file IS a
+// picture. A file browser needs the other question answered: what does the
+// platform draw for a folder, a document, an executable? That is file_icon,
+// backed by NSWorkspace / the themed GIcon / SHGetFileInfo.
+//
+// The last row rebinds ONE widget through set_file_icon, which is the shape
+// a recycled list row needs: the widget outlives the path it is showing.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). The spec asserts each icon widget actually carries a picture.
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, file_icon,
+    set_file_icon, image_size, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    swapper = 0
+
+    window("file icons", 420, 340) {
+        vstack(8) {
+            text("The platform's icon for each kind of entry")
+            divider()
+
+            hstack(8) {
+                d = file_icon("/")
+                image_size(d, 32, 32)
+                text("a directory")
+            }
+            hstack(8) {
+                f = file_icon("notes.txt")
+                image_size(f, 32, 32)
+                text("a text document")
+            }
+            hstack(8) {
+                // Deliberately a path that does not exist: every backend
+                // falls back to the extension, so a listing can draw a row
+                // before it has stat'ed it.
+                m = file_icon("/nowhere/at/all/song.mp3")
+                image_size(m, 32, 32)
+                text("an unseen .mp3")
+            }
+            divider()
+
+            hstack(8) {
+                // Starts EMPTY on purpose. An icon widget that already has a
+                // picture cannot show that a rebind did anything, so the
+                // spec watches this one go from no-picture to picture.
+                swapper = file_icon("")
+                image_size(swapper, 32, 32)
+                text("rebound by the button")
+            }
+            _sw = btn("Show a .txt here") callback {
+                set_file_icon(swapper, "readme.txt")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

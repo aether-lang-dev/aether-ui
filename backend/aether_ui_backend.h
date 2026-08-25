@@ -324,6 +324,18 @@ int aether_ui_image_create(const char* filepath);
 // embedded-art bytes that never touch disk.
 int aether_ui_image_from_bytes(const char* data, int length);
 void aether_ui_image_set_size(int handle, int width, int height);
+// The OS's icon FOR A PATH (folder / document / executable / by extension),
+// as opposed to image_create, which loads the file itself. NSWorkspace
+// iconForFile on macOS, the GIcon from the content type on GTK4,
+// SHGetFileInfo on win32. The path need not exist: every backend falls back
+// to guessing from the name, so a listing can draw an icon for an entry it
+// has not stat'ed. Never returns 0 for a live widget: on failure the widget
+// exists and is simply empty, so the tree stays stable.
+int aether_ui_file_icon_create(const char* path);
+void aether_ui_file_icon_set(int handle, const char* path);
+// 1 if this image widget currently carries a picture. The driver reports it,
+// so a spec can tell a real icon from an empty box.
+int aether_ui_image_has_content(int handle);
 
 // Menus (Group 5b) — native menu bars and context menus.
 // Backend-implemented on Win32 (HMENU), GTK (GMenu), AppKit (NSMenu).

@@ -357,6 +357,9 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
                       ",\"wrap\":%s,\"anchor\":\"%s\",\"truncate\":\"%s\"",
                       aether_ui_text_get_wrap(handle) ? "true" : "false",
                       an[a], tr[t]);
+    } else if (strcmp(type, "image") == 0) {
+        n += snprintf(buf + n, bufsize - n, ",\"has_image\":%s",
+                      aether_ui_image_has_content(handle) ? "true" : "false");
     } else if (strcmp(type, "toggle") == 0) {
         n += snprintf(buf + n, bufsize - n, ",\"active\":%s",
                       h->toggle_active(handle) ? "true" : "false");

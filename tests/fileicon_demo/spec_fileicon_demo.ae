@@ -1,0 +1,51 @@
+// spec_fileicon_demo.ae: file_icon asks the OS for the icon of a KIND of
+// file, and set_file_icon rebinds an existing widget to a new path.
+//
+// image(path) already existed and loads the file itself; this is the other
+// question, the one a file browser asks. What the driver can see is whether
+// an image widget actually carries a picture ("has_image"), which is enough
+// to tell a real platform icon from an empty box, and enough to prove a
+// rebind did something: the last widget starts empty and must fill in.
+//
+// Run via ci.sh Phase 5e3, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/fileicon_demo/bin/fileicon_demo &
+//   UI_SPEC=fileicon_demo/spec_fileicon_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "file icons over AetherUIDriver") {
+
+        spec.it("a directory, a document and an unseen path all get an icon") callback {
+            b = uidriver.get_body("/widgets")
+            // Three icons that must resolve, plus the deliberately empty one.
+            n = uidriver.count_occurrences(b, "\"has_image\":true")
+            spec.assert_eq(n, 3, "three paths resolved to a platform icon")
+        }
+
+        spec.it("the empty widget starts with no picture") callback {
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "\"has_image\":false",
+                "file_icon(\"\") is an empty box, not a broken one")
+        }
+
+        spec.it("set_file_icon rebinds a live widget") callback {
+            sw = uidriver.widget_id_by_text("Show a .txt here")
+            spec.assert_gt(sw, 0, "the rebind button is there")
+            uidriver.post_ok("/widget/${sw}/click", "rebind the icon")
+
+            ok = uidriver.wait_body_contains("/widgets", "\"has_image\":true", 20)
+            spec.assert_true(ok, "the rebound widget now carries a picture")
+            b = uidriver.get_body("/widgets")
+            n = uidriver.count_occurrences(b, "\"has_image\":true")
+            spec.assert_eq(n, 4, "all four icon widgets now have a picture")
+            spec.assert_eq(string.contains(b, "\"has_image\":false"), 0,
+                "no icon widget is left empty")
+        }
+    }
+    spec.run_summary(fw)
+}
