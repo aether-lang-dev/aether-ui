@@ -246,6 +246,7 @@ typedef struct {
     int text_wrap;        // WK_TEXT: multi-line wrapping label
     int text_anchor;      // WK_TEXT: 0=start 1=middle 2=end
     int text_truncate;    // WK_TEXT: EFFECTIVE ellipsis 0=none 2=middle 3=tail
+    int image_fill;       // WK_IMAGE: EFFECTIVE fill 0=original 3=stretch
 
     // Per-widget data (union over kind)
     union {
@@ -4628,6 +4629,30 @@ int aether_ui_image_has_content(int handle) {
     LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
     UINT kind = (st & SS_ICON) ? IMAGE_ICON : IMAGE_BITMAP;
     return SendMessageW(w->hwnd, STM_GETIMAGE, kind, 0) ? 1 : 0;
+}
+
+// A Win32 STATIC scales through one style bit: SS_REALSIZECONTROL stretches
+// the bitmap to the control (stretch), and without it the bitmap draws at its
+// natural size (original). Contain and cover would each need a StretchBlt into
+// a re-scaled bitmap on every WM_SIZE, which is not wired here, so they DEGRADE
+// TO ORIGINAL rather than to stretch: distortion is the exact thing a fill mode
+// exists to prevent, so silently distorting would be worse than not scaling.
+// get_fill reports what was applied, as truncate and overlay material do.
+void aether_ui_image_set_fill(int handle, int mode) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
+    int eff = (mode == 3) ? 3 : 0;
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    if (eff == 3) st |= SS_REALSIZECONTROL;
+    else          st &= ~SS_REALSIZECONTROL;
+    SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+    w->image_fill = eff;
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+int aether_ui_image_get_fill(int handle) {
+    Widget* w = widget_at(handle);
+    return (w && w->kind == WK_IMAGE) ? w->image_fill : 0;
 }
 
 void aether_ui_image_set_size(int handle, int width, int height) {

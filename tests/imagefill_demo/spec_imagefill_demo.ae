@@ -1,0 +1,54 @@
+// spec_imagefill_demo.ae: image_fill picks how a picture fills its box, and
+// the driver reports the mode that was actually applied (issue #16).
+//
+// The driver cannot see pixels, so what it pins down is that each mode
+// round-trips independently, that setting one image does not disturb its
+// neighbours, and that the DEFAULT is the same on every backend. That last
+// one is not padding: GtkPicture defaults to CONTAIN and NSImageView to
+// ProportionallyDown, so before this was stated explicitly the two backends
+// disagreed about what an untouched image does, and the driver reported
+// "contain" on Linux against "original" on macOS for the same program.
+//
+// Run via ci.sh Phase 5e6, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/imagefill_demo/bin/imagefill_demo &
+//   UI_SPEC=imagefill_demo/spec_imagefill_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "image fill modes over AetherUIDriver") {
+
+        spec.it("the picture actually loaded") callback {
+            b = uidriver.get_body("/widgets")
+            n = uidriver.count_occurrences(b, "\"has_image\":true")
+            spec.assert_eq(n, 4, "all four images carry a picture")
+        }
+
+        spec.it("each mode round-trips") callback {
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "\"fill\":\"original\"", "original")
+            spec.assert_contains(b, "\"fill\":\"contain\"", "contain")
+            spec.assert_contains(b, "\"fill\":\"cover\"", "cover")
+            spec.assert_contains(b, "\"fill\":\"stretch\"", "stretch")
+        }
+
+        spec.it("setting one image does not disturb the others") callback {
+            b = uidriver.get_body("/widgets")
+            // Exactly one of each: a backend that applied the last call to
+            // every image, or ignored three of them, would show four alike.
+            spec.assert_eq(uidriver.count_occurrences(b, "\"fill\":\"cover\""), 1,
+                "one cover")
+            spec.assert_eq(uidriver.count_occurrences(b, "\"fill\":\"stretch\""), 1,
+                "one stretch")
+            spec.assert_eq(uidriver.count_occurrences(b, "\"fill\":\"original\""), 1,
+                "one original")
+            spec.assert_eq(uidriver.count_occurrences(b, "\"fill\":\"contain\""), 1,
+                "one contain")
+        }
+    }
+    spec.run_summary(fw)
+}

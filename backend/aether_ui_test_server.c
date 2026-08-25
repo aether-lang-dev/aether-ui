@@ -358,8 +358,13 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
                       aether_ui_text_get_wrap(handle) ? "true" : "false",
                       an[a], tr[t]);
     } else if (strcmp(type, "image") == 0) {
-        n += snprintf(buf + n, bufsize - n, ",\"has_image\":%s",
-                      aether_ui_image_has_content(handle) ? "true" : "false");
+        static const char* fm[] = {"original", "contain", "cover", "stretch"};
+        int f = aether_ui_image_get_fill(handle);
+        if (f < 0 || f > 3) f = 0;
+        // fill is the EFFECTIVE mode: a backend that cannot do the one asked
+        // for reports the one it actually applied.
+        n += snprintf(buf + n, bufsize - n, ",\"has_image\":%s,\"fill\":\"%s\"",
+                      aether_ui_image_has_content(handle) ? "true" : "false", fm[f]);
     } else if (strcmp(type, "toggle") == 0) {
         n += snprintf(buf + n, bufsize - n, ",\"active\":%s",
                       h->toggle_active(handle) ? "true" : "false");

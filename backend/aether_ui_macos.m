@@ -3774,8 +3774,79 @@ void aether_ui_sheet_dismiss_impl(int handle) {
     }
 }
 
+// NSImageScaling covers original, contain and stretch, but has no COVER:
+// fill the box, keep the aspect ratio, crop whatever overflows. That is the
+// one a thumbnail grid actually wants, so it is drawn here rather than
+// declared unavailable.
+@interface AetherImageView : NSImageView
+@property (nonatomic) int fillMode;
+@end
+@implementation AetherImageView
+- (void)drawRect:(NSRect)dirty {
+    NSImage* img = [self image];
+    NSSize is = img ? [img size] : NSZeroSize;
+    if (self.fillMode != 2 || !img || is.width <= 0 || is.height <= 0) {
+        [super drawRect:dirty];
+        return;
+    }
+    NSRect b = [self bounds];
+    CGFloat sx = b.size.width / is.width, sy = b.size.height / is.height;
+    CGFloat sc = sx > sy ? sx : sy;               // MAX: cover, not contain
+    NSRect dst = NSMakeRect(
+        b.origin.x + (b.size.width  - is.width  * sc) * 0.5,
+        b.origin.y + (b.size.height - is.height * sc) * 0.5,
+        is.width * sc, is.height * sc);
+    [NSGraphicsContext saveGraphicsState];
+    [NSBezierPath clipRect:b];                    // crop the overflow
+    [img drawInRect:dst fromRect:NSZeroRect
+          operation:NSCompositingOperationSourceOver fraction:1.0];
+    [NSGraphicsContext restoreGraphicsState];
+}
+@end
+
+void aether_ui_image_set_fill(int handle, int mode) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSImageView class]]) return;
+    NSImageView* iv = (NSImageView*)v;
+    if ([iv isKindOfClass:[AetherImageView class]]) {
+        ((AetherImageView*)iv).fillMode = mode;
+    }
+    switch (mode) {
+        case 1:  [iv setImageScaling:NSImageScaleProportionallyUpOrDown]; break;
+        case 3:  [iv setImageScaling:NSImageScaleAxesIndependently];      break;
+        // cover paints in drawRect:, so the built-in scaling stays out of it.
+        case 2:  [iv setImageScaling:NSImageScaleNone];                   break;
+        default: [iv setImageScaling:NSImageScaleNone];                   break;
+    }
+    [iv setNeedsDisplay:YES];
+}
+
+int aether_ui_image_get_fill(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSImageView class]]) return 0;
+    if ([v isKindOfClass:[AetherImageView class]]) {
+        int m = ((AetherImageView*)v).fillMode;
+        if (m == 2) return 2;
+    }
+    switch ([(NSImageView*)v imageScaling]) {
+        case NSImageScaleProportionallyUpOrDown: return 1;
+        // AppKit's own default. It scales DOWN keeping aspect, which is
+        // contain, not natural size, so reporting "original" here would
+        // misdescribe what is on screen.
+        case NSImageScaleProportionallyDown:     return 1;
+        case NSImageScaleAxesIndependently:      return 3;
+        default:                                 return 0;
+    }
+}
+
 int aether_ui_image_create(const char* filepath) {
-    NSImageView* iv = [[NSImageView alloc] init];
+    AetherImageView* iv = [[AetherImageView alloc] init];
+    // CRITICAL: state the default rather than inheriting each toolkit's own.
+    // GtkPicture defaults to CONTAIN and NSImageView to ProportionallyDown;
+    // leaving them implicit had the two backends disagree about what an
+    // untouched image does. contain is the safe default: it never distorts
+    // and never overflows, which is the whole complaint fill modes answer.
+    [iv setImageScaling:NSImageScaleProportionallyUpOrDown];
     if (filepath && *filepath) {
         NSImage* img = [[NSImage alloc] initWithContentsOfFile:
             [NSString stringWithUTF8String:filepath]];
@@ -3788,7 +3859,8 @@ int aether_ui_image_create(const char* filepath) {
 // initWithData: uses the same ImageIO decoders as the file path — PNG /
 // JPEG / GIF / etc. NB written from Linux; verify on the Mac.
 int aether_ui_image_from_bytes(const char* data, int length) {
-    NSImageView* iv = [[NSImageView alloc] init];
+    AetherImageView* iv = [[AetherImageView alloc] init];
+    [iv setImageScaling:NSImageScaleProportionallyUpOrDown];
     if (data && length > 0) {
         NSData* d = [NSData dataWithBytes:data length:(NSUInteger)length];
         NSImage* img = [[NSImage alloc] initWithData:d];
@@ -3806,7 +3878,7 @@ static NSImage* aeui_icon_for_path(const char* path) {
 }
 
 int aether_ui_file_icon_create(const char* path) {
-    NSImageView* iv = [[NSImageView alloc] init];
+    AetherImageView* iv = [[AetherImageView alloc] init];
     NSImage* icon = aeui_icon_for_path(path);
     if (icon) [iv setImage:icon];
     return register_widget_typed((__bridge void*)iv, AUI_IMAGE);
