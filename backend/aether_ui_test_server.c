@@ -1016,11 +1016,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         int pos = snprintf(body, sizeof(body), "{\"count\":%d,\"overlays\":[", n);
         for (int i = 1; i <= n && pos < (int)sizeof(body) - 96; i++) {
             pos += snprintf(body + pos, sizeof(body) - pos,
-                "%s{\"handle\":%d,\"modal\":%d,\"live\":%d,\"exiting\":%d,\"material\":\"%s\"}",
+                "%s{\"handle\":%d,\"modal\":%d,\"live\":%d,\"exiting\":%d,"
+                "\"exit_played\":%d,\"material\":\"%s\"}",
                             i > 1 ? "," : "", i,
                             aether_ui_overlay_is_modal_impl(i),
                             aether_ui_overlay_is_live_impl(i),
                             aether_ui_overlay_is_exiting_impl(i),
+                            aether_ui_overlay_exit_played_impl(i),
                             aether_ui_overlay_material_effective_impl(i));
         }
         snprintf(body + pos, sizeof(body) - pos, "]}");

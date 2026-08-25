@@ -2824,6 +2824,7 @@ typedef struct {
     char* exit_kind;
     int exit_ms;
     int exiting;
+    int exit_played;   // sticky: an exit tween STARTED (survives the entry's death)
     // Scrim material (overlay_material). GTK4 has no backdrop-filter, so "blur"
     // degrades to "tint" (a lighter, higher-contrast scrim). "dim" = default.
     char* material;   // effective: "dim" | "tint" (never "blur" on GTK4)
@@ -2993,6 +2994,7 @@ static void overlay_do_close(OverlayEntry* e) {
         gtk_widget_add_css_class(e->content, out);
         if (e->scrim) gtk_widget_add_css_class(e->scrim, "aui-tr-fade-out");
         e->exiting = 1;
+        e->exit_played = 1;
         g_timeout_add(e->exit_ms > 0 ? e->exit_ms : 180, overlay_exit_done, e);
         return;
     }
@@ -3031,6 +3033,9 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
     e->exit_kind = NULL;
     e->exit_ms = 0;
     e->exiting = 0;
+    // CRITICAL: this entry comes from realloc'd memory with no memset, so
+    // every field has to be initialised here by hand or it reads garbage.
+    e->exit_played = 0;
     e->material = NULL;   // "dim" until overlay_material sets it
 
     if (modal) {
@@ -3161,6 +3166,11 @@ void aether_ui_overlay_set_transition_impl(int overlay_handle,
 int aether_ui_overlay_is_exiting_impl(int overlay_handle) {
     if (overlay_handle < 1 || overlay_handle > overlay_count) return 0;
     return overlays[overlay_handle - 1].exiting;
+}
+
+int aether_ui_overlay_exit_played_impl(int overlay_handle) {
+    if (overlay_handle < 1 || overlay_handle > overlay_count) return 0;
+    return overlays[overlay_handle - 1].exit_played;
 }
 
 // ---------------------------------------------------------------------------

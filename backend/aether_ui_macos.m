@@ -2952,6 +2952,7 @@ typedef struct {
     int modal;
     int live;
     int exiting;    // 1 while the exit tween plays (before live flips to 0)
+    int exit_played;   // sticky: an exit tween STARTED (survives the entry's death)
     int trans_ms;   // per-entry transition duration; 0 = no tween (instant)
     char* trans_kind;  // "fade"/"slide-up"/"slide-down"/"scale"; NULL = fade
     // Scrim material (overlay_material). macOS has a REAL frosted material —
@@ -3104,6 +3105,7 @@ void aether_ui_overlay_close_impl(int overlay_handle) {
     // (Phase 5h2). AETHER_UI_NO_ANIMATION and untransitioned entries skip it.
     if (e->trans_ms > 0 && e->content && !aeui_animations_off()) {
         e->exiting = 1;
+        e->exit_played = 1;
         int dur_ms = e->trans_ms;
         int cap = overlay_handle;
         NSView* content = e->content;
@@ -3175,6 +3177,11 @@ void aether_ui_overlay_set_transition_impl(int overlay_handle,
 int aether_ui_overlay_is_exiting_impl(int overlay_handle) {
     OverlayEntry* e = overlay_at(overlay_handle);
     return e ? e->exiting : 0;
+}
+
+int aether_ui_overlay_exit_played_impl(int overlay_handle) {
+    OverlayEntry* e = overlay_at(overlay_handle);
+    return e ? e->exit_played : 0;
 }
 
 // Scrim material. macOS has a REAL frosted material: "blur" installs an

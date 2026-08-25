@@ -3798,6 +3798,7 @@ typedef struct {
     int tr_x, tr_y, tr_w, tr_h;
     int trans_ms;
     int exiting;
+    int exit_played;   // sticky: an exit tween STARTED (survives the entry's death)
     UINT_PTR fade_timer;  // system-assigned WM_TIMER id while fading (0 = none)
     DWORD fade_start;      // GetTickCount at fade start
     // Scrim material (overlay_material). win32 can't blur behind a child HWND,
@@ -4067,6 +4068,7 @@ void aether_ui_overlay_close_impl(int overlay_handle) {
         w32_make_layered(e->content);
         SetLayeredWindowAttributes(e->content, 0, 255, LWA_ALPHA);
         e->exiting = 1;
+        e->exit_played = 1;
         e->fade_start = GetTickCount();
         // ~60fps steps; the proc computes exact alpha from elapsed time.
         e->fade_timer = SetTimer(NULL, 0, 16, w32_overlay_fade_proc);
@@ -4109,6 +4111,11 @@ void aether_ui_overlay_set_transition_impl(int overlay_handle,
 int aether_ui_overlay_is_exiting_impl(int overlay_handle) {
     Win32OverlayEntry* e = w32_overlay_at(overlay_handle);
     return e ? e->exiting : 0;
+}
+
+int aether_ui_overlay_exit_played_impl(int overlay_handle) {
+    Win32OverlayEntry* e = w32_overlay_at(overlay_handle);
+    return e ? e->exit_played : 0;
 }
 
 // Scrim material. win32 can't blur behind a child HWND, so "blur" degrades to
