@@ -39,13 +39,53 @@ exports (
 import std.string
 import std.map
 import std.math
-import ui
+// NO `import ui`: this module used to consume ui's canvas_* wrappers, which
+// made ui -> vg.backend.gtk -> ui a circular import the moment ui itself
+// wanted to render (the chrome-drawn faces, phase 2). The wrappers are
+// pure pass-throughs, so the backend speaks the shared C canvas ABI
+// directly — same commands, no cycle. Misnamed "gtk" for history: these
+// impls exist on every backend.
 import vg.raster.rasterize
 import vg.backend.dispatch
 import vg.grammar.utils
 import std.floatarr
 
 extern malloc(size: int) -> ptr
+extern aether_ui_canvas_begin_path_impl(canvas_id: int)
+extern aether_ui_canvas_move_to_impl(canvas_id: int, x: float, y: float)
+extern aether_ui_canvas_line_to_impl(canvas_id: int, x: float, y: float)
+extern aether_ui_canvas_arc_impl(canvas_id: int, cx: float, cy: float,
+                                 radius: float, start_angle: float, end_angle: float)
+extern aether_ui_canvas_close_path_impl(canvas_id: int)
+extern aether_ui_canvas_fill_impl(canvas_id: int, r: float, g: float, b: float, a: float, even_odd: int)
+extern aether_ui_canvas_stroke_impl(canvas_id: int, r: float, g: float, b: float,
+                               a: float, line_width: float, cap: int, join: int)
+extern aether_ui_canvas_fill_rect_impl(canvas_id: int, x: float, y: float,
+                                  w: float, h: float,
+                                  r: float, g: float, b: float, a: float)
+extern aether_ui_canvas_fill_text_impl(canvas_id: int, text: string,
+                                       x: float, y: float, font_size: float,
+                                       font_flags: int, font_family: string,
+                                       r: float, g: float, b: float, a: float)
+extern aether_ui_canvas_stroke_text_impl(canvas_id: int, text: string,
+                                         x: float, y: float, font_size: float,
+                                         line_width: float, font_flags: int,
+                                         font_family: string,
+                                         r: float, g: float, b: float, a: float)
+extern aether_ui_canvas_draw_image_impl(canvas_id: int, x: float, y: float,
+                                        iw: int, ih: int,
+                                        rgba: string, byte_len: int)
+extern aether_ui_canvas_fill_linear_gradient_impl(canvas_id: int,
+        x1: float, y1: float, x2: float, y2: float,
+        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
+        cap: int, join: int)
+extern aether_ui_canvas_fill_radial_gradient_impl(canvas_id: int,
+        cx: float, cy: float, radius: float, fx: float, fy: float,
+        n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
+        cap: int, join: int, rx: float, ry: float, rot_deg: float)
+extern aether_ui_canvas_group_begin_impl(canvas_id: int)
+extern aether_ui_canvas_group_end_impl(canvas_id: int, alpha: float)
+extern aether_ui_canvas_redraw_impl(canvas_id: int)
 
 // ─── Backend handle ──────────────────────────────────────────────
 
@@ -55,7 +95,7 @@ struct GtkBackend {
 }
 
 // Create an adapter backend around an existing aether_ui canvas id.
-// Callers make the canvas via ui.canvas_create(w, h) and pass
+// Callers make the canvas via aether_ui_canvas_create_impl(w, h) and pass
 // the returned id here. Returns a *dispatch.Dispatch the
 // shape factories dispatch through — the GtkBackend handle is the
 // `be` threaded into the op-switch closure.
@@ -80,12 +120,12 @@ gtk_backend_new(canvas_id: int) -> ptr {
 // alpha at group_end (cairo push/pop group — overlaps don't double-darken).
 canvas_group_begin_op(p: ptr) -> ptr {
     b = p as *GtkBackend
-    ui.canvas_group_begin(b.canvas_id)
+    aether_ui_canvas_group_begin_impl(b.canvas_id)
     return fresh_handle()
 }
 canvas_group_end_op(p: ptr, opts: ptr) -> ptr {
     b = p as *GtkBackend
-    ui.canvas_group_end(b.canvas_id, opt_f(opts, "alpha", 1.0))
+    aether_ui_canvas_group_end_impl(b.canvas_id, opt_f(opts, "alpha", 1.0))
     return fresh_handle()
 }
 
@@ -98,7 +138,7 @@ gtk_backend_canvas_id(p: ptr) -> int {
 
 gtk_backend_redraw(p: ptr) {
     b = dispatch.backend_self(p) as *GtkBackend
-    ui.canvas_redraw(b.canvas_id)
+    aether_ui_canvas_redraw_impl(b.canvas_id)
 }
 
 // ─── opts helpers ────────────────────────────────────────────────
@@ -193,17 +233,17 @@ canvas_circle(p: ptr, opts: ptr) -> ptr {
 
     // Fill: build the circle path, fill it.
     if string.length(fill) > 0 {
-        ui.canvas_begin_path(cid)
-        ui.canvas_arc(cid, cx, cy, r, 0.0, two_pi)
+        aether_ui_canvas_begin_path_impl(cid)
+        aether_ui_canvas_arc_impl(cid, cx, cy, r, 0.0, two_pi)
         // A lone circle has no self-overlap, so the rule cannot matter; pass
         // nonzero (the SVG default).
-        ui.canvas_fill(cid, color_r01(fill), color_g01(fill),
+        aether_ui_canvas_fill_impl(cid, color_r01(fill), color_g01(fill),
                                    color_b01(fill), color_a01(fill), 0)
     }
     // Stroke: rebuild the path, stroke it.
     if string.length(stroke) > 0 {
-        ui.canvas_begin_path(cid)
-        ui.canvas_arc(cid, cx, cy, r, 0.0, two_pi)
+        aether_ui_canvas_begin_path_impl(cid)
+        aether_ui_canvas_arc_impl(cid, cx, cy, r, 0.0, two_pi)
         stroke_path(cid, stroke, sw, opts)
     }
     return fresh_handle()
@@ -227,17 +267,17 @@ canvas_rectangle(p: ptr, opts: ptr) -> ptr {
     sw = opt_f(opts, "strokeWidth", 1.0)
 
     if string.length(fill) > 0 {
-        ui.canvas_fill_rect(cid, x, y, w, h,
+        aether_ui_canvas_fill_rect_impl(cid, x, y, w, h,
             color_r01(fill), color_g01(fill), color_b01(fill), color_a01(fill))
     }
     if string.length(stroke) > 0 {
         // Outline: a closed 4-segment polyline.
-        ui.canvas_begin_path(cid)
-        ui.canvas_move_to(cid, x, y)
-        ui.canvas_line_to(cid, x2, y)
-        ui.canvas_line_to(cid, x2, y2)
-        ui.canvas_line_to(cid, x, y2)
-        ui.canvas_close_path(cid)
+        aether_ui_canvas_begin_path_impl(cid)
+        aether_ui_canvas_move_to_impl(cid, x, y)
+        aether_ui_canvas_line_to_impl(cid, x2, y)
+        aether_ui_canvas_line_to_impl(cid, x2, y2)
+        aether_ui_canvas_line_to_impl(cid, x, y2)
+        aether_ui_canvas_close_path_impl(cid)
         stroke_path(cid, stroke, sw, opts)
     }
     return fresh_handle()
@@ -257,9 +297,9 @@ canvas_line(p: ptr, opts: ptr) -> ptr {
     sw = opt_f(opts, "strokeWidth", 1.0)
 
     if string.length(stroke) > 0 {
-        ui.canvas_begin_path(cid)
-        ui.canvas_move_to(cid, x1, y1)
-        ui.canvas_line_to(cid, x2, y2)
+        aether_ui_canvas_begin_path_impl(cid)
+        aether_ui_canvas_move_to_impl(cid, x1, y1)
+        aether_ui_canvas_line_to_impl(cid, x2, y2)
         stroke_path(cid, stroke, sw, opts)
     }
     return fresh_handle()
@@ -304,7 +344,7 @@ canvas_path(p: ptr, opts: ptr) -> ptr {
     } else {
         if string.length(fill) > 0 {
             replay_path(cid, pts)
-            ui.canvas_fill(cid, color_r01(fill), color_g01(fill),
+            aether_ui_canvas_fill_impl(cid, color_r01(fill), color_g01(fill),
                                        color_b01(fill), color_a01(fill),
                                        fillrule_evenodd(opts))
         }
@@ -377,13 +417,13 @@ apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_widt
         rx = opt_f(opts, string.concat(prefix, "RX"), 0.0)
         ry = opt_f(opts, string.concat(prefix, "RY"), 0.0)
         rot = opt_f(opts, string.concat(prefix, "ROT"), 0.0)
-        ui.canvas_fill_radial_gradient(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend, cap, join, rx, ry, rot)
+        aether_ui_canvas_fill_radial_gradient_impl(cid, cx, cy, r, fx, fy, valid, offsets, rgba, line_width, extend, cap, join, rx, ry, rot)
     } else {
         x1 = opt_f(opts, string.concat(prefix, "X1"), 0.0)
         y1 = opt_f(opts, string.concat(prefix, "Y1"), 0.0)
         x2 = opt_f(opts, string.concat(prefix, "X2"), 0.0)
         y2 = opt_f(opts, string.concat(prefix, "Y2"), 0.0)
-        ui.canvas_fill_linear_gradient(cid, x1, y1, x2, y2, valid, offsets, rgba, line_width, extend, cap, join)
+        aether_ui_canvas_fill_linear_gradient_impl(cid, x1, y1, x2, y2, valid, offsets, rgba, line_width, extend, cap, join)
     }
 }
 
@@ -420,7 +460,7 @@ linejoin_code(opts: ptr) -> int {
 // Stroke the current path with the resolved colour + width, honouring the
 // stroke-linecap/linejoin opts (SVG defaults butt/miter).
 stroke_path(cid: int, stroke: string, sw: float, opts: ptr) {
-    ui.canvas_stroke_cj(cid, color_r01(stroke), color_g01(stroke),
+    aether_ui_canvas_stroke_impl(cid, color_r01(stroke), color_g01(stroke),
         color_b01(stroke), color_a01(stroke), sw,
         linecap_code(opts), linejoin_code(opts))
 }
@@ -430,7 +470,7 @@ stroke_path(cid: int, stroke: string, sw: float, opts: ptr) {
 // sub-path is a move_to; subsequent points are line_to; "M" forces
 // the next point to be a move_to; "Z" closes the sub-path.
 replay_path(cid: int, pts: string) {
-    ui.canvas_begin_path(cid)
+    aether_ui_canvas_begin_path_impl(cid)
     toks = string_split(pts, " ")
     n = string_array_size(toks)
     pen_down = 0       // 0 = next coord is a move_to
@@ -447,7 +487,7 @@ replay_path(cid: int, pts: string) {
             continue
         }
         if string.equals(tok, "Z") == 1 {
-            ui.canvas_close_path(cid)
+            aether_ui_canvas_close_path_impl(cid)
             pen_down = 0
             i = i + 1
             continue
@@ -462,10 +502,10 @@ replay_path(cid: int, pts: string) {
             if ex == "" {
                 if ey == "" {
                     if pen_down == 0 {
-                        ui.canvas_move_to(cid, x, y)
+                        aether_ui_canvas_move_to_impl(cid, x, y)
                         pen_down = 1
                     } else {
-                        ui.canvas_line_to(cid, x, y)
+                        aether_ui_canvas_line_to_impl(cid, x, y)
                     }
                 }
             }
@@ -502,7 +542,7 @@ canvas_text(p: ptr, opts: ptr) -> ptr {
     if opt_i(opts, "italic", 0) == 1    { fflags = fflags + 4 }
 
     ffam = opt_s(opts, "fontFamily")
-    ui.canvas_fill_text(cid, text, x, y, size, fflags, ffam,
+    aether_ui_canvas_fill_text_impl(cid, text, x, y, size, fflags, ffam,
         color_r01(color), color_g01(color), color_b01(color), color_a01(color))
 
     // Stroked text (SVG stroke on <text>): paint the outline over the fill.
@@ -510,7 +550,7 @@ canvas_text(p: ptr, opts: ptr) -> ptr {
     if sw > 0.0 {
         sc = opt_s(opts, "strokeColor")
         if string.length(sc) > 0 {
-            ui.canvas_stroke_text(cid, text, x, y, size, sw, fflags, ffam,
+            aether_ui_canvas_stroke_text_impl(cid, text, x, y, size, sw, fflags, ffam,
                 color_r01(sc), color_g01(sc), color_b01(sc), color_a01(sc))
         }
     }
@@ -551,7 +591,7 @@ canvas_raster(p: ptr, opts: ptr) -> ptr {
         return fresh_handle()
     }
 
-    ui.canvas_draw_image(cid, x, y, w, h, pixels, n)
+    aether_ui_canvas_draw_image_impl(cid, x, y, w, h, pixels, n)
     return fresh_handle()
 }
 
