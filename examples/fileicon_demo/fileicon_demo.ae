@@ -18,6 +18,7 @@ import std.os (os_getenv)
 
 main() {
     swapper = 0
+    rebound = 0
 
     window("file icons", 420, 340) {
         vstack(8) {
@@ -70,6 +71,18 @@ main() {
                 untinted = file_icon("notes.txt")
                 image_size(untinted, 32, 32)
                 text("same icon, no tint")
+            }
+            hstack(8) {
+                // A tinted icon that gets REBOUND, which is the recycled-row
+                // case: the tint must survive the new path, or the widget
+                // reports a colour it has stopped showing.
+                rebound = file_icon("notes.txt")
+                image_size(rebound, 32, 32)
+                image_tint(rebound, 0.2, 0.5, 1.0)
+                text("tinted, then rebound")
+            }
+            _rb = btn("Rebind the tinted icon") callback {
+                set_file_icon(rebound, "report.pdf")
             }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }

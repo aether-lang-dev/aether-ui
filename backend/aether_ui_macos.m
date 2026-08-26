@@ -3965,12 +3965,24 @@ void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) 
     if (!on) {
         [iv setContentTintColor:nil];
         [[iv image] setTemplate:NO];
+        [iv setNeedsDisplay:YES];
         return;
     }
     // contentTintColor only reaches a TEMPLATE image: AppKit draws the alpha
     // shape in the tint and throws the source colours away. Marking it here
     // is what makes the tint visible rather than silently ignored.
-    [[iv image] setTemplate:YES];
+    //
+    // CRITICAL: mark a COPY. NSWorkspace hands out cached, SHARED NSImages
+    // for a given file type, so setTemplate:YES on the object it returned
+    // would turn that icon into a template everywhere else in the app too:
+    // tint one row and every other row showing the same file type changes
+    // with it. A private copy keeps the effect where it was asked for.
+    NSImage* img = [iv image];
+    if (img && ![img isTemplate]) {
+        NSImage* own = [img copy];
+        if (own) { [iv setImage:own]; img = own; }
+    }
+    [img setTemplate:YES];
     [iv setContentTintColor:[NSColor colorWithRed:r green:g blue:b alpha:1.0]];
     [iv setNeedsDisplay:YES];
 }
@@ -4071,7 +4083,18 @@ int aether_ui_file_icon_create(const char* path) {
 void aether_ui_file_icon_set(int handle, const char* path) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || ![v isKindOfClass:[NSImageView class]]) return;
-    [(NSImageView*)v setImage:aeui_icon_for_path(path)];
+    NSImageView* iv = (NSImageView*)v;
+    NSImage* img = aeui_icon_for_path(path);
+    // A tint lives on the VIEW while the template flag lives on the IMAGE, so
+    // a rebind used to leave the view still tinted and the new image not a
+    // template: get_tint reported a colour the widget had stopped showing.
+    // That is exactly the recycled-row case this function exists for.
+    if (img && [iv contentTintColor]) {
+        NSImage* own = [img copy];        // never mark the shared cache
+        if (own) { [own setTemplate:YES]; img = own; }
+    }
+    [iv setImage:img];
+    [iv setNeedsDisplay:YES];
 }
 
 int aether_ui_image_has_content(int handle) {
