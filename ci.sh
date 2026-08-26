@@ -454,6 +454,44 @@ else
 fi
 
 echo
+echo "=== Phase 1d: Win32 backend cross-compile check ==="
+# The Win32 backend is the one nobody here can run: there is no Windows leg in
+# CI, so its sources were edited and shipped WITHOUT EVER BEING COMPILED. Eight
+# commits touched aether_ui_win32.c in two days that way. A mingw-w64
+# cross-compiler checks them for the price of an apt package and about a
+# second, which is not a substitute for running the thing, but it is the
+# difference between "mirrors the other backends" and "is known to build".
+#
+# Syntax-only and at the project's own warning level, not -Wall: this gate
+# exists to catch code that cannot compile, and widening it to style would
+# fail on pre-existing warnings that have nothing to do with the change under
+# test.
+W32_CC=""
+for cc in x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
+    command -v "$cc" > /dev/null 2>&1 && { W32_CC="$cc"; break; }
+done
+if [ -n "$W32_CC" ]; then
+    w32_fail=0
+    for src in backend/aether_ui_win32.c \
+               backend/aether_ui_test_server.c \
+               backend/aether_ui_system_extras.c; do
+        if "$W32_CC" -fsyntax-only -Ibackend "$ROOT/$src" \
+                > "/tmp/ci_w32_$(basename "$src").log" 2>&1; then
+            echo "  OK   $(basename "$src")"
+        else
+            echo "  FAIL $(basename "$src")"
+            grep ": error:" "/tmp/ci_w32_$(basename "$src").log" | head -10 | sed 's/^/       /'
+            w32_fail=1
+        fi
+    done
+    [ "$w32_fail" -eq 0 ] || FAIL=$((FAIL + 1))
+else
+    # Say so rather than passing quietly: a skipped gate that looks like a
+    # green one is how the Win32 sources drifted in the first place.
+    echo "  SKIP no mingw-w64 cross-compiler (install gcc-mingw-w64-x86-64 to enable)"
+fi
+
+echo
 echo "=== Phase 2: smoke-launch non-driver examples ==="
 for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))
