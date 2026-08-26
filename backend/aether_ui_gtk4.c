@@ -5490,6 +5490,47 @@ static gboolean on_row_drop(GtkDropTarget* target, const GValue* value,
     return TRUE;
 }
 
+// Outbound file drag. The payload is stashed on the widget so the prepare
+// callback and the driver read the same string, which is what keeps the
+// headless view of it honest.
+static GdkContentProvider* on_file_drag_prepare(GtkDragSource* src, double x,
+                                                double y, gpointer data) {
+    (void)src; (void)x; (void)y;
+    const char* path = (const char*)data;
+    if (!path || !*path) return NULL;
+    GFile* f = g_file_new_for_path(path);
+    GdkContentProvider* p = gdk_content_provider_new_typed(G_TYPE_FILE, f);
+    g_object_unref(f);
+    return p;
+}
+
+void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    if (!path || !*path) {
+        g_object_set_data(G_OBJECT(w), "aeui-dragfile", NULL);
+        return;
+    }
+    char* owned = g_strdup(path);
+    g_object_set_data_full(G_OBJECT(w), "aeui-dragfile", owned, g_free);
+    // Arm the source once; re-arming would stack controllers on a widget
+    // whose payload is simply being updated.
+    if (!g_object_get_data(G_OBJECT(w), "aeui-dragarmed")) {
+        GtkDragSource* src = gtk_drag_source_new();
+        gtk_drag_source_set_actions(src, GDK_ACTION_COPY);
+        g_signal_connect(src, "prepare", G_CALLBACK(on_file_drag_prepare), owned);
+        gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(src));
+        g_object_set_data(G_OBJECT(w), "aeui-dragarmed", GINT_TO_POINTER(1));
+    }
+}
+
+const char* aether_ui_widget_drag_payload_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return "";
+    const char* p = (const char*)g_object_get_data(G_OBJECT(w), "aeui-dragfile");
+    return p ? p : "";
+}
+
 void aether_ui_row_drag_reorder_impl(int row_handle, int index,
                                      void* on_drop_closure) {
     GtkWidget* row = aether_ui_get_widget(row_handle);

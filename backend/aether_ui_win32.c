@@ -2141,6 +2141,32 @@ static AeClosure* w32_window_key_closure = NULL;
 // WM_DROPFILES arm in the window proc lands with the real key path.
 static AeClosure* w32_file_drop_closure = NULL;
 
+// Outbound file drag. Registered and readable by the driver, but not yet
+// wired to a real drag: starting one on win32 means OLE DoDragDrop with an
+// IDataObject and an IDropSource, which is a COM implementation rather than a
+// style bit, and unlike SHBrowseForFolderW there is no non-COM equivalent to
+// reach for. Recorded here so the payload is at least a single source of
+// truth when that lands.
+static char** w32_drag_paths = NULL;
+static int w32_drag_paths_len = 0;
+
+void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
+    if (handle < 1) return;
+    if (handle > w32_drag_paths_len) {
+        int want = handle + 16;
+        w32_drag_paths = (char**)realloc(w32_drag_paths, sizeof(char*) * want);
+        for (int i = w32_drag_paths_len; i < want; i++) w32_drag_paths[i] = NULL;
+        w32_drag_paths_len = want;
+    }
+    free(w32_drag_paths[handle - 1]);
+    w32_drag_paths[handle - 1] = (path && *path) ? _strdup(path) : NULL;
+}
+
+const char* aether_ui_widget_drag_payload_impl(int handle) {
+    if (handle < 1 || handle > w32_drag_paths_len) return "";
+    return w32_drag_paths[handle - 1] ? w32_drag_paths[handle - 1] : "";
+}
+
 void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
     w32_file_drop_closure = (AeClosure*)boxed_closure;
     // Window 1 is the primary in the multi-window registry. A handler set

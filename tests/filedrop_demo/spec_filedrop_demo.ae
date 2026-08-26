@@ -48,6 +48,24 @@ main() {
                 "no percent-encoding leaked into the app")
             spec.assert_contains(b, "drops: 2", "two drops so far")
         }
+
+        spec.it("a widget can be a drag SOURCE, and only if asked") callback {
+            // A real drag cannot be performed on a machine with no seat, so
+            // what is checkable is the registration: which widget would hand
+            // over which file. The control matters as much as the subject —
+            // if every widget reported a payload the field would prove
+            // nothing about draggable() having been called.
+            src = uidriver.widget_id_by_text("drag me to another app")
+            spec.assert_gt(src, 0, "the drag source is there")
+            bs = uidriver.get_body("/widget/${src}")
+            spec.assert_contains(bs, "\"drag\":\"/tmp/dragged.txt\"",
+                "it carries the file it was given")
+
+            plain = uidriver.widget_id_by_text("this one is not draggable")
+            bp = uidriver.get_body("/widget/${plain}")
+            spec.assert_eq(string.contains(bp, "\"drag\""), 0,
+                "and a widget nobody made draggable carries nothing")
+        }
     }
     spec.run_summary(fw)
 }
