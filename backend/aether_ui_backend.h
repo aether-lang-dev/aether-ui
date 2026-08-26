@@ -343,6 +343,17 @@ int aether_ui_image_has_content(int handle);
 // cover degrade to original there (never to stretch, since distortion is the
 // thing a fill mode exists to avoid) and the getter says so.
 void aether_ui_image_set_fill(int handle, int mode);
+// Recolour a TEMPLATE or SYMBOLIC image, the way a toolbar tints its icons.
+// Only meaningful for images whose shape carries the meaning and whose colour
+// does not: a photograph has nothing to tint. `on` 0 clears it.
+//   macOS  NSImageView contentTintColor over a template image
+//   GTK4   the CSS colour a symbolic GIcon paints itself with
+//   win32  no native equivalent; recorded and reported as not applied
+void aether_ui_image_set_tint(int handle, int on, double r, double g, double b);
+// The tint actually APPLIED, packed 0xRRGGBB with bit 24 set, or -1 for none.
+// A backend that cannot tint reports -1 even after being asked, so a spec can
+// tell "tinted" from "asked, ignored".
+int aether_ui_image_get_tint(int handle);
 int aether_ui_image_get_fill(int handle);
 
 // Menus (Group 5b) — native menu bars and context menus.

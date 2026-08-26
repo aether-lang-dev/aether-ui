@@ -13,7 +13,7 @@
 
 import ui
 import ui (window, vstack, hstack, text, btn, divider, file_icon,
-    set_file_icon, image_size, enable_test_server)
+    set_file_icon, image_size, image_tint, enable_test_server)
 import std.os (os_getenv)
 
 main() {
@@ -54,6 +54,22 @@ main() {
             }
             _sw = btn("Show a .txt here") callback {
                 set_file_icon(swapper, "readme.txt")
+            }
+            divider()
+
+            // Tinting only means something for a template or symbolic image,
+            // where the shape carries the meaning and the colour does not. A
+            // file icon is exactly that; a photograph has nothing to tint.
+            hstack(8) {
+                tinted = file_icon("notes.txt")
+                image_size(tinted, 32, 32)
+                image_tint(tinted, 0.2, 0.5, 1.0)
+                text("tinted blue")
+            }
+            hstack(8) {
+                untinted = file_icon("notes.txt")
+                image_size(untinted, 32, 32)
+                text("same icon, no tint")
             }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }

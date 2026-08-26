@@ -4701,6 +4701,19 @@ int aether_ui_image_has_content(int handle) {
 // TO ORIGINAL rather than to stretch: distortion is the exact thing a fill mode
 // exists to prevent, so silently distorting would be worse than not scaling.
 // get_fill reports what was applied, as truncate and overlay material do.
+// No native tint. A STATIC draws the bitmap or icon it was handed; recolouring
+// one means compositing a new bitmap through GDI+ on every repaint, which is a
+// different feature from a style bit. get_tint therefore reports -1 even after
+// a set, so a caller can see it was not applied rather than assume it was.
+void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) {
+    (void)handle; (void)on; (void)r; (void)g; (void)b;
+}
+
+int aether_ui_image_get_tint(int handle) {
+    (void)handle;
+    return -1;
+}
+
 void aether_ui_image_set_fill(int handle, int mode) {
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_IMAGE || !w->hwnd) return;

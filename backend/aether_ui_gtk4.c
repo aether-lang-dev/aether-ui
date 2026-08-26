@@ -3922,6 +3922,35 @@ int aether_ui_image_create(const char* filepath) {
     return aether_ui_register_widget(img);
 }
 
+void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    // A symbolic GIcon paints itself in the widget's CSS colour, which is
+    // exactly a tint. A GtkPicture holds a texture and has no such notion,
+    // so tinting one is not expressible and is reported as not applied.
+    if (!GTK_IS_IMAGE(w)) return;
+    if (!on) {
+        g_object_set_data(G_OBJECT(w), "aeui-img-tint", NULL);
+        aether_ui_apply_css(handle, w, "color: unset;");
+        return;
+    }
+    char prop[128];
+    snprintf(prop, sizeof(prop), "color: rgb(%d,%d,%d);",
+             (int)(r * 255), (int)(g * 255), (int)(b * 255));
+    aether_ui_apply_css(handle, w, prop);
+    g_object_set_data(G_OBJECT(w), "aeui-img-tint",
+        GINT_TO_POINTER((((int)(r * 255) & 255) << 16) |
+                        (((int)(g * 255) & 255) << 8) |
+                        ((int)(b * 255) & 255) | 0x1000000));
+}
+
+int aether_ui_image_get_tint(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_IMAGE(w)) return -1;
+    int v = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-img-tint"));
+    return (v & 0x1000000) ? v : -1;
+}
+
 void aether_ui_image_set_fill(int handle, int mode) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_PICTURE(w)) return;
