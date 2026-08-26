@@ -2183,8 +2183,14 @@ static AeClosure* w32_file_drop_closure = NULL;
 static char** w32_drag_paths = NULL;
 static int w32_drag_paths_len = 0;
 
-// The path this drag carries, set immediately before DoDragDrop.
-static const char* w32_drag_active_path = NULL;
+// The path this drag carries, COPIED for the duration rather than pointed at.
+//
+// DoDragDrop runs its own message loop, so app code can execute while a drag
+// is in flight: a timer callback calling draggable(handle, other) frees the
+// registry's string, and a pointer into it would dangle inside GetData. One
+// copy avoids the whole question. MAX_PATH*4 covers a UTF-8 path comfortably.
+static char w32_drag_active_path[MAX_PATH * 4];
+static int  w32_drag_active = 0;
 
 // --- IDropSource ---------------------------------------------------------
 static HRESULT STDMETHODCALLTYPE w32_ds_QueryInterface(IDropSource* self,
@@ -2268,7 +2274,7 @@ static HRESULT STDMETHODCALLTYPE w32_do_GetData(IDataObject* self,
     if (fmt->cfFormat != CF_HDROP || !(fmt->tymed & TYMED_HGLOBAL)) {
         return DV_E_FORMATETC;
     }
-    HGLOBAL mem = w32_hdrop_for(w32_drag_active_path);
+    HGLOBAL mem = w32_drag_active ? w32_hdrop_for(w32_drag_active_path) : NULL;
     if (!mem) return E_OUTOFMEMORY;
     memset(med, 0, sizeof(*med));
     med->tymed = TYMED_HGLOBAL;
@@ -2363,13 +2369,15 @@ static LRESULT CALLBACK w32_drag_src_proc(HWND hwnd, UINT msg, WPARAM wp,
         const char* path = aether_ui_widget_drag_payload_impl(handle);
         if (path && *path) {
             pressed_handle = 0;   // one drag per press
-            w32_drag_active_path = path;
+            snprintf(w32_drag_active_path, sizeof(w32_drag_active_path),
+                     "%s", path);
+            w32_drag_active = 1;
             DWORD effect = 0;
             // Synchronous: returns on drop or cancel, which is what makes the
             // static singletons above safe.
             DoDragDrop(&w32_data_object, &w32_drop_source,
                        DROPEFFECT_COPY, &effect);
-            w32_drag_active_path = NULL;
+            w32_drag_active = 0;
             return 0;
         }
     }
@@ -2457,11 +2465,33 @@ void aether_ui_shortcut_chord_impl(const char* first_combo,
 
 // Feed a combo into the chord machine. Returns 1 if consumed (armed a prefix
 // or completed a chord).
+// Combo comparison is CASE-INSENSITIVE.
+//
+// This backend matches registered combos verbatim, which was fine while the
+// only producer was the driver route sending back exactly what the app
+// registered. A real keypress is a second producer, and it has to invent a
+// spelling: an app writes shortcut("Ctrl+Space") while the translation emits
+// "Ctrl+space" from the key-name table, and a strcmp would never fire.
+//
+// GTK4 and macOS both normalise before comparing (aeui_normalize_combo,
+// combo_normalize); this is the same idea at the comparison instead of at the
+// registration, so nothing already stored has to change form.
+static int w32_combo_eq(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    for (; *a && *b; a++, b++) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+        if (ca != cb) return 0;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
 static int w32_chord_feed(const char* combo) {
     if (w32_chord_pending) {
         for (int i = 0; i < w32_chord_count; i++) {
-            if (strcmp(w32_chords[i].first, w32_chord_pending) == 0 &&
-                strcmp(w32_chords[i].second, combo) == 0) {
+            if (w32_combo_eq(w32_chords[i].first, w32_chord_pending) &&
+                w32_combo_eq(w32_chords[i].second, combo)) {
                 AeClosure* c = w32_chords[i].closure;
                 free(w32_chord_pending); w32_chord_pending = NULL;
                 invoke_closure(c);
@@ -2471,7 +2501,7 @@ static int w32_chord_feed(const char* combo) {
         free(w32_chord_pending); w32_chord_pending = NULL;  // cancel; fall through
     }
     for (int i = 0; i < w32_chord_count; i++) {
-        if (strcmp(w32_chords[i].first, combo) == 0) {
+        if (w32_combo_eq(w32_chords[i].first, combo)) {
             w32_chord_pending = _strdup(combo);
             return 1;
         }
@@ -2563,7 +2593,7 @@ static int aeui_win32_fire_shortcut(const char* combo) {
     if (w32_chord_feed(combo)) return 1;
     int fired = 0;
     for (int i = 0; i < w32_shortcut_count; i++) {
-        if (strcmp(w32_shortcuts[i].combo, combo) != 0) continue;
+        if (!w32_combo_eq(w32_shortcuts[i].combo, combo)) continue;
         W32Shortcut* s = &w32_shortcuts[i];
         if (s->enabled && s->enabled->fn) {
             if (!((int(*)(void*))s->enabled->fn)(s->enabled->env)) continue;
