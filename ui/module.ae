@@ -1367,6 +1367,13 @@ window_on_key(cb: fn) {
 // DragAcceptFiles + WM_DROPFILES. The driver delivers to the same closure via
 // POST /window/filedrop?paths=..., because a real drag cannot be synthesised
 // on a machine with no seat.
+// LIMITATION, stated because it cannot be fixed within this ABI: the paths
+// cross the C boundary newline-separated, and a newline is a legal character
+// in a filename on every platform here. A dropped file whose name contains
+// one is OMITTED from the batch rather than delivered, because splitting it
+// would hand the app two paths that name nothing, and a file manager acting
+// on those is worse than a file manager missing one.
+//
 // cb gets (paths, count): `paths` is a std.string ARRAY, read with
 // string.string_array_get(paths, i), which is the same shape string_split
 // hands back everywhere else in the tree. It is owned by this wrapper and

@@ -3349,7 +3349,14 @@ static gboolean on_window_file_drop(GtkDropTarget* target, const GValue* value,
     GString* joined = g_string_new(NULL);
     for (GSList* l = files; l; l = l->next) {
         char* path = g_file_get_path(G_FILE(l->data));
-        if (!path) continue;
+        if (!path) continue;   // non-local (smb://, trash://): no local path
+        // CRITICAL: a NEWLINE is legal in a filename, and this ABI separates
+        // paths with one. Delivering such a path would split it into two
+        // strings, NEITHER of which names a file that exists, and the app
+        // would act on both. For a file manager that could mean operating on
+        // the wrong path entirely, so the file is dropped from the batch
+        // instead: fewer paths, all of them real.
+        if (strchr(path, '\n')) { g_free(path); continue; }
         if (joined->len) g_string_append_c(joined, '\n');
         g_string_append(joined, path);
         g_free(path);
