@@ -10,7 +10,8 @@
 //   delivers to the same closure via POST /window/filedrop?paths=a%0Ab.
 
 import ui
-import ui (window, vstack, text, divider, on_file_drop, enable_test_server)
+import ui (window, vstack, text, btn, divider, on_file_drop, draggable,
+    enable_test_server)
 import std.os (os_getenv)
 import std.string
 
@@ -26,6 +27,16 @@ main() {
             count = text("drops: 0")
             first = text("first path: (none)")
             total = text("files in last drop: 0")
+
+            divider()
+            text("and the other direction: this row can be dragged OUT")
+            // A drag source carrying a file. Dragging it into another app
+            // hands over /tmp/dragged.txt, the shape a file manager needs to
+            // move a file out to Finder or Files.
+            out_row = btn("drag me to another app") callback { }
+            draggable(out_row, "/tmp/dragged.txt")
+
+            plain_row = btn("this one is not draggable") callback { }
 
             on_file_drop(|paths: ptr, n: int| {
                 drops = drops + 1

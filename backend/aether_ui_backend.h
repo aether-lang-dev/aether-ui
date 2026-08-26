@@ -606,6 +606,16 @@ void aether_ui_window_on_key_impl(void* boxed_closure);
 // across the boundary. NSPasteboardTypeFileURL / GtkDropTarget over
 // GDK_TYPE_FILE_LIST / WM_DROPFILES.
 void aether_ui_window_on_file_drop_impl(void* boxed_closure);
+// The outbound half: make `handle` a drag SOURCE carrying a file path, so the
+// user can drag a row out to another app (a file manager's whole point).
+// NSDraggingSession over an NSURL / GtkDragSource over a GFile /
+// registry-only on win32, which has no non-COM path for this.
+// path == NULL or "" clears it.
+void aether_ui_widget_draggable_file_impl(int handle, const char* path);
+// What a widget would drag, or "" if it is not a drag source. The driver
+// reports it: a real drag cannot be performed on a headless machine, so
+// registration is the part a spec can hold.
+const char* aether_ui_widget_drag_payload_impl(int handle);
 // Deliver a drop. Returns 1 if a handler was registered and ran. The real
 // drop path and the driver's /window/filedrop both end here, since a real
 // drag cannot be synthesised on a headless machine.

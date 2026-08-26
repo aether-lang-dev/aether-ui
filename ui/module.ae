@@ -33,7 +33,7 @@ exports (
     set_button_label, set_hidden, set_window_title,
     context_menu_item, context_menu_item_accel,
     shortcut, shortcut_when, shortcut_chord, widget_shortcut,
-    window_on_key, on_key, on_file_drop, focus, focused_widget,
+    window_on_key, on_key, on_file_drop, draggable, focus, focused_widget,
     set_slider, get_slider, set_progress,
     bg_color, text_color, font_size, font_bold, corner_radius,
     opacity, enabled, tooltip, onclick,
@@ -180,6 +180,7 @@ extern aether_ui_context_menu_item_accel_impl(handle: int, label: string,
 extern aether_ui_shortcut_impl(combo: string, closure: ptr)
 extern aether_ui_window_on_key_impl(closure: ptr)
 extern aether_ui_window_on_file_drop_impl(closure: ptr)
+extern aether_ui_widget_draggable_file_impl(handle: int, path: string)
 extern aether_ui_shortcut_when_impl(combo: string, closure: ptr, enabled: ptr)
 extern aether_ui_shortcut_chord_impl(first: string, second: string, closure: ptr)
 extern aether_ui_focus_impl(handle: int)
@@ -1330,6 +1331,19 @@ on_file_drop(cb: fn) {
         cb(paths, n)
         string.string_array_free(paths)
     }))
+}
+
+// draggable(handle, path): make a widget a drag SOURCE carrying a file, so
+// the user can drag a row OUT of this app into another one. Pass "" to stop
+// it being draggable.
+//
+// NSDraggingSession over an NSURL / GtkDragSource over a GFile. NB win32
+// records the payload and the driver can read it, but does not start a real
+// drag yet: doing so means OLE DoDragDrop with an IDataObject and an
+// IDropSource, and unlike the folder picker there is no non-COM equivalent.
+//   draggable(row, "/home/me/notes.md")
+draggable(handle: int, path: string) {
+    aether_ui_widget_draggable_file_impl(handle, path)
 }
 
 // on_key(widget, cb): the same, scoped to while `widget` (or a descendant)

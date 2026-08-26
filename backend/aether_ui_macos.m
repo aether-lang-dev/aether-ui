@@ -516,6 +516,83 @@ void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert)
 
 static AeClosure* window_file_drop_closure = NULL;
 
+// Outbound file drag. beginDraggingSession: is an NSView method, so any
+// widget can start one without changing its class; the source object only has
+// to say which operations it allows. One shared instance serves every
+// draggable widget, since it carries no per-drag state.
+@interface AetherDragSource : NSObject <NSDraggingSource>
+@end
+@implementation AetherDragSource
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    (void)session; (void)context;
+    return NSDragOperationCopy;
+}
+@end
+static AetherDragSource* aeui_drag_source = nil;
+
+// Payload per widget handle. A plain parallel array rather than associated
+// objects so the driver can read it back without touching AppKit.
+static char** aeui_drag_paths = NULL;
+static int aeui_drag_paths_len = 0;
+
+static void aeui_drag_path_set(int handle, const char* path) {
+    if (handle < 1) return;
+    if (handle > aeui_drag_paths_len) {
+        int want = handle + 16;
+        aeui_drag_paths = (char**)realloc(aeui_drag_paths, sizeof(char*) * want);
+        for (int i = aeui_drag_paths_len; i < want; i++) aeui_drag_paths[i] = NULL;
+        aeui_drag_paths_len = want;
+    }
+    free(aeui_drag_paths[handle - 1]);
+    aeui_drag_paths[handle - 1] = (path && *path) ? strdup(path) : NULL;
+}
+
+const char* aether_ui_widget_drag_payload_impl(int handle) {
+    if (handle < 1 || handle > aeui_drag_paths_len) return "";
+    return aeui_drag_paths[handle - 1] ? aeui_drag_paths[handle - 1] : "";
+}
+
+@interface AetherDragRecognizer : NSPanGestureRecognizer
+@property (nonatomic) int widgetHandle;
+@end
+@implementation AetherDragRecognizer
+@end
+
+@interface AetherDragStarter : NSObject
++ (void)begin:(AetherDragRecognizer*)g;
+@end
+@implementation AetherDragStarter
++ (void)begin:(AetherDragRecognizer*)g {
+    if ([g state] != NSGestureRecognizerStateBegan) return;
+    const char* path = aether_ui_widget_drag_payload_impl(g.widgetHandle);
+    if (!path || !*path) return;
+    NSView* v = [g view];
+    NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:url];
+    [item setDraggingFrame:[v bounds] contents:nil];
+    if (!aeui_drag_source) aeui_drag_source = [[AetherDragSource alloc] init];
+    [v beginDraggingSessionWithItems:@[item]
+                               event:[[NSApplication sharedApplication] currentEvent]
+                              source:aeui_drag_source];
+}
+@end
+
+void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    aeui_drag_path_set(handle, path);
+    if (!path || !*path) return;
+    for (NSGestureRecognizer* g in [v gestureRecognizers]) {
+        // Already armed: the payload above is all that changes.
+        if ([g isKindOfClass:[AetherDragRecognizer class]]) return;
+    }
+    AetherDragRecognizer* rec = [[AetherDragRecognizer alloc]
+        initWithTarget:[AetherDragStarter class] action:@selector(begin:)];
+    rec.widgetHandle = handle;
+    [v addGestureRecognizer:rec];
+}
+
 int aether_ui_window_file_drop_deliver(const char* paths) {
     if (!window_file_drop_closure || !window_file_drop_closure->fn) return 0;
     // A NULL probe (draggingEntered) asks only whether anyone is listening,

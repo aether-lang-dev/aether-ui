@@ -390,6 +390,15 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
                       aether_ui_tabs_selected(handle),
                       aether_ui_tabs_count(handle));
     }
+    // Drag payload is reported after the per-type chain, because ANY widget
+    // can be a drag source. Absent means not draggable, which is the default,
+    // so an app that never calls draggable() sees no change in the JSON.
+    {
+        const char* dragp = aether_ui_widget_drag_payload_impl(handle);
+        if (dragp && *dragp) {
+            n += snprintf(buf + n, bufsize - n, ",\"drag\":\"%s\"", dragp);
+        }
+    }
     n += snprintf(buf + n, bufsize - n, "}");
     return n;
 }
