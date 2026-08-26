@@ -508,7 +508,18 @@ void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert)
                       options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
     if (![urls count]) return NO;
     NSMutableArray* paths = [NSMutableArray array];
-    for (NSURL* u in urls) { if ([u path]) [paths addObject:[u path]]; }
+    for (NSURL* u in urls) {
+        NSString* p = [u path];
+        if (!p) continue;
+        // CRITICAL: a NEWLINE is legal in a filename (APFS accepts one), and
+        // this ABI separates paths with one. Delivering such a path would
+        // split it into two strings, NEITHER of which names a file that
+        // exists, and the app would act on both. Dropping it from the batch
+        // gives fewer paths but every one of them real.
+        if ([p rangeOfString:@"\n"].location != NSNotFound) continue;
+        [paths addObject:p];
+    }
+    if (![paths count]) return NO;
     NSString* joined = [paths componentsJoinedByString:@"\n"];
     return aether_ui_window_file_drop_deliver([joined UTF8String]) ? YES : NO;
 }
