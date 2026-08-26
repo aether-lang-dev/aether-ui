@@ -4300,6 +4300,12 @@ image_fill(handle: int, mode: string) {
 // bitmap once and hands the STATIC the result, keeping the original so
 // image_untint restores it rather than approximating it back. The driver's
 // "tint" field reports what was applied rather than what was asked.
+//
+// Combining tint with image_fill("cover") works on macOS and win32. It does
+// NOT on GTK4, and cannot: tint is the CSS colour of a symbolic GIcon, which
+// only a GtkImage shows, while content-fit belongs to GtkPicture, and one
+// widget is not both. get_tint reports none there, so the difference is
+// visible rather than silent.
 //   image_tint(icon, 0.2, 0.5, 1.0)
 image_tint(handle: int, r: float, g: float, b: float) {
     aether_ui_image_set_tint(handle, 1, r, g, b)
