@@ -6324,6 +6324,12 @@ static gboolean window_pick_idle(gpointer data) {
 // Get widget text content (for text labels and text fields).
 static const char* widget_text_content(GtkWidget* w) {
     if (!w) return "";
+    /* A chrome-drawn face replaced this widget's native label child
+       (aether_ui_widget_set_child_impl stashed the text first) — report
+       the stashed label so /widgets and widget_id_by_text stay
+       drawn-vs-native indistinguishable, the phase-2 parity contract. */
+    const char* face = (const char*)g_object_get_data(G_OBJECT(w), "aeui-face-label");
+    if (face) return face;
     if (GTK_IS_LABEL(w)) return gtk_label_get_text(GTK_LABEL(w));
     if (GTK_IS_ENTRY(w)) {
         GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));
@@ -7437,6 +7443,27 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
 // ---------------------------------------------------------------------------
 
 // Called from Aether DSL wrappers where parent comes through _ctx (void*).
+/* set_child(parent, child) — make `child` a BIN parent's single child.
+   First consumer: the chrome-drawn button face (vg-drawn controls phase 2):
+   a native GtkButton keeps every native behaviour — click, focus, a11y,
+   the driver contract — and only its FACE is replaced by a chrome-rendered
+   canvas. The native label is stashed as object data first, so the
+   /widgets text hook keeps answering the original label (parity). */
+void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
+    GtkWidget* p = aether_ui_get_widget(parent_handle);
+    GtkWidget* c = aether_ui_get_widget(child_handle);
+    if (!p || !c) return;
+    GtkWidget* cur = gtk_widget_get_parent(c);
+    if (cur) gtk_widget_unparent(c);
+    if (GTK_IS_BUTTON(p)) {
+        const char* lbl = gtk_button_get_label(GTK_BUTTON(p));
+        if (lbl && *lbl)
+            g_object_set_data_full(G_OBJECT(p), "aeui-face-label",
+                                   g_strdup(lbl), g_free);
+        gtk_button_set_child(GTK_BUTTON(p), c);
+    }
+}
+
 void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     int parent_handle = (int)(intptr_t)parent_ctx;
     GtkWidget* parent = aether_ui_get_widget(parent_handle);

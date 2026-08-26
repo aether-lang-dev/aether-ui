@@ -466,3 +466,13 @@ const char* aether_ui_undo_label_impl(void) {
 static void* g_aeui_vgfont = 0;
 void* aether_ui_vgfont_get(void) { return g_aeui_vgfont; }
 void aether_ui_vgfont_set(void* f) { g_aeui_vgfont = f; }
+
+// ─── chrome-drawn face renderer registry ─────────────────────────────────
+// vg-drawn controls phase 2: ui.chromed registers a face-renderer closure
+// here; ui/module.ae's btn() invokes it when AETHER_UI_CHROME=drawn. The
+// cell keeps ui vg-free (apps not opting in never link the vg tree) and
+// dodges a transitive-inline compiler trip (see aether asks). Same C-cell
+// pattern as the commands scope above — Aether has no module-level state.
+static void* g_aeui_chrome_face = 0;   // boxed |handle: int, label: string|
+void aether_ui_chrome_face_set_impl(void* boxed) { g_aeui_chrome_face = boxed; }
+void* aether_ui_chrome_face_get_impl(void) { return g_aeui_chrome_face; }

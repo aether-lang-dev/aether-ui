@@ -1,0 +1,72 @@
+// ui/chromed.ae — OPT-IN wiring for chrome-drawn control faces (vg-drawn
+// controls phase 2, docs/design/vg-drawn-controls.md).
+//
+//   import ui.chromed
+//   ...
+//   chromed.enable()          // once, before building windows
+//
+// then AETHER_UI_CHROME=drawn swaps every ui.btn's face for a chrome-
+// rendered canvas; without the env flag enable() is inert (native stays
+// the default — the fork's guardrail). The renderer registers through a C
+// cell rather than living in ui/module.ae for two load-bearing reasons:
+// apps that never opt in never link the vg tree, and routing vg through
+// ui transitively tripped an aetherc closure-param bug in vg's tween_fill
+// (the #1657 shadowing family — filed with aether).
+
+exports ( enable )
+
+import ui
+import ui (canvas_widget)
+import ui.chrome (chrome_tokens, chrome_measure, chrome_control, CHROME_NORMAL)
+import vg (scene_new, vg_root, scene_set_deferred, vg_flush, scene_free_recording)
+import vg.backend.gtk (gtk_backend_new)
+import vg.grammar.factories
+import std.string
+
+extern lrint(x: float) -> long
+extern box_closure(f: fn) -> ptr
+extern aether_ui_chrome_face_set_impl(boxed: ptr)
+extern aether_ui_widget_set_child_impl(parent_handle: int, child_handle: int)
+extern aether_ui_canvas_create_impl(width: int, height: int) -> int
+extern aether_ui_canvas_redraw_impl(canvas_id: int)
+
+// Render a chrome face onto canvas `cv`. A DEFERRED vg scene flushed once:
+// immediate scenes dispatch each shape at creation with the DEFAULT
+// (black) fill — the trailing fill() only patches the element, never the
+// already-emitted command ("everything renders black", test_vg's
+// deferred-mode note; same fix vg() and ui.frames use). No vg.live, no
+// timer — the font_picker stall class is structurally excluded.
+_face(cv: int, label: string, w: float, h: float) {
+    opts = factories.opts_new()
+    factories.opts_set_view_box(opts, "0 0 ${w} ${h}")
+    factories.opts_set_width(opts, w)
+    factories.opts_set_height(opts, h)
+    ctx = factories.create_aevg_context(opts)
+    sc = scene_new(ctx, gtk_backend_new(cv))
+    scene_set_deferred(sc, 1)
+    root = vg_root(sc)
+    t = chrome_tokens()
+    _n, _fw, _fh = chrome_control(root, 0.0, 0.0, label, t, CHROME_NORMAL, 0)
+    vg_flush(sc)
+    scene_free_recording(sc)
+    aether_ui_canvas_redraw_impl(cv)
+}
+
+// The registered renderer: measure with REAL canvas font metrics, size a
+// canvas face, make it the button's single child (the backend stashes the
+// native label so /widgets keeps answering it — the parity contract), draw.
+_btn_face(handle: int, label: string) {
+    t = chrome_tokens()
+    w, h = chrome_measure(label, t)
+    cv = aether_ui_canvas_create_impl(lrint(w) as int, lrint(h) as int)
+    aether_ui_widget_set_child_impl(handle, canvas_widget(cv))
+    _face(cv, label, w, h)
+}
+
+// Register the face renderer. Inert without AETHER_UI_CHROME=drawn —
+// ui.btn checks the flag before consulting the cell.
+enable() {
+    aether_ui_chrome_face_set_impl(box_closure(|handle: int, label: string| {
+        _btn_face(handle, label)
+    }))
+}

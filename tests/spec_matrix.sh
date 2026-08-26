@@ -140,6 +140,13 @@ SUITES=(
   # migration, where private action numbers collide with the shared enum
   # (docs/design/one-driver-not-two.md).
   "driveractions|examples/testable|driver_actions/spec_driver_actions|"
+  # vg-drawn controls phase 2 (docs/design/vg-drawn-controls.md): the SAME
+  # native testable spec must pass with chrome-drawn button faces — the
+  # driver cannot tell drawn from native. chromeproof then asserts the flag
+  # actually DID something (canvas face children + chrome pixels), since a
+  # no-op flag would pass the parity suite vacuously.
+  "chromeparity|examples/testable|testable/spec_testable|AETHER_UI_CHROME=drawn"
+  "chromeproof|examples/testable|chrome_drawn/spec_chrome_drawn|AETHER_UI_CHROME=drawn"
   "frames|apps/frames_demo|frames_demo/spec_frames_demo|"
   "sketchpad|apps/sketchpad|sketchpad/spec_sketchpad|"
   # video_frame decodes in-process via contrib.avcodec, so it needs FFmpeg's

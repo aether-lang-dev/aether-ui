@@ -121,6 +121,22 @@ exports (
 import std.string   // overlay_anchor_code parses the anchor string
 import std.list     // each_update walks the items list
 import std.os (os_getenv)   // transition honours AETHER_UI_NO_ANIMATION
+// ── chrome-drawn faces (vg-drawn controls, phase 2) ──────────────────
+// AETHER_UI_CHROME=drawn swaps a native button's FACE for a ui.chrome-
+// rendered canvas while keeping the native widget as host — click, focus,
+// a11y and the whole driver contract stay native (the drawn-picker
+// pattern; docs/design/vg-drawn-controls.md). The RENDERER is not here:
+// ui stays vg-free, and apps opt in by importing ui.chromed and calling
+// chromed.enable(), which registers the face renderer in a C cell. Two
+// reasons, both load-bearing: apps that never opt in never link the vg
+// tree, and routing vg through ui transitively tripped an aetherc
+// closure-param bug in vg's tween_fill (the #1657 family — filed).
+extern aether_ui_widget_set_child_impl(parent_handle: int, child_handle: int)
+extern aether_ui_chrome_face_get_impl() -> ptr
+
+_chrome_invoke_face(cb: fn, handle: int, label: string) {
+    cb(handle, label)
+}
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 import std.fs      // load_styles (AeCS theme files)
@@ -946,9 +962,25 @@ button(_ctx: ptr, label: string) {
 
 // btn — quick callback-only form:
 //   btn("=") callback { call(equals) }
+// Is the chrome-drawn face flag on? "drawn" only — anything else (unset,
+// "native", typos) keeps the native default, per the fork's guardrails.
+_chrome_on() -> int {
+    v = os_getenv("AETHER_UI_CHROME")
+    if v == null { return 0 }
+    if string.equals(v, "drawn") == 1 { return 1 }
+    return 0
+}
+
 btn(_ctx: ptr, label: string, on_press: fn) {
     boxed = box_closure(on_press)
     handle = aether_ui_button_create(label, boxed)
+    if _chrome_on() == 1 {
+        face = aether_ui_chrome_face_get_impl()
+        if face != null {
+            fcb = unbox_closure(face)
+            _chrome_invoke_face(fcb, handle, label)
+        }
+    }
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }

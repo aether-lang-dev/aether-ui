@@ -20,7 +20,7 @@ exports (
     hover_widget, unhover, press_widget, release_widget,
     window_key, focus_widget, focused_widget,
     set_state, state_value_int,
-    widget_id_by_text, widget_id_of, widget_id_last_of, widget_text_by_id, widget_bool_by_text,
+    widget_id_by_text, widget_id_of, widget_id_of_parent, widget_id_last_of, widget_text_by_id, widget_bool_by_text,
     widget_bool_by_id, widget_int_field_by_id, field_str, field_int,
     canvas_w, canvas_h, canvas_widget_id, canvas_debug_area, canvas_debug_commands,
     canvas_debug_w, canvas_debug_h, canvas_painted_pixels,
@@ -244,6 +244,32 @@ widget_id_of(wtype: string, text: string) -> int {
             if string.length(text) > 0 {
                 if string.equals(field_str(w, "text"), text) == 0 { tok = 0 }
             }
+        }
+        if tok == 1 { if found == 0 { found = field_int(w, "id") } }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
+}
+
+// widget_id_of_parent(wtype, parent_id) — first widget of `wtype` whose
+// PARENT is the given id. First consumer: the chrome-drawn proof spec,
+// which identifies a drawn face as "the canvas child of this button".
+widget_id_of_parent(wtype: string, parent_id: int) -> int {
+    body = get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    found = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        tok = 1
+        if string.length(wtype) > 0 {
+            if string.equals(field_str(w, "type"), wtype) == 0 { tok = 0 }
+        }
+        if tok == 1 {
+            if field_int(w, "parent") != parent_id { tok = 0 }
         }
         if tok == 1 { if found == 0 { found = field_int(w, "id") } }
         i = i + 1

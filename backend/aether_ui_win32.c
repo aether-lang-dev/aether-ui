@@ -2343,6 +2343,18 @@ int aether_ui_divider_create(void) {
 // at creation time OR reparents via SetParent. Our DSL calls this after
 // creation, so we reparent here.
 // ---------------------------------------------------------------------------
+/* set_child — parent a widget INTO another widget (the chrome-drawn
+   button face). On win32 the native BUTTON keeps its window text (so the
+   /widgets text hook needs no stash) and the child hwnd covers its face. */
+void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
+    Widget* p = widget_at(parent_handle);
+    Widget* c = widget_at(child_handle);
+    if (!p || !c || !p->hwnd || !c->hwnd) return;
+    SetParent(c->hwnd, p->hwnd);
+    RECT r; GetClientRect(p->hwnd, &r);
+    MoveWindow(c->hwnd, 0, 0, r.right, r.bottom, TRUE);
+}
+
 void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     int parent_handle = (int)(intptr_t)parent_ctx;
     Widget* p = widget_at(parent_handle);

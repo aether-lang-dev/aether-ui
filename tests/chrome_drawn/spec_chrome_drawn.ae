@@ -1,0 +1,65 @@
+// spec_chrome_drawn.ae — proves the chrome-drawn button is ACTUALLY drawn.
+//
+// The parity half of phase 2 is the `chromeparity` suite: the UNCHANGED
+// native testable spec run under AETHER_UI_CHROME=drawn — clicks, focus,
+// seal, text lookup all indistinguishable. That spec passing under the
+// flag proves nothing broke; it cannot prove the flag DID anything (a
+// no-op flag passes it vacuously — the false-success family). This spec
+// is the other half: assert the drawn markers exist.
+//
+// Drawn marker: a native button hosting a chrome face has a CANVAS CHILD
+// (the face) — native buttons never do. Runs only under the flag (its
+// suite line sets AETHER_UI_CHROME=drawn).
+
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "chrome-drawn buttons are drawn, not just relabeled") {
+        spec.it("every button hosts a canvas face child") callback {
+            plus = uidriver.widget_id_of("button", "+1")
+            minus = uidriver.widget_id_of("button", "-1")
+            spec.assert_gt(plus, 0, "+1 button found by TEXT (label stash works)")
+            spec.assert_gt(minus, 0, "-1 button found by text")
+
+            // The face is the button's child in the widget tree: a canvas
+            // whose parent field is the button's own id.
+            body = uidriver.get_body("/widgets")
+            pface = string.contains(body, "\"type\":\"canvas\"")
+            spec.assert_eq(pface, 1, "canvases exist in the tree")
+            // The +1 face specifically: id plus+1 is created immediately
+            // after the button by _chrome_btn_face — assert by PARENT link
+            // rather than id arithmetic.
+            fid = uidriver.widget_id_of_parent("canvas", plus)
+            spec.assert_gt(fid, 0, "+1 button has a canvas child — the drawn face")
+            fid2 = uidriver.widget_id_of_parent("canvas", minus)
+            spec.assert_gt(fid2, 0, "-1 button has one too")
+        }
+
+        spec.it("the face carries real chrome pixels") callback {
+            // The chrome body fill is the tokens' normal bg #F3F4F6 =
+            // -789258 packed. Probe the face canvas's centre through the
+            // replay route: only the chrome renderer can have put that
+            // colour there. (The face canvas is the FIRST canvas in this
+            // app under the flag? No — testable has its own key canvas;
+            // resolve the face's CANVAS ID via its widget id order instead:
+            // canvas ids count creation order, faces are created before
+            // testable's own 120x60 canvas... too fragile — probe ALL
+            // canvas ids for one whose centre is the chrome bg.)
+            found = 0
+            i = 1
+            while i < 8 {
+                v = uidriver.get_body("/canvas/${i}/pixel?x=20&y=10&w=40&h=20")
+                if string.contains(v, "-789258") == 1 { found = 1 }
+                i = i + 1
+            }
+            spec.assert_eq(found, 1,
+                "some canvas centre shows the chrome body bg (#F3F4F6)")
+        }
+    }
+    spec.run_summary(fw)
+}

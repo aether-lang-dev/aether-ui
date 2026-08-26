@@ -5445,6 +5445,20 @@ static void aeui_mark_expand(NSView* v, int bits) {
     aeui_mark_expand([v superview], bits);   // carry it to the root
 }
 
+/* set_child — subview a widget into another (the chrome-drawn button
+   face). NSButton keeps its title (text hook unaffected); the child view
+   covers the face. */
+void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
+    NSView* p = (__bridge NSView*)aether_ui_get_widget(parent_handle);
+    NSView* c = (__bridge NSView*)aether_ui_get_widget(child_handle);
+    if (!p || !c) return;
+    [c removeFromSuperview];
+    [c setTranslatesAutoresizingMaskIntoConstraints:YES];
+    [c setFrame:[p bounds]];
+    [c setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    [p addSubview:c];
+}
+
 void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     int parent_handle = (int)(intptr_t)parent_ctx;
     NSView* parent = (__bridge NSView*)aether_ui_get_widget(parent_handle);

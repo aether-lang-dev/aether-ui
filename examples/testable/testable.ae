@@ -7,12 +7,16 @@
 //   ./test_automation.sh
 
 import ui
+// Opt in to chrome-drawn control faces: inert unless AETHER_UI_CHROME=drawn
+// (the chromeparity/chromeproof suites set it; the native suites do not).
+import ui.chromed
 import std.mem
 
 extern println(s: string)
 extern malloc(size: int) -> ptr
 
 main() {
+    chromed.enable()
     counter = ui.ui_state(0)
 
     ui.window("Testable App", 400, 400) {
