@@ -101,11 +101,15 @@ The whole pipeline, the way CI runs it:
 ./tests/spec_matrix.sh   # just the AetherUIDriver specs
 ```
 
-`ci.sh` also cross-compiles the Win32 backend when a mingw-w64 compiler is
-present (`brew install mingw-w64`, or `apt install gcc-mingw-w64-x86-64`), and
-says SKIP when there is none. That is not a substitute for running on Windows,
-which nothing here does; it is what stops the one backend nobody can execute
-from being edited blind.
+`ci.sh` also cross-compiles AND LINKS the Win32 backend when a mingw-w64
+compiler is present (`brew install mingw-w64`, or `apt install
+gcc-mingw-w64-x86-64`), and says SKIP when there is none. The link half is not
+redundant: a Windows API declared in a header whose import library is missing
+compiles perfectly and fails at link, so dropping `-lole32` leaves the syntax
+check at zero errors while the link reports `__imp_CoCreateInstance`.
+
+That is not a substitute for running on Windows, which nothing here does; it
+is what stops the one backend nobody can execute from being edited blind.
 
 See [docs/design/win32-gdiplus-renderer.md](docs/design/win32-gdiplus-renderer.md)
 for the Win32 rendering model, and [docs/README.md](docs/README.md) for the

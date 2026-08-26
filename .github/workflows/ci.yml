@@ -132,3 +132,20 @@ jobs:
             echo "--- $src"
             x86_64-w64-mingw32-gcc -fsyntax-only -Ibackend "$src"
           done
+
+      # Syntax is not the whole story: a Windows API declared in a header
+      # whose import library is missing compiles perfectly and fails at link.
+      # Dropping -lole32 leaves the step above at 0 errors while this one
+      # reports __imp_CoCreateInstance.
+      - name: Link the Win32 backend
+        run: |
+          x86_64-w64-mingw32-gcc -o /tmp/aether_ui_win32_link.exe \
+            tests/win32/link_stub.c \
+            backend/aether_ui_win32.c \
+            backend/aether_ui_test_server.c \
+            backend/aether_ui_system_extras.c \
+            -Ibackend \
+            -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
+            -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi \
+            -luxtheme -lws2_32 -lbcrypt
+          echo "linked: $(ls -l /tmp/aether_ui_win32_link.exe | awk '{print $5}') bytes"

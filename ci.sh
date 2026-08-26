@@ -462,10 +462,9 @@ echo "=== Phase 1d: Win32 backend cross-compile check ==="
 # second, which is not a substitute for running the thing, but it is the
 # difference between "mirrors the other backends" and "is known to build".
 #
-# Syntax-only and at the project's own warning level, not -Wall: this gate
-# exists to catch code that cannot compile, and widening it to style would
-# fail on pre-existing warnings that have nothing to do with the change under
-# test.
+# At the project's own warning level, not -Wall: this gate exists to catch
+# code that cannot build, and widening it to style would fail on pre-existing
+# warnings that have nothing to do with the change under test.
 W32_CC=""
 for cc in x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
     command -v "$cc" > /dev/null 2>&1 && { W32_CC="$cc"; break; }
@@ -484,6 +483,33 @@ if [ -n "$W32_CC" ]; then
             w32_fail=1
         fi
     done
+    # Syntax is not the whole story. A Windows API declared in a header whose
+    # IMPORT LIBRARY is missing compiles perfectly and fails at link, which is
+    # invisible to everyone who cannot build on Windows. Proven, not assumed:
+    # dropping -lole32 leaves the syntax check at 0 errors while the link
+    # reports __imp_CoCreateInstance and three more.
+    #
+    # The only thing between this and a real binary is the libaether runtime,
+    # which has no Windows build here; tests/win32/link_stub.c supplies it and
+    # says what to do when it stops being enough.
+    if [ "$w32_fail" -eq 0 ]; then
+        if "$W32_CC" -o /tmp/ci_w32_link.exe \
+                "$ROOT/tests/win32/link_stub.c" \
+                "$ROOT/backend/aether_ui_win32.c" \
+                "$ROOT/backend/aether_ui_test_server.c" \
+                "$ROOT/backend/aether_ui_system_extras.c" \
+                -I"$ROOT/backend" \
+                -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
+                -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi \
+                -luxtheme -lws2_32 -lbcrypt > /tmp/ci_w32_link.log 2>&1; then
+            echo "  OK   links against the Windows import libraries"
+        else
+            echo "  FAIL link"
+            grep -E "undefined reference|error:" /tmp/ci_w32_link.log \
+                | head -10 | sed 's/^/       /'
+            w32_fail=1
+        fi
+    fi
     [ "$w32_fail" -eq 0 ] || FAIL=$((FAIL + 1))
 else
     # Say so rather than passing quietly: a skipped gate that looks like a
