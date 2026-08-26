@@ -1387,10 +1387,10 @@ on_file_drop(cb: fn) {
 // the user can drag a row OUT of this app into another one. Pass "" to stop
 // it being draggable.
 //
-// NSDraggingSession over an NSURL / GtkDragSource over a GFile. NB win32
-// records the payload and the driver can read it, but does not start a real
-// drag yet: doing so means OLE DoDragDrop with an IDataObject and an
-// IDropSource, and unlike the folder picker there is no non-COM equivalent.
+// NSDraggingSession over an NSURL / GtkDragSource over a GFile / an OLE
+// DoDragDrop offering CF_HDROP on win32. The drag starts on a mouse MOVE with
+// the button held, not on the press, so a draggable widget can still simply
+// be clicked.
 //   draggable(row, "/home/me/notes.md")
 draggable(handle: int, path: string) {
     aether_ui_widget_draggable_file_impl(handle, path)

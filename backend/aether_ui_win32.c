@@ -247,6 +247,7 @@ typedef struct {
     int text_anchor;      // WK_TEXT: 0=start 1=middle 2=end
     int text_truncate;    // WK_TEXT: EFFECTIVE ellipsis 0=none 2=middle 3=tail
     int image_fill;       // WK_IMAGE: EFFECTIVE fill 0=original 3=stretch
+    int drag_armed;       // draggable(): the drag-source subclass is installed
 
     // Per-widget data (union over kind)
     union {
@@ -2169,14 +2170,204 @@ static AeClosure* w32_window_key_closure = NULL;
 // WM_DROPFILES arm in the window proc lands with the real key path.
 static AeClosure* w32_file_drop_closure = NULL;
 
-// Outbound file drag. Registered and readable by the driver, but not yet
-// wired to a real drag: starting one on win32 means OLE DoDragDrop with an
-// IDataObject and an IDropSource, which is a COM implementation rather than a
-// style bit, and unlike SHBrowseForFolderW there is no non-COM equivalent to
-// reach for. Recorded here so the payload is at least a single source of
-// truth when that lands.
+// Outbound file drag: a real OLE drag, which needs an IDataObject offering
+// CF_HDROP and an IDropSource saying when the gesture ends. There is no
+// non-COM route for this the way SHBrowseForFolderW was for the folder
+// picker, so the interfaces are implemented by hand below.
+//
+// Both objects are STATIC singletons with a fixed refcount rather than
+// heap-allocated per drag. DoDragDrop is synchronous: it does not return
+// until the drop or the cancel, so exactly one drag exists at a time and
+// there is nothing to race with. That removes the whole class of COM
+// lifetime bug from a path nobody here can run and debug.
 static char** w32_drag_paths = NULL;
 static int w32_drag_paths_len = 0;
+
+// The path this drag carries, set immediately before DoDragDrop.
+static const char* w32_drag_active_path = NULL;
+
+// --- IDropSource ---------------------------------------------------------
+static HRESULT STDMETHODCALLTYPE w32_ds_QueryInterface(IDropSource* self,
+                                                       REFIID riid, void** out) {
+    if (!out) return E_POINTER;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDropSource)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE w32_ds_AddRef(IDropSource* self) {
+    (void)self; return 2;   // static singleton: never freed
+}
+static ULONG STDMETHODCALLTYPE w32_ds_Release(IDropSource* self) {
+    (void)self; return 1;
+}
+static HRESULT STDMETHODCALLTYPE w32_ds_QueryContinueDrag(IDropSource* self,
+                                                          BOOL esc, DWORD keys) {
+    (void)self;
+    if (esc) return DRAGDROP_S_CANCEL;
+    if (!(keys & (MK_LBUTTON | MK_RBUTTON))) return DRAGDROP_S_DROP;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE w32_ds_GiveFeedback(IDropSource* self,
+                                                     DWORD effect) {
+    (void)self; (void)effect;
+    return DRAGDROP_S_USEDEFAULTCURSORS;   // let the shell draw the cursor
+}
+static IDropSourceVtbl w32_drop_source_vtbl = {
+    w32_ds_QueryInterface, w32_ds_AddRef, w32_ds_Release,
+    w32_ds_QueryContinueDrag, w32_ds_GiveFeedback
+};
+static IDropSource w32_drop_source = { &w32_drop_source_vtbl };
+
+// --- IDataObject (CF_HDROP only) -----------------------------------------
+//
+// CF_HDROP is a DROPFILES header followed by a DOUBLE-null-terminated list of
+// wide paths. The second terminator is what tells the receiver the list ended;
+// omitting it is the classic way a drop arrives as one path plus garbage.
+static HGLOBAL w32_hdrop_for(const char* utf8_path) {
+    if (!utf8_path || !*utf8_path) return NULL;
+    wchar_t* wide = utf8_to_wide(utf8_path);
+    if (!wide) return NULL;
+    size_t chars = wcslen(wide) + 2;          // path NUL + list NUL
+    size_t bytes = sizeof(DROPFILES) + chars * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GHND, bytes);
+    if (!mem) return NULL;
+    DROPFILES* df = (DROPFILES*)GlobalLock(mem);
+    if (!df) { GlobalFree(mem); return NULL; }
+    df->pFiles = sizeof(DROPFILES);
+    df->fWide  = TRUE;
+    wchar_t* dst = (wchar_t*)((char*)df + sizeof(DROPFILES));
+    wcscpy(dst, wide);
+    dst[wcslen(wide) + 1] = L'\0';           // the list terminator
+    GlobalUnlock(mem);
+    return mem;
+}
+
+static HRESULT STDMETHODCALLTYPE w32_do_QueryInterface(IDataObject* self,
+                                                       REFIID riid, void** out) {
+    if (!out) return E_POINTER;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDataObject)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE w32_do_AddRef(IDataObject* self) {
+    (void)self; return 2;
+}
+static ULONG STDMETHODCALLTYPE w32_do_Release(IDataObject* self) {
+    (void)self; return 1;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_GetData(IDataObject* self,
+                                                FORMATETC* fmt, STGMEDIUM* med) {
+    (void)self;
+    if (!fmt || !med) return E_POINTER;
+    if (fmt->cfFormat != CF_HDROP || !(fmt->tymed & TYMED_HGLOBAL)) {
+        return DV_E_FORMATETC;
+    }
+    HGLOBAL mem = w32_hdrop_for(w32_drag_active_path);
+    if (!mem) return E_OUTOFMEMORY;
+    memset(med, 0, sizeof(*med));
+    med->tymed = TYMED_HGLOBAL;
+    med->hGlobal = mem;
+    med->pUnkForRelease = NULL;   // the receiver frees it
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_GetDataHere(IDataObject* self,
+                                                    FORMATETC* fmt,
+                                                    STGMEDIUM* med) {
+    (void)self; (void)fmt; (void)med;
+    return E_NOTIMPL;   // callers that need this fall back to GetData
+}
+static HRESULT STDMETHODCALLTYPE w32_do_QueryGetData(IDataObject* self,
+                                                     FORMATETC* fmt) {
+    (void)self;
+    if (!fmt) return E_POINTER;
+    return (fmt->cfFormat == CF_HDROP && (fmt->tymed & TYMED_HGLOBAL))
+        ? S_OK : DV_E_FORMATETC;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_GetCanonicalFormatEtc(IDataObject* self,
+                                                              FORMATETC* in,
+                                                              FORMATETC* out) {
+    (void)self; (void)in;
+    if (out) memset(out, 0, sizeof(*out));
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_SetData(IDataObject* self,
+                                                FORMATETC* fmt, STGMEDIUM* med,
+                                                BOOL release) {
+    (void)self; (void)fmt; (void)med; (void)release;
+    return E_NOTIMPL;   // this object is read-only by design
+}
+static HRESULT STDMETHODCALLTYPE w32_do_EnumFormatEtc(IDataObject* self,
+                                                      DWORD dir,
+                                                      IEnumFORMATETC** out) {
+    (void)self; (void)dir;
+    if (out) *out = NULL;
+    // Shell drop targets query CF_HDROP directly rather than enumerating, so
+    // this stays unimplemented rather than carrying an enumerator that only
+    // exists to be correct on paper.
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_DAdvise(IDataObject* self,
+                                                FORMATETC* fmt, DWORD flags,
+                                                IAdviseSink* sink,
+                                                DWORD* conn) {
+    (void)self; (void)fmt; (void)flags; (void)sink;
+    if (conn) *conn = 0;
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_DUnadvise(IDataObject* self,
+                                                  DWORD conn) {
+    (void)self; (void)conn;
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+static HRESULT STDMETHODCALLTYPE w32_do_EnumDAdvise(IDataObject* self,
+                                                    IEnumSTATDATA** out) {
+    (void)self;
+    if (out) *out = NULL;
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+static IDataObjectVtbl w32_data_object_vtbl = {
+    w32_do_QueryInterface, w32_do_AddRef, w32_do_Release,
+    w32_do_GetData, w32_do_GetDataHere, w32_do_QueryGetData,
+    w32_do_GetCanonicalFormatEtc, w32_do_SetData, w32_do_EnumFormatEtc,
+    w32_do_DAdvise, w32_do_DUnadvise, w32_do_EnumDAdvise
+};
+static IDataObject w32_data_object = { &w32_data_object_vtbl };
+
+// The gesture. A drag starts on a mouse MOVE with the button held, not on the
+// press: starting on the press would swallow ordinary clicks on the widget,
+// so a draggable row could never simply be clicked.
+static LRESULT CALLBACK w32_drag_src_proc(HWND hwnd, UINT msg, WPARAM wp,
+                                          LPARAM lp, UINT_PTR id,
+                                          DWORD_PTR ref) {
+    (void)id;
+    int handle = (int)ref;
+    static int pressed = 0;
+    if (msg == WM_LBUTTONDOWN) {
+        pressed = 1;
+    } else if (msg == WM_LBUTTONUP) {
+        pressed = 0;
+    } else if (msg == WM_MOUSEMOVE && pressed && (wp & MK_LBUTTON)) {
+        const char* path = aether_ui_widget_drag_payload_impl(handle);
+        if (path && *path) {
+            pressed = 0;   // one drag per press
+            w32_drag_active_path = path;
+            DWORD effect = 0;
+            // Synchronous: returns on drop or cancel, which is what makes the
+            // static singletons above safe.
+            DoDragDrop(&w32_data_object, &w32_drop_source,
+                       DROPEFFECT_COPY, &effect);
+            w32_drag_active_path = NULL;
+            return 0;
+        }
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
 
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
     if (handle < 1) return;
@@ -2188,6 +2379,21 @@ void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
     }
     free(w32_drag_paths[handle - 1]);
     w32_drag_paths[handle - 1] = (path && *path) ? _strdup(path) : NULL;
+
+    // Arm the gesture once per widget. Re-arming would stack subclasses on a
+    // widget whose payload is merely being updated.
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return;
+    if (path && *path && !w->drag_armed) {
+        // OLE has to be initialised on this thread before DoDragDrop. It is
+        // idempotent and RPC_E_CHANGED_MODE is fine: it means someone already
+        // initialised it in a compatible way.
+        OleInitialize(NULL);
+        if (SetWindowSubclass(w->hwnd, w32_drag_src_proc, 2,
+                              (DWORD_PTR)handle)) {
+            w->drag_armed = 1;
+        }
+    }
 }
 
 const char* aether_ui_widget_drag_payload_impl(int handle) {
