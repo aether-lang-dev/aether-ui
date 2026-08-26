@@ -1,0 +1,46 @@
+// Aether UI SVG example: an SVG FILE as a widget.
+//
+// image(path) hands the file to the platform's image decoder, and none of
+// the three decodes SVG reliably. aether-ui already ships a complete SVG
+// stack in vg, so ui.svg routes an SVG through THAT instead: identical
+// pixels on GTK4, AppKit and Win32, no platform decoder, no conversion step.
+//
+// badge.svg is deliberately 2:1, so a square fit would letterbox it and the
+// aspect handling is visible rather than incidental.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). The spec reads the canvases' geometry, which is what shows the
+//   SVG was measured rather than guessed.
+
+import ui
+import ui (window, vstack, hstack, text, divider, enable_test_server)
+import ui.svg (svg_image, svg_image_sized)
+import std.os (os_getenv)
+
+main() {
+    window("svg image", 460, 380) {
+        vstack(8) {
+            text("badge.svg is 200x100, so its aspect is 2:1")
+            divider()
+
+            hstack(8) {
+                // Longer side becomes 120; the other follows the aspect, so
+                // this lands at 120x60 rather than a letterboxed 120x120.
+                _a = svg_image("examples/svgimage_demo/badge.svg", 120)
+                text("svg_image(.., 120)")
+            }
+            hstack(8) {
+                // Caller-decided box, aspect ignored on purpose.
+                _b = svg_image_sized("examples/svgimage_demo/badge.svg", 80, 80)
+                text("svg_image_sized(.., 80, 80)")
+            }
+            divider()
+            // A file that is not there must not crash or hang: it returns 0
+            // and the app carries on, because a missing asset is a normal
+            // thing to hit and not worth taking the window down for.
+            missing = svg_image("examples/svgimage_demo/nope.svg", 40)
+            text("missing file -> handle ${missing}")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
