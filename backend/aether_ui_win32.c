@@ -2347,15 +2347,22 @@ static LRESULT CALLBACK w32_drag_src_proc(HWND hwnd, UINT msg, WPARAM wp,
                                           DWORD_PTR ref) {
     (void)id;
     int handle = (int)ref;
-    static int pressed = 0;
+    // WHICH widget was pressed, not merely THAT one was. This proc is shared
+    // by every draggable widget, so a plain flag here is global state: press
+    // on row A, keep the button down, move over row B, and B would start a
+    // drag carrying B's file. The user would have grabbed A and dropped B.
+    //
+    // One mouse means one press, so a single handle is the whole state.
+    static int pressed_handle = 0;
     if (msg == WM_LBUTTONDOWN) {
-        pressed = 1;
+        pressed_handle = handle;
     } else if (msg == WM_LBUTTONUP) {
-        pressed = 0;
-    } else if (msg == WM_MOUSEMOVE && pressed && (wp & MK_LBUTTON)) {
+        pressed_handle = 0;
+    } else if (msg == WM_MOUSEMOVE && pressed_handle == handle
+               && (wp & MK_LBUTTON)) {
         const char* path = aether_ui_widget_drag_payload_impl(handle);
         if (path && *path) {
-            pressed = 0;   // one drag per press
+            pressed_handle = 0;   // one drag per press
             w32_drag_active_path = path;
             DWORD effect = 0;
             // Synchronous: returns on drop or cancel, which is what makes the
@@ -5077,17 +5084,26 @@ static HBITMAP w32_tint_bitmap(HBITMAP src, COLORREF rgb) {
 // The untinted original per widget handle, so untint restores rather than
 // approximates, and so re-tinting starts from the source instead of tinting
 // an already-tinted copy.
-static HBITMAP* w32_tint_orig = NULL;
+//
+// TWO originals, because a widget can be backed by either. An ICON is not a
+// bitmap with a different name: it carries a MASK, which is what gives it its
+// transparent shape. Restoring an icon-backed widget from the colour plane
+// alone brings it back as an opaque rectangle, and freeing an HICON with
+// DeleteObject silently does nothing and leaks it. Both need the icon itself.
+static HBITMAP* w32_tint_base = NULL;   // what we tint FROM (we own it)
+static HICON*   w32_tint_icon = NULL;   // the original icon, if icon-backed
 static int*     w32_tint_rgb  = NULL;   // packed 0xRRGGBB | 0x1000000, or 0
 static int      w32_tint_len  = 0;
 
 static void w32_tint_slots(int handle) {
     if (handle <= w32_tint_len) return;
     int want = handle + 16;
-    w32_tint_orig = (HBITMAP*)realloc(w32_tint_orig, sizeof(HBITMAP) * want);
+    w32_tint_base = (HBITMAP*)realloc(w32_tint_base, sizeof(HBITMAP) * want);
+    w32_tint_icon = (HICON*)realloc(w32_tint_icon, sizeof(HICON) * want);
     w32_tint_rgb  = (int*)realloc(w32_tint_rgb, sizeof(int) * want);
     for (int i = w32_tint_len; i < want; i++) {
-        w32_tint_orig[i] = NULL;
+        w32_tint_base[i] = NULL;
+        w32_tint_icon[i] = NULL;
         w32_tint_rgb[i]  = 0;
     }
     w32_tint_len = want;
@@ -5097,47 +5113,59 @@ void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) 
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
     w32_tint_slots(handle);
-
     LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
-    UINT kind = (st & SS_ICON) ? IMAGE_ICON : IMAGE_BITMAP;
 
     if (!on) {
-        HBITMAP orig = w32_tint_orig[handle - 1];
-        if (orig) {
+        if (w32_tint_icon[handle - 1]) {
+            // Icon-backed: put the ICON back, mask and all, and return the
+            // control to SS_ICON. Restoring the colour plane instead would
+            // bring it back as an opaque rectangle.
+            st &= ~SS_BITMAP;
+            st |= SS_ICON;
+            SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+            HBITMAP tinted = (HBITMAP)SendMessageW(w->hwnd, STM_SETICON,
+                                (WPARAM)w32_tint_icon[handle - 1], 0);
+            if (tinted) DeleteObject(tinted);
+            if (w32_tint_base[handle - 1]) {
+                DeleteObject(w32_tint_base[handle - 1]);
+            }
+            w32_tint_icon[handle - 1] = NULL;
+            w32_tint_base[handle - 1] = NULL;
+        } else if (w32_tint_base[handle - 1]) {
             HBITMAP cur = (HBITMAP)SendMessageW(w->hwnd, STM_SETIMAGE,
-                                                IMAGE_BITMAP, (LPARAM)orig);
-            if (cur && cur != orig) DeleteObject(cur);
-            w32_tint_orig[handle - 1] = NULL;
+                            IMAGE_BITMAP, (LPARAM)w32_tint_base[handle - 1]);
+            if (cur && cur != w32_tint_base[handle - 1]) DeleteObject(cur);
+            w32_tint_base[handle - 1] = NULL;   // the control owns it again
         }
         w32_tint_rgb[handle - 1] = 0;
         InvalidateRect(w->hwnd, NULL, TRUE);
         return;
     }
 
-    // Start from the ORIGINAL when one is already stashed, so tinting twice
-    // does not stack.
-    HBITMAP base = w32_tint_orig[handle - 1];
-    int had_orig = base != NULL;
+    // Establish what to tint FROM, once. Re-tinting reuses it so the tints do
+    // not stack.
+    HBITMAP base = w32_tint_base[handle - 1];
     if (!base) {
-        if (kind == IMAGE_ICON) {
-            // An icon has no bitmap to recolour directly; take its colour
-            // plane. The control becomes bitmap-backed from here, which is
-            // why the style flips with it.
+        if (st & SS_ICON) {
             HICON ic = (HICON)SendMessageW(w->hwnd, STM_GETIMAGE, IMAGE_ICON, 0);
             if (!ic) return;
             ICONINFO ii;
             memset(&ii, 0, sizeof(ii));
             if (!GetIconInfo(ic, &ii)) return;
-            base = ii.hbmColor;
-            if (ii.hbmMask && ii.hbmMask != base) DeleteObject(ii.hbmMask);
-            if (!base) return;
+            if (ii.hbmMask) DeleteObject(ii.hbmMask);
+            if (!ii.hbmColor) return;
+            base = ii.hbmColor;                 // ours to free from here
+            w32_tint_icon[handle - 1] = ic;     // keep it for untint
             st &= ~SS_ICON;
             st |= SS_BITMAP;
             SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
         } else {
-            base = (HBITMAP)SendMessageW(w->hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
-            if (!base) return;
+            HBITMAP cur = (HBITMAP)SendMessageW(w->hwnd, STM_GETIMAGE,
+                                                IMAGE_BITMAP, 0);
+            if (!cur) return;
+            base = cur;
         }
+        w32_tint_base[handle - 1] = base;
     }
 
     COLORREF rgb = RGB((int)(r * 255) & 255, (int)(g * 255) & 255,
@@ -5147,12 +5175,10 @@ void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) 
 
     HBITMAP prev = (HBITMAP)SendMessageW(w->hwnd, STM_SETIMAGE,
                                          IMAGE_BITMAP, (LPARAM)tinted);
-    // Keep the first original; free only bitmaps we made ourselves, never the
-    // one being kept for untint.
-    if (!had_orig) {
-        w32_tint_orig[handle - 1] = base;
-        if (prev && prev != base) DeleteObject(prev);
-    } else if (prev && prev != base) {
+    // Free the outgoing image, but never the base being kept for untint, and
+    // never an HICON through DeleteObject: on the first tint of an icon-backed
+    // widget `prev` IS the icon, and it is already stashed above.
+    if (prev && prev != base && (HICON)prev != w32_tint_icon[handle - 1]) {
         DeleteObject(prev);
     }
     w32_tint_rgb[handle - 1] = (((int)(r * 255) & 255) << 16)
