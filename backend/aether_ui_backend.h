@@ -336,6 +336,14 @@ void aether_ui_file_icon_set(int handle, const char* path);
 // 1 if this image widget currently carries a picture. The driver reports it,
 // so a spec can tell a real icon from an empty box.
 int aether_ui_image_has_content(int handle);
+// How a picture fills its box: 0 original (natural size), 1 contain (scale to
+// fit, keep aspect), 2 cover (fill the box, keep aspect, crop the overflow),
+// 3 stretch (fill the box, distort). The getter reports the mode actually
+// APPLIED: a Win32 STATIC can only do original and stretch, so contain and
+// cover degrade to original there (never to stretch, since distortion is the
+// thing a fill mode exists to avoid) and the getter says so.
+void aether_ui_image_set_fill(int handle, int mode);
+int aether_ui_image_get_fill(int handle);
 
 // Menus (Group 5b) — native menu bars and context menus.
 // Backend-implemented on Win32 (HMENU), GTK (GMenu), AppKit (NSMenu).

@@ -95,7 +95,7 @@ exports (
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
     vlist_scrollable, vlist_container,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
-    image, image_from_bytes, image_size, file_icon, set_file_icon,
+    image, image_from_bytes, image_size, image_fill, file_icon, set_file_icon,
     canvas_widget, canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
     canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
     canvas_set_clip_rects, canvas_reset_clip,
@@ -374,6 +374,7 @@ extern aether_ui_sheet_dismiss_impl(handle: int)
 extern aether_ui_image_create(filepath: string) -> int
 extern aether_ui_image_from_bytes(data: string, length: int) -> int
 extern aether_ui_image_set_size(handle: int, width: int, height: int)
+extern aether_ui_image_set_fill(handle: int, mode: int)
 extern aether_ui_file_icon_create(path: string) -> int
 extern aether_ui_file_icon_set(handle: int, path: string)
 
@@ -4172,6 +4173,24 @@ image_from_bytes(_ctx: ptr, data: string, length: int) {
 
 image_size(handle: int, width: int, height: int) {
     aether_ui_image_set_size(handle, width, height)
+}
+
+// image_fill(handle, mode): how the picture fills its box.
+//   "original" natural size
+//   "contain"  scale to fit, keep aspect (letterboxed)
+//   "cover"    fill the box, keep aspect, crop the overflow
+//   "stretch"  fill the box, distort
+// A thumbnail grid wants "cover"; without one, images distort or overflow.
+// NB win32 can only do original and stretch (a STATIC scales through one
+// style bit), so contain and cover degrade to original there, never to
+// stretch: distortion is what a fill mode exists to prevent. The driver's
+// "fill" field reports what was applied, not what was asked for.
+image_fill(handle: int, mode: string) {
+    m = 0
+    if string.equals(mode, "contain") == 1 { m = 1 }
+    if string.equals(mode, "cover") == 1   { m = 2 }
+    if string.equals(mode, "stretch") == 1 { m = 3 }
+    aether_ui_image_set_fill(handle, m)
 }
 
 // file_icon(path): the icon the OS uses FOR THAT KIND OF FILE, which is a

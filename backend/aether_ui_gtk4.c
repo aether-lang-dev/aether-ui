@@ -3860,15 +3860,44 @@ void aether_ui_sheet_dismiss_impl(int handle) {
 }
 
 // Image widget
+// GtkPicture, not GtkImage, for anything that shows a PICTURE: GtkImage is an
+// icon widget and always scales down keeping aspect, so cover and stretch are
+// not expressible on it. GtkPicture has content-fit, which is exactly the four
+// modes. file_icon stays on GtkImage because a themed GIcon is an icon, and
+// only GtkImage can show one.
 int aether_ui_image_create(const char* filepath) {
     ensure_gtk_init();
     GtkWidget* img;
     if (filepath && *filepath) {
-        img = gtk_image_new_from_file(filepath);
+        img = gtk_picture_new_for_filename(filepath);
     } else {
-        img = gtk_image_new();
+        img = gtk_picture_new();
     }
+    gtk_picture_set_can_shrink(GTK_PICTURE(img), TRUE);
+    // Explicit, so both backends agree on what an untouched image does.
+    gtk_picture_set_content_fit(GTK_PICTURE(img), GTK_CONTENT_FIT_CONTAIN);
     return aether_ui_register_widget(img);
+}
+
+void aether_ui_image_set_fill(int handle, int mode) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_PICTURE(w)) return;
+    GtkContentFit fit = GTK_CONTENT_FIT_SCALE_DOWN;
+    if (mode == 1)      fit = GTK_CONTENT_FIT_CONTAIN;
+    else if (mode == 2) fit = GTK_CONTENT_FIT_COVER;
+    else if (mode == 3) fit = GTK_CONTENT_FIT_FILL;
+    gtk_picture_set_content_fit(GTK_PICTURE(w), fit);
+}
+
+int aether_ui_image_get_fill(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_PICTURE(w)) return 0;
+    switch (gtk_picture_get_content_fit(GTK_PICTURE(w))) {
+        case GTK_CONTENT_FIT_CONTAIN: return 1;
+        case GTK_CONTENT_FIT_COVER:   return 2;
+        case GTK_CONTENT_FIT_FILL:    return 3;
+        default:                      return 0;
+    }
 }
 
 // Decode encoded image bytes into an image widget (no temp file). GTK4's
@@ -3876,17 +3905,19 @@ int aether_ui_image_create(const char* filepath) {
 // the resulting GdkTexture is a GdkPaintable a GtkImage displays directly.
 int aether_ui_image_from_bytes(const char* data, int length) {
     ensure_gtk_init();
-    GtkWidget* img = gtk_image_new();
+    GtkWidget* img = gtk_picture_new();
+    gtk_picture_set_can_shrink(GTK_PICTURE(img), TRUE);
+    gtk_picture_set_content_fit(GTK_PICTURE(img), GTK_CONTENT_FIT_CONTAIN);
     if (data && length > 0) {
         GBytes* bytes = g_bytes_new(data, (gsize)length);
         GError* err = NULL;
         GdkTexture* tex = gdk_texture_new_from_bytes(bytes, &err);
         g_bytes_unref(bytes);
         if (tex) {
-            gtk_image_set_from_paintable(GTK_IMAGE(img), GDK_PAINTABLE(tex));
+            gtk_picture_set_paintable(GTK_PICTURE(img), GDK_PAINTABLE(tex));
             g_object_unref(tex);
         } else if (err) {
-            g_clear_error(&err);   // stays an empty image on decode failure
+            g_clear_error(&err);   // stays an empty picture on decode failure
         }
     }
     return aether_ui_register_widget(img);
@@ -3941,16 +3972,24 @@ void aether_ui_file_icon_set(int handle, const char* path) {
 
 int aether_ui_image_has_content(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (!w || !GTK_IS_IMAGE(w)) return 0;
-    return gtk_image_get_storage_type(GTK_IMAGE(w)) != GTK_IMAGE_EMPTY ? 1 : 0;
+    if (!w) return 0;
+    if (GTK_IS_PICTURE(w)) {
+        return gtk_picture_get_paintable(GTK_PICTURE(w)) != NULL ? 1 : 0;
+    }
+    if (GTK_IS_IMAGE(w)) {
+        return gtk_image_get_storage_type(GTK_IMAGE(w)) != GTK_IMAGE_EMPTY ? 1 : 0;
+    }
+    return 0;
 }
 
 void aether_ui_image_set_size(int handle, int width, int height) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (w && GTK_IS_IMAGE(w)) {
+    if (!w) return;
+    if (GTK_IS_IMAGE(w)) {
+        // An icon sizes by pixel-size; the request alone leaves it tiny.
         gtk_image_set_pixel_size(GTK_IMAGE(w), width > height ? width : height);
-        gtk_widget_set_size_request(w, width, height);
     }
+    gtk_widget_set_size_request(w, width, height);
 }
 
 // ---------------------------------------------------------------------------
@@ -6021,7 +6060,7 @@ static const char* widget_type_name(GtkWidget* w) {
     if (GTK_IS_BOX(w) && g_object_get_data(G_OBJECT(w), "aeui-tabs")) return "tabs";
     if (GTK_IS_OVERLAY(w)) return "zstack";
     if (GTK_IS_DRAWING_AREA(w)) return "canvas";
-    if (GTK_IS_IMAGE(w)) return "image";
+    if (GTK_IS_IMAGE(w) || GTK_IS_PICTURE(w)) return "image";
     if (GTK_IS_BOX(w)) {
         GtkOrientation o = aeui_box_orientation(w);
         return o == GTK_ORIENTATION_VERTICAL ? "vstack" : "hstack";

@@ -1,0 +1,50 @@
+// Aether UI image fill example: how a picture fills a box it does not match.
+//
+// image(path) + image_size() set a bounding box but said nothing about HOW
+// the picture fills it, so a thumbnail either distorted or overflowed. The
+// four modes are the ones every toolkit names: original, contain, cover,
+// stretch. The source here is deliberately 4x2 and the boxes are square, so
+// the modes are visibly different rather than incidentally equal.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). The spec reads back the EFFECTIVE mode per image.
+
+import ui
+import ui (window, vstack, hstack, text, image, image_size, image_fill,
+    divider, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("image fill", 460, 380) {
+        vstack(8) {
+            text("one 4x2 picture, four ways of filling a 96x96 box (default is contain)")
+            divider()
+
+            hstack(10) {
+                a = image("examples/imagefill_demo/swatch.png")
+                image_size(a, 96, 96)
+                image_fill(a, "original")
+                text("original")
+            }
+            hstack(10) {
+                b = image("examples/imagefill_demo/swatch.png")
+                image_size(b, 96, 96)
+                image_fill(b, "contain")
+                text("contain")
+            }
+            hstack(10) {
+                c = image("examples/imagefill_demo/swatch.png")
+                image_size(c, 96, 96)
+                image_fill(c, "cover")
+                text("cover")
+            }
+            hstack(10) {
+                d = image("examples/imagefill_demo/swatch.png")
+                image_size(d, 96, 96)
+                image_fill(d, "stretch")
+                text("stretch")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
