@@ -238,7 +238,7 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 | `pick_folder(title, start_dir)` | `SELECT_FOLDER` chooser | `NSOpenPanel` (directories) | `SHBrowseForFolderW` |
 | `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | `WM_KEYDOWN` translated ahead of `IsDialogMessageW` |
 | `on_file_drop(cb)` | `GtkDropTarget` over `GDK_TYPE_FILE_LIST` | `NSPasteboardTypeFileURL` | `DragAcceptFiles` + `WM_DROPFILES` |
-| `draggable(h, path)` | `GtkDragSource` over a `GFile` | `NSDraggingSession` over an `NSURL` | payload recorded, **real drag still to land** (needs OLE `DoDragDrop`) |
+| `draggable(h, path)` | `GtkDragSource` over a `GFile` | `NSDraggingSession` over an `NSURL` | OLE `DoDragDrop` offering `CF_HDROP` |
 
 `open_file(title, start_dir)`, `save_file(title, name)` and `pick_folder` are
 native modals, so all three return `""` under `AETHER_UI_HEADLESS` rather than
