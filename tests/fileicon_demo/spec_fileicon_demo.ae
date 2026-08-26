@@ -34,19 +34,22 @@ main() {
                 "file_icon(\"\") is an empty box, not a broken one")
         }
 
-        spec.it("image_tint recolours a template image, where it can") callback {
+        spec.it("image_tint recolours a template image") callback {
             b = uidriver.get_body("/widgets")
-            // The tint field is the EFFECTIVE one: a backend that cannot tint
-            // reports nothing even after being asked, so this reads as
-            // "tinted on the backends that can" rather than as a promise.
+            // All three backends tint now: contentTintColor over a template
+            // image on AppKit, the CSS colour of a symbolic GIcon on GTK4,
+            // and a recoloured DIB on win32. The field is still the EFFECTIVE
+            // tint, so this fails rather than passing quietly if any backend
+            // goes back to only recording the request.
             tinted = uidriver.count_occurrences(b, "\"tint\":\"#337fff\"")
-            if string.contains(b, "backend: win32") == 1 {
-                // No native tint on a STATIC. Reporting one would be a lie,
-                // so the field must be absent, not wrong.
-                spec.assert_eq(tinted, 0, "win32 does not claim a tint it cannot do")
-            } else {
-                spec.assert_eq(tinted, 1, "exactly the tinted icon reports the colour")
-            }
+            spec.assert_eq(tinted, 1, "exactly the tinted icon reports the colour")
+            // The control: exactly ONE widget carries a tint field at all.
+            // Counting a label string here instead was backend-dependent and
+            // wrong, because GTK4 emits a label as both "text" and
+            // "a11y_name" while AppKit emits it once. Counting the field
+            // itself is the claim being made and reads the same everywhere.
+            any_tint = uidriver.count_occurrences(b, "\"tint\":")
+            spec.assert_eq(any_tint, 1, "no other widget reports a tint")
         }
 
         spec.it("set_file_icon rebinds a live widget") callback {

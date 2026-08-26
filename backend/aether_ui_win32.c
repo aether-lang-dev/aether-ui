@@ -4808,17 +4808,157 @@ int aether_ui_image_has_content(int handle) {
 // TO ORIGINAL rather than to stretch: distortion is the exact thing a fill mode
 // exists to prevent, so silently distorting would be worse than not scaling.
 // get_fill reports what was applied, as truncate and overlay material do.
-// No native tint. A STATIC draws the bitmap or icon it was handed; recolouring
-// one means compositing a new bitmap through GDI+ on every repaint, which is a
-// different feature from a style bit. get_tint therefore reports -1 even after
-// a set, so a caller can see it was not applied rather than assume it was.
+// Tinting a template image: keep the ALPHA SHAPE, replace the colour. That is
+// what the other two backends do (contentTintColor over a template image on
+// AppKit, the CSS colour a symbolic GIcon paints itself with on GTK4).
+//
+// The earlier note here said this would mean compositing on every repaint,
+// which is what made it look like a different class of feature. It does not:
+// a tint changes only when someone sets one, so the recolour happens ONCE and
+// the STATIC is handed the result. The original is kept so untinting restores
+// it rather than approximating it back.
+//
+// Returns a new top-down 32bpp DIB, or NULL. The caller owns it.
+static HBITMAP w32_tint_bitmap(HBITMAP src, COLORREF rgb) {
+    BITMAP bm;
+    if (!src || !GetObject(src, sizeof(bm), &bm)) return NULL;
+    int w = bm.bmWidth, h = bm.bmHeight;
+    if (w <= 0 || h <= 0) return NULL;
+
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth       = w;
+    bi.bmiHeader.biHeight      = -h;          // negative: top-down rows
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    HDC dc = GetDC(NULL);
+    if (!dc) return NULL;
+    unsigned char* out_px = NULL;
+    HBITMAP out = CreateDIBSection(dc, &bi, DIB_RGB_COLORS,
+                                   (void**)&out_px, NULL, 0);
+    unsigned char* src_px = (unsigned char*)malloc((size_t)w * h * 4);
+    if (!out || !out_px || !src_px) {
+        if (src_px) free(src_px);
+        if (out) DeleteObject(out);
+        ReleaseDC(NULL, dc);
+        return NULL;
+    }
+    GetDIBits(dc, src, 0, h, src_px, &bi, DIB_RGB_COLORS);
+
+    // CRITICAL: an image with no usable alpha must not become invisible. A
+    // 24bpp source has no alpha channel at all, and plenty of 32bpp bitmaps
+    // carry zero in that byte while being fully opaque. Either way, taking
+    // the alpha at face value would tint the shape to nothing.
+    int any_alpha = 0;
+    for (int i = 0; i < w * h; i++) {
+        if (src_px[i * 4 + 3] != 0) { any_alpha = 1; break; }
+    }
+    for (int i = 0; i < w * h; i++) {
+        unsigned char a = any_alpha ? src_px[i * 4 + 3] : 255;
+        out_px[i * 4 + 0] = GetBValue(rgb);
+        out_px[i * 4 + 1] = GetGValue(rgb);
+        out_px[i * 4 + 2] = GetRValue(rgb);
+        out_px[i * 4 + 3] = a;
+    }
+    free(src_px);
+    ReleaseDC(NULL, dc);
+    return out;
+}
+
+// The untinted original per widget handle, so untint restores rather than
+// approximates, and so re-tinting starts from the source instead of tinting
+// an already-tinted copy.
+static HBITMAP* w32_tint_orig = NULL;
+static int*     w32_tint_rgb  = NULL;   // packed 0xRRGGBB | 0x1000000, or 0
+static int      w32_tint_len  = 0;
+
+static void w32_tint_slots(int handle) {
+    if (handle <= w32_tint_len) return;
+    int want = handle + 16;
+    w32_tint_orig = (HBITMAP*)realloc(w32_tint_orig, sizeof(HBITMAP) * want);
+    w32_tint_rgb  = (int*)realloc(w32_tint_rgb, sizeof(int) * want);
+    for (int i = w32_tint_len; i < want; i++) {
+        w32_tint_orig[i] = NULL;
+        w32_tint_rgb[i]  = 0;
+    }
+    w32_tint_len = want;
+}
+
 void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) {
-    (void)handle; (void)on; (void)r; (void)g; (void)b;
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
+    w32_tint_slots(handle);
+
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    UINT kind = (st & SS_ICON) ? IMAGE_ICON : IMAGE_BITMAP;
+
+    if (!on) {
+        HBITMAP orig = w32_tint_orig[handle - 1];
+        if (orig) {
+            HBITMAP cur = (HBITMAP)SendMessageW(w->hwnd, STM_SETIMAGE,
+                                                IMAGE_BITMAP, (LPARAM)orig);
+            if (cur && cur != orig) DeleteObject(cur);
+            w32_tint_orig[handle - 1] = NULL;
+        }
+        w32_tint_rgb[handle - 1] = 0;
+        InvalidateRect(w->hwnd, NULL, TRUE);
+        return;
+    }
+
+    // Start from the ORIGINAL when one is already stashed, so tinting twice
+    // does not stack.
+    HBITMAP base = w32_tint_orig[handle - 1];
+    int had_orig = base != NULL;
+    if (!base) {
+        if (kind == IMAGE_ICON) {
+            // An icon has no bitmap to recolour directly; take its colour
+            // plane. The control becomes bitmap-backed from here, which is
+            // why the style flips with it.
+            HICON ic = (HICON)SendMessageW(w->hwnd, STM_GETIMAGE, IMAGE_ICON, 0);
+            if (!ic) return;
+            ICONINFO ii;
+            memset(&ii, 0, sizeof(ii));
+            if (!GetIconInfo(ic, &ii)) return;
+            base = ii.hbmColor;
+            if (ii.hbmMask && ii.hbmMask != base) DeleteObject(ii.hbmMask);
+            if (!base) return;
+            st &= ~SS_ICON;
+            st |= SS_BITMAP;
+            SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+        } else {
+            base = (HBITMAP)SendMessageW(w->hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
+            if (!base) return;
+        }
+    }
+
+    COLORREF rgb = RGB((int)(r * 255) & 255, (int)(g * 255) & 255,
+                       (int)(b * 255) & 255);
+    HBITMAP tinted = w32_tint_bitmap(base, rgb);
+    if (!tinted) return;
+
+    HBITMAP prev = (HBITMAP)SendMessageW(w->hwnd, STM_SETIMAGE,
+                                         IMAGE_BITMAP, (LPARAM)tinted);
+    // Keep the first original; free only bitmaps we made ourselves, never the
+    // one being kept for untint.
+    if (!had_orig) {
+        w32_tint_orig[handle - 1] = base;
+        if (prev && prev != base) DeleteObject(prev);
+    } else if (prev && prev != base) {
+        DeleteObject(prev);
+    }
+    w32_tint_rgb[handle - 1] = (((int)(r * 255) & 255) << 16)
+                             | (((int)(g * 255) & 255) << 8)
+                             |  ((int)(b * 255) & 255) | 0x1000000;
+    InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
 int aether_ui_image_get_tint(int handle) {
-    (void)handle;
-    return -1;
+    if (handle < 1 || handle > w32_tint_len) return -1;
+    int v = w32_tint_rgb[handle - 1];
+    return (v & 0x1000000) ? v : -1;
 }
 
 void aether_ui_image_set_fill(int handle, int mode) {
