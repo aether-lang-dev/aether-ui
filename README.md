@@ -236,7 +236,7 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 | `image_tint(h, r, g, b)` / `image_untint(h)` | CSS colour of a symbolic `GIcon` | template image + `contentTintColor` | **no native tint**, reported as not applied |
 | `file_icon(path)` / `set_file_icon(h, path)` | `GIcon` from the content type | `NSWorkspace iconForFile` | `SHGetFileInfoW` |
 | `pick_folder(title, start_dir)` | `SELECT_FOLDER` chooser | `NSOpenPanel` (directories) | `SHBrowseForFolderW` |
-| `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | registry + driver route; **real keypress path still to land** |
+| `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | `WM_KEYDOWN` translated ahead of `IsDialogMessageW` |
 | `on_file_drop(cb)` | `GtkDropTarget` over `GDK_TYPE_FILE_LIST` | `NSPasteboardTypeFileURL` | `DragAcceptFiles` + `WM_DROPFILES` |
 | `draggable(h, path)` | `GtkDragSource` over a `GFile` | `NSDraggingSession` over an `NSURL` | payload recorded, **real drag still to land** (needs OLE `DoDragDrop`) |
 
