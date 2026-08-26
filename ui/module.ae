@@ -4289,10 +4289,10 @@ image_fill(handle: int, mode: string) {
 // image_untint(handle) puts it back.
 //
 // macOS marks the image as a template and sets contentTintColor; GTK4 sets
-// the CSS colour a symbolic GIcon paints itself with. NB win32 has NO native
-// equivalent (recolouring a STATIC's bitmap means compositing a new one
-// through GDI+ on every repaint), so a tint does not apply there, and the
-// driver's "tint" field reports what was applied rather than what was asked.
+// the CSS colour a symbolic GIcon paints itself with; win32 recolours the
+// bitmap once and hands the STATIC the result, keeping the original so
+// image_untint restores it rather than approximating it back. The driver's
+// "tint" field reports what was applied rather than what was asked.
 //   image_tint(icon, 0.2, 0.5, 1.0)
 image_tint(handle: int, r: float, g: float, b: float) {
     aether_ui_image_set_tint(handle, 1, r, g, b)

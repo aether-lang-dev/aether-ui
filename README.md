@@ -233,7 +233,7 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 |------|------|--------|-------|
 | `text_truncate(h, mode)` | `PangoEllipsizeMode` | `NSLineBreakByTruncating*` | `SS_ENDELLIPSIS` / `SS_PATHELLIPSIS`; **no head ellipsis, so head applies as tail** |
 | `image_fill(h, mode)` | `GtkPicture` content-fit | `NSImageScaling`, cover drawn directly | one style bit only; **contain and cover apply as original, never stretch** |
-| `image_tint(h, r, g, b)` / `image_untint(h)` | CSS colour of a symbolic `GIcon` | template image + `contentTintColor` | **no native tint**, reported as not applied |
+| `image_tint(h, r, g, b)` / `image_untint(h)` | CSS colour of a symbolic `GIcon` | template image + `contentTintColor` | bitmap recoloured once, original kept for untint |
 | `file_icon(path)` / `set_file_icon(h, path)` | `GIcon` from the content type | `NSWorkspace iconForFile` | `SHGetFileInfoW` |
 | `pick_folder(title, start_dir)` | `SELECT_FOLDER` chooser | `NSOpenPanel` (directories) | `SHBrowseForFolderW` |
 | `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | `WM_KEYDOWN` translated ahead of `IsDialogMessageW` |
