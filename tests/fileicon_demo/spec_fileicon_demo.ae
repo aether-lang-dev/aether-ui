@@ -43,10 +43,13 @@ main() {
             // goes back to only recording the request.
             tinted = uidriver.count_occurrences(b, "\"tint\":\"#337fff\"")
             spec.assert_eq(tinted, 1, "exactly the tinted icon reports the colour")
-            // The control beside it: if both reported a tint the field would
-            // prove nothing about image_tint having been called.
-            plain = uidriver.count_occurrences(b, "same icon, no tint")
-            spec.assert_eq(plain, 1, "the untinted icon is still there, untinted")
+            // The control: exactly ONE widget carries a tint field at all.
+            // Counting a label string here instead was backend-dependent and
+            // wrong, because GTK4 emits a label as both "text" and
+            // "a11y_name" while AppKit emits it once. Counting the field
+            // itself is the claim being made and reads the same everywhere.
+            any_tint = uidriver.count_occurrences(b, "\"tint\":")
+            spec.assert_eq(any_tint, 1, "no other widget reports a tint")
         }
 
         spec.it("set_file_icon rebinds a live widget") callback {
