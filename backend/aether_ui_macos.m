@@ -559,6 +559,25 @@ const char* aether_ui_widget_drag_payload_impl(int handle) {
 @implementation AetherDragRecognizer
 @end
 
+// stringWithUTF8String: returns NIL for bytes that are not valid UTF-8, and
+// fileURLWithPath:nil RAISES. So a path from anywhere other than this Mac's
+// own filesystem could take the app down: a path read from a network share, a
+// config file, or a listing produced on Linux, all of which an app may hand
+// to file_icon or draggable.
+//
+// Measured rather than assumed: APFS REJECTS a non-UTF-8 filename outright
+// (creating one fails with EILSEQ), so the local filesystem will never hand
+// you such a path, and both conversions return nil for one. The exposure is
+// the API surface, not the disk. Returning nil and doing nothing is the point
+// either way: an icon that does not appear beats a process that raises.
+static NSString* aeui_path_string(const char* path) {
+    if (!path || !*path) return nil;
+    NSString* s = [[NSFileManager defaultManager]
+        stringWithFileSystemRepresentation:path length:strlen(path)];
+    if (s) return s;
+    return [NSString stringWithUTF8String:path];   // last resort; may be nil
+}
+
 @interface AetherDragStarter : NSObject
 + (void)begin:(AetherDragRecognizer*)g;
 @end
@@ -568,7 +587,9 @@ const char* aether_ui_widget_drag_payload_impl(int handle) {
     const char* path = aether_ui_widget_drag_payload_impl(g.widgetHandle);
     if (!path || !*path) return;
     NSView* v = [g view];
-    NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    NSString* p = aeui_path_string(path);
+    if (!p) return;                       // undecodable: no drag, not a crash
+    NSURL* url = [NSURL fileURLWithPath:p];
     NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:url];
     [item setDraggingFrame:[v bounds] contents:nil];
     if (!aeui_drag_source) aeui_drag_source = [[AetherDragSource alloc] init];
@@ -2892,9 +2913,12 @@ static char* aeui_run_open_panel(const char* title, const char* start_dir,
     [panel setCanChooseDirectories:folders ? YES : NO];
     [panel setAllowsMultipleSelection:NO];
     if (start_dir && *start_dir) {
-        [panel setDirectoryURL:
-            [NSURL fileURLWithPath:[NSString stringWithUTF8String:start_dir]
-                       isDirectory:YES]];
+        NSString* dir = aeui_path_string(start_dir);
+        // No start directory beats a crash: the panel simply opens wherever
+        // the platform would have opened it.
+        if (dir) {
+            [panel setDirectoryURL:[NSURL fileURLWithPath:dir isDirectory:YES]];
+        }
     }
     if ([panel runModal] == NSModalResponseOK) {
         NSURL* url = [[panel URLs] firstObject];
@@ -4021,8 +4045,8 @@ int aether_ui_image_from_bytes(const char* data, int length) {
 // NSWorkspace answers for a path that does not exist too: it falls back to
 // the extension, which is what a directory listing needs before it stats.
 static NSImage* aeui_icon_for_path(const char* path) {
-    if (!path || !*path) return nil;
-    NSString* p = [NSString stringWithUTF8String:path];
+    NSString* p = aeui_path_string(path);
+    if (!p) return nil;   // iconForFile: requires a non-nil path
     return [[NSWorkspace sharedWorkspace] iconForFile:p];
 }
 
