@@ -491,12 +491,49 @@ void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert)
 // NSStackView root would make it an arranged subview and shove the app's own
 // widgets aside. When no overlay is open the tree is visually identical to
 // having mounted the root directly.
+// The window's content view doubles as the file-drop target: it already
+// spans the whole window and outlives every widget in it, so a drop lands
+// wherever the pointer is rather than only over a particular control.
 @interface AetherOverlayHost : NSView
 @end
 @implementation AetherOverlayHost
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    return aether_ui_window_file_drop_deliver(NULL) ? NSDragOperationCopy
+                                                    : NSDragOperationNone;
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL*>* urls = [[sender draggingPasteboard]
+        readObjectsForClasses:@[[NSURL class]]
+                      options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (![urls count]) return NO;
+    NSMutableArray* paths = [NSMutableArray array];
+    for (NSURL* u in urls) { if ([u path]) [paths addObject:[u path]]; }
+    NSString* joined = [paths componentsJoinedByString:@"\n"];
+    return aether_ui_window_file_drop_deliver([joined UTF8String]) ? YES : NO;
+}
 @end
 
+static AeClosure* window_file_drop_closure = NULL;
+
+int aether_ui_window_file_drop_deliver(const char* paths) {
+    if (!window_file_drop_closure || !window_file_drop_closure->fn) return 0;
+    // A NULL probe (draggingEntered) asks only whether anyone is listening,
+    // so the cursor can show copy-or-refuse before the mouse is released.
+    if (!paths) return 1;
+    ((void(*)(void*, const char*))window_file_drop_closure->fn)(
+        window_file_drop_closure->env, paths);
+    return 1;
+}
+
 static AetherOverlayHost* overlay_host = nil;
+
+void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
+    window_file_drop_closure = (AeClosure*)boxed_closure;
+    if (overlay_host) {
+        [overlay_host registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+    }
+}
 // The initial-size floor (see applicationDidFinishLaunching). Retracted by the
 // first explicit resize, so window(w,h) is a starting size, not a cage.
 static NSLayoutConstraint* aeui_win_floor_w = nil;
@@ -532,6 +569,11 @@ static NSLayoutConstraint* aeui_win_cap_h = nil;
             [root.bottomAnchor constraintEqualToAnchor:host.bottomAnchor].active = YES;
             [self.window setContentView:host];
             overlay_host = host;
+            // A handler registered BEFORE the window existed still gets its
+            // types registered, the same deferral shortcuts use.
+            if (window_file_drop_closure) {
+                [host registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+            }
 
             // Force a layout pass now. A headless run never displays the
             // window, and without this every widget_rect would answer 0x0 —

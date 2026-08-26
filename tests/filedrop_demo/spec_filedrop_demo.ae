@@ -1,0 +1,53 @@
+// spec_filedrop_demo.ae: files dropped on the window reach the app (issue #17).
+//
+// A real drag cannot be synthesised on a machine with no seat, so the driver
+// hands the SAME closure a real drop does, via POST /window/filedrop. What
+// this pins down is that a MULTI-file drop arrives as several paths rather
+// than one, which is the part that quietly breaks: the paths travel as one
+// newline-separated string, so a missing decode or a missing split turns two
+// files into one oddly-named file and nothing errors.
+//
+// Run via ci.sh Phase 5e8, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/filedrop_demo/bin/filedrop_demo &
+//   UI_SPEC=filedrop_demo/spec_filedrop_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "window file drop over AetherUIDriver") {
+
+        spec.it("starts with nothing dropped") callback {
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "drops: 0", "no drops yet")
+            spec.assert_contains(b, "first path: (none)", "and no path")
+        }
+
+        spec.it("a single file arrives with its path") callback {
+            uidriver.post_ok("/window/filedrop?paths=/home/me/notes.md", "drop one")
+            ok = uidriver.wait_body_contains("/widgets", "first path: /home/me/notes.md", 20)
+            spec.assert_true(ok, "the app got the path")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "drops: 1", "one drop")
+            spec.assert_contains(b, "files in last drop: 1", "carrying one file")
+        }
+
+        spec.it("a multi-file drop arrives as SEVERAL paths") callback {
+            uidriver.post_ok("/window/filedrop?paths=/tmp/one.txt%0A/tmp/two.md",
+                             "drop two")
+            ok = uidriver.wait_body_contains("/widgets", "files in last drop: 2", 20)
+            // The whole point: two files, not one string with a %0A in it.
+            spec.assert_true(ok, "both files came through as separate paths")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "first path: /tmp/one.txt",
+                "and the first path is not carrying the second")
+            spec.assert_eq(string.contains(b, "%0A"), 0,
+                "no percent-encoding leaked into the app")
+            spec.assert_contains(b, "drops: 2", "two drops so far")
+        }
+    }
+    spec.run_summary(fw)
+}

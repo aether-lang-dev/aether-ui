@@ -599,6 +599,17 @@ void aether_ui_shortcut_impl(const char* combo, void* boxed_closure);
 // would break typing into whatever has focus. mods is a bitmask:
 // 1 shift, 2 ctrl, 4 alt, 8 super/command.
 void aether_ui_window_on_key_impl(void* boxed_closure);
+// Files dropped onto the window, the most common drag-and-drop case by far
+// and the one an editor or file manager cannot do without. The closure gets
+// the paths NEWLINE-SEPARATED in one string: the DSL splits that into a list,
+// which keeps the C ABI a plain char* instead of building an Aether list
+// across the boundary. NSPasteboardTypeFileURL / GtkDropTarget over
+// GDK_TYPE_FILE_LIST / WM_DROPFILES.
+void aether_ui_window_on_file_drop_impl(void* boxed_closure);
+// Deliver a drop. Returns 1 if a handler was registered and ran. The real
+// drop path and the driver's /window/filedrop both end here, since a real
+// drag cannot be synthesised on a headless machine.
+int aether_ui_window_file_drop_deliver(const char* paths_newline_separated);
 // Deliver a key to that handler. Returns 1 if a handler was registered and
 // ran. Both the real key path and the driver's /window/key end up here, so a
 // spec exercises the same closure a keypress would.
