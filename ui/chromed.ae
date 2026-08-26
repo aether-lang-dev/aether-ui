@@ -17,7 +17,8 @@ exports ( enable )
 
 import ui
 import ui (canvas_widget)
-import ui.chrome (chrome_tokens, chrome_measure, chrome_control, CHROME_NORMAL)
+import ui.chrome (chrome_tokens, chrome_measure, chrome_control,
+                  chrome_toggle, chrome_toggle_measure, CHROME_NORMAL)
 import vg (scene_new, vg_root, scene_set_deferred, vg_flush, scene_free_recording)
 import vg.backend.gtk (gtk_backend_new)
 import vg.grammar.factories
@@ -25,6 +26,7 @@ import std.string
 
 extern lrint(x: float) -> long
 extern box_closure(f: fn) -> ptr
+extern unbox_closure(boxed: ptr) -> fn
 extern aether_ui_chrome_face_set_impl(boxed: ptr)
 extern aether_ui_widget_set_child_impl(parent_handle: int, child_handle: int)
 extern aether_ui_canvas_create_impl(width: int, height: int) -> int
@@ -63,10 +65,77 @@ _btn_face(handle: int, label: string) {
     _face(cv, label, w, h)
 }
 
-// Register the face renderer. Inert without AETHER_UI_CHROME=drawn —
-// ui.btn checks the flag before consulting the cell.
+// ── toggle ──────────────────────────────────────────────────────────
+// The toggle face must RE-RENDER on every state change (the knob slides,
+// the track recolours), whatever caused it — pointer, driver /toggle, or
+// set_toggle — so this path is creation-owning: it builds the native
+// toggle itself with a WRAPPED on_change that repaints the face after
+// invoking the user's callback. A malloc'd cell carries the handles the
+// wrapper needs; closures capture it by value before the fields are
+// written, which is safe because field reads through the pointer are
+// live (the turtle/auto_hide capture rule).
+
+struct ToggleFace {
+    handle: int
+    cv: int
+    label: string
+}
+
+extern aether_ui_toggle_create(label: string, boxed_closure: ptr) -> int
+extern aether_ui_toggle_get_active(handle: int) -> int
+extern aether_ui_chrome_toggle_set_impl(boxed: ptr)
+extern aether_ui_canvas_clear_impl(canvas_id: int)
+extern malloc(size: int) -> ptr
+
+_invoke_user(cb: fn, active: int) {
+    cb(active)
+}
+
+_toggle_render(tf: *ToggleFace) {
+    t = chrome_tokens()
+    w, h = chrome_toggle_measure(tf.label, t)
+    on = aether_ui_toggle_get_active(tf.handle)
+    aether_ui_canvas_clear_impl(tf.cv)
+    opts = factories.opts_new()
+    factories.opts_set_view_box(opts, "0 0 ${w} ${h}")
+    factories.opts_set_width(opts, w)
+    factories.opts_set_height(opts, h)
+    ctx = factories.create_aevg_context(opts)
+    sc = scene_new(ctx, gtk_backend_new(tf.cv))
+    scene_set_deferred(sc, 1)
+    root = vg_root(sc)
+    _n, _w2, _h2 = chrome_toggle(root, 0.0, 0.0, tf.label, on, t, CHROME_NORMAL, 0)
+    vg_flush(sc)
+    scene_free_recording(sc)
+    aether_ui_canvas_redraw_impl(tf.cv)
+}
+
+_mk_toggle(label: string, user_boxed: ptr) -> int {
+    tf = malloc(24) as *ToggleFace
+    tf.handle = 0
+    tf.cv = 0
+    tf.label = label
+    wrapped = box_closure(|active: int| {
+        ucb = unbox_closure(user_boxed)
+        _invoke_user(ucb, active)
+        _toggle_render(tf)
+    })
+    handle = aether_ui_toggle_create(label, wrapped)
+    tf.handle = handle
+    t = chrome_tokens()
+    w, h = chrome_toggle_measure(label, t)
+    cv = aether_ui_canvas_create_impl(lrint(w) as int, lrint(h) as int)
+    tf.cv = cv
+    aether_ui_widget_set_child_impl(handle, canvas_widget(cv))
+    _toggle_render(tf)
+    return handle
+}
+
+// Register the face renderers. Inert without AETHER_UI_CHROME=drawn —
+// ui.btn/ui.toggle check the flag before consulting the cells.
 enable() {
-    aether_ui_chrome_face_set_impl(box_closure(|handle: int, label: string| {
-        _btn_face(handle, label)
-    }))
+    // Named fns, not lambdas: a closure literal cannot carry a return
+    // annotation, and box_closure boxes a named fn just as happily.
+    aether_ui_chrome_face_set_impl(box_closure(_btn_face))
+    aether_ui_chrome_toggle_set_impl(box_closure(_mk_toggle))
 }

@@ -133,9 +133,16 @@ import std.os (os_getenv)   // transition honours AETHER_UI_NO_ANIMATION
 // closure-param bug in vg's tween_fill (the #1657 family — filed).
 extern aether_ui_widget_set_child_impl(parent_handle: int, child_handle: int)
 extern aether_ui_chrome_face_get_impl() -> ptr
+extern aether_ui_chrome_toggle_get_impl() -> ptr
 
 _chrome_invoke_face(cb: fn, handle: int, label: string) {
     cb(handle, label)
+}
+
+// The toggle cell is CREATION-OWNING (it must wrap the user callback with
+// a face re-render), so it returns the handle it built.
+_chrome_invoke_toggle(cb: fn, label: string, user_boxed: ptr) -> int {
+    return cb(label, user_boxed)
 }
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
@@ -1040,7 +1047,19 @@ securefield(_ctx: ptr, placeholder: string, on_change: fn) {
 
 toggle(_ctx: ptr, label: string, on_change: fn) {
     boxed = box_closure(on_change)
-    handle = aether_ui_toggle_create(label, boxed)
+    handle = 0
+    made = 0
+    if _chrome_on() == 1 {
+        cell = aether_ui_chrome_toggle_get_impl()
+        if cell != null {
+            tcb = unbox_closure(cell)
+            handle = _chrome_invoke_toggle(tcb, label, boxed)
+            made = 1
+        }
+    }
+    if made == 0 {
+        handle = aether_ui_toggle_create(label, boxed)
+    }
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }

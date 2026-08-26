@@ -40,6 +40,30 @@ main() {
             spec.assert_gt(fid2, 0, "-1 button has one too")
         }
 
+        spec.it("the toggle face re-renders on state change") callback {
+            tg = uidriver.widget_id_of("toggle", "Accept terms")
+            spec.assert_gt(tg, 0, "toggle found by TEXT (check-button stash works)")
+            face = uidriver.widget_id_of_parent("canvas", tg)
+            spec.assert_gt(face, 0, "toggle hosts a canvas face child")
+
+            // The ON track is EXACTLY the focus token #3B82F6 (-12877066
+            // packed) — a colour only chrome_toggle's on-branch paints.
+            // Toggle, then sweep the canvases for it; toggle back to leave
+            // the app as found (chromeparity's inverts-twice runs in the
+            // OTHER suite process, but leave-no-trace is cheap hygiene).
+            uidriver.toggle_widget(tg)
+            found = 0
+            i = 1
+            while i < 8 {
+                v = uidriver.get_body("/canvas/${i}/pixel?x=8&y=14&w=120&h=30")
+                if string.contains(v, "-12877066") == 1 { found = 1 }
+                i = i + 1
+            }
+            uidriver.toggle_widget(tg)
+            spec.assert_eq(found, 1,
+                "after toggling ON, some face track is the focus blue")
+        }
+
         spec.it("the face carries real chrome pixels") callback {
             // The chrome body fill is the tokens' normal bg #F3F4F6 =
             // -789258 packed. Probe the face canvas's centre through the

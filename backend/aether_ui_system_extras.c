@@ -476,3 +476,12 @@ void aether_ui_vgfont_set(void* f) { g_aeui_vgfont = f; }
 static void* g_aeui_chrome_face = 0;   // boxed |handle: int, label: string|
 void aether_ui_chrome_face_set_impl(void* boxed) { g_aeui_chrome_face = boxed; }
 void* aether_ui_chrome_face_get_impl(void) { return g_aeui_chrome_face; }
+
+// Toggle twin of the face renderer: ui.chromed registers a CREATION-OWNING
+// closure |label: string, user_boxed: ptr| -> int here — it must build the
+// native toggle itself so it can wrap the user's on_change with a face
+// re-render (the knob/track must move on every change, wherever it came
+// from: pointer, driver /toggle, or set_toggle).
+static void* g_aeui_chrome_toggle = 0;
+void aether_ui_chrome_toggle_set_impl(void* boxed) { g_aeui_chrome_toggle = boxed; }
+void* aether_ui_chrome_toggle_get_impl(void) { return g_aeui_chrome_toggle; }

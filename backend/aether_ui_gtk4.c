@@ -7455,6 +7455,17 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
     if (!p || !c) return;
     GtkWidget* cur = gtk_widget_get_parent(c);
     if (cur) gtk_widget_unparent(c);
+    if (GTK_IS_CHECK_BUTTON(p)) {
+        /* GTK4 CheckButton is NOT a GtkButton subclass — own branch, same
+           stash-then-replace: the drawn toggle face covers the whole
+           control, and /widgets keeps answering the original label. */
+        const char* lbl = gtk_check_button_get_label(GTK_CHECK_BUTTON(p));
+        if (lbl && *lbl)
+            g_object_set_data_full(G_OBJECT(p), "aeui-face-label",
+                                   g_strdup(lbl), g_free);
+        gtk_check_button_set_child(GTK_CHECK_BUTTON(p), c);
+        return;
+    }
     if (GTK_IS_BUTTON(p)) {
         const char* lbl = gtk_button_get_label(GTK_BUTTON(p));
         if (lbl && *lbl)
