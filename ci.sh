@@ -60,7 +60,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -615,6 +615,17 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=imagefill_demo/spec_imagefill_demo \
     run_server_test "$(EX_BIN imagefill_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" imagefill_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e7: AetherUIDriver fixed-bar + filling-body layout spec ==="
+# Issue #5: a pinned toolbar must keep its height while the body absorbs the
+# slack, across a resize. The failure was never a crash, only wrong numbers,
+# so the spec resizes the window and reads heights back.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=barfill_demo/spec_barfill_demo \
+    run_server_test "$(EX_BIN barfill_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" barfill_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

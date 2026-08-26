@@ -25,6 +25,7 @@ exports (
     canvas_w, canvas_h, canvas_widget_id, canvas_debug_area, canvas_debug_commands,
     canvas_debug_w, canvas_debug_h, canvas_painted_pixels,
     wait_server, wait_body_contains, count_occurrences,
+    wait_root_height_change,
     menus_body, menu_handle_with, menu_activate, menu_activate_item
 )
 
@@ -408,6 +409,20 @@ count_occurrences(hay: string, needle: string) -> int {
         i = string.index_of_from(hay, needle, from)
     }
     return n
+}
+
+// Wait for a widget's height to CHANGE from a known value. A resize is not
+// instant and the new number is not knowable in advance (a window manager may
+// grant a different size than asked), so polling for "different" is the only
+// honest wait.
+wait_root_height_change(id: int, was: int, tries: int) -> int {
+    i = 0
+    while i < tries {
+        if widget_int_field_by_id(id, "h") != was { return 1 }
+        sleep(150)
+        i = i + 1
+    }
+    return 0
 }
 
 wait_body_contains(path: string, needle: string, tries: int) -> int {

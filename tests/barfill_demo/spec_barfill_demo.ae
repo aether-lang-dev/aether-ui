@@ -1,0 +1,91 @@
+// spec_barfill_demo.ae: a fixed bar with a filling body survives a resize
+// (issue #5).
+//
+// The reported failure was not a crash. Every widget existed and answered;
+// the numbers were wrong. A pinned toolbar ballooned because two rows split
+// the slack between them, and the root did not follow the window at all. So
+// this spec resizes the window and reads heights back, which is the only way
+// that class of bug is visible.
+//
+// Two shapes, because the report described both: a row pinned with height()
+// and a row with its natural height, each beside a fill_height() body.
+//
+// Run via ci.sh Phase 5e7, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/barfill_demo/bin/barfill_demo &
+//   UI_SPEC=barfill_demo/spec_barfill_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "fixed bar + filling body over AetherUIDriver") {
+
+        spec.it("the bar is its pinned height and the body takes the rest") callback {
+            root = uidriver.widget_id_of("vstack", "")
+            bar  = uidriver.widget_id_of("hstack", "")
+            spec.assert_gt(bar, 0, "the toolbar is there")
+
+            bar_h = uidriver.widget_int_field_by_id(bar, "h")
+            spec.assert_eq(bar_h, 56, "the pinned bar is exactly its height()")
+
+            root_h = uidriver.widget_int_field_by_id(root, "h")
+            spec.assert_gt(root_h, 56, "the root is taller than just its bar")
+        }
+
+        // The invariant is "whatever the ROOT gained, the body gained", not
+        // "the window is exactly 700 tall". A window manager may grant a
+        // different size than asked, and asserting the requested number
+        // would make this a test of the WM rather than of the layout.
+        spec.it("resizing gives every new pixel to the body") callback {
+            root = uidriver.widget_id_of("vstack", "")
+            bar  = uidriver.widget_id_of("hstack", "")
+            bar2 = uidriver.widget_id_last_of("hstack", "")
+            body = uidriver.widget_id_last_of("vstack", "")
+            root_before = uidriver.widget_int_field_by_id(root, "h")
+            body_before = uidriver.widget_int_field_by_id(body, "h")
+            // The NATURAL row's height is whatever the platform makes it (56
+            // on AppKit, 34 under GTK4). Pinning a number here would test the
+            // theme's metrics; what matters is that it does not CHANGE.
+            bar2_before = uidriver.widget_int_field_by_id(bar2, "h")
+            spec.assert_gt(body_before, 0, "the body has a height to start with")
+            spec.assert_gt(bar2_before, 0, "the natural row has a height")
+
+            uidriver.resize_window(460, 700)
+            grew = uidriver.wait_root_height_change(root, root_before, 20)
+            spec.assert_true(grew, "the root followed the window")
+
+            root_after = uidriver.widget_int_field_by_id(root, "h")
+            body_after = uidriver.widget_int_field_by_id(body, "h")
+            spec.assert_eq(body_after - body_before, root_after - root_before,
+                "every pixel the root gained went to the body")
+
+            spec.assert_eq(uidriver.widget_int_field_by_id(bar, "h"), 56,
+                "the pinned bar did not grow")
+            spec.assert_eq(uidriver.widget_int_field_by_id(bar2, "h"), bar2_before,
+                "and the natural-height row did not balloon either")
+        }
+
+        spec.it("shrinking takes the pixels back from the body, not the bar") callback {
+            root = uidriver.widget_id_of("vstack", "")
+            bar  = uidriver.widget_id_of("hstack", "")
+            body = uidriver.widget_id_last_of("vstack", "")
+            root_before = uidriver.widget_int_field_by_id(root, "h")
+            body_before = uidriver.widget_int_field_by_id(body, "h")
+
+            uidriver.resize_window(460, 500)
+            shrank = uidriver.wait_root_height_change(root, root_before, 20)
+            spec.assert_true(shrank, "the root followed the window down")
+
+            root_after = uidriver.widget_int_field_by_id(root, "h")
+            body_after = uidriver.widget_int_field_by_id(body, "h")
+            spec.assert_eq(body_before - body_after, root_before - root_after,
+                "every pixel the root lost came off the body")
+            spec.assert_eq(uidriver.widget_int_field_by_id(bar, "h"), 56,
+                "the bar is still its pinned height")
+        }
+    }
+    spec.run_summary(fw)
+}
