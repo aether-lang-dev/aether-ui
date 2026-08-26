@@ -365,6 +365,14 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         // for reports the one it actually applied.
         n += snprintf(buf + n, bufsize - n, ",\"has_image\":%s,\"fill\":\"%s\"",
                       aether_ui_image_has_content(handle) ? "true" : "false", fm[f]);
+        // The tint actually APPLIED. A backend that cannot tint reports none
+        // even after being asked, so a spec can tell "tinted" from "asked and
+        // ignored" instead of trusting the request.
+        int tint = aether_ui_image_get_tint(handle);
+        if (tint >= 0) {
+            n += snprintf(buf + n, bufsize - n, ",\"tint\":\"#%06x\"",
+                          tint & 0xFFFFFF);
+        }
     } else if (strcmp(type, "toggle") == 0) {
         n += snprintf(buf + n, bufsize - n, ",\"active\":%s",
                       h->toggle_active(handle) ? "true" : "false");

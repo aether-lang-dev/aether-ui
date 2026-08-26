@@ -3923,6 +3923,36 @@ void aether_ui_sheet_dismiss_impl(int handle) {
 }
 @end
 
+void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSImageView class]]) return;
+    NSImageView* iv = (NSImageView*)v;
+    if (!on) {
+        [iv setContentTintColor:nil];
+        [[iv image] setTemplate:NO];
+        return;
+    }
+    // contentTintColor only reaches a TEMPLATE image: AppKit draws the alpha
+    // shape in the tint and throws the source colours away. Marking it here
+    // is what makes the tint visible rather than silently ignored.
+    [[iv image] setTemplate:YES];
+    [iv setContentTintColor:[NSColor colorWithRed:r green:g blue:b alpha:1.0]];
+    [iv setNeedsDisplay:YES];
+}
+
+int aether_ui_image_get_tint(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSImageView class]]) return -1;
+    NSColor* c = [(NSImageView*)v contentTintColor];
+    if (!c) return -1;
+    c = [c colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+    if (!c) return -1;
+    return (((int)([c redComponent]   * 255) & 255) << 16)
+         | (((int)([c greenComponent] * 255) & 255) << 8)
+         |  ((int)([c blueComponent]  * 255) & 255)
+         | 0x1000000;
+}
+
 void aether_ui_image_set_fill(int handle, int mode) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || ![v isKindOfClass:[NSImageView class]]) return;

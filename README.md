@@ -217,6 +217,7 @@ actually applied, never the one that was requested.
 ```aether
 ui.text_truncate(label, "middle")     // none | head | middle | tail
 ui.image_fill(pic, "cover")           // original | contain | cover | stretch
+ui.image_tint(icon, 0.2, 0.5, 1.0)    // recolour a template/symbolic image
 icon = ui.file_icon("/some/path")     // the OS icon for that KIND of file
 ui.set_file_icon(icon, "other.md")    // rebind a live icon widget
 dir  = ui.pick_folder("New file in", "")   // native folder chooser
@@ -226,6 +227,7 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 |------|------|--------|-------|
 | `text_truncate(h, mode)` | `PangoEllipsizeMode` | `NSLineBreakByTruncating*` | `SS_ENDELLIPSIS` / `SS_PATHELLIPSIS`; **no head ellipsis, so head applies as tail** |
 | `image_fill(h, mode)` | `GtkPicture` content-fit | `NSImageScaling`, cover drawn directly | one style bit only; **contain and cover apply as original, never stretch** |
+| `image_tint(h, r, g, b)` / `image_untint(h)` | CSS colour of a symbolic `GIcon` | template image + `contentTintColor` | **no native tint**, reported as not applied |
 | `file_icon(path)` / `set_file_icon(h, path)` | `GIcon` from the content type | `NSWorkspace iconForFile` | `SHGetFileInfoW` |
 | `pick_folder(title, start_dir)` | `SELECT_FOLDER` chooser | `NSOpenPanel` (directories) | `SHBrowseForFolderW` |
 | `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | registry + driver route; **real keypress path still to land** |
