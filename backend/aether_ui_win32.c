@@ -1763,6 +1763,12 @@ static void apply_window_theme(HWND hwnd) {
     }
 }
 
+// Defined further down with the shortcut registry they belong to; the message
+// loop above needs them here.
+static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
+                            char* name, int namesize);
+static int aeui_win32_fire_shortcut(const char* combo);
+
 void aether_ui_app_run_raw(int app_handle) {
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
@@ -1851,6 +1857,27 @@ void aether_ui_app_run_raw(int app_handle) {
         // gp/falling_blocks navigate with exactly those. (The driver's
         // /canvas/key path bypasses this loop entirely, so specs are
         // unaffected either way — this is for real keyboard input.)
+        // Accelerators and the any-key handler get the keystroke BEFORE
+        // IsDialogMessageW, for the same reason the canvas does: dialog nav
+        // eats Return, Escape and Tab, and a registered Ctrl+R must not be
+        // typed into whatever has focus. This is the piece #47 was about, and
+        // it deliberately reuses the registry the driver route already fires,
+        // so a real key and POST /window/key end in the same closure.
+        if (msg.message == WM_KEYDOWN) {
+            char w32_combo[64], w32_name[64];
+            int w32_mods = w32_key_from_msg(msg.wParam, w32_combo,
+                                            sizeof(w32_combo), w32_name,
+                                            sizeof(w32_name));
+            if (w32_mods >= 0) {
+                if (aeui_win32_fire_shortcut(w32_combo)) {
+                    continue;   // consumed: do not also type it
+                }
+                // Not bound: offer it to the any-key handler and let the key
+                // carry on, so a focused control still receives what was
+                // typed.
+                aether_ui_window_key_deliver(w32_name, w32_mods);
+            }
+        }
         int canvas_has_focus =
             (msg.message == WM_KEYDOWN || msg.message == WM_CHAR) &&
             aeui_hwnd_is_key_canvas(msg.hwnd);
@@ -2095,8 +2122,9 @@ static int w32_ctx_popup(Widget* w, int sx, int sy) {
 // verbatim (the app and the driver use identical combo strings, so no
 // GTK-style normalization is needed here). shortcut_when adds a predicate;
 // shortcut_chord adds a two-key state machine. A future real-keyboard path
-// (a WM_KEYDOWN → combo translation feeding aeui_win32_fire_shortcut) would
-// reuse this same registry.
+// A real keypress reaches this registry through w32_key_from_msg, called from
+// the message loop before IsDialogMessageW: same combo strings the driver
+// route sends, so a keystroke and POST /window/key end in the same closure.
 typedef struct {
     char* combo;             // as written ("Ctrl+E")
     AeClosure* closure;
@@ -2239,6 +2267,85 @@ static int w32_chord_feed(const char* combo) {
 }
 
 // Fire the shortcut(s) bound to `combo` (chords first). Returns 1 if handled.
+// A real keypress, translated to the combo string the registry stores and the
+// driver sends. Those two have always been "identical combo strings, matched
+// verbatim"; this makes the KEYBOARD produce the same spelling, which is the
+// piece that was missing (#47).
+//
+// Two outputs, because two things want the key: `combo` for the accelerator
+// registry ("Ctrl+R"), and `name` + mods for the any-key handler ("r", 2),
+// exactly as GTK4 and AppKit hand them over.
+static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
+                            char* name, int namesize) {
+    // Modifier keys alone are not a keypress: reporting them would fire an
+    // any-key handler on every Ctrl the user touches on the way to Ctrl+R.
+    // Returns the modifier bitmask, or -1 for "not a key worth reporting".
+    // NOT 0 for that: 0 is a perfectly good mask, the one an unmodified
+    // letter carries, so conflating them would drop every plain keystroke.
+    if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN
+        || vk == VK_RWIN) {
+        return -1;
+    }
+    // Names match aeui_key_name_for_event on AppKit and gdk_keyval_name on
+    // GTK4. An app comparing k == "BackSpace" has to see the same string
+    // whichever backend delivered it.
+    const char* n = NULL;
+    switch (vk) {
+        case VK_LEFT:   n = "Left";      break;
+        case VK_RIGHT:  n = "Right";     break;
+        case VK_UP:     n = "Up";        break;
+        case VK_DOWN:   n = "Down";      break;
+        case VK_RETURN: n = "Return";    break;
+        case VK_ESCAPE: n = "Escape";    break;
+        case VK_TAB:    n = "Tab";       break;
+        case VK_SPACE:  n = "space";     break;
+        case VK_BACK:   n = "BackSpace"; break;
+        case VK_DELETE: n = "Delete";    break;
+        case VK_HOME:   n = "Home";      break;
+        case VK_END:    n = "End";       break;
+        case VK_PRIOR:  n = "Page_Up";   break;
+        case VK_NEXT:   n = "Page_Down"; break;
+        default: break;
+    }
+    char one[2] = {0, 0};
+    if (!n) {
+        if (vk >= VK_F1 && vk <= VK_F24) {
+            snprintf(name, namesize, "F%d", (int)(vk - VK_F1 + 1));
+            n = name;
+        } else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
+            // VK codes for letters are the UPPERCASE character. The any-key
+            // name is lower-case, matching what the other two deliver for an
+            // unmodified letter; the combo keeps the upper-case form the app
+            // writes in shortcut("Ctrl+R").
+            one[0] = (char)((vk >= 'A' && vk <= 'Z') ? vk + 32 : vk);
+            snprintf(name, namesize, "%s", one);
+            n = name;
+        } else {
+            return -1;  // punctuation and the rest: not worth guessing
+        }
+    } else {
+        snprintf(name, namesize, "%s", n);
+    }
+
+    int ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) ? 1 : 0;
+    int shift = (GetKeyState(VK_SHIFT)   & 0x8000) ? 1 : 0;
+    int alt   = (GetKeyState(VK_MENU)    & 0x8000) ? 1 : 0;
+    int super = ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) ? 1 : 0;
+
+    // The combo spells the KEY as the app writes it: shortcut("Ctrl+R"), so
+    // an upper-case letter here even though the any-key name is lower-case.
+    char keypart[32];
+    if ((vk >= 'A' && vk <= 'Z')) {
+        keypart[0] = (char)vk; keypart[1] = '\0';
+    } else {
+        snprintf(keypart, sizeof(keypart), "%s", name);
+    }
+    snprintf(combo, combosize, "%s%s%s%s%s",
+             ctrl ? "Ctrl+" : "", shift ? "Shift+" : "",
+             alt ? "Alt+" : "", super ? "Super+" : "", keypart);
+    return (ctrl ? 2 : 0) | (shift ? 1 : 0) | (alt ? 4 : 0) | (super ? 8 : 0);
+}
+
 static int aeui_win32_fire_shortcut(const char* combo) {
     if (w32_chord_feed(combo)) return 1;
     int fired = 0;
