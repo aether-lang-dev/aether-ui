@@ -3328,6 +3328,49 @@ static gboolean on_window_any_key(GtkEventControllerKey* ctl, guint keyval,
     return FALSE;   // never swallow: the focused widget still gets the key
 }
 
+// Files dropped on the window. A GtkDropTarget over GDK_TYPE_FILE_LIST on the
+// window itself, so a drop anywhere in it counts rather than only over one
+// widget.
+static AeClosure* aeui_file_drop_closure = NULL;
+
+int aether_ui_window_file_drop_deliver(const char* paths) {
+    if (!aeui_file_drop_closure || !aeui_file_drop_closure->fn) return 0;
+    if (!paths) return 1;   // presence probe
+    ((void(*)(void*, const char*))aeui_file_drop_closure->fn)(
+        aeui_file_drop_closure->env, paths);
+    return 1;
+}
+
+static gboolean on_window_file_drop(GtkDropTarget* target, const GValue* value,
+                                    double x, double y, gpointer data) {
+    (void)target; (void)x; (void)y; (void)data;
+    if (!G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST)) return FALSE;
+    GSList* files = g_value_get_boxed(value);
+    GString* joined = g_string_new(NULL);
+    for (GSList* l = files; l; l = l->next) {
+        char* path = g_file_get_path(G_FILE(l->data));
+        if (!path) continue;
+        if (joined->len) g_string_append_c(joined, '\n');
+        g_string_append(joined, path);
+        g_free(path);
+    }
+    int ok = joined->len ? aether_ui_window_file_drop_deliver(joined->str) : 0;
+    g_string_free(joined, TRUE);
+    return ok ? TRUE : FALSE;
+}
+
+void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
+    aeui_file_drop_closure = (AeClosure*)boxed_closure;
+    if (!primary_window) return;   // attaches when the window appears
+    static int drop_attached = 0;
+    if (drop_attached) return;
+    GtkDropTarget* tgt = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    g_signal_connect(tgt, "drop", G_CALLBACK(on_window_file_drop), NULL);
+    gtk_widget_add_controller(GTK_WIDGET(primary_window),
+                              GTK_EVENT_CONTROLLER(tgt));
+    drop_attached = 1;
+}
+
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     aeui_window_key_closure = (AeClosure*)boxed_closure;
     if (!primary_window) return;   // attaches when the window appears

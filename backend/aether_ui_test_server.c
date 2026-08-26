@@ -1022,6 +1022,22 @@ static void handle_request_inner(aether_sock_t client_fd,
                  aether_ui_font_descent(size),
                  aether_ui_font_height(size));
         send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 1 && strncmp(path, "/window/filedrop", 16) == 0) {
+        // A real drag cannot be synthesised on a headless machine, so the
+        // driver hands the SAME closure a real drop would. paths= is
+        // newline-separated, percent-encoded by the client.
+        // Percent-decode: the separator between paths is a newline, which a
+        // client must encode as %0A. Without decoding, two paths arrive as
+        // one literal string containing "%0A" and the drop looks like a
+        // single file with a strange name.
+        const char* raw = extract_query_param(path, "paths");
+        char decoded[2048];
+        snprintf(decoded, sizeof(decoded), "%s", raw ? raw : "");
+        url_decode_keep_plus(decoded);
+        int fired = aether_ui_window_file_drop_deliver(decoded);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
+        send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 0 && strcmp(path, "/overlays") == 0) {
         // Overlay handles are 1-based and monotonic; the table is never
         // compacted, so a closed overlay stays listed with "live":0. Specs

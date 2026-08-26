@@ -2134,6 +2134,31 @@ void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
 // above, and lands with it.
 static AeClosure* w32_window_key_closure = NULL;
 
+// Files dropped on the window. DragAcceptFiles + WM_DROPFILES rather than an
+// OLE IDropTarget: this file speaks the same generation of API throughout,
+// WM_DROPFILES is exactly file drops (which is the case being asked for), and
+// it needs no COM plumbing to stay readable in C. Registered here; the
+// WM_DROPFILES arm in the window proc lands with the real key path.
+static AeClosure* w32_file_drop_closure = NULL;
+
+void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
+    w32_file_drop_closure = (AeClosure*)boxed_closure;
+    // Window 1 is the primary in the multi-window registry. A handler set
+    // before the window exists still takes effect: app_create calls this
+    // again once there is an HWND to accept drops on.
+    if (w32_window_count > 0 && w32_windows[0].hwnd) {
+        DragAcceptFiles(w32_windows[0].hwnd, TRUE);
+    }
+}
+
+int aether_ui_window_file_drop_deliver(const char* paths) {
+    if (!w32_file_drop_closure || !w32_file_drop_closure->fn) return 0;
+    if (!paths) return 1;   // presence probe
+    ((void(*)(void*, const char*))w32_file_drop_closure->fn)(
+        w32_file_drop_closure->env, paths);
+    return 1;
+}
+
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     w32_window_key_closure = (AeClosure*)boxed_closure;
 }

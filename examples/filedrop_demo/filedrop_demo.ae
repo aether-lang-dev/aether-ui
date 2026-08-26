@@ -1,0 +1,43 @@
+// Aether UI file-drop example: files dropped onto the window.
+//
+// The drag-and-drop case an editor or a file manager cannot do without, and
+// the one #17 called the minimum. The window accepts a drop anywhere in it,
+// not only over one widget, which is what makes "drop files here" work
+// without a target the user has to aim at.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). A real drag cannot be synthesised headlessly, so the driver
+//   delivers to the same closure via POST /window/filedrop?paths=a%0Ab.
+
+import ui
+import ui (window, vstack, text, divider, on_file_drop, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    drops = 0
+
+    window("file drop", 460, 300) {
+        vstack(8) {
+            text("Drop files anywhere on this window")
+            divider()
+            count = text("drops: 0")
+            first = text("first path: (none)")
+            total = text("files in last drop: 0")
+
+            on_file_drop(|paths: ptr, n: int| {
+                drops = drops + 1
+                aether_ui_text_set_string(count, "drops: ${drops}")
+                aether_ui_text_set_string(total, "files in last drop: ${n}")
+                if n > 0 {
+                    aether_ui_text_set_string(first,
+                        string.concat("first path: ",
+                                      string.string_array_get(paths, 0)))
+                }
+            })
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

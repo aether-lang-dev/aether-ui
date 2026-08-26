@@ -89,6 +89,7 @@ SUITES=(
   "keyhandler|examples/keyhandler_demo|keyhandler_demo/spec_keyhandler_demo|"
   "imagefill|examples/imagefill_demo|imagefill_demo/spec_imagefill_demo|"
   "barfill|examples/barfill_demo|barfill_demo/spec_barfill_demo|"
+  "filedrop|examples/filedrop_demo|filedrop_demo/spec_filedrop_demo|"
   "listbox|examples/listbox_demo|listbox_demo/spec_listbox_demo|"
   "navstack|examples/navstackdemo|navstackdemo/spec_navstackdemo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"
