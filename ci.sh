@@ -640,6 +640,17 @@ if [ "$SPEC_OK" -eq 1 ]; then
 fi
 
 echo
+echo "=== Phase 5e9: AetherUIDriver SVG-as-widget spec ==="
+# The SVG half of #16: an SVG FILE drawn through vg rather than handed to a
+# platform decoder that cannot read it. Geometry is the check, because the
+# way this fails is a stretched canvas with the aspect thrown away.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=svgimage_demo/spec_svgimage_demo \
+    run_server_test "$(EX_BIN svgimage_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" svgimage_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 5f: AetherUIDriver listbox spec ==="
 # listbox (item 4 D1): rows are real widgets; the driver clicks a ROW (click
 # falls back to gesture handlers on non-buttons), selection reads back via

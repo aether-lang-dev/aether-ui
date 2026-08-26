@@ -1,0 +1,64 @@
+// spec_svgimage_demo.ae: an SVG file renders as a widget, at the right size
+// (the SVG half of issue #16).
+//
+// The driver cannot see pixels, so what it holds is GEOMETRY, which is where
+// this actually goes wrong. A canvas is created hexpand/vexpand TRUE so a
+// full-window canvas fills; a sized drawing is the opposite case, and without
+// pinning, the 2:1 badge was stretched to 340x202 and the aspect ratio
+// computed for it was thrown away. Both numbers below are ones that were
+// wrong before the pin.
+//
+// badge.svg is 200x100 on purpose: against a square fit, a wrong aspect is
+// visible in the numbers rather than hidden by a coincidence.
+//
+// Run via ci.sh Phase 5e9, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/svgimage_demo/bin/svgimage_demo &
+//   UI_SPEC=svgimage_demo/spec_svgimage_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "svg image over AetherUIDriver") {
+
+        spec.it("svg_image keeps the SVG's own aspect ratio") callback {
+            c = uidriver.widget_id_of("canvas", "")
+            spec.assert_gt(c, 0, "the SVG rendered into a canvas")
+            w = uidriver.widget_int_field_by_id(c, "w")
+            h = uidriver.widget_int_field_by_id(c, "h")
+            // The RELATION is the claim that must hold anywhere: a 200x100
+            // source stays 2:1 whatever the theme's minimums do to the
+            // absolute numbers. The exact pixels are asserted too, because
+            // this code pins width() and height() itself rather than leaving
+            // them to the layout.
+            spec.assert_eq(w, h * 2, "the 2:1 aspect survived")
+            spec.assert_eq(w, 120, "longer side is the size asked for")
+            spec.assert_eq(h, 60, "shorter side follows from it")
+        }
+
+        spec.it("svg_image_sized honours the caller's box instead") callback {
+            c = uidriver.widget_id_last_of("canvas", "")
+            w = uidriver.widget_int_field_by_id(c, "w")
+            h = uidriver.widget_int_field_by_id(c, "h")
+            spec.assert_eq(w, h, "a square box stayed square")
+            spec.assert_eq(w, 80, "exactly the width asked for")
+            spec.assert_eq(h, 80, "and the height, aspect deliberately ignored")
+        }
+
+        spec.it("a missing file is a 0 handle, not a crash") callback {
+            // A missing asset is a normal thing to hit. Taking the window
+            // down for it, or hanging, would both be worse than a widget
+            // that is not there.
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "missing file -> handle 0",
+                "the app is alive and told the truth about it")
+            // Two canvases, not three: the missing one made no widget.
+            n = uidriver.count_occurrences(b, "\"type\":\"canvas\"")
+            spec.assert_eq(n, 2, "no phantom canvas for the file that is not there")
+        }
+    }
+    spec.run_summary(fw)
+}

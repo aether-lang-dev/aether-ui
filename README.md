@@ -257,6 +257,28 @@ ui.on_file_drop(|paths: ptr, n: int| {               // files from another app
 ui.draggable(row, "/home/me/notes.md")               // drag a file OUT
 ```
 
+### SVG assets
+
+`image(path)` hands the file to the platform's image decoder, and none of the
+three decodes SVG dependably. aether-ui already ships a complete SVG stack in
+`vg` (the one `apps/svg_render_png` matches `rsvg-convert` with), so `ui.svg`
+routes an SVG through that instead: identical pixels on every backend, no
+platform decoder, no conversion step.
+
+```aether
+import ui.svg (svg_image, svg_image_sized)
+
+svg_image("assets/logo.svg", 64)          // longer side 64, aspect kept
+svg_image_sized("assets/logo.svg", 80, 24) // exact box, aspect ignored
+```
+
+Opt-in like `ui.icons`, and for the same reason: an app showing SVG assets
+should not have to link the icon vocabulary, and an app that wants a close
+glyph should not link the SVG parser. The result is a canvas (a drawing), not
+a bitmap, so `image_fill` and `image_tint` have nothing to act on; size it at
+the call. A file that cannot be read returns handle 0 rather than taking the
+window down.
+
 ## Reactive state
 
 ```aether
@@ -292,6 +314,7 @@ ui.set_progress(handle, 0.5)          // set progress bar
 | [`examples/imagefill_demo`](examples/imagefill_demo) | image_fill: original / contain / cover / stretch |
 | [`examples/keyhandler_demo`](examples/keyhandler_demo) | window_on_key type-ahead, and accelerator priority |
 | [`examples/filedrop_demo`](examples/filedrop_demo) | on_file_drop, files dropped from another app |
+| [`examples/svgimage_demo`](examples/svgimage_demo) | ui.svg: an SVG file as a widget, drawn through vg |
 | [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
 | [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
 
