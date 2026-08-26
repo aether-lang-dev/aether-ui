@@ -94,3 +94,41 @@ jobs:
 
       - name: Run the UI test pipeline
         run: ./ci.sh
+
+  # The Win32 backend is the one nobody can run here. There is no Windows leg
+  # (ci.sh's Windows path needs the aether repo's `make
+  # contrib-aether-ui-check`, a cross-repo dependency this workflow does not
+  # set up), so its sources have been edited and shipped without ever being
+  # COMPILED: eight commits touched aether_ui_win32.c in two days that way.
+  #
+  # This does not run anything, and does not pretend to. It cross-compiles,
+  # which is the difference between "mirrors the other backends" and "is known
+  # to build", for an apt package and about a second.
+  #
+  # Its own job on purpose. The GTK4 leg's install line carries a warning
+  # about being extended casually (adding gdb hung it for 45 minutes, twice),
+  # and an isolated job cannot take the real gates down with it. It needs no
+  # aether toolchain either: the backend sources compile against backend/ and
+  # the Windows SDK headers alone.
+  win32-crosscheck:
+    name: win32-crosscheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the mingw-w64 cross-compiler
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo -E apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+
+      - name: Cross-compile the Win32 backend
+        run: |
+          for src in backend/aether_ui_win32.c \
+                     backend/aether_ui_test_server.c \
+                     backend/aether_ui_system_extras.c; do
+            echo "--- $src"
+            x86_64-w64-mingw32-gcc -fsyntax-only -Ibackend "$src"
+          done
