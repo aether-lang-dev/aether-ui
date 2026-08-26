@@ -1,0 +1,40 @@
+// Aether UI fixed-bar + filling-body layout (issue #5).
+//
+// The standard desktop shape: a toolbar pinned to its own height, a body that
+// takes everything else and keeps taking it as the window resizes. The demo
+// exists to be MEASURED: the spec resizes the window through the driver and
+// reads back both rows' heights, because the failure mode is not a crash but
+// two rows quietly splitting the slack between them.
+
+import ui
+import ui (window, vstack, hstack, text, btn, height, fill_height,
+    enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("bar + body", 460, 400) {
+        vstack(0) {
+            bar = hstack(6) {
+                _b1 = btn("Open") callback { }
+                _b2 = btn("Save") callback { }
+                _t = text("toolbar")
+            }
+            height(bar, 56)
+
+            // Second shape from the report: a row with NO explicit height
+            // next to a filling body. The claim was that two low-hugging
+            // rows split the slack, ballooning the bar.
+            bar2 = hstack(6) {
+                _c1 = btn("Cut") callback { }
+                _c2 = text("natural-height row")
+            }
+
+            body = vstack(6) {
+                _t1 = text("body line one")
+                _t2 = text("body line two")
+            }
+            fill_height(body)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
