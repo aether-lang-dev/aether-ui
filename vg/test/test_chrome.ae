@@ -121,5 +121,27 @@ main() {
     assert_eq_str("control body fill themed",
                   element.element_last_fill(vg.node_element(cn)), "#F3F4F6")
 
+    // ── toggle: track+knob+label order, on/off track fills ──────────
+    tctx = mk_ctx()
+    tbk = record.backend_new()
+    tscene = vg.scene_new(tctx, tbk)
+    troot = vg.vg_root(tscene)
+    offn, tw1, th1 = chrome.chrome_toggle(troot, 0.0, 0.0, "Off", 0,
+                                          tokens, chrome.CHROME_NORMAL, 0)
+    // Dispatch order contract: track (rounded path), knob (circle), label.
+    assert_eq_str("toggle track is a rounded path", record.backend_kind(tbk, 0), "path")
+    assert_eq_str("toggle knob is a circle", record.backend_kind(tbk, 1), "circle")
+    assert_eq_str("toggle label is text", record.backend_kind(tbk, 2), "text")
+    assert_eq_str("OFF track fill is the inactive grey",
+                  element.element_last_fill(vg.node_element(offn)), "#D1D5DB")
+    onn, _tw2, _th2 = chrome.chrome_toggle(troot, 0.0, 60.0, "On", 1,
+                                           tokens, chrome.CHROME_NORMAL, 0)
+    assert_eq_str("ON track fill is the focus token",
+                  element.element_last_fill(vg.node_element(onn)), "#3B82F6")
+    // Measure under the stub: track h = 6 (zero metrics + air), w = 1.8*h
+    // + gap 8 + 2*pad_x = 10.8 + 8 + 28; h = track + 2*pad_y = 20.
+    assert_near("toggle measure w under stub", tw1, 46.8)
+    assert_near("toggle measure h under stub", th1, 20.0)
+
     println("=== test_chrome passed ===")
 }
