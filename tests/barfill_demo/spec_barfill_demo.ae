@@ -46,7 +46,12 @@ main() {
             body = uidriver.widget_id_last_of("vstack", "")
             root_before = uidriver.widget_int_field_by_id(root, "h")
             body_before = uidriver.widget_int_field_by_id(body, "h")
+            // The NATURAL row's height is whatever the platform makes it (56
+            // on AppKit, 34 under GTK4). Pinning a number here would test the
+            // theme's metrics; what matters is that it does not CHANGE.
+            bar2_before = uidriver.widget_int_field_by_id(bar2, "h")
             spec.assert_gt(body_before, 0, "the body has a height to start with")
+            spec.assert_gt(bar2_before, 0, "the natural row has a height")
 
             uidriver.resize_window(460, 700)
             grew = uidriver.wait_root_height_change(root, root_before, 20)
@@ -59,7 +64,7 @@ main() {
 
             spec.assert_eq(uidriver.widget_int_field_by_id(bar, "h"), 56,
                 "the pinned bar did not grow")
-            spec.assert_eq(uidriver.widget_int_field_by_id(bar2, "h"), 56,
+            spec.assert_eq(uidriver.widget_int_field_by_id(bar2, "h"), bar2_before,
                 "and the natural-height row did not balloon either")
         }
 
