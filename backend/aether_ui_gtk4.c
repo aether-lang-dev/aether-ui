@@ -5531,8 +5531,17 @@ static gboolean on_row_drop(GtkDropTarget* target, const GValue* value,
 // headless view of it honest.
 static GdkContentProvider* on_file_drag_prepare(GtkDragSource* src, double x,
                                                 double y, gpointer data) {
-    (void)src; (void)x; (void)y;
-    const char* path = (const char*)data;
+    (void)x; (void)y; (void)data;
+    // Read the CURRENT payload off the widget rather than capturing it when
+    // the source was armed. Capturing was wrong twice over: draggable() with
+    // a new path frees the old string through the set_data_full destructor,
+    // leaving the captured pointer dangling, and even before that free the
+    // drag would have offered the FIRST path forever, so a recycled row that
+    // rebinds its file would hand over the wrong one.
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(src));
+    const char* path = w ? (const char*)g_object_get_data(G_OBJECT(w),
+                                                          "aeui-dragfile")
+                         : NULL;
     if (!path || !*path) return NULL;
     GFile* f = g_file_new_for_path(path);
     GdkContentProvider* p = gdk_content_provider_new_typed(G_TYPE_FILE, f);
@@ -5554,7 +5563,8 @@ void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
     if (!g_object_get_data(G_OBJECT(w), "aeui-dragarmed")) {
         GtkDragSource* src = gtk_drag_source_new();
         gtk_drag_source_set_actions(src, GDK_ACTION_COPY);
-        g_signal_connect(src, "prepare", G_CALLBACK(on_file_drag_prepare), owned);
+        // No user_data: the handler reads the live payload off the widget.
+        g_signal_connect(src, "prepare", G_CALLBACK(on_file_drag_prepare), NULL);
         gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(src));
         g_object_set_data(G_OBJECT(w), "aeui-dragarmed", GINT_TO_POINTER(1));
     }
