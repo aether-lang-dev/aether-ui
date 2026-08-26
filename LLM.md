@@ -13,6 +13,8 @@ A declarative widget DSL for Aether, porting the Perry UI framework. It supports
 - **Cross-Platform ABI**: Any new widget functionality must be implemented in all three backends (GTK4, AppKit, Win32). Use the `aether_ui_backend.h` ABI as the single source of truth.
 - **Headless Testing**: All UI operations that would normally show a modal (alerts, file pickers) MUST honor the `AETHER_UI_HEADLESS` environment variable by returning early on CI to prevent hanging the test runner.
 - **AetherUIDriver**: The built-in HTTP test server is the primary way to test UI interactions. It must be maintained to expose widget state and mutations consistently across platforms.
+- **Report the EFFECTIVE state, never the requested one**: when a backend cannot do exactly what was asked, it applies the closest honest thing and its getter says which. A Win32 `STATIC` has no head ellipsis, so `text_truncate(h, "head")` applies tail and reports `tail`; contain and cover on an image apply as original there and report `original`; a `"blur"` scrim material degrades to `"tint"` and `overlay_material_effective` says so. A getter that echoes the request back cannot distinguish "applied" from "silently ignored", which makes any spec built on it green against the bug.
+- **State cross-platform defaults explicitly**: two toolkits will each have their own, and an unset default silently means different behaviour per backend. `GtkPicture` defaults to CONTAIN while `NSImageView` defaults to ProportionallyDown, so an image with no `image_fill` call behaved differently on Linux and macOS until both were set at creation.
 
 ## Branching: there isn't any
 Nic and Paul commit and push **direct to `main`**. No feature branches, no PRs.

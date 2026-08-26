@@ -207,6 +207,52 @@ a live window has "a life of its own" that ends on an external event, so only
 | Grid        | `ui.root_grid(cols, rspace, cspace)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
 | Menu bar    | `ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
 
+## Presentation, keys and drops
+
+Setters and handlers that control how existing widgets behave. Each names the
+platform mechanism, and where a platform cannot do something it is said here
+rather than left to be discovered: the driver reports the mode that was
+actually applied, never the one that was requested.
+
+```aether
+ui.text_truncate(label, "middle")     // none | head | middle | tail
+ui.image_fill(pic, "cover")           // original | contain | cover | stretch
+icon = ui.file_icon("/some/path")     // the OS icon for that KIND of file
+ui.set_file_icon(icon, "other.md")    // rebind a live icon widget
+dir  = ui.pick_folder("New file in", "")   // native folder chooser
+```
+
+| Verb | GTK4 | AppKit | Win32 |
+|------|------|--------|-------|
+| `text_truncate(h, mode)` | `PangoEllipsizeMode` | `NSLineBreakByTruncating*` | `SS_ENDELLIPSIS` / `SS_PATHELLIPSIS`; **no head ellipsis, so head applies as tail** |
+| `image_fill(h, mode)` | `GtkPicture` content-fit | `NSImageScaling`, cover drawn directly | one style bit only; **contain and cover apply as original, never stretch** |
+| `file_icon(path)` / `set_file_icon(h, path)` | `GIcon` from the content type | `NSWorkspace iconForFile` | `SHGetFileInfoW` |
+| `pick_folder(title, start_dir)` | `SELECT_FOLDER` chooser | `NSOpenPanel` (directories) | `SHBrowseForFolderW` |
+| `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | registry + driver route; **real keypress path still to land** |
+| `on_file_drop(cb)` | `GtkDropTarget` over `GDK_TYPE_FILE_LIST` | `NSPasteboardTypeFileURL` | `DragAcceptFiles` + `WM_DROPFILES` |
+
+`open_file(title, start_dir)`, `save_file(title, name)` and `pick_folder` are
+native modals, so all three return `""` under `AETHER_UI_HEADLESS` rather than
+block a machine with no seat to dismiss them.
+
+### Keys, and why there are two kinds
+
+`shortcut("Ctrl+R")` and friends answer *"was THIS combo pressed"*.
+`window_on_key` answers *"what was pressed"*, which is what type-ahead needs
+and what no number of registered shortcuts can express. The any-key handler
+fires only when no shortcut consumed the key, so accelerators keep priority,
+and it never swallows the key, so whatever has focus still receives it.
+
+```aether
+ui.shortcut("Ctrl+R") callback { reload() }          // a bound combo
+ui.window_on_key(|k: string, m: int| {               // anything at all
+    if k == "BackSpace" { go_up() }
+})
+ui.on_file_drop(|paths: ptr, n: int| {               // files from another app
+    first = string.string_array_get(paths, 0)
+})
+```
+
 ## Reactive state
 
 ```aether
@@ -237,6 +283,13 @@ ui.set_progress(handle, 0.5)          // set progress bar
 | [`examples/system`](examples/system) | alert, clipboard, dark mode detection, sheet |
 | [`examples/canvas`](examples/canvas) | canvas drawing, fill_rect, stroke, on_hover, on_double_click |
 | [`examples/testable`](examples/testable) | AetherUIDriver test server, sealed widgets, remote control banner |
+| [`examples/rebuild_demo`](examples/rebuild_demo) | clear_children / remove_child on a grid and a stack |
+| [`examples/fileicon_demo`](examples/fileicon_demo) | file_icon, set_file_icon, the OS icon for a kind of file |
+| [`examples/imagefill_demo`](examples/imagefill_demo) | image_fill: original / contain / cover / stretch |
+| [`examples/keyhandler_demo`](examples/keyhandler_demo) | window_on_key type-ahead, and accelerator priority |
+| [`examples/filedrop_demo`](examples/filedrop_demo) | on_file_drop, files dropped from another app |
+| [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
+| [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
 
 ## AetherUIDriver — automated UI testing, baked in
 
