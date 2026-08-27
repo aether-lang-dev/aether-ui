@@ -3377,6 +3377,16 @@ static void overlay_finalize_close(int overlay_handle) {
     if (!e) return;
     e->live = 0;
     e->exiting = 0;
+    /* UNREGISTER, not just detach -- the same rule navstack_pop documents.
+       `widgets` is a __strong array, so a closed overlay whose views are only
+       removed from their superview stays retained AND stays registered: the
+       census never falls, and widget_clicks still holds its callbacks, so the
+       driver can click a button inside a dialog that no longer exists. That
+       is not hypothetical -- the dead callback captures the app's overlay
+       handle variable, which by then names a DIFFERENT, live overlay, so
+       clicking a destroyed dialog's Close button dismisses the open one. */
+    if (e->scrim)   unregister_view_tree(e->scrim);
+    if (e->content) unregister_view_tree(e->content);
     if (e->scrim)   [e->scrim removeFromSuperview];
     if (e->content) [e->content removeFromSuperview];
     e->scrim = nil;

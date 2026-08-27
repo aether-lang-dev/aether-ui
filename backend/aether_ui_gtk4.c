@@ -2996,8 +2996,18 @@ static const char* aeui_tr_class(const char* kind, int entering) {
 
 // Actually detach the entry's widgets. Split out so a deferred exit tween can
 // call it once the animation finishes.
+static void unregister_widget_tree(GtkWidget* w);
+
 static void overlay_detach(OverlayEntry* e) {
     GtkOverlay* ov = aeui_window_overlay(e->window);
+    /* UNREGISTER FIRST, and it must be first: `widgets` holds RAW, unreffed
+       GtkWidget pointers, and gtk_overlay_remove_overlay drops the last ref,
+       so the widgets are finalized on the way out. Clearing the registry
+       afterwards is impossible (the tree is gone to walk) and leaving it
+       populated is worse than a leak -- every handle inside a closed overlay
+       would be a dangling pointer the next driver or app call dereferences. */
+    if (e->scrim)   unregister_widget_tree(e->scrim);
+    if (e->content) unregister_widget_tree(e->content);
     if (ov) {
         if (e->scrim) gtk_overlay_remove_overlay(ov, e->scrim);
         if (e->content) gtk_overlay_remove_overlay(ov, e->content);
