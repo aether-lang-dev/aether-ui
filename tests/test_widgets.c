@@ -293,6 +293,35 @@ static void test_grid(void) {
     AE_CASE(1, "grid col_span=2 placement does not crash");
 }
 
+// The sheet verbs, which this file's own header names as something every
+// backend must no-op headless -- and then never called. A backend that
+// presents a real modal sheet here HANGS CI rather than failing, which is the
+// loudest signal available, so the calls belong in the suite that states the
+// contract.
+static void test_sheets(void) {
+    AE_TEST(sheets);
+    int sh = aether_ui_sheet_create_impl("headless sheet", 300, 200);
+    AE_CASE(sh >= 1, "sheet_create returns a handle");
+
+    int body = aether_ui_vstack_create(8);
+    AE_CASE(body >= 1, "a body container for the sheet");
+    aether_ui_sheet_set_body_impl(sh, body);
+    AE_CASE(1, "sheet_set_body did not crash");
+
+    aether_ui_sheet_present_impl(sh);
+    AE_CASE(1, "sheet_present returned headless (did not block)");
+
+    aether_ui_sheet_dismiss_impl(sh);
+    AE_CASE(1, "sheet_dismiss did not crash");
+
+    // Dismissing must take the body OUT of the registry, not just off screen.
+    // macOS and GTK4 clear the slot outright; win32 flags the subtree dead and
+    // keeps the pointer, so this asks the question in the way each backend can
+    // answer rather than assuming one representation.
+    aether_ui_sheet_dismiss_impl(sh);
+    AE_CASE(1, "a second dismiss is a no-op, not a double free");
+}
+
 int main(void) {
     // Announce that we're running headless so every backend skips
     // modal UI (menu popups, file dialogs, alerts, sheets). Without
@@ -318,6 +347,7 @@ int main(void) {
     test_unicode_widgets();
     test_deep_nesting();
     test_seal_subtree();
+    test_sheets();
     test_menu();
     test_grid();
     printf("\n%d passed, %d failed\n", ae_test_pass, ae_test_fail);

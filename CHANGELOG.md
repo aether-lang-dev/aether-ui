@@ -25,6 +25,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only reader it gets. It paid for itself immediately, since
   `-Wmisleading-indentation` is what surfaced the unclamped gradient stops
   above.
+- GTK4 honours `AETHER_UI_HEADLESS` when presenting a sheet. It called
+  `gtk_window_present` unconditionally, so a headless run put a real sheet on
+  the desktop, on the backend CI uses for Linux, against a contract
+  `tests/test_widgets.c` states in its own header and names `sheet_present` in.
+  It now realizes without mapping, exactly as `window_show_impl` forty lines up
+  already did. macOS already guarded it and Win32 got it for free by
+  delegating to `window_show_impl`.
+- Dismissing a sheet unregisters the widgets inside it. No backend did, so a
+  dismissed body stayed listed in `/widgets` forever; on GTK4 the registry
+  holds raw, unreffed pointers and destroying the window finalizes its
+  children, so those entries dangled rather than merely leaked. On macOS the
+  unregister happens in `sheet_dismiss` itself rather than only from
+  `windowWillClose:`, because `-endSheet:` ends the modal session without
+  closing the window and sends no willClose. That is the path taken whenever
+  the app is not headless, so a headless-only test never reaches it.
+- macOS stops registering a dead widget for every sheet created. The sheet's
+  own `contentView` was registered and the handle thrown away
+  (`register_widget_typed(...) * 0 + idx`) under a comment saying callers could
+  reference it by handle. They never could: the caller gets the sheet index,
+  `sheet_set_body` replaces that `contentView` moments later, and the type it
+  was tagged with has no entry in the name table, so the orphan reported as a
+  plain `"widget"`. The two enum values left unused by its removal are gone
+  with it.
+
+### Notes
+
+- The sheet verbs had no coverage at all, in C or over the driver. They now
+  have both: `examples/sheet_demo` with `tests/sheet_demo/spec_sheet_demo.ae`
+  (5 cases, CI Phase 5e10 and a `sheet` suite in the spec matrix), and a
+  `sheets` case in the C suite, which takes it from 55 to 61 assertions. Four
+  of the five spec assertions fail on the previous code.
 
 ### Fixed
 
