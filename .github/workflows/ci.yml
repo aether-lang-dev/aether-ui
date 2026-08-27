@@ -124,13 +124,17 @@ jobs:
           sudo apt-get update
           sudo -E apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
 
+      # -Wall -Werror: this is the one backend nobody on the team can run, so
+      # the compiler is the only reader it gets. The gate ran at the default
+      # level while a backlog of pre-existing warnings made that unfair to
+      # whoever's change tripped it; the backlog is zero, so it closes here.
       - name: Cross-compile the Win32 backend
         run: |
           for src in backend/aether_ui_win32.c \
                      backend/aether_ui_test_server.c \
                      backend/aether_ui_system_extras.c; do
             echo "--- $src"
-            x86_64-w64-mingw32-gcc -fsyntax-only -Ibackend "$src"
+            x86_64-w64-mingw32-gcc -fsyntax-only -Wall -Werror -Ibackend "$src"
           done
 
       # Syntax is not the whole story: a Windows API declared in a header
