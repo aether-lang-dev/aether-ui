@@ -6920,6 +6920,27 @@ typedef struct {
     int result;
 } CanvasKeyAction;
 
+/* Canvas scroll. Unlike the pointer hooks this closure does not live in
+   CanvasState: canvas_on_scroll attaches it to the widget itself, next to the
+   GtkEventControllerScroll that normally delivers it, so the driver reads it
+   from the same place rather than keeping a second copy that could disagree. */
+static gboolean canvas_scroll_idle(gpointer data) {
+    CanvasClickAction* a = (CanvasClickAction*)data;
+    int wh = aether_ui_canvas_get_widget(a->canvas_id);
+    GtkWidget* w = aether_ui_get_widget(wh);
+    AeClosure* c = w ? (AeClosure*)g_object_get_data(G_OBJECT(w),
+                                                     "aeui-canvas-scroll")
+                     : NULL;
+    if (c && c->fn) {
+        ((void(*)(void*, double, double))c->fn)(c->env, a->x, a->y);
+        a->result = 0;
+    } else {
+        a->result = 3;
+    }
+    a->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 static gboolean canvas_key_idle(gpointer data) {
     CanvasKeyAction* a = (CanvasKeyAction*)data;
     CanvasState* cs = get_canvas_state(a->canvas_id);
@@ -7461,6 +7482,13 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
             canvas_key_idle(&ka);
             ctx->result = ka.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_SCROLL: {
+            CanvasClickAction ca = {0};
+            ca.canvas_id = ctx->handle; ca.x = ctx->dval; ca.y = ctx->dval2;
+            canvas_scroll_idle(&ca);
+            ctx->result = ca.result; ctx->done = 1;
             return;
         }
         case AETHER_DRV_CANVAS_KEYUP: {

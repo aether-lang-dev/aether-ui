@@ -1,0 +1,53 @@
+// Aether UI canvas-scroll example: canvas_on_scroll(canvas, cb).
+//
+// Wheel and two-finger scroll over a canvas. This was GTK4-only and an
+// honest no-op elsewhere -- the DSL comment said so -- which meant a shipped
+// app's zoom (apps/turtle scroll-to-zoom) did nothing on macOS or Windows.
+// It is now wired on all three: a GtkEventControllerScroll on GTK4,
+// -scrollWheel: on AppKit, WM_MOUSEWHEEL on win32.
+//
+// THE CONVENTION IS THE CONTRACT, and each platform reports it differently:
+//   dy < 0  is "away from the user", the conventional zoom-IN direction.
+// AppKit's scrollingDeltaY has the opposite sign and flips again under
+// natural scrolling; Windows' WM_MOUSEWHEEL is opposite and arrives in
+// multiples of 120. Each backend converts, so an app sees one convention.
+// Getting it wrong never fails loudly -- it silently inverts zoom -- which is
+// why the spec below asserts the SIGN, not merely that something fired.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, btn, root_vstack,
+    canvas_create, canvas_on_scroll, enable_test_server_root)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    zoom_in = 0
+    zoom_out = 0
+    label = 0
+    cv = 0
+
+    main_root = root_vstack(10) {
+        text("Canvas scroll demo")
+        label = text("in: 0 out: 0")
+        cv = canvas_create(240, 120)
+    }
+
+    canvas_on_scroll(cv) callback |dx: float, dy: float| {
+        // dy < 0 = away from the user = zoom in, per the DSL contract.
+        if dy < 0.0 {
+            zoom_in = zoom_in + 1
+        } else if dy > 0.0 {
+            zoom_out = zoom_out + 1
+        }
+        aether_ui_text_set_string(label, "in: ${zoom_in} out: ${zoom_out}")
+    }
+
+    app = ui.app_create("Canvas scroll demo", 320, 240)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

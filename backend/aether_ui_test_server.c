@@ -1102,6 +1102,9 @@ static void handle_request_inner(aether_sock_t client_fd,
             // BEFORE "/key": strstr("/keyup", "/key") also matches.
             ctx.action = AETHER_DRV_CANVAS_KEYUP;
             what = "no canvas keyup handler";
+        } else if (strstr(path, "/scroll")) {
+            ctx.action = AETHER_DRV_CANVAS_SCROLL;
+            what = "no canvas scroll handler";
         } else if (strstr(path, "/key")) {
             ctx.action = AETHER_DRV_CANVAS_KEY;
             what = "no canvas key handler";
@@ -1115,6 +1118,12 @@ static void handle_request_inner(aether_sock_t client_fd,
         const char* nm = extract_query_param(path, "name");
         if (xs) ctx.dval  = atof(xs);
         if (ys) ctx.dval2 = atof(ys);
+        // Scroll speaks dx/dy, not x/y: a wheel event carries a delta, not a
+        // position, and naming them x/y would read as "scrolled AT this point".
+        const char* dxs = extract_query_param(path, "dx");
+        const char* dys = extract_query_param(path, "dy");
+        if (dxs) ctx.dval  = atof(dxs);
+        if (dys) ctx.dval2 = atof(dys);
         if (nm) {
             strncpy(ctx.sval, nm, sizeof(ctx.sval) - 1);
             char* amp = strchr(ctx.sval, '&');

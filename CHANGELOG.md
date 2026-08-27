@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- `canvas_on_scroll` is wired on macOS and Win32, not GTK4 only. It was an
+  honest no-op elsewhere, documented as such at the DSL, but the consequence
+  was that a shipped app's scroll-to-zoom (`apps/turtle`) did nothing on two of
+  the three platforms, and the boxed closure handed in was discarded and
+  leaked. AppKit gets a real `-scrollWheel:` (precise deltas when the device
+  reports them, coarse `deltaY` otherwise), Win32 a `WM_MOUSEWHEEL` in the
+  canvas proc.
+  **Each backend converts to the DSL's convention rather than passing its
+  platform's own sign through**: `dy < 0` is "away from the user", the
+  conventional zoom-IN direction. AppKit's `scrollingDeltaY` is the opposite
+  sign and flips again under natural scrolling, which
+  `-isDirectionInvertedFromDevice` reports; Win32's wheel delta is the opposite
+  sign and arrives in multiples of `WHEEL_DELTA`, so it is divided into notches
+  rather than handing an app a number 120x larger on Windows alone. Getting
+  either wrong never fails loudly, it silently inverts or over-scales zoom, so
+  both are written out longhand.
+- Driver route `POST /canvas/{id}/scroll?dx=&dy=`, on all three backends, so
+  the above is testable at all. A canvas with no handler answers 404
+  ("unwired") rather than 200, matching the other canvas verbs.
+
+### Notes
+
+- `examples/canvasscroll_demo` and `tests/canvasscroll_demo/` (5 cases, CI
+  Phase 5e12, spec-matrix suite `canvasscroll`) cover it. The spec asserts the
+  SIGN, not merely that something fired. It states plainly what it cannot
+  prove: the route fires the closure the backend stored, so it shows the
+  closure is kept and the app sees the documented convention, but nothing
+  generates a real `-scrollWheel:` or `WM_MOUSEWHEEL`. That is the driver's
+  standing blindness for input paths, which is why the conversion arithmetic
+  is spelled out in each backend instead of folded into the call.
+
 ### Fixed
 
 - GTK4's `timer_cancel` is idempotent, like the other two backends. It handed

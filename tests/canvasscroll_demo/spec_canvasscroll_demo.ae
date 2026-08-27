@@ -1,0 +1,70 @@
+// spec_canvasscroll_demo.ae — drives the canvasscroll_demo example.
+//
+// canvas_on_scroll was GTK4-only and an honest no-op elsewhere, so a shipped
+// app's scroll-to-zoom (apps/turtle) did nothing on macOS or Windows. It is
+// now wired on all three, and each backend converts its platform's sign to
+// the DSL convention: dy < 0 is "away from the user", the zoom-IN direction.
+//
+// WHAT THIS SPEC PROVES, and what it does not. POST /canvas/{id}/scroll fires
+// the closure the backend STORED, so a green run proves the closure is kept
+// (it used to be discarded, and leaked) and that the app sees the documented
+// sign. It does NOT prove the platform event is hooked up: nothing here
+// generates a real -scrollWheel: or WM_MOUSEWHEEL. That is the same
+// structural blindness the driver has for every input path -- it observes
+// state, not which event produced it -- and the conversion arithmetic is
+// written out longhand in each backend for exactly that reason.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/canvasscroll_demo &
+//   UI_SPEC=canvasscroll_demo/spec_canvasscroll_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+counts() -> string {
+    b = uidriver.get_body("/widgets")
+    key = "\"text\":\"in: "
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + string.length(key), string.length(b))
+    j = string.string_index_of(rest, "\"")
+    if j < 0 { return "" }
+    return string.string_substring(rest, 0, j)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "canvas scroll over AetherUIDriver") {
+        spec.it("starts with no scroll counted") callback {
+            spec.assert_str_eq(counts(), "0 out: 0", "counters start at zero")
+        }
+
+        // A canvas with no on_scroll registered answers 404, because the
+        // dispatcher reports "unwired" (result 3) rather than "missed". This
+        // is a contract assertion, NOT the regression test: on the previous
+        // code the action did not exist in the dispatcher at all, so it fell
+        // through and still answered 200. What catches the old behaviour is
+        // the counter staying at zero, below.
+        spec.it("the canvas has a scroll handler wired") callback {
+            code = uidriver.post_status("/canvas/1/scroll?dx=0&dy=-1")
+            spec.assert_eq(code, 200, "scroll route reached a live handler")
+        }
+
+        spec.it("dy < 0 is away from the user, the zoom-IN direction") callback {
+            spec.assert_str_eq(counts(), "1 out: 0", "one zoom-in counted")
+        }
+
+        spec.it("dy > 0 is toward the user, the zoom-OUT direction") callback {
+            uidriver.post_ok("/canvas/1/scroll?dx=0&dy=1", "scroll toward")
+            spec.assert_str_eq(counts(), "1 out: 1", "one zoom-out counted")
+        }
+
+        spec.it("magnitude is passed through, not reduced to a step") callback {
+            uidriver.post_ok("/canvas/1/scroll?dx=0&dy=-3", "a bigger scroll")
+            spec.assert_str_eq(counts(), "2 out: 1", "a single event, whatever its size")
+        }
+    }
+    spec.run_summary(fw)
+}

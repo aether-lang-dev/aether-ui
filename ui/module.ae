@@ -3043,7 +3043,9 @@ struct CanvasHoverState {
 // two-finger scroll over the canvas. dy < 0 is "away from the user" (the
 // conventional zoom-IN direction); the raw deltas are passed through rather
 // than a +/-1 step, because a zoom wants magnitude and a stepper can sign it
-// itself. GTK4 only for now; a no-op elsewhere.
+// itself. Wired on all three backends: a GtkEventControllerScroll on GTK4,
+// -scrollWheel: on AppKit, WM_MOUSEWHEEL on win32. Each converts to THIS
+// convention rather than passing its platform's own sign through.
 // canvas_gesture_probe(canvas, cb) — DIAGNOSTIC. Wires every touchpad
 // controller GTK4 offers to one callback:
 //   cb(|kind: string, a: float, b: float, mods: int|)

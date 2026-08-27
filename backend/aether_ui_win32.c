@@ -5604,6 +5604,7 @@ typedef struct {
     AeClosure* on_key;     // key-press hook (GDK key name string)
     AeClosure* on_key_release; // key-up hook (same key names)
     AeClosure* on_resize;  // |w, h| — fired from WM_SIZE (canvas rescale)
+    AeClosure* on_canvas_scroll; // wheel / precision scroll (dx,dy)
     // Last-paint metrics for the compositor instrumentation
     // (GET /canvas/{id}/debug). `last_paint_area` is the pixel area the
     // last paint covered: the summed clip-rect area when the paint was
@@ -5784,7 +5785,8 @@ void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
 }
 
 void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
-    (void)canvas_id; (void)boxed_closure;
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    canvases[canvas_id - 1].on_canvas_scroll = (AeClosure*)boxed_closure;
 }
 
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
@@ -8166,6 +8168,31 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         }
         case WM_ERASEBKGND:
             return 1;
+        case WM_MOUSEWHEEL: {
+            /* The DSL contract is the GTK4 one, which this has to match rather
+               than reproduce Windows' own convention: dy < 0 means "away from
+               the user", the conventional zoom-IN direction.
+
+               WM_MOUSEWHEEL's delta is the OPPOSITE sign -- positive is a push
+               away from the user -- so it is negated here. It arrives in
+               multiples of WHEEL_DELTA (120); dividing yields notches, which
+               keeps the magnitude comparable to the other backends instead of
+               handing an app a number 120x larger on Windows alone. Getting
+               either wrong does not fail loudly, it silently inverts or
+               over-scales zoom, so both are spelled out. */
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                if (cv->on_canvas_scroll && cv->on_canvas_scroll->fn) {
+                    double notches =
+                        (double)GET_WHEEL_DELTA_WPARAM(wp) / (double)WHEEL_DELTA;
+                    ((void(*)(void*, double, double))cv->on_canvas_scroll->fn)(
+                        cv->on_canvas_scroll->env, 0.0, -notches);
+                    return 0;
+                }
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
         case WM_MOUSEMOVE: {
             // Forward canvas-local (x, y) to the on_move hook. WM_MOUSEMOVE
             // lParam carries client-area coords (top-left origin) — the same
@@ -8792,6 +8819,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             || ctx->action == AETHER_DRV_CANVAS_MOVE
             || ctx->action == AETHER_DRV_CANVAS_RELEASE
             || ctx->action == AETHER_DRV_CANVAS_KEY
+            || ctx->action == AETHER_DRV_CANVAS_SCROLL
             || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
             // Drive the canvas hit-test hooks directly, exactly as a real
             // WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_LBUTTONUP / WM_KEYDOWN would
@@ -8816,6 +8844,12 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     if (cv->on_release && cv->on_release->fn) {
                         ((void(*)(void*, double, double))cv->on_release->fn)(
                             cv->on_release->env, ctx->dval, ctx->dval2);
+                        ctx->result = 0;
+                    }
+                } else if (ctx->action == AETHER_DRV_CANVAS_SCROLL) {
+                    if (cv->on_canvas_scroll && cv->on_canvas_scroll->fn) {
+                        ((void(*)(void*, double, double))cv->on_canvas_scroll->fn)(
+                            cv->on_canvas_scroll->env, ctx->dval, ctx->dval2);
                         ctx->result = 0;
                     }
                 } else if (ctx->action == AETHER_DRV_CANVAS_KEYUP) {
