@@ -60,7 +60,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -729,6 +729,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=sheet_demo/spec_sheet_demo \
     run_server_test "$(EX_BIN sheet_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" sheet_demo || FAIL=$((FAIL + 1))
+echo "=== Phase 5e11: AetherUIDriver timer spec ==="
+# G_DEBUG=fatal-criticals on purpose, and only here. GTK4's timer_cancel used
+# to hand the raw GSource id to g_source_remove, so cancelling twice raised a
+# GLib CRITICAL where macOS and win32 both no-op. Nothing the driver reports
+# changes when that happens, so without making criticals fatal the misuse is
+# invisible from a spec. With it, the app aborts and the assertions fail.
+if [ "$SPEC_OK" -eq 1 ]; then
+    export G_DEBUG=fatal-criticals
+    UI_SPEC=timer_demo/spec_timer_demo \
+    run_server_test "$(EX_BIN timer_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" timer_demo || FAIL=$((FAIL + 1))
+    unset G_DEBUG
 fi
 
 echo

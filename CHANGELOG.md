@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GTK4's `timer_cancel` is idempotent, like the other two backends. It handed
+  the raw `GSource` id back as the timer handle and passed it straight to
+  `g_source_remove`, so cancelling twice, or cancelling a handle whose timer is
+  already gone, raised `GLib-CRITICAL: Source ID N was not found when
+  attempting to remove it`, which is fatal under `G_DEBUG=fatal-criticals`. The
+  same call is a harmless no-op on macOS, which invalidates an already-nil
+  `NSTimer`, and on Win32, which finds no live entry in the table it keeps.
+  GTK4 now keeps that table too, so a handle names an entry of ours rather than
+  a GLib source directly.
+  Two things this is NOT, both measured rather than assumed, so the next reader
+  need not re-derive them: GLib does not recycle source ids, so a stale handle
+  could not have named someone else's source; and removing a source from inside
+  its own dispatch, which `canvas_on_hover`'s watchdog does, raises nothing.
+
+### Notes
+
+- The timer verbs had no spec coverage. `examples/timer_demo` and
+  `tests/timer_demo/spec_timer_demo.ae` (4 cases, CI Phase 5e10, spec-matrix
+  suite `timer`) now cover them, and that phase runs with
+  `G_DEBUG=fatal-criticals` so GLib misuse is a failure a spec can see rather
+  than a line in a log: nothing the driver reports changes when a CRITICAL is
+  raised, so without it the bug above is invisible from out here.
+- A survey of the DSL surface found 96 of 382 public verbs are never called
+  from any example, app or spec. Some are thin wrappers over ABI the C suite
+  does cover, so it is an upper bound, but it is the same gap the sheet and
+  timer defects were sitting in.
+
+### Fixed
+
 - Win32 gradient stops clamp all four colour components, not just alpha. Red,
   green and blue were built from the same float input and shifted into their
   own bytes unclamped, so a stop component outside `[0,1]` spilled into the

@@ -1,0 +1,65 @@
+// Aether UI timer example: timer() and timer_cancel().
+//
+// The timer verbs had no spec coverage at all, and cancel behaved differently
+// on one backend. macOS invalidates an already-nil NSTimer and win32 finds no
+// live entry, so cancelling twice is a harmless no-op on both. GTK4 handed the
+// raw GSource id back and passed it straight to g_source_remove, so a second
+// cancel raised
+//
+//   GLib-CRITICAL: Source ID N was not found when attempting to remove it
+//
+// which is fatal under G_DEBUG=fatal-criticals -- which is exactly how CI runs
+// this phase, so the misuse is a hard failure rather than a line in a log.
+//
+// Two independent timers, because the interesting question is not just "did A
+// stop" but "did stopping A twice leave B alone".
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, btn, root_vstack, timer, timer_cancel,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    a_ticks = 0
+    b_ticks = 0
+    a_timer = 0
+    a_label = 0
+    b_label = 0
+
+    main_root = root_vstack(10) {
+        text("Timer demo")
+        a_label = text("a: 0")
+        b_label = text("b: 0")
+
+    }
+
+    a_timer = timer(60) callback {
+        a_ticks = a_ticks + 1
+        aether_ui_text_set_string(a_label, "a: ${a_ticks}")
+    }
+    _b = timer(90) callback {
+        b_ticks = b_ticks + 1
+        aether_ui_text_set_string(b_label, "b: ${b_ticks}")
+    }
+
+    // Built AFTER the timer on purpose. A closure captures by value unless the
+    // variable is also assigned inside a closure, so a stop button created up
+    // in the block above would have captured a_timer while it was still 0 and
+    // silently cancelled nothing.
+    //
+    // It deliberately does NOT zero a_timer, so pressing twice cancels the same
+    // handle twice. That is the case this example exists for.
+    _stop = btn(main_root, "stop a") callback {
+        if a_timer > 0 { timer_cancel(a_timer) }
+    }
+
+    app = ui.app_create("Timer demo", 320, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

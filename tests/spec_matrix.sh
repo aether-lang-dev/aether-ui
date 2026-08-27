@@ -92,6 +92,7 @@ SUITES=(
   "filedrop|examples/filedrop_demo|filedrop_demo/spec_filedrop_demo|"
   "svgimage|examples/svgimage_demo|svgimage_demo/spec_svgimage_demo|"
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
+  "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
   "listbox|examples/listbox_demo|listbox_demo/spec_listbox_demo|"
   "navstack|examples/navstackdemo|navstackdemo/spec_navstackdemo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"
