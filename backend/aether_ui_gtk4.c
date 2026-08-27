@@ -2326,6 +2326,19 @@ void aether_ui_set_state_style(int handle, int state,
         n += snprintf(decl + n, sizeof(decl) - n, "color: rgb(%d,%d,%d);",
                       (int)(fr * 255), (int)(fg_ * 255), (int)(fb * 255));
     }
+    /* Record the colour beside the CSS, in the same packed form the base
+       background uses. The stylesheet is what PAINTS it, but nothing can ask
+       GTK what background a widget currently renders -- there is no getter --
+       so the readback reconstructs it from the widget's state flags and these.
+       Generated from the same values as the CSS above, so the two agree by
+       construction rather than by a second guess. */
+    if (br >= 0.0) {
+        g_object_set_data(G_OBJECT(w),
+            (state == 1) ? "aeui-active-bg" : "aeui-hover-bg",
+            GINT_TO_POINTER(0x1000000 | (((int)(br * 255) & 0xFF) << 16)
+                                      | (((int)(bg_ * 255) & 0xFF) << 8)
+                                      |  ((int)(bb * 255) & 0xFF)));
+    }
     // Specificity: a bare `.cls:hover` loses to the theme's own
     // `button:hover`, so qualify with the element like set_bg_color does
     // (button.flat.CLS), and keep the plain form for non-buttons.
@@ -6313,6 +6326,19 @@ const char* aether_ui_widget_classes_impl(int handle) {
 int aether_ui_styled_bg_impl(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return -1;
+    /* Answer for the state the widget is ACTUALLY in. The :hover and :active
+       rules set_state_style installs really do paint -- the driver's hover
+       sets GTK_STATE_FLAG_PRELIGHT exactly as a pointer would -- so a readback
+       that only ever reported the resting colour described a widget that was
+       not on screen. Active beats hover, matching the CSS cascade and the
+       AppKit backend. Widgets with no state style fall through unchanged. */
+    GtkStateFlags f = gtk_widget_get_state_flags(w);
+    int st = 0;
+    if (f & GTK_STATE_FLAG_ACTIVE)
+        st = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-active-bg"));
+    if (!(st & 0x1000000) && (f & GTK_STATE_FLAG_PRELIGHT))
+        st = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-hover-bg"));
+    if (st & 0x1000000) return st & 0xFFFFFF;
     int v = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-styled-bg"));
     return (v & 0x1000000) ? (v & 0xFFFFFF) : -1;
 }

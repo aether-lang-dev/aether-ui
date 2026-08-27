@@ -1,0 +1,38 @@
+// Aether UI hover-paint example: style_hover / style_active actually paint.
+//
+// style_hover's own DSL comment says it exists because "without this a control
+// reads as dead". On macOS it read as dead anyway: the colour was recorded in
+// an associated object that only the driver's readback ever looked at, and no
+// draw path consulted it. GTK4 applies a :hover CSS rule; win32 paints it in
+// its owner-draw path (hover_set && is_hovered).
+//
+// The row below has a base background, a DIFFERENT hover background, and a
+// DIFFERENT active one, so a spec can tell the three apart by colour rather
+// than by "something changed".
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack, hstack,
+    style_bg_color, style_hover, style_active, enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    row = 0
+    main_root = root_vstack(10) {
+        text("Hover paint demo")
+        row = hstack(0) {
+            text("hover me")
+        }
+    }
+
+    _ = style_bg_color(row, 0.2, 0.4, 0.6, 1.0)   // base   #336699
+    _ = style_hover(row, 0.8, 0.2, 0.2)      // hover  #cc3333
+    _ = style_active(row, 0.1, 0.6, 0.1)     // active #199919
+
+    app = ui.app_create("Hover paint demo", 320, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

@@ -2596,6 +2596,78 @@ int aether_ui_styled_border_impl(int handle) {
 // Interaction states. macOS already installs an NSTrackingArea for hover
 // (see the hover section), so the colours are stashed on the view and the
 // enter/exit handlers swap the layer background. state: 0=hover, 1=active.
+/* Paint the widget's CURRENT interaction state.
+   style_hover/style_active recorded a colour here and nothing ever painted
+   it: `aeui-hover-style` was read only by the driver readback below, and
+   `aeui-hovered` only by the driver's own hovered getter, so a control styled
+   with style_hover still "read as dead" on this backend -- the exact thing
+   that DSL verb's comment says it exists to prevent. GTK4 does it with a
+   :hover CSS rule, win32 in its owner-draw path (hover_set && is_hovered).
+
+   Active beats hover, and with neither the base style_bg_color colour is
+   restored. All three are stashed in the same packed 0xRRGGBB | 0x1000000
+   form, so one decode serves them. A widget with none of the three is left
+   alone rather than forced to a colour: that is what keeps an unstyled
+   control looking native. */
+static void aeui_apply_state_bg(NSView* v) {
+    if (!v) return;
+    NSNumber* style = nil;
+    if (objc_getAssociatedObject(v, "aeui-pressed"))
+        style = objc_getAssociatedObject(v, "aeui-active-style");
+    if (!style && objc_getAssociatedObject(v, "aeui-hovered"))
+        style = objc_getAssociatedObject(v, "aeui-hover-style");
+    if (!style) style = objc_getAssociatedObject(v, "aeui_styled_bg");
+    if (!style) return;
+    int packed = [style intValue];
+    if (!(packed & 0x1000000)) return;
+    [v setWantsLayer:YES];
+    v.layer.backgroundColor = [[NSColor
+        colorWithRed:((packed >> 16) & 0xFF) / 255.0
+               green:((packed >> 8) & 0xFF) / 255.0
+                blue:(packed & 0xFF) / 255.0
+               alpha:1.0] CGColor];
+    if ([v isKindOfClass:[NSButton class]]) [(NSButton*)v setBordered:NO];
+}
+
+/* Real pointer hover, as opposed to the driver's simulated one. Flags the view
+   and repaints through the same helper, so both routes agree by construction
+   rather than by two implementations that can drift. */
+@interface AetherStateHoverMonitor : NSObject
+@property (weak) NSView* view;
+@property (strong) NSTrackingArea* area;
+- (void)attach;
+@end
+@implementation AetherStateHoverMonitor
+- (void)attach {
+    NSView* v = self.view;
+    if (!v) return;
+    if (self.area) [v removeTrackingArea:self.area];
+    self.area = [[NSTrackingArea alloc]
+        initWithRect:[v bounds]
+             options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow
+                     | NSTrackingInVisibleRect
+               owner:self
+            userInfo:nil];
+    [v addTrackingArea:self.area];
+}
+- (void)mouseEntered:(NSEvent*)e {
+    (void)e;
+    NSView* v = self.view;
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui-hovered", @(1),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    aeui_apply_state_bg(v);
+}
+- (void)mouseExited:(NSEvent*)e {
+    (void)e;
+    NSView* v = self.view;
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui-hovered", nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    aeui_apply_state_bg(v);
+}
+@end
+
 void aether_ui_set_state_style(int handle, int state,
                                double br, double bg_, double bb,
                                double fr, double fg_, double fb) {
@@ -2608,6 +2680,16 @@ void aether_ui_set_state_style(int handle, int state,
         @(0x1000000 | (((int)(br*255) & 0xFF) << 16)
                     | (((int)(bg_*255) & 0xFF) << 8) | ((int)(bb*255) & 0xFF)),
         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Arm real pointer tracking once per view, and repaint now in case the
+    // pointer is already inside.
+    if (!objc_getAssociatedObject(v, "aeui-state-hover-mon")) {
+        AetherStateHoverMonitor* m = [[AetherStateHoverMonitor alloc] init];
+        m.view = v;
+        [m attach];
+        objc_setAssociatedObject(v, "aeui-state-hover-mon", m,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    aeui_apply_state_bg(v);
 }
 
 int aether_ui_state_style_impl(int handle, int state) {
@@ -6081,6 +6163,32 @@ int aether_ui_styled_bg_impl(int handle) {
                    |  ((int)([c blueComponent]  * 255) & 255);
         return packed;
     }
+    /* Same rule, generalised: answer from the layer that actually PAINTS.
+       style_hover/style_active swap the layer colour for the duration of the
+       interaction, so a readback answering only from the stashed request would
+       report the resting colour while a different one is on screen -- the very
+       disagreement the scroll-view arm above exists to avoid. Views with no
+       layer colour of their own fall through to the stash unchanged, so an
+       unstyled widget and every existing colour assertion read as before. */
+    NSView* lv = (__bridge NSView*)aether_ui_get_widget(handle);
+    /* ONLY for a widget that opted into state styling. Reading the layer for
+       every view would change what this field MEANS -- from "the background
+       that was set" to "whatever the layer happens to paint" -- and start
+       reporting a colour for views that never asked for one (the injected
+       banner picked one up while this was broader). A widget with a hover or
+       active style is exactly the case where the two can legitimately differ,
+       so it is the only case that needs the live answer. */
+    int styled_state = lv && (objc_getAssociatedObject(lv, "aeui-hover-style")
+                           || objc_getAssociatedObject(lv, "aeui-active-style"));
+    if (styled_state && [lv layer] && [lv layer].backgroundColor) {
+        NSColor* lc = [[NSColor colorWithCGColor:[lv layer].backgroundColor]
+            colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+        if (lc && [lc alphaComponent] > 0.0) {
+            return (((int)([lc redComponent]   * 255) & 255) << 16)
+                 | (((int)([lc greenComponent] * 255) & 255) << 8)
+                 |  ((int)([lc blueComponent]  * 255) & 255);
+        }
+    }
     return aeui_styled_readback(handle, "aeui_styled_bg");
 }
 
@@ -6416,8 +6524,14 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             int n0 = aether_ui_widget_count_impl();
             for (int i = 1; i <= n0; i++) {
                 NSView* pv = (__bridge NSView*)aether_ui_get_widget(i);
-                if (pv) objc_setAssociatedObject(pv, "aeui-hovered", nil,
-                                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                if (pv) {
+                    objc_setAssociatedObject(pv, "aeui-hovered", nil,
+                                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    // Repaint on the way OUT too. Clearing the flag without
+                    // this left the last hovered widget wearing its hover
+                    // colour for good.
+                    aeui_apply_state_bg(pv);
+                }
             }
             ctx->retval = 1; ctx->result = 0; return;
         }
@@ -6439,13 +6553,20 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             int n = aether_ui_widget_count_impl();
             for (int i = 1; i <= n; i++) {
                 NSView* pv = (__bridge NSView*)aether_ui_get_widget(i);
-                if (pv) objc_setAssociatedObject(pv, "aeui-hovered", nil,
-                                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                if (pv) {
+                    objc_setAssociatedObject(pv, "aeui-hovered", nil,
+                                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    // Repaint on the way OUT too. Clearing the flag without
+                    // this left the last hovered widget wearing its hover
+                    // colour for good.
+                    aeui_apply_state_bg(pv);
+                }
             }
             NSView* hv = (__bridge NSView*)aether_ui_get_widget(ctx->handle);
             if (hv) {
                 objc_setAssociatedObject(hv, "aeui-hovered", @(1),
                                          OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                aeui_apply_state_bg(hv);
                 [hv setNeedsDisplay:YES];
                 ctx->retval = 1;
             }
@@ -6458,6 +6579,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 objc_setAssociatedObject(pv2, "aeui-pressed",
                     ctx->action == AETHER_DRV_PRESS ? @(1) : nil,
                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                aeui_apply_state_bg(pv2);
                 [pv2 setNeedsDisplay:YES];
                 ctx->retval = 1;
             }
