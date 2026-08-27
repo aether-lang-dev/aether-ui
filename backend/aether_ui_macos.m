@@ -5474,6 +5474,24 @@ static void unregister_view_tree(NSView* v) {
     widget_classes[h - 1] = NULL;
     widget_clicks[h - 1] = NULL;
     widget_weights[h - 1] = 0;
+    // Per-handle state added outside this array set has to be released here
+    // too. Handles are monotonic, so nothing INHERITS a dead widget's payload
+    // and this is not a correctness bug; it is a leak, and an unbounded one,
+    // because every list rebuild (each_update, vlist, listbox_update all clear
+    // and repopulate) retires a row and takes its handle out of use forever.
+    // Guarded: the setter GROWS the array for an out-of-range handle, and
+    // clearing a list would then realloc once per row for rows that never had
+    // a payload at all.
+    if (h <= aeui_drag_paths_len) aeui_drag_path_set(h, NULL);
+    // An opacity tween in flight outlives its widget: the timer retains the
+    // AetherTween, and the dictionary retains it again under this handle. The
+    // weak view means it stops animating, but nothing ever drops the entry.
+    AetherTween* tw = aeui_tweens[@(h)];
+    if (tw) {
+        [tw.timer invalidate];
+        tw.timer = nil;
+        [aeui_tweens removeObjectForKey:@(h)];
+    }
 }
 
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
