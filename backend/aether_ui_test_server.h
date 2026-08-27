@@ -57,6 +57,9 @@ typedef enum {
     // Canvas key-UP, pairing AETHER_DRV_CANVAS_KEY so a spec can drive
     // held-key state (games: press on key-down, clear on key-up).
     AETHER_DRV_CANVAS_KEYUP = 21,  // handle=canvas, sval=key name
+    // Canvas wheel / two-finger scroll. dval=dx, dval2=dy, in the DSL's
+    // convention (dy<0 is away from the user, the zoom-IN direction).
+    AETHER_DRV_CANVAS_SCROLL = 22, // handle=canvas, dval=dx, dval2=dy
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

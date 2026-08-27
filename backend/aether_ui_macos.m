@@ -4255,6 +4255,7 @@ typedef struct {
     AeClosure* on_key;     // key-down (key name: "Left", "a", "space", …)
     AeClosure* on_key_release; // key-up (same key names; driver-driven for now)
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
+    AeClosure* on_scroll;  // wheel / two-finger scroll (dx,dy); see scrollWheel:
     int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
     double* paint_clip_rects;
     int paint_clip_count;
@@ -4759,6 +4760,39 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     [self mouseMoved:event];
 }
 
+/* Wheel and two-finger scroll. The DSL contract is the GTK4 one, which this
+   has to match rather than reproduce AppKit's own convention: dy < 0 means
+   "away from the user", the conventional zoom-IN direction, and the raw
+   magnitude is passed through rather than a +/-1 step.
+
+   AppKit's scrollingDeltaY is the OPPOSITE sign -- positive for a push away
+   from the user -- and is additionally flipped again when the user has natural
+   scrolling on, which -isDirectionInvertedFromDevice reports. Both are undone
+   here, so an app sees one convention on every platform. Getting this wrong
+   does not fail loudly; it silently inverts zoom, which is why the arithmetic
+   is spelled out instead of folded into the call.
+
+   Precise deltas (trackpad, and mice that report them) are used when
+   available; the coarse deltaY is the fallback for a classic notched wheel. */
+- (void)scrollWheel:(NSEvent*)event {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || !cs->on_scroll || !cs->on_scroll->fn) {
+        [super scrollWheel:event];
+        return;
+    }
+    double ax, ay;
+    if ([event hasPreciseScrollingDeltas]) {
+        ax = [event scrollingDeltaX];
+        ay = [event scrollingDeltaY];
+    } else {
+        ax = [event deltaX];
+        ay = [event deltaY];
+    }
+    if ([event isDirectionInvertedFromDevice]) { ax = -ax; ay = -ay; }
+    ((void(*)(void*, double, double))cs->on_scroll->fn)(cs->on_scroll->env,
+                                                       -ax, -ay);
+}
+
 - (BOOL)acceptsFirstResponder { return YES; }
 
 - (void)keyDown:(NSEvent*)event {
@@ -4899,7 +4933,9 @@ void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
 }
 
 void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
-    (void)canvas_id; (void)boxed_closure;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_scroll = (AeClosure*)boxed_closure;
 }
 
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
@@ -6308,11 +6344,13 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_MOVE:
         case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY:
-        case AETHER_DRV_CANVAS_KEYUP: {
+        case AETHER_DRV_CANVAS_KEYUP:
+        case AETHER_DRV_CANVAS_SCROLL: {
             CanvasState* cs = get_canvas_state(ctx->handle);
             AeClosure* c = NULL;
             if (cs) {
-                c = (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
+                c = (ctx->action == AETHER_DRV_CANVAS_SCROLL)  ? cs->on_scroll
+                  : (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
                   : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
                   : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
                   : (ctx->action == AETHER_DRV_CANVAS_KEYUP)   ? cs->on_key_release
