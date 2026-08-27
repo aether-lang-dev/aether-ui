@@ -60,7 +60,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -716,6 +716,19 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=svgimage_demo/spec_svgimage_demo \
     run_server_test "$(EX_BIN svgimage_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" svgimage_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e10: AetherUIDriver sheet spec ==="
+# The sheet verbs had NO coverage, in C or over the driver, and two things
+# were wrong in that gap: macOS registered the sheet's own contentView and
+# threw the handle away (one dead, unaddressable entry per sheet), and no
+# backend unregistered the body on dismiss. GTK4 also presented a sheet in
+# headless mode, which is why this phase runs headless like the rest.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=sheet_demo/spec_sheet_demo \
+    run_server_test "$(EX_BIN sheet_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" sheet_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

@@ -3907,6 +3907,13 @@ int aether_ui_sheet_create_impl(const char* title, int width, int height) {
     gtk_window_set_default_size(GTK_WINDOW(win), width, height);
     gtk_window_set_modal(GTK_WINDOW(win), TRUE);
     gtk_window_set_resizable(GTK_WINDOW(win), TRUE);
+    /* Same destroy hook the secondary windows get, so dismissing a sheet
+       unregisters the widgets inside it. Without it the registry keeps raw,
+       unreffed pointers to children GTK has already finalized. The handler
+       looks the window up in extra_windows, does not find a sheet there, and
+       so touches no live flag -- it only does the unregistering. */
+    g_signal_connect(win, "destroy",
+                     G_CALLBACK(on_extra_window_destroyed), NULL);
     return aether_ui_register_widget(win);
 }
 
@@ -3920,9 +3927,19 @@ void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
 
 void aether_ui_sheet_present_impl(int handle) {
     GtkWidget* win = aether_ui_get_widget(handle);
-    if (win && GTK_IS_WINDOW(win)) {
-        gtk_window_present(GTK_WINDOW(win));
+    if (!win || !GTK_IS_WINDOW(win)) return;
+    /* Honour AETHER_UI_HEADLESS, exactly as window_show_impl does forty lines
+       up. This called gtk_window_present unconditionally, so a headless run
+       put a real sheet on the desktop -- on the backend CI uses for Linux, and
+       against a contract tests/test_widgets.c states in its own header and
+       names sheet_present in. Realize without mapping, so the widgets inside
+       are laid out and reachable but nothing appears. */
+    const char* headless = getenv("AETHER_UI_HEADLESS");
+    if (headless && headless[0] && headless[0] != '0') {
+        gtk_widget_realize(win);
+        return;
     }
+    gtk_window_present(GTK_WINDOW(win));
 }
 
 void aether_ui_sheet_dismiss_impl(int handle) {

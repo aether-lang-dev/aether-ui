@@ -63,7 +63,7 @@ enum {
     AUI_PROGRESSBAR, AUI_DIVIDER, AUI_SCROLLVIEW,
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
     AUI_CANVAS, AUI_IMAGE, AUI_FORM_SECTION, AUI_FORM_SECTION_INNER,
-    AUI_NAVSTACK, AUI_BANNER, AUI_WINDOW, AUI_SHEET,
+    AUI_NAVSTACK, AUI_BANNER,
     AUI_SPLITVIEW, AUI_WRAP, AUI_SCRIM, AUI_TABS
 };
 
@@ -3095,6 +3095,7 @@ static NSMutableArray<NSWindow*>* extra_windows = nil;
    window_show() has opened reports -isVisible NO and /windows called it closed.
    The three backends disagreed about the same program in the mode CI runs. */
 static NSMutableArray<NSNumber*>* extra_window_live = nil;
+static NSMutableArray<NSWindow*>* sheet_windows = nil;
 
 static void unregister_view_tree(NSView* v);
 
@@ -3103,10 +3104,15 @@ static void unregister_view_tree(NSView* v);
 @implementation AetherWindowDelegate
 - (void)windowWillClose:(NSNotification*)n {
     NSWindow* w = [n object];
-    if (!extra_windows) return;
-    NSUInteger i = [extra_windows indexOfObjectIdenticalTo:w];
-    if (i == NSNotFound) return;
-    if (i < [extra_window_live count]) extra_window_live[i] = @0;
+    if (!w) return;
+    NSUInteger i = extra_windows ? [extra_windows indexOfObjectIdenticalTo:w]
+                                 : NSNotFound;
+    if (i != NSNotFound) {
+        if (i < [extra_window_live count]) extra_window_live[i] = @0;
+    } else if (!sheet_windows ||
+               [sheet_windows indexOfObjectIdenticalTo:w] == NSNotFound) {
+        return;   // not a window this backend owns
+    }
     /* UNREGISTER the window's widgets, the same rule overlay close and
        navstack_pop follow. `widgets` is a __strong array, so a closed window
        whose views are merely dropped stays retained AND registered: the census
@@ -3927,7 +3933,6 @@ int aether_ui_vg_tooltip_drawn_impl(void) {
 }
 
 // Sheet — modal NSWindow attached to primary window via beginSheet:.
-static NSMutableArray<NSWindow*>* sheet_windows = nil;
 
 int aether_ui_sheet_create_impl(const char* title, int width, int height) {
     if (!sheet_windows) sheet_windows = [NSMutableArray array];
@@ -3938,10 +3943,16 @@ int aether_ui_sheet_create_impl(const char* title, int width, int height) {
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
     [sheet setTitle:[NSString stringWithUTF8String:title ? title : ""]];
+    if (!aeui_window_delegate) aeui_window_delegate = [[AetherWindowDelegate alloc] init];
+    [sheet setDelegate:aeui_window_delegate];
     [sheet_windows addObject:sheet];
-    int idx = (int)[sheet_windows count];
-    // Register under the widget registry too, so callers can reference by handle.
-    return register_widget_typed((__bridge void*)[sheet contentView], AUI_SHEET) * 0 + idx;
+    /* The sheet's own contentView used to be registered here and the handle
+       thrown away (`register_widget_typed(...) * 0 + idx`), under a comment
+       saying callers could reference it. They never could: the caller gets the
+       sheet index, sheet_set_body REPLACES that contentView moments later, and
+       AUI_SHEET has no entry in the type-name table, so the orphan reported as
+       a plain "widget". All it did was retain one dead view per sheet. */
+    return (int)[sheet_windows count];
 }
 
 void aether_ui_sheet_set_body_impl(int handle, int root_handle) {

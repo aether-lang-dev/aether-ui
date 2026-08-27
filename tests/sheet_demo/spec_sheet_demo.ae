@@ -1,0 +1,84 @@
+// spec_sheet_demo.ae — drives the sheet_demo example over the AetherUIDriver.
+//
+// The sheet verbs (sheet_create / sheet_set_body / sheet_present /
+// sheet_dismiss) had no coverage at all before this, in C or over the driver,
+// and two things were wrong in that gap:
+//
+//   * macOS registered the sheet's own contentView in the widget registry and
+//     threw the handle away, under a comment claiming callers could reference
+//     it. They never could: the caller gets the sheet index, sheet_set_body
+//     REPLACES that contentView moments later, and the type it was tagged with
+//     has no entry in the name table, so the orphan reported as a plain
+//     "widget". One dead, unaddressable, retained entry per sheet created.
+//
+//   * Dismissing a sheet left the widgets inside it registered, so /widgets
+//     kept listing a body that was gone. On GTK4 the registry holds raw,
+//     unreffed pointers and destroying the window finalizes its children, so
+//     those entries dangled rather than merely leaked.
+//
+// Presenting a sheet must also honour AETHER_UI_HEADLESS, which GTK4 did not:
+// it called gtk_window_present unconditionally. That one is not assertable
+// from here (the driver cannot ask the compositor whether a window is on
+// screen), so it is covered by the guard mirroring window_show_impl and by
+// this spec running headless at all.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/sheet_demo &
+//   UI_SPEC=sheet_demo/spec_sheet_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "sheets over AetherUIDriver") {
+        spec.it("starts with no sheet body registered") callback {
+            b = uidriver.get_body("/widgets")
+            n = uidriver.count_occurrences(b, "\"text\":\"Inside the sheet\"")
+            spec.assert_eq(n, 0, "no sheet body before opening")
+        }
+
+        spec.it("opening a sheet registers its body") callback {
+            o = uidriver.widget_id_by_text("open sheet")
+            spec.assert_gt(o, 0, "open button found")
+            uidriver.post_ok("/widget/${o}/click", "open the sheet")
+            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"Inside the sheet\"", 20)
+            spec.assert_true(ok, "the sheet body is registered while open")
+        }
+
+        // The phantom entry: an untyped widget with no text, which is what the
+        // discarded contentView registration looked like from out here.
+        spec.it("opening registers no untyped phantom widget") callback {
+            b = uidriver.get_body("/widgets")
+            n = uidriver.count_occurrences(b, "\"type\":\"widget\"")
+            spec.assert_eq(n, 0, "no widget of the fallback type is registered")
+        }
+
+        spec.it("dismissing a sheet unregisters its body") callback {
+            c = uidriver.widget_id_by_text("close sheet")
+            spec.assert_gt(c, 0, "close button found")
+            uidriver.post_ok("/widget/${c}/click", "dismiss the sheet")
+
+            b = uidriver.get_body("/widgets")
+            n = uidriver.count_occurrences(b, "\"text\":\"Inside the sheet\"")
+            spec.assert_eq(n, 0, "the dismissed body is no longer registered")
+            btn = uidriver.widget_id_by_text("sheet ok")
+            spec.assert_eq(btn, 0, "its button is unaddressable too")
+        }
+
+        spec.it("a second open/dismiss cycle returns to the same census") callback {
+            base = uidriver.count_occurrences(uidriver.get_body("/widgets"), "\"id\":")
+            o = uidriver.widget_id_by_text("open sheet")
+            uidriver.post_ok("/widget/${o}/click", "open again")
+            opened = uidriver.count_occurrences(uidriver.get_body("/widgets"), "\"id\":")
+            spec.assert_gt(opened, base, "the fresh body registers")
+            c = uidriver.widget_id_by_text("close sheet")
+            uidriver.post_ok("/widget/${c}/click", "dismiss again")
+            after = uidriver.count_occurrences(uidriver.get_body("/widgets"), "\"id\":")
+            spec.assert_eq(after, base, "the census returns to its baseline")
+        }
+    }
+    spec.run_summary(fw)
+}

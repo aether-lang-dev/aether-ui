@@ -1,0 +1,64 @@
+// Aether UI sheet example: sheet_create / sheet_set_body / sheet_present /
+// sheet_dismiss.
+//
+// A sheet is a modal child window: on macOS it slides out of the parent's
+// title bar, on GTK4 and Win32 it is a modal top-level. Until this example
+// the whole verb set had no coverage at all, in C or over the driver.
+//
+// Two things the spec pins down, both of which were broken:
+//
+//   * PRESENTING A SHEET HONOURS AETHER_UI_HEADLESS. macOS returned early;
+//     GTK4 called gtk_window_present unconditionally, so a headless run put a
+//     real sheet on the desktop, on the backend CI uses for Linux. The
+//     contract is stated in tests/test_widgets.c's own header, which names
+//     sheet_present.
+//
+//   * DISMISSING A SHEET UNREGISTERS THE WIDGETS INSIDE IT, so /widgets stops
+//     listing a body that is gone. GTK4 keeps raw, unreffed pointers in the
+//     registry and destroying the window finalizes its children, so the stale
+//     entries were dangling rather than merely leaked.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222).
+
+import ui
+import ui (window, vstack, text, btn, root_vstack,
+    sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    sheet = 0
+
+    main_root = root_vstack(10) {
+        text("Sheet demo")
+        status = text("status: idle")
+
+        _open = btn("open sheet") callback {
+            body = root_vstack(8) {
+                text("Inside the sheet")
+                _ok = btn("sheet ok") callback { }
+            }
+            sheet = sheet_create("Settings", 300, 200)
+            sheet_set_body(sheet, body)
+            sheet_present(sheet)
+            aether_ui_text_set_string(status, "status: open")
+        }
+
+        _close = btn("close sheet") callback {
+            if sheet > 0 {
+                sheet_dismiss(sheet)
+                sheet = 0
+                aether_ui_text_set_string(status, "status: dismissed")
+            }
+        }
+    }
+
+    app = ui.app_create("Sheet demo", 320, 240)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}
