@@ -1,17 +1,18 @@
-import build
+import bldr
 import aether
 import aether (source, output, no_closure_regen, lib)
 import build_support.aetherui (ui_backend)
 
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-    aether.program(b) {
-        source("svg_transpile_harness.ae")
-        output("svg_transpile_harness")
-        lib("${root}")
-        no_closure_regen()
-        ui_backend(root)
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("svg_transpile_harness.ae")
+            output("svg_transpile_harness")
+            lib("${root}")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
     }
-    return 0
 }

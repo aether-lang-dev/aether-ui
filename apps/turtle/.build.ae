@@ -1,19 +1,20 @@
 // turtle — aether-ui toolkit app, built as its own cached aeb node.
 // turtle_interp.ae is imported by turtle.ae directly (no separate source()
 // entry needed), same as grand_perspective's gp_*.ae components.
-import build
+import bldr
 import aether
 import aether (source, output, no_closure_regen)
 import build_support.aetherui (ui_backend)
 
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-    aether.program(b) {
-        source("turtle.ae")
-        output("turtle")
-        no_closure_regen()
-        ui_backend(root)
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("turtle.ae")
+            output("turtle")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
     }
-    return 0
 }

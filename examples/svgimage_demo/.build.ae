@@ -1,19 +1,20 @@
 // svgimage_demo: aether-ui toolkit example. Needs the vg module tree (the SVG
 // parser and rasteriser live there), hence lib("${root}") as the vg apps do.
-import build
+import bldr
 import aether
 import aether (source, output, no_closure_regen, lib)
 import build_support.aetherui (ui_backend)
 
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-    aether.program(b) {
-        source("svgimage_demo.ae")
-        output("svgimage_demo")
-        lib("${root}")
-        no_closure_regen()
-        ui_backend(root)
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("svgimage_demo.ae")
+            output("svgimage_demo")
+            lib("${root}")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
     }
-    return 0
 }

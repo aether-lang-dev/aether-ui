@@ -1,15 +1,16 @@
-import build
+import bldr
 import aether
 import aether (source, output, no_closure_regen)
 import build_support.aetherui (ui_backend)
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-    aether.program(b) {
-        source("weightclamp_demo.ae")
-        output("weightclamp_demo")
-        no_closure_regen()
-        ui_backend(root)
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("weightclamp_demo.ae")
+            output("weightclamp_demo")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
     }
-    return 0
 }

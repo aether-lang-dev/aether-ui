@@ -17,14 +17,15 @@
 // The shared per-platform backend-link block lives in build_support/aetherui
 // (ui_backend); vg apps add `lib("${root}")` for the vg.* module tree.
 
-import build
+import bldr
 
 main() {
-    b = build.start()
-    // Apps needing contrib archives (sqlite/avcodec) carry .build.contrib.ae
-    // instead of .build.ae, so they stay out of these scans: they cannot link
-    // on a clean checkout. ci.sh builds them when the archives are present.
-    build.scan(b, "examples/**/.build.ae")
-    build.scan(b, "apps/**/.build.ae")
-    return 0
+    bldr.build() {
+        // Apps needing contrib archives (sqlite/avcodec) carry .build.contrib.ae
+        // instead of .build.ae, so they stay out of these scans: they cannot link
+        // on a clean checkout. ci.sh builds them when the archives are present.
+        scan("examples/**/.build.ae")
+        scan("apps/**/.build.ae")
+        return 0
+    }
 }

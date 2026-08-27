@@ -1,19 +1,19 @@
 // aeb build descriptor for the AeVG analog clock — building aether-ui through
-// aeb instead of the hand-rolled build.sh.
+// aeb instead of the hand-rolled bldr.sh.
 //
 // aether-ui's Aether surface (ui.ae / live.ae / the AeVG grammar_*
 // modules) is a THIN wrapper over a large C backend — its function bodies are
 // `extern` declarations of the C ABI in the platform backend files. So we set
 // no_closure_regen(): aeb compiles the entry with plain `aetherc` (tolerates
-// extern-bodied imports, like build.sh) and links the C backend via
+// extern-bodied imports, like bldr.sh) and links the C backend via
 // extra_source, instead of `--emit=lib`-ing the import closure (which can't
 // resolve the externs). The aeb feature filed from this spike —
 // ~/scm/aeb/asks/thin-aether-over-c-backend.md, since landed.
 //
-// PLATFORM: build.sh's `uname` case is expressed here in Aether via
+// PLATFORM: bldr.sh's `uname` case is expressed here in Aether via
 // os.platform() (Aether 0.203: "linux" | "darwin" | "windows" | …). Each branch
 // adds its backend C files + libs/frameworks. Built + verified on Linux/GTK4;
-// the darwin/windows branches mirror build.sh and are wired but untested here.
+// the darwin/windows branches mirror bldr.sh and are wired but untested here.
 //
 // Run from the repo ROOT (so aeb's root-discovery puts the repo root on the
 // aetherc --lib path — analog_clock.ae lives in aevg/ but imports root-level
@@ -21,7 +21,7 @@
 //   ./bootstrap.sh aevg/.analog-clock.ae        (or: aeb aevg/.analog-clock.ae)
 //   ./target/build/aevg/bin/analog_clock              (DISPLAY=:0 for the window)
 
-import build
+import bldr
 import std.os
 import std.os (platform)
 import std.string
@@ -29,70 +29,71 @@ import aether
 import aether (source, output, extra_source, link_flag, include_dir, no_closure_regen)
 
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-
-    aether.program(b) {
-        source("analog_clock.ae")
-        output("analog_clock")
-
-        // Imports are extern-backed (C ABI in the backend files below), so
-        // compile the entry plain + link the C — don't --emit=lib the closure.
-        no_closure_regen()
-
-        // Aether runtime headers (build.sh's AETHER_INCLUDES) — all platforms.
-        include_dir("/usr/local/include/aether/runtime")
-        include_dir("/usr/local/include/aether/runtime/actors")
-        include_dir("/usr/local/include/aether/std")
-        include_dir("/usr/local/include/aether/std/collections")
-        link_flag("-L/usr/local/lib/aether")
-        link_flag("-laether")
-        link_flag("-pthread")
-        link_flag("-lm")
-        // libaether's transitive deps (PCRE2/SSL/zlib/…), expanded at gcc time.
-        link_flag("$(ae cflags --libs 2>/dev/null)")
-
-        // ── per-platform backend (mirrors build.sh's uname case) ──
-        os_name = platform()
-        if string.equals(os_name, "linux") == 1 {
-            // GTK4 backend + SNI tray + system extras. (build.sh also adds the
-            // optional libnotify flags when present — real OS notifications;
-            // omitted here as the clock doesn't notify, so notify*() would land
-            // in the registry only. Add a `-DAEUI_HAVE_LIBNOTIFY=1` +
-            // pkg-config libnotify pair here if a notifying example needs it.)
-            extra_source("${root}/aether_ui_gtk4.c")
-            extra_source("${root}/aether_ui_system_extras.c")
-            extra_source("${root}/aether_ui_sni.c")
-            link_flag("$(pkg-config --cflags gtk4)")
-            link_flag("$(pkg-config --libs gtk4)")
+    bldr.build() {
+        root = _get("root")
+    
+        aether.program() {
+            source("analog_clock.ae")
+            output("analog_clock")
+    
+            // Imports are extern-backed (C ABI in the backend files below), so
+            // compile the entry plain + link the C — don't --emit=lib the closure.
+            no_closure_regen()
+    
+            // Aether runtime headers (bldr.sh's AETHER_INCLUDES) — all platforms.
+            include_dir("/usr/local/include/aether/runtime")
+            include_dir("/usr/local/include/aether/runtime/actors")
+            include_dir("/usr/local/include/aether/std")
+            include_dir("/usr/local/include/aether/std/collections")
+            link_flag("-L/usr/local/lib/aether")
+            link_flag("-laether")
+            link_flag("-pthread")
+            link_flag("-lm")
+            // libaether's transitive deps (PCRE2/SSL/zlib/…), expanded at gcc time.
+            link_flag("$(ae cflags --libs 2>/dev/null)")
+    
+            // ── per-platform backend (mirrors bldr.sh's uname case) ──
+            os_name = platform()
+            if string.equals(os_name, "linux") == 1 {
+                // GTK4 backend + SNI tray + system extras. (bldr.sh also adds the
+                // optional libnotify flags when present — real OS notifications;
+                // omitted here as the clock doesn't notify, so notify*() would land
+                // in the registry only. Add a `-DAEUI_HAVE_LIBNOTIFY=1` +
+                // pkg-config libnotify pair here if a notifying example needs it.)
+                extra_source("${root}/aether_ui_gtk4.c")
+                extra_source("${root}/aether_ui_system_extras.c")
+                extra_source("${root}/aether_ui_sni.c")
+                link_flag("$(pkg-config --cflags gtk4)")
+                link_flag("$(pkg-config --libs gtk4)")
+            }
+            if string.equals(os_name, "darwin") == 1 {
+                // AppKit backend + system extras; Cocoa/Quartz frameworks.
+                extra_source("${root}/aether_ui_macos.m")
+                extra_source("${root}/aether_ui_system_extras.c")
+                link_flag("-fobjc-arc")
+                link_flag("-framework AppKit")
+                link_flag("-framework Foundation")
+                link_flag("-framework QuartzCore")
+            }
+            if string.equals(os_name, "windows") == 1 {
+                // Win32 backend + test server + system extras; win32 libs.
+                extra_source("${root}/aether_ui_win32.c")
+                extra_source("${root}/aether_ui_test_server.c")
+                extra_source("${root}/aether_ui_system_extras.c")
+                link_flag("-luser32")
+                link_flag("-lgdi32")
+                link_flag("-lgdiplus")
+                link_flag("-lmsimg32")
+                link_flag("-lcomctl32")
+                link_flag("-lcomdlg32")
+                link_flag("-lshell32")
+                link_flag("-lole32")
+                link_flag("-luuid")
+                link_flag("-ldwmapi")
+                link_flag("-luxtheme")
+                link_flag("-lws2_32")
+            }
         }
-        if string.equals(os_name, "darwin") == 1 {
-            // AppKit backend + system extras; Cocoa/Quartz frameworks.
-            extra_source("${root}/aether_ui_macos.m")
-            extra_source("${root}/aether_ui_system_extras.c")
-            link_flag("-fobjc-arc")
-            link_flag("-framework AppKit")
-            link_flag("-framework Foundation")
-            link_flag("-framework QuartzCore")
-        }
-        if string.equals(os_name, "windows") == 1 {
-            // Win32 backend + test server + system extras; win32 libs.
-            extra_source("${root}/aether_ui_win32.c")
-            extra_source("${root}/aether_ui_test_server.c")
-            extra_source("${root}/aether_ui_system_extras.c")
-            link_flag("-luser32")
-            link_flag("-lgdi32")
-            link_flag("-lgdiplus")
-            link_flag("-lmsimg32")
-            link_flag("-lcomctl32")
-            link_flag("-lcomdlg32")
-            link_flag("-lshell32")
-            link_flag("-lole32")
-            link_flag("-luuid")
-            link_flag("-ldwmapi")
-            link_flag("-luxtheme")
-            link_flag("-lws2_32")
-        }
+        return 0
     }
-    return 0
 }

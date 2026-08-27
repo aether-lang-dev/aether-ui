@@ -1,36 +1,37 @@
 // video_frame — aether-ui toolkit example, built as its own cached aeb node.
-import build
+import bldr
 import aether
 import aether (source, output, no_closure_regen, lib, link_flag)
 import build_support.aetherui (ui_backend)
 
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-    aether.program(b) {
-        source("video_frame.ae")
-        output("video_frame")
-        lib("${root}")
-        // contrib.avcodec lives in the sibling aether checkout, like
-        // LisMusic's contrib.sqlite: module path plus the prebuilt bridge
-        // archive and FFmpeg's own libraries.
-        lib("${root}/../aether")
-        link_flag("-L${root}/../../.local/lib/aether")
-        // FFmpeg's own libraries. On Linux they sit in a default search
-        // path; on macOS Homebrew keeps them under its prefix, so the -L is
-        // required there and harmless where the directory does not exist.
-        // aeb has no pkg-config helper (link_flag is the only lever), hence
-        // naming the conventional prefixes rather than querying.
-        link_flag("-L/usr/local/lib")
-        link_flag("-L/opt/homebrew/lib")
-        link_flag("-laether_avcodec")
-        link_flag("-lavcodec")
-        link_flag("-lavformat")
-        link_flag("-lavutil")
-        link_flag("-lswscale")
-        link_flag("-lswresample")
-        no_closure_regen()
-        ui_backend(root)
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("video_frame.ae")
+            output("video_frame")
+            lib("${root}")
+            // contrib.avcodec lives in the sibling aether checkout, like
+            // LisMusic's contrib.sqlite: module path plus the prebuilt bridge
+            // archive and FFmpeg's own libraries.
+            lib("${root}/../aether")
+            link_flag("-L${root}/../../.local/lib/aether")
+            // FFmpeg's own libraries. On Linux they sit in a default search
+            // path; on macOS Homebrew keeps them under its prefix, so the -L is
+            // required there and harmless where the directory does not exist.
+            // aeb has no pkg-config helper (link_flag is the only lever), hence
+            // naming the conventional prefixes rather than querying.
+            link_flag("-L/usr/local/lib")
+            link_flag("-L/opt/homebrew/lib")
+            link_flag("-laether_avcodec")
+            link_flag("-lavcodec")
+            link_flag("-lavformat")
+            link_flag("-lavutil")
+            link_flag("-lswscale")
+            link_flag("-lswresample")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
     }
-    return 0
 }

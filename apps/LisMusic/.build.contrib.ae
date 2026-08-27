@@ -4,25 +4,26 @@
 // lis_store uses contrib.sqlite (a real SQLite backend), so this node adds
 // the aether/ tree to the module path (for `import contrib.sqlite`) and links
 // the prebuilt bridge archive + system libsqlite3.
-import build
+import bldr
 import aether
 import aether (source, output, no_closure_regen, lib, link_flag)
 import build_support.aetherui (ui_backend)
 
 main() {
-    b = build.start()
-    root = build._get(b, "root")
-    aether.program(b) {
-        source("lismusic.ae")
-        output("LisMusic")
-        // contrib.sqlite lives in the sibling aether checkout; put it on the
-        // module search path so `import contrib.sqlite` resolves.
-        lib("${root}/../aether")
-        link_flag("-L/usr/local/lib/aether")
-        link_flag("-laether_sqlite")
-        link_flag("-lsqlite3")
-        no_closure_regen()
-        ui_backend(root)
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("lismusic.ae")
+            output("LisMusic")
+            // contrib.sqlite lives in the sibling aether checkout; put it on the
+            // module search path so `import contrib.sqlite` resolves.
+            lib("${root}/../aether")
+            link_flag("-L/usr/local/lib/aether")
+            link_flag("-laether_sqlite")
+            link_flag("-lsqlite3")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
     }
-    return 0
 }
