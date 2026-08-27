@@ -1,0 +1,96 @@
+// spec_timer_demo.ae — drives the timer_demo example over the AetherUIDriver.
+//
+// The timer verbs had no spec coverage, and cancel was not idempotent on one
+// backend. macOS invalidates an already-nil NSTimer and win32 finds no live
+// entry, so a second cancel is a harmless no-op on both. GTK4 handed the raw
+// GSource id back and passed it straight to g_source_remove, so a second
+// cancel raised
+//
+//   GLib-CRITICAL: Source ID N was not found when attempting to remove it
+//
+// CI runs THIS PHASE with G_DEBUG=fatal-criticals, which is what turns that
+// line in a log into a failure the spec can see: the app aborts, the driver
+// stops answering, and the assertions below fail. Without that the misuse is
+// invisible from out here, because nothing the driver reports changes.
+//
+// Two independent timers, because the question is not only "did a stop" but
+// "did stopping a twice leave b alone".
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/timer_demo &
+//   UI_SPEC=timer_demo/spec_timer_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+// The exact text of the "a: N" label, pulled out of /widgets. Compared as a
+// string: the assertion is "changed" or "did not change", never a tick count,
+// which would be a test of how loaded the machine is.
+a_text() -> string {
+    b = uidriver.get_body("/widgets")
+    key = "\"text\":\"a: "
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + string.length(key), string.length(b))
+    j = string.string_index_of(rest, "\"")
+    if j < 0 { return "" }
+    return string.string_substring(rest, 0, j)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "timers over AetherUIDriver") {
+        spec.it("finds both timer labels") callback {
+            body = uidriver.get_body("/widgets")
+            spec.assert_contains(body, "\"text\":\"a: ", "label a exists")
+            spec.assert_contains(body, "\"text\":\"b: ", "label b exists")
+        }
+
+        spec.it("both timers are running") callback {
+            before = uidriver.get_body("/widgets")
+            sleep(400)
+            after = uidriver.get_body("/widgets")
+            spec.assert_true(before != after, "the tree changes while timers run")
+        }
+
+        spec.it("cancelling a stops a and leaves b running") callback {
+            s = uidriver.widget_id_by_text("stop a")
+            spec.assert_gt(s, 0, "stop button found")
+            uidriver.post_ok("/widget/${s}/click", "cancel timer a")
+            sleep(300)
+
+            // a must be FROZEN: its own label text, not the tree as a whole,
+            // which b would keep changing on its own.
+            frozen = a_text()
+            spec.assert_true(frozen != "", "label a is readable after cancel")
+            body1 = uidriver.get_body("/widgets")
+            sleep(400)
+            spec.assert_str_eq(a_text(), frozen, "a stopped ticking")
+            body2 = uidriver.get_body("/widgets")
+            spec.assert_true(body1 != body2, "b is still running after a was cancelled")
+        }
+
+        // The case this example exists for. On the previous GTK4 code this
+        // raised a GLib CRITICAL, and under fatal-criticals the app is gone by
+        // the time the next request lands.
+        spec.it("cancelling a SECOND time is harmless") callback {
+            s = uidriver.widget_id_by_text("stop a")
+            spec.assert_gt(s, 0, "stop button still addressable")
+            uidriver.post_ok("/widget/${s}/click", "cancel timer a again")
+            sleep(300)
+
+            body = uidriver.get_body("/widgets")
+            spec.assert_contains(body, "\"text\":\"stop a\"", "the app survived the second cancel")
+
+            frozen = a_text()
+            body1 = uidriver.get_body("/widgets")
+            sleep(400)
+            spec.assert_str_eq(a_text(), frozen, "a is still stopped, not restarted")
+            body2 = uidriver.get_body("/widgets")
+            spec.assert_true(body1 != body2, "b is STILL running after the double cancel")
+        }
+    }
+    spec.run_summary(fw)
+}

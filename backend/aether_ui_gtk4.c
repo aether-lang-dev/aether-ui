@@ -2765,14 +2765,63 @@ static gboolean on_timer_tick(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+/* Timer handles are OURS, not GLib's, which is what the macOS and win32
+   backends have always done and this one did not: it handed the raw GSource
+   id straight back and passed it straight to g_source_remove.
+
+   That makes cancel NON-IDEMPOTENT here and nowhere else. Cancelling twice, or
+   cancelling a handle whose timer is already gone, is a harmless no-op on the
+   other two backends -- macOS invalidates an already-nil NSTimer, win32 finds
+   no live entry -- but on GLib it is
+
+       GLib-CRITICAL: Source ID N was not found when attempting to remove it
+
+   which is fatal under G_DEBUG=fatal-criticals. Measured, along with two
+   things it is NOT, so the next reader does not have to re-derive them:
+   GLib does not recycle source ids (remove id 1, the next allocation is 3),
+   so a stale handle cannot name somebody else's source; and removing a source
+   from inside its own dispatch, which canvas_on_hover's watchdog does, is
+   fine and raises nothing.
+
+   The indirection buys idempotence, and costs one small table that mirrors the
+   one win32 already keeps. */
+typedef struct {
+    int    id;
+    guint  source;
+    int    alive;
+} AeuiTimerEntry;
+static AeuiTimerEntry* aeui_timers = NULL;
+static int aeui_timer_count = 0;
+static int aeui_timer_cap = 0;
+static int aeui_next_timer_id = 1;
+
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
     if (!boxed_closure || interval_ms <= 0) return 0;
-    guint id = g_timeout_add((guint)interval_ms, on_timer_tick, boxed_closure);
-    return (int)id;
+    guint source = g_timeout_add((guint)interval_ms, on_timer_tick, boxed_closure);
+    if (aeui_timer_count >= aeui_timer_cap) {
+        aeui_timer_cap = aeui_timer_cap == 0 ? 16 : aeui_timer_cap * 2;
+        aeui_timers = realloc(aeui_timers, sizeof(AeuiTimerEntry) * aeui_timer_cap);
+    }
+    int id = aeui_next_timer_id++;
+    aeui_timers[aeui_timer_count].id = id;
+    aeui_timers[aeui_timer_count].source = source;
+    aeui_timers[aeui_timer_count].alive = 1;
+    aeui_timer_count++;
+    return id;
 }
 
 void aether_ui_timer_cancel_impl(int timer_id) {
-    if (timer_id > 0) g_source_remove((guint)timer_id);
+    if (timer_id < 1) return;
+    for (int i = 0; i < aeui_timer_count; i++) {
+        if (aeui_timers[i].id != timer_id) continue;
+        // The alive flag, not the search, is what makes a second cancel a
+        // no-op instead of a removal of somebody else's recycled source.
+        if (aeui_timers[i].alive) {
+            g_source_remove(aeui_timers[i].source);
+            aeui_timers[i].alive = 0;
+        }
+        return;
+    }
 }
 
 // Open URL in default browser
