@@ -1,0 +1,67 @@
+// spec_hoverpaint_demo.ae — style_hover / style_active actually paint.
+//
+// style_hover's DSL comment says it exists because "without this a control
+// reads as dead". On macOS it read as dead anyway: the colour was recorded in
+// an associated object that only the driver's readback consulted, and no draw
+// path ever used it. GTK4 applies a :hover CSS rule; win32 paints it in its
+// owner-draw path (hover_set && is_hovered).
+//
+// The row carries three distinct colours so each state is identified by WHICH
+// colour, not merely by "it changed":
+//   base #336699   hover #cc3333   active #199919
+//
+// The full round trip matters as much as the individual states: leaving must
+// restore the base, and releasing must fall back to HOVER rather than base
+// while the pointer is still over the widget. Both were wrong in the first cut
+// of this fix and only the round trip caught them.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/hoverpaint_demo &
+//   UI_SPEC=hoverpaint_demo/spec_hoverpaint_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.json
+
+row_id() -> int { return uidriver.widget_id_of("hstack", "") }
+
+row_bg() -> string {
+    body = uidriver.get_body("/widget/${row_id()}")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = uidriver.field_str(v, "bg")
+    json.json_free(v)
+    return r
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "hover/active painting over AetherUIDriver") {
+        spec.it("rests on the base background") callback {
+            spec.assert_str_eq(row_bg(), "#336699", "base colour at rest")
+        }
+
+        spec.it("hover paints the hover colour") callback {
+            uidriver.post_ok("/widget/${row_id()}/hover", "hover the row")
+            spec.assert_str_eq(row_bg(), "#cc3333", "hover colour while hovered")
+        }
+
+        spec.it("press paints the active colour, which beats hover") callback {
+            uidriver.post_ok("/widget/${row_id()}/press", "press the row")
+            spec.assert_str_eq(row_bg(), "#199919", "active colour while pressed")
+        }
+
+        spec.it("releasing falls back to hover, not to base") callback {
+            uidriver.post_ok("/widget/${row_id()}/unpress", "release the row")
+            spec.assert_str_eq(row_bg(), "#cc3333", "still hovered after release")
+        }
+
+        spec.it("leaving restores the base") callback {
+            uidriver.post_ok("/widget/0/hover", "pointer leaves everything")
+            spec.assert_str_eq(row_bg(), "#336699", "base colour restored")
+        }
+    }
+    spec.run_summary(fw)
+}

@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- macOS paints `style_hover` and `style_active` instead of only recording them.
+  The colour went into an associated object that nothing but the driver's own
+  readback ever consulted; no draw path used it, so a control styled with
+  `style_hover` still "read as dead" on this backend, which is the exact thing
+  that verb's own comment says it exists to prevent. GTK4 does it with a
+  `:hover` CSS rule and Win32 in its owner-draw path; macOS now applies the
+  colour to the view's layer, with active beating hover and the base
+  `style_bg_color` restored when neither applies.
+  Both routes go through one helper so they cannot drift: the driver's
+  simulated hover/press, and a real `NSTrackingArea` armed the first time a
+  state style is set. The clear paths repaint too, which the first cut missed,
+  leaving the last hovered widget wearing its hover colour permanently.
+- The driver's `bg` readback answers from the layer that actually paints for a
+  widget carrying a hover or active style, extending the rule the scroll-view
+  arm already followed. Deliberately narrow: reading the layer for every view
+  changes what the field MEANS, from "the background that was set" to "whatever
+  the layer happens to paint", and made the injected banner start reporting a
+  colour it never asked for.
+
+### Notes
+
+- `examples/hoverpaint_demo` and `tests/hoverpaint_demo/` (5 assertions, CI
+  Phase 5e15, spec-matrix suite `hoverpaint`) cover it, with three distinct
+  colours so each state is identified by WHICH colour rather than by "it
+  changed". The round trip is asserted, not just the states: releasing must
+  fall back to hover rather than base while the pointer is still over the
+  widget, and leaving must restore the base. Both were wrong in the first cut
+  and only the round trip caught them.
+
+### Fixed
+
 - macOS honours group opacity. `canvas_group_begin` / `canvas_group_end` were
   two empty stubs there, so an SVG `<g opacity="0.5">` painted **fully opaque**:
   measured through the driver, a 0.5 group over white read `0xFFFF0000` instead
