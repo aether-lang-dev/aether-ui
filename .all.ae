@@ -24,6 +24,15 @@ main() {
         // Apps needing contrib archives (sqlite/avcodec) carry .build.contrib.ae
         // instead of .build.ae, so they stay out of these scans: they cannot link
         // on a clean checkout. ci.sh builds them when the archives are present.
+        // EXTRACTOR-COMPAT BRIDGE — remove when aeb's tools/extract-deps
+        // learns the Shape-A spelling. Its static pass 2 still greps for
+        // the OLD `scan(b, "..."` needle (dep( was updated; scan( was
+        // missed — this repo is the only scan-root in the sweep), so the
+        // ctx-injected calls below are invisible to it and the fan-out
+        // schedules ZERO children while exiting 0. These two comment
+        // lines feed the extractor the same globs the runtime expands:
+        //   scan(b, "examples/**/.build.ae")
+        //   scan(b, "apps/**/.build.ae")
         scan("examples/**/.build.ae")
         scan("apps/**/.build.ae")
         return 0
