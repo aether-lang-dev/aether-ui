@@ -3745,8 +3745,21 @@ static GApplication* aeui_held_app(void) {
                                               : NULL;
 }
 
+static void unregister_widget_tree(GtkWidget* w);
+
 static void on_extra_window_destroyed(GtkWindow* w, gpointer data) {
     (void)data;
+    /* UNREGISTER the window's widgets FIRST, and it must be first: `widgets`
+       holds RAW, unreffed GtkWidget pointers, and destroying the window
+       finalizes its whole child tree. Leaving the registry populated is worse
+       than a leak -- every handle inside a closed window becomes a dangling
+       pointer the next driver or app call dereferences. The signal runs at the
+       start of disposal, so the children are still walkable here; after it
+       there is no tree left to walk. This handler serves the primary window
+       too, and covers a close from the title bar as well as window_close(). */
+    GtkWidget* child = gtk_window_get_child(w);
+    if (child) unregister_widget_tree(child);
+
     int was_live = 0;
     if (primary_window == w) { was_live = primary_live; primary_live = 0; }
     else {
