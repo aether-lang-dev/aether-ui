@@ -1,0 +1,48 @@
+// Aether UI group-opacity example: canvas_group_begin / canvas_group_end.
+//
+// TRUE group opacity: everything between begin and end composites into ONE
+// layer, and that layer is painted once at the group alpha. The point is
+// OVERLAP: painting each child at the group alpha instead makes the overlap
+// double-darken, which is the wrong answer and the one you get for free.
+//
+// This is what an SVG <g opacity="0.5"> means, and vg emits the pair for it.
+// GTK4 has had it via cairo_push_group since the feature landed; win32 gained
+// it later (its comment records mememe.svg, a <g opacity="0.5"> of three
+// overlapping strokes, rendering wrong). macOS kept two empty stubs, so the
+// same defect survived here.
+//
+// Layout: two red squares overlapping by half, inside a 0.5 group, on white.
+//   left-only  (25,50)  — one square at 50%
+//   overlap    (75,50)  — BOTH squares, still 50% if the group composites once
+//   right-only (125,50) — one square at 50%
+// A correct group makes all three the SAME colour. Without one, the middle is
+// darker.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack, canvas_create, canvas_fill_rect,
+    canvas_group_begin, canvas_group_end, enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    cv = 0
+    main_root = root_vstack(10) {
+        text("Group opacity demo")
+        cv = canvas_create(200, 100)
+    }
+
+    // White ground so the composite is measurable against a known colour.
+    canvas_fill_rect(cv, 0.0, 0.0, 200.0, 100.0, 1.0, 1.0, 1.0, 1.0)
+
+    canvas_group_begin(cv)
+    canvas_fill_rect(cv, 0.0,   25.0, 100.0, 50.0, 1.0, 0.0, 0.0, 1.0)
+    canvas_fill_rect(cv, 50.0,  25.0, 100.0, 50.0, 1.0, 0.0, 0.0, 1.0)
+    canvas_group_end(cv, 0.5)
+
+    app = ui.app_create("Group opacity demo", 320, 240)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}
