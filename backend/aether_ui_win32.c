@@ -8324,6 +8324,14 @@ static void w32_release_handle_state(int h) {
         free(w32_drag_paths[h - 1]);
         w32_drag_paths[h - 1] = NULL;
     }
+    // The opacity tween runs on a THREAD timer, not a window timer, so
+    // destroying the HWND does not stop it. It would keep waking at 60Hz and
+    // finding a dead window until its own duration ran out.
+    Widget* w = widget_at(h);
+    if (w && w->tr_timer) {
+        KillTimer(NULL, w->tr_timer);
+        w->tr_timer = 0;
+    }
 }
 
 static void mark_subtree_dead(HWND hwnd) {

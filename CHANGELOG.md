@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has a hard quota of, so a long-lived tinted list could eventually stop drawing.
   GTK4 was already correct here, it attaches the same state with
   `g_object_set_data_full` and the widget's own finalize releases it.
+- An opacity tween in flight now ends when its widget is removed. On macOS the
+  tween object stayed in the handle-keyed table forever, so an animated row
+  leaked one per rebuild; the weak view reference meant it stopped animating,
+  but nothing dropped the entry. On Windows the tween runs on a thread timer
+  rather than a window timer, so destroying the window did not stop it and it
+  kept waking at 60Hz against a dead window until its duration elapsed.
 
 ### Added
 

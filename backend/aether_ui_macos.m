@@ -5446,7 +5446,19 @@ static void unregister_view_tree(NSView* v) {
     // and this is not a correctness bug; it is a leak, and an unbounded one,
     // because every list rebuild (each_update, vlist, listbox_update all clear
     // and repopulate) retires a row and takes its handle out of use forever.
-    aeui_drag_path_set(h, NULL);
+    // Guarded: the setter GROWS the array for an out-of-range handle, and
+    // clearing a list would then realloc once per row for rows that never had
+    // a payload at all.
+    if (h <= aeui_drag_paths_len) aeui_drag_path_set(h, NULL);
+    // An opacity tween in flight outlives its widget: the timer retains the
+    // AetherTween, and the dictionary retains it again under this handle. The
+    // weak view means it stops animating, but nothing ever drops the entry.
+    AetherTween* tw = aeui_tweens[@(h)];
+    if (tw) {
+        [tw.timer invalidate];
+        tw.timer = nil;
+        [aeui_tweens removeObjectForKey:@(h)];
+    }
 }
 
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
