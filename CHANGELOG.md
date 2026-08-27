@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Win32 stroked canvas text honours its font family. The `CV_STROKE_TEXT` draw
+  already called `gdip_resolve_family(cmd->font_family)`; it was the command
+  builder that never filled the field in, discarding the argument with a bare
+  `(void)font_family`. Filled text, whose builder sits ten lines above and does
+  store it, honoured the requested face, so the same string rendered in two
+  different typefaces depending on whether it was filled or stroked. The
+  existing cleanup already frees the field for both command kinds, so nothing
+  else changes.
+
+### Fixed
+
 - macOS honours SVG `spreadMethod` on gradients. `extend` (0=pad, 1=reflect,
   2=repeat) was dropped with a "not yet honored" note, so every gradient
   rendered as pad while GTK4 (`CAIRO_EXTEND_*`) and Win32 both honoured it.

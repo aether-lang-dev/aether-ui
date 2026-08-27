@@ -5948,12 +5948,18 @@ void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
                                         double line_width, int font_flags,
                                         const char* font_family,
                                         double r, double g, double b, double a) {
-    (void)font_family;
-    (void)font_flags;
+    (void)font_flags;   // bold/italic selection not yet wired on Win32
     CanvasCmd c = {0};
     c.k = CV_STROKE_TEXT; c.p0 = x; c.p1 = y; c.p2 = font_size; c.p3 = line_width;
     c.cr = r; c.cg = g; c.cb = b; c.calpha = a;
     c.text = text ? _strdup(text) : NULL;
+    /* The CV_STROKE_TEXT draw already calls gdip_resolve_family(cmd->font_family)
+       -- it was this builder that never filled the field in, so stroked text
+       always resolved to the default face while FILLED text, whose builder is
+       ten lines up and does store it, honoured the requested one. The same
+       string rendered in two different typefaces depending on fill vs stroke.
+       Freed by the same command-cleanup path as the fill case. */
+    c.font_family = (font_family && font_family[0]) ? _strdup(font_family) : NULL;
     canvas_add_cmd(canvas_id, c);
 }
 
