@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- Six stale platform-support claims corrected. Each said a verb was GTK4-only
+  or a no-op on macOS/Win32 when all three backends had implemented it, in
+  some cases years of commits ago. These are not cosmetic: a comment saying
+  `weight()` does nothing off GTK4 sends an app to build a workaround for a
+  feature CI already proves works.
+  - `weight()` said "GTK4 only; no-op on win32/macOS". Real on all three, and
+    `spec_weightclamp_demo` asserts the min-clamp on macOS and Linux in CI.
+  - `canvas_on_key` said "macos/win32 stubs". Real via `-keyDown:` and
+    `WM_KEYDOWN`.
+  - `canvas_on_release` said "no-op on backends without a release bridge yet".
+    Real via `-mouseUp:` and `WM_LBUTTONUP`. `spec_rubiks_cube` and
+    `spec_frames_demo` drive both paths in CI.
+  - `context_menu_item` said "AppKit/Win32 are no-op stubs". macOS hands the
+    items to `-[NSView setMenu:]`, Win32 pops a `TrackPopupMenu` from
+    `WM_CONTEXTMENU`; `spec_context_menu` covers it.
+  - `add_css_class` said "GTK-only, no-op stubs elsewhere", which reads as
+    "does nothing". The class list is tracked on all three (it is how the
+    driver reports selection state and how `.aui-row-selected` works
+    everywhere); what is GTK4-only is applying STYLE from it, since the other
+    two have no stylesheet engine.
+  - `aether_ui_win32.c` carried "not yet implemented on Win32... No-op stub"
+    directly above a later note saying the opposite. The stale sentence had
+    been left in place rather than replaced.
+  `on_layout`'s comment already records this exact rot happening once before,
+  which is why it now states which backend does what rather than naming one.
+
 ### Added
 
 - `canvas_on_scroll` is wired on macOS and Win32, not GTK4 only. It was an

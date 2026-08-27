@@ -2081,9 +2081,7 @@ void aether_ui_button_set_label(int handle, const char* label) {
     if (w && w->hwnd) SetWindowTextW(w->hwnd, utf8_to_wide(label));
 }
 
-// Right-click context menus: not yet implemented on Win32 (TrackPopupMenu is
-// the native shape). No-op stub — same precedent as canvas_on_move.
-// Context-menu side-store (REAL, 2026-07-20): items accumulate on the widget;
+// Right-click context menus (REAL, 2026-07-20): items accumulate on the widget;
 // a real right-click pops a TrackPopupMenu built from them, and the driver's
 // /widget/{id}/context_menu[/{idx}] routes report/activate the same store —
 // no test-only path.
