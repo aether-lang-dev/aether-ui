@@ -21,9 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   simulated hover/press, and a real `NSTrackingArea` armed the first time a
   state style is set. The clear paths repaint too, which the first cut missed,
   leaving the last hovered widget wearing its hover colour permanently.
-- The driver's `bg` readback answers from the layer that actually paints for a
-  widget carrying a hover or active style, extending the rule the scroll-view
-  arm already followed. Deliberately narrow: reading the layer for every view
+- The driver's `bg` readback answers for the state the widget is actually in,
+  on both backends. macOS reads the layer that paints (extending the rule the
+  scroll-view arm already followed); GTK4 reconstructs it from the widget's
+  real state flags, because the `:hover` / `:active` CSS genuinely paints there
+  but GTK exposes no getter for the background a widget currently renders. The
+  colours are recorded from the same values the CSS is generated from, so the
+  two agree by construction. Without this the readback reported the resting
+  colour for a widget that was visibly in another state. Deliberately narrow: reading the layer for every view
   changes what the field MEANS, from "the background that was set" to "whatever
   the layer happens to paint", and made the injected banner start reporting a
   colour it never asked for.
