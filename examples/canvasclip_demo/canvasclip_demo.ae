@@ -1,0 +1,40 @@
+// Aether UI canvas-clip example: canvas_clip_rect(cid, x, y, w, h).
+//
+// Intersect the clip with a rect; it persists for the rest of the frame's
+// replay. This is what AeVG emits at scene-flush start (vg/live.ae) to enforce
+// the SVG viewport's overflow:hidden, so shapes outside the viewBox are cut at
+// its edge rather than spilling past it.
+//
+// It was a SILENT NO-OP ON WIN32 -- the impl discarded its arguments and the
+// paint replay had no case for it at all -- so every live vg scene drew past
+// its viewport on Windows and nowhere else. It went unnoticed because the one
+// test for the primitive (vg/test/test_canvas_clip.ae) asserted only that a
+// PNG got written, and was not in any CI run list.
+//
+// The canvas here clips to the top-left quadrant and then fills the WHOLE
+// canvas red. Correct behaviour: red inside the quadrant, background outside.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack,
+    canvas_create, canvas_clip_rect, canvas_fill_rect, enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    cv = 0
+    main_root = root_vstack(10) {
+        text("Canvas clip demo")
+        cv = canvas_create(100, 100)
+    }
+
+    // Clip to the top-left 50x50, then fill all 100x100 red.
+    canvas_clip_rect(cv, 0.0, 0.0, 50.0, 50.0)
+    canvas_fill_rect(cv, 0.0, 0.0, 100.0, 100.0, 1.0, 0.0, 0.0, 1.0)
+
+    app = ui.app_create("Canvas clip demo", 320, 240)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

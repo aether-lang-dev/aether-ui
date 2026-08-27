@@ -60,7 +60,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -757,6 +757,20 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=canvasscroll_demo/spec_canvasscroll_demo \
     run_server_test "$(EX_BIN canvasscroll_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" canvasscroll_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e13: AetherUIDriver canvas-clip spec ==="
+# canvas_clip_rect was a SILENT NO-OP on win32 (the impl discarded its
+# arguments; the paint replay had no case for it), so every AeVG live scene
+# drew past its viewport there -- vg/live.ae emits one at scene-flush start to
+# enforce SVG overflow:hidden. It survived because the only test for the
+# primitive asserted nothing about clipping and was in no run list. This one
+# asserts pixels, on both backends CI has.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=canvasclip_demo/spec_canvasclip_demo \
+    run_server_test "$(EX_BIN canvasclip_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" canvasclip_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

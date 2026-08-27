@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `canvas_clip_rect` clips on Win32. It was a silent no-op there: the impl
+  discarded all five arguments and the paint replay had no case for the
+  command at all, while macOS and GTK4 both push it and honour it. Since
+  `vg/live.ae` emits one at scene-flush start to enforce the SVG viewport's
+  `overflow:hidden`, **every AeVG live scene drew past its viewport on Windows
+  and nowhere else**. Both Win32 replay paths now honour it: `IntersectClipRect`
+  on the GDI path, `GdipSetClipRectI` with CombineMode Intersect on the GDI+
+  one, each matching the documented semantic of narrowing the current clip for
+  the rest of the frame. Both also reset the clip when a replay starts, because
+  the `read_pixel` path reuses one cached DC across calls and a clip left by
+  the previous replay would shrink the visible area a little more every frame.
+
+### Notes
+
+- The clip primitive now has a test that asserts clipping. It had none:
+  `vg/test/test_canvas_clip.ae` wrote a PNG, checked the write returned 1 and
+  told a human to "inspect" it, despite a header comment claiming it asserted a
+  pixel inside the clip and one outside; and it was in no CI run list, so it
+  never ran. It is replaced by `examples/canvasclip_demo` plus
+  `tests/canvasclip_demo/` (5 assertions, CI Phase 5e13, spec-matrix suite
+  `canvasclip`), which reads real pixels through `GET /canvas/{id}/pixel` and
+  runs on both backends CI has.
+  Scope stated plainly: there is no Windows CI, so that spec does not prove the
+  Win32 fix. It pins the contract the fix implements and stops macOS and GTK4
+  regressing. It asserts "inside is red, outside is NOT red" rather than an
+  exact background value, because the offscreen replay's background differs per
+  backend and pinning one would test the wash instead of the clip.
+
+### Fixed
+
 - Six stale platform-support claims corrected. Each said a verb was GTK4-only
   or a no-op on macOS/Win32 when all three backends had implemented it, in
   some cases years of commits ago. These are not cosmetic: a comment saying
