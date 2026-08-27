@@ -1,0 +1,63 @@
+// spec_groupalpha_demo.ae — canvas_group_begin/end give TRUE group opacity.
+//
+// The demo paints two red squares overlapping by half inside a 0.5 group, on
+// white. Correct behaviour composites the pair into one layer and paints it
+// once at 0.5, so all three sample points are the SAME 50%-red:
+//
+//   left-only (25,50)   overlap (75,50)   right-only (125,50)
+//
+// macOS had two empty stubs here, so the group alpha was dropped entirely and
+// every sample read fully opaque red (0xFFFF0000 measured). GTK4 has had this
+// via cairo_push_group since the feature landed; win32 gained it later, and
+// its comment records the same symptom for mememe.svg.
+//
+// TWO DIFFERENT WRONGS, so two different assertions:
+//   * alpha ignored (the macOS bug) -> the samples are fully opaque
+//   * alpha applied PER CHILD instead of once -> the overlap is darker
+// The second is the one that makes this "true" group opacity rather than a
+// cheaper thing that looks right until shapes overlap.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/groupalpha_demo &
+//   UI_SPEC=groupalpha_demo/spec_groupalpha_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.json
+
+// 0xFFFF0000 (opaque red) as a signed int.
+opaque_red() -> int { return -65536 }
+
+pixel_at(x: int, y: int) -> int {
+    body = uidriver.get_body("/canvas/1/pixel?x=${x}&y=${y}&w=200&h=100")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "group opacity over AetherUIDriver") {
+        // Catches the stub: with the alpha dropped every sample is opaque red.
+        spec.it("the group alpha is applied at all") callback {
+            spec.assert_true(pixel_at(25, 50) != opaque_red(),
+                             "a 0.5 group is not painted fully opaque")
+            spec.assert_true(pixel_at(125, 50) != opaque_red(),
+                             "and not on the other square either")
+        }
+
+        // Catches the cheaper wrong answer: per-child alpha darkens overlaps.
+        spec.it("the group composites ONCE, so the overlap is not darker") callback {
+            left = pixel_at(25, 50)
+            over = pixel_at(75, 50)
+            right = pixel_at(125, 50)
+            spec.assert_eq(over, left, "overlap matches the left square")
+            spec.assert_eq(over, right, "overlap matches the right square")
+        }
+    }
+    spec.run_summary(fw)
+}

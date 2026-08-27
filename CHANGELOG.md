@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- macOS honours group opacity. `canvas_group_begin` / `canvas_group_end` were
+  two empty stubs there, so an SVG `<g opacity="0.5">` painted **fully opaque**:
+  measured through the driver, a 0.5 group over white read `0xFFFF0000` instead
+  of `0xFFFF7F7F`. This is the same defect the Win32 backend's own comment
+  records for `mememe.svg`, fixed there and left standing here. macOS now
+  composites the group into one `CGContextBeginTransparencyLayer` and paints it
+  once at the group alpha, matching GTK4's `cairo_push_group` +
+  `cairo_paint_with_alpha`.
+  CoreGraphics takes a transparency layer's alpha from the gstate **at begin**,
+  while the alpha arrives with the end command, so the replay looks ahead for
+  the matching end and sets it first. The look-ahead is depth-counted: a nested
+  group's end must not be mistaken for the outer one's.
+
+### Notes
+
+- `examples/groupalpha_demo` and `tests/groupalpha_demo/` (4 assertions, CI
+  Phase 5e14, spec-matrix suite `groupalpha`) cover it, with two squares
+  overlapping by half inside a 0.5 group. Two assertions because there are two
+  distinct wrong answers: dropping the alpha (the stub, which fails the first)
+  and applying it per child, which leaves the overlap darker than either square
+  and fails the second. The second passes trivially on the old code, which is
+  exactly why both are there.
+
+### Fixed
+
 - `canvas_clip_rect` clips on Win32. It was a silent no-op there: the impl
   discarded all five arguments and the paint replay had no case for the
   command at all, while macOS and GTK4 both push it and honour it. Since

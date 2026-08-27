@@ -3848,10 +3848,6 @@ void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     free(cur);
     widget_classes[handle - 1] = out;  // "" when the last class was removed
 }
-void aether_ui_canvas_group_begin_impl(int canvas_id) { (void)canvas_id; }
-void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
-    (void)canvas_id; (void)alpha;
-}
 // ---------------------------------------------------------------------------
 // The drawn tooltip — a vg-drawn shape's tooltip, rendered as an overlay
 // rather than a native NSToolTip (which can't be positioned per-shape and
@@ -4220,7 +4216,16 @@ typedef enum {
     CANVAS_DRAW_IMAGE,
     CANVAS_FILL_LINEAR,
     CANVAS_FILL_RADIAL,
-    CANVAS_CLIP_RECT
+    CANVAS_CLIP_RECT,
+    /* True group opacity: composite everything between BEGIN and END
+       into one transparency layer, then paint that layer ONCE at the
+       group alpha, so overlapping children do not double-darken.
+       GTK4 has had it via cairo_push_group since the feature landed and
+       win32 gained it later; this backend's pair stayed empty stubs,
+       which is the same defect the win32 comment records for mememe.svg
+       (a <g opacity="0.5"> of three overlapping strokes).
+       Appended at the END: the values are positional. */
+    CANVAS_GROUP_BEGIN, CANVAS_GROUP_END
 } CanvasCmdType;
 
 typedef struct {
@@ -4394,6 +4399,33 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                 CGContextStrokePath(cg);
                 break;
             }
+            case CANVAS_GROUP_BEGIN: {
+                /* CoreGraphics applies a transparency layer's alpha from the
+                   gstate AT BEGIN, but the alpha only arrives with the END
+                   command. The buffer is fully built before replay, so look
+                   ahead for the matching END and set it now. Depth-counted:
+                   a nested group's END must not be mistaken for this one's. */
+                double ga = 1.0;
+                int depth = 1;
+                for (int j = i + 1; j < end; j++) {
+                    if (cs->cmds[j].type == CANVAS_GROUP_BEGIN) depth++;
+                    else if (cs->cmds[j].type == CANVAS_GROUP_END) {
+                        depth--;
+                        if (depth == 0) { ga = cs->cmds[j].x; break; }
+                    }
+                }
+                CGContextSaveGState(cg);
+                CGContextSetAlpha(cg, ga);
+                CGContextBeginTransparencyLayer(cg, NULL);
+                break;
+            }
+            case CANVAS_GROUP_END:
+                /* The alpha was applied at BEGIN; ending the layer composites
+                   it once, which is the whole point -- painting each child at
+                   the group alpha instead makes overlaps double-darken. */
+                CGContextEndTransparencyLayer(cg);
+                CGContextRestoreGState(cg);
+                break;
             case CANVAS_CLIP_RECT:
                 // Intersects the current clip and persists for the rest of the
                 // frame (SVG viewport overflow:hidden). The context is fresh
@@ -4975,6 +5007,14 @@ void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
 
 // Viewport clip — no-op on AppKit for now (GTK-verified feature; AppKit can
 // add a CGContextClip path later).
+void aether_ui_canvas_group_begin_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_BEGIN });
+}
+void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
+    // Alpha rides in x, matching the GTK4 record (cairo_paint_with_alpha(c->x)).
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_END, .x = alpha });
+}
+
 void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
                                      double w, double h) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
