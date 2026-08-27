@@ -35,7 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dismissing a sheet unregisters the widgets inside it. No backend did, so a
   dismissed body stayed listed in `/widgets` forever; on GTK4 the registry
   holds raw, unreffed pointers and destroying the window finalizes its
-  children, so those entries dangled rather than merely leaked.
+  children, so those entries dangled rather than merely leaked. On macOS the
+  unregister happens in `sheet_dismiss` itself rather than only from
+  `windowWillClose:`, because `-endSheet:` ends the modal session without
+  closing the window and sends no willClose. That is the path taken whenever
+  the app is not headless, so a headless-only test never reaches it.
 - macOS stops registering a dead widget for every sheet created. The sheet's
   own `contentView` was registered and the handle thrown away
   (`register_widget_typed(...) * 0 + idx`) under a comment saying callers could

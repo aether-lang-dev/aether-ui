@@ -3987,8 +3987,21 @@ void aether_ui_sheet_present_impl(int handle) {
 void aether_ui_sheet_dismiss_impl(int handle) {
     if (!sheet_windows || handle < 1 || handle > (int)[sheet_windows count]) return;
     NSWindow* sheet = sheet_windows[handle - 1];
+    /* Unregister HERE, not only from windowWillClose:. -endSheet: ends the
+       modal session; it does NOT close the window and sends no willClose, so a
+       sheet dismissed while it is a REAL sheet keeps its widgets in the
+       registry. That is the path taken whenever the app is not headless, which
+       is how CI runs the macOS leg -- headless only ever reaches the -close
+       branch below, so testing headless alone hides it. Calling this twice is
+       harmless: the second pass finds no handle for a view already cleared. */
+    NSView* cv = [sheet contentView];
+    if (cv) {
+        for (NSView* sub in [[cv subviews] copy]) unregister_view_tree(sub);
+        unregister_view_tree(cv);
+    }
     if (primary_window && [sheet sheetParent]) {
         [primary_window endSheet:sheet];
+        [sheet orderOut:nil];   // endSheet alone leaves it on screen
     } else {
         [sheet close];
     }

@@ -48,12 +48,21 @@ main() {
             spec.assert_true(ok, "the sheet body is registered while open")
         }
 
-        // The phantom entry: an untyped widget with no text, which is what the
-        // discarded contentView registration looked like from out here.
-        spec.it("opening registers no untyped phantom widget") callback {
-            b = uidriver.get_body("/widgets")
-            n = uidriver.count_occurrences(b, "\"type\":\"widget\"")
-            spec.assert_eq(n, 0, "no widget of the fallback type is registered")
+        // The phantom entry: the discarded contentView registration showed up
+        // from out here as an extra widget on the FALLBACK type. Asserted as a
+        // DELTA across an open, not as an absolute count of zero: GTK4 has a
+        // widget of its own on that type, so "none anywhere" is a macOS fact,
+        // not a portable one, and asserting it failed the Linux leg.
+        spec.it("opening a sheet adds no widget on the fallback type") callback {
+            c = uidriver.widget_id_by_text("close sheet")
+            uidriver.post_ok("/widget/${c}/click", "start from closed")
+            before = uidriver.count_occurrences(uidriver.get_body("/widgets"),
+                                                "\"type\":\"widget\"")
+            o = uidriver.widget_id_by_text("open sheet")
+            uidriver.post_ok("/widget/${o}/click", "open the sheet")
+            after = uidriver.count_occurrences(uidriver.get_body("/widgets"),
+                                               "\"type\":\"widget\"")
+            spec.assert_eq(after, before, "the sheet registers nothing untyped")
         }
 
         spec.it("dismissing a sheet unregisters its body") callback {
