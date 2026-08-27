@@ -25,7 +25,7 @@ main() {
             // Three icons that must resolve, plus the deliberately empty one.
             n = uidriver.count_occurrences(b, "\"has_image\":true")
             // three from the first block, plus the tinted pair below it
-            spec.assert_eq(n, 5, "every path resolved to a platform icon")
+            spec.assert_eq(n, 6, "every path resolved to a platform icon")
         }
 
         spec.it("the empty widget starts with no picture") callback {
@@ -42,14 +42,34 @@ main() {
             // tint, so this fails rather than passing quietly if any backend
             // goes back to only recording the request.
             tinted = uidriver.count_occurrences(b, "\"tint\":\"#337fff\"")
-            spec.assert_eq(tinted, 1, "exactly the tinted icon reports the colour")
+            spec.assert_eq(tinted, 2, "exactly the tinted icons report the colour")
             // The control: exactly ONE widget carries a tint field at all.
             // Counting a label string here instead was backend-dependent and
             // wrong, because GTK4 emits a label as both "text" and
             // "a11y_name" while AppKit emits it once. Counting the field
             // itself is the claim being made and reads the same everywhere.
             any_tint = uidriver.count_occurrences(b, "\"tint\":")
-            spec.assert_eq(any_tint, 1, "no other widget reports a tint")
+            spec.assert_eq(any_tint, 2, "no widget beyond the tinted pair reports one")
+        }
+
+        spec.it("a tint survives the icon being rebound") callback {
+            // HONEST LIMIT: this asserts the tint is still REPORTED after a
+            // rebind, which the driver reads from the view. It cannot see
+            // whether the new image is a template, and AppKit only applies a
+            // tint to a template image, so this case passes either way on
+            // that half. It is here to catch the tint being cleared outright,
+            // and to record where the driver's sight ends.
+            before = uidriver.count_occurrences(uidriver.get_body("/widgets"),
+                                                "\"tint\":\"#337fff\"")
+            spec.assert_eq(before, 2, "two icons are tinted to start with")
+
+            r = uidriver.widget_id_by_text("Rebind the tinted icon")
+            spec.assert_gt(r, 0, "the rebind button is there")
+            uidriver.post_ok("/widget/${r}/click", "rebind a tinted icon")
+
+            after = uidriver.count_occurrences(uidriver.get_body("/widgets"),
+                                               "\"tint\":\"#337fff\"")
+            spec.assert_eq(after, 2, "the rebound icon is still tinted")
         }
 
         spec.it("set_file_icon rebinds a live widget") callback {
@@ -61,7 +81,7 @@ main() {
             spec.assert_true(ok, "the rebound widget now carries a picture")
             b = uidriver.get_body("/widgets")
             n = uidriver.count_occurrences(b, "\"has_image\":true")
-            spec.assert_eq(n, 6, "every icon widget now has a picture")
+            spec.assert_eq(n, 7, "every icon widget now has a picture")
             spec.assert_eq(string.contains(b, "\"has_image\":false"), 0,
                 "no icon widget is left empty")
         }
