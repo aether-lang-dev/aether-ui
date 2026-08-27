@@ -49,20 +49,28 @@ main() {
         }
 
         // The phantom entry: the discarded contentView registration showed up
-        // from out here as an extra widget on the FALLBACK type. Asserted as a
-        // DELTA across an open, not as an absolute count of zero: GTK4 has a
-        // widget of its own on that type, so "none anywhere" is a macOS fact,
-        // not a portable one, and asserting it failed the Linux leg.
-        spec.it("opening a sheet adds no widget on the fallback type") callback {
+        // from out here as an extra widget on the FALLBACK type that never
+        // left. Asserted as "back to baseline after a dismiss", not "none
+        // while open": on GTK4 the sheet handle IS a widget handle, so the
+        // sheet window itself is legitimately registered on that type while it
+        // lives, and a g_object_weak_ref clears the slot when it finalizes.
+        // Both earlier shapes of this assertion were wrong about that and
+        // failed the Linux leg while passing on macOS.
+        spec.it("a sheet leaves nothing behind on the fallback type") callback {
             c = uidriver.widget_id_by_text("close sheet")
             uidriver.post_ok("/widget/${c}/click", "start from closed")
+            sleep(300)
             before = uidriver.count_occurrences(uidriver.get_body("/widgets"),
                                                 "\"type\":\"widget\"")
             o = uidriver.widget_id_by_text("open sheet")
             uidriver.post_ok("/widget/${o}/click", "open the sheet")
+            sleep(200)
+            c2 = uidriver.widget_id_by_text("close sheet")
+            uidriver.post_ok("/widget/${c2}/click", "dismiss it again")
+            sleep(300)
             after = uidriver.count_occurrences(uidriver.get_body("/widgets"),
                                                "\"type\":\"widget\"")
-            spec.assert_eq(after, before, "the sheet registers nothing untyped")
+            spec.assert_eq(after, before, "no untyped entry outlives the sheet")
         }
 
         spec.it("dismissing a sheet unregisters its body") callback {
