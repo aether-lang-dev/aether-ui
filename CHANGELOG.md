@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Win32 gradient stops clamp all four colour components, not just alpha. Red,
+  green and blue were built from the same float input and shifted into their
+  own bytes unclamped, so a stop component outside `[0,1]` spilled into the
+  neighbouring channel instead of saturating. The sibling helper that packs a
+  solid colour had always clamped all four.
+
+### Notes
+
+- The Win32 cross-compile gate now runs at `-Wall -Werror`. It deliberately ran
+  at the default level while there was a backlog of pre-existing warnings,
+  because failing someone's change for six warnings it did not introduce
+  teaches people to ignore the gate. The backlog is zero, so the ratchet
+  closes: this is the one backend nobody here can run, and the compiler is the
+  only reader it gets. It paid for itself immediately, since
+  `-Wmisleading-indentation` is what surfaced the unclamped gradient stops
+  above.
+
+### Fixed
+
 - Widget removal now releases the per-handle state that lives outside the core
   registry arrays. On macOS a retired `draggable()` widget kept its drag payload
   string; on Windows a retired tinted `image()` or `file_icon()` kept its base

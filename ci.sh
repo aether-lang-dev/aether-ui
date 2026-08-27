@@ -462,9 +462,13 @@ echo "=== Phase 1d: Win32 backend cross-compile check ==="
 # second, which is not a substitute for running the thing, but it is the
 # difference between "mirrors the other backends" and "is known to build".
 #
-# At the project's own warning level, not -Wall: this gate exists to catch
-# code that cannot build, and widening it to style would fail on pre-existing
-# warnings that have nothing to do with the change under test.
+# -Wall -Werror. The gate deliberately ran at the default level while there
+# was a backlog of pre-existing warnings, because failing a change for six
+# warnings it did not introduce teaches people to ignore the gate. The backlog
+# is zero now, so the ratchet closes: this is the one backend nobody here can
+# run, and -Wall is the only reader it gets. It already earned its keep --
+# -Wmisleading-indentation is what surfaced a gradient-stop path that clamped
+# alpha and packed the other three components unclamped.
 W32_CC=""
 for cc in x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
     command -v "$cc" > /dev/null 2>&1 && { W32_CC="$cc"; break; }
@@ -474,12 +478,12 @@ if [ -n "$W32_CC" ]; then
     for src in backend/aether_ui_win32.c \
                backend/aether_ui_test_server.c \
                backend/aether_ui_system_extras.c; do
-        if "$W32_CC" -fsyntax-only -Ibackend "$ROOT/$src" \
+        if "$W32_CC" -fsyntax-only -Wall -Werror -Ibackend "$ROOT/$src" \
                 > "/tmp/ci_w32_$(basename "$src").log" 2>&1; then
             echo "  OK   $(basename "$src")"
         else
             echo "  FAIL $(basename "$src")"
-            grep ": error:" "/tmp/ci_w32_$(basename "$src").log" | head -10 | sed 's/^/       /'
+            grep -E ": (error|warning):" "/tmp/ci_w32_$(basename "$src").log" | head -10 | sed 's/^/       /'
             w32_fail=1
         fi
     done

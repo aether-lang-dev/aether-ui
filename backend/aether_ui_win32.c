@@ -6659,6 +6659,8 @@ __declspec(dllimport) int __stdcall GdipSetPathGradientSurroundColorsWithCount(
 static int gdip_cap(int our) { return our == 0 ? 0 : (our == 2 ? 1 : 2); }
 static int gdip_join(int our) { return our == 0 ? 0 : (our == 2 ? 1 : 2); }
 
+static int w32_clamp_byte(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
 /* 0xAARRGGBB from a command's float colour. THE POINT OF THE EXERCISE:
    GDI's CreateSolidBrush(RGB(...)) has nowhere to put cmd->calpha -- the
    command buffer HAS carried alpha all along, GDI just discards it at draw
@@ -6670,10 +6672,10 @@ static ARGB gdip_argb(const CanvasCmd* c) {
     int r = (int)(c->cr * 255.0 + 0.5);
     int g = (int)(c->cg * 255.0 + 0.5);
     int b = (int)(c->cb * 255.0 + 0.5);
-    if (a < 0) a = 0; if (a > 255) a = 255;
-    if (r < 0) r = 0; if (r > 255) r = 255;
-    if (g < 0) g = 0; if (g > 255) g = 255;
-    if (b < 0) b = 0; if (b > 255) b = 255;
+    a = w32_clamp_byte(a);
+    r = w32_clamp_byte(r);
+    g = w32_clamp_byte(g);
+    b = w32_clamp_byte(b);
     return ((ARGB)a << 24) | ((ARGB)r << 16) | ((ARGB)g << 8) | (ARGB)b;
 }
 
@@ -7174,8 +7176,12 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     if (ok) {
                         if (np < 2048) { pts[np].X = qx; pts[np].Y = qy; np++; }
                         if (!have) { mnx=mxx=qx; mny=mxy=qy; have=1; }
-                        else { if(qx<mnx)mnx=qx; if(qx>mxx)mxx=qx;
-                               if(qy<mny)mny=qy; if(qy>mxy)mxy=qy; }
+                        else {
+                            if (qx < mnx) mnx = qx;
+                            if (qx > mxx) mxx = qx;
+                            if (qy < mny) mny = qy;
+                            if (qy > mxy) mxy = qy;
+                        }
                     }
                 }
                 if (!have) break;
@@ -7190,7 +7196,14 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     int r = (int)(cmd->stop_rgba[s*4+0] * 255.0f + 0.5f);
                     int gg= (int)(cmd->stop_rgba[s*4+1] * 255.0f + 0.5f);
                     int b = (int)(cmd->stop_rgba[s*4+2] * 255.0f + 0.5f);
-                    if (a<0)a=0; if (a>255)a=255;
+                    /* All four, not just alpha: r/gg/b are built the same
+                       way and shifted into their own bytes, so a stop
+                       component outside [0,1] spilled into the neighbouring
+                       channel instead of saturating. */
+                    a  = w32_clamp_byte(a);
+                    r  = w32_clamp_byte(r);
+                    gg = w32_clamp_byte(gg);
+                    b  = w32_clamp_byte(b);
                     cols[s] = ((ARGB)a<<24)|((ARGB)r<<16)|((ARGB)gg<<8)|(ARGB)b;
                     /* THE STOP'S OWN OFFSET. This spaced stops EVENLY --
                        s/(ns-1) -- discarding cmd->stop_off, which
