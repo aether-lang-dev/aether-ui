@@ -25,6 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but nothing dropped the entry. On Windows the tween runs on a thread timer
   rather than a window timer, so destroying the window did not stop it and it
   kept waking at 60Hz against a dead window until its duration elapsed.
+- Closing an overlay now unregisters its widget subtree instead of only
+  detaching it, on all three backends. Every open/close cycle previously
+  stranded the whole card in the widget registry: the census grew by one entry
+  per widget per cycle and never fell, and because the click table still held
+  the dead card's callbacks the driver could click a button inside a dialog
+  that no longer existed. Those callbacks capture the app's overlay-handle
+  variable, which by then names a different, live overlay, so clicking a
+  destroyed card's Dismiss dismissed the open one.
+  On GTK4 this was worse than a leak. The registry holds raw, unreffed
+  `GtkWidget*`, and `gtk_overlay_remove_overlay` drops the last reference, so
+  the stale entries were dangling pointers rather than retained widgets.
+  On Windows the scrim was destroyed without being marked dead first, the order
+  the same file's other removal paths document as mandatory, and the content
+  window was never destroyed at all, only hidden and reparented onto the
+  holder, so every dialog ever opened stayed alive as a real window.
+  `spec_overlay_demo` gained two cases covering it; they fail on the previous
+  code and pass now.
 
 ### Added
 

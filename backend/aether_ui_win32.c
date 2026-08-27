@@ -4384,10 +4384,26 @@ static void w32_make_layered(HWND h) {
 // Detach an overlay entry's windows for real (end state of a close, whether
 // instant or after the fade). Mirrors the old close body.
 static void w32_overlay_detach(Win32OverlayEntry* e) {
-    if (e->scrim) { DestroyWindow(e->scrim); e->scrim = NULL; }
+    /* mark_subtree_dead BEFORE DestroyWindow, the order clear_children,
+       remove_child and navstack_pop all document: afterwards GetWindow can no
+       longer enumerate the children to mark them, and because Windows recycles
+       HWND values IsWindow() cannot tell a destroyed overlay from a live
+       widget that inherited its handle. The scrim was already being destroyed
+       here WITHOUT the marking step.
+
+       The content was neither marked nor destroyed, only hidden and reparented
+       onto the holder, so every dialog ever opened stayed alive as real
+       windows and kept reporting live types to the driver. Destroying matches
+       GTK4, where removing the overlay drops the last ref and finalizes the
+       content -- closing an overlay consumes its content on every backend. */
+    if (e->scrim) {
+        mark_subtree_dead(e->scrim);
+        DestroyWindow(e->scrim);
+        e->scrim = NULL;
+    }
     if (e->content) {
-        ShowWindow(e->content, SW_HIDE);
-        SetParent(e->content, widget_holder);
+        mark_subtree_dead(e->content);
+        DestroyWindow(e->content);
         e->content = NULL;
     }
     e->exiting = 0;
