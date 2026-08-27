@@ -3087,6 +3087,42 @@ int aether_ui_fire_appearance(int dark) {
 // Multi-window support — NSWindow per handle.
 // ---------------------------------------------------------------------------
 static NSMutableArray<NSWindow*>* extra_windows = nil;
+/* Explicit open/closed state, parallel to extra_windows, which is what the
+   gtk4 and win32 backends have always kept on their window records. This
+   backend inferred it from -isVisible instead, for want of a delegate to
+   observe a close, and that inference is wrong in headless mode: the contract
+   there is that a window is never ordered onto the desktop, so a window that
+   window_show() has opened reports -isVisible NO and /windows called it closed.
+   The three backends disagreed about the same program in the mode CI runs. */
+static NSMutableArray<NSNumber*>* extra_window_live = nil;
+
+static void unregister_view_tree(NSView* v);
+
+@interface AetherWindowDelegate : NSObject <NSWindowDelegate>
+@end
+@implementation AetherWindowDelegate
+- (void)windowWillClose:(NSNotification*)n {
+    NSWindow* w = [n object];
+    if (!extra_windows) return;
+    NSUInteger i = [extra_windows indexOfObjectIdenticalTo:w];
+    if (i == NSNotFound) return;
+    if (i < [extra_window_live count]) extra_window_live[i] = @0;
+    /* UNREGISTER the window's widgets, the same rule overlay close and
+       navstack_pop follow. `widgets` is a __strong array, so a closed window
+       whose views are merely dropped stays retained AND registered: the census
+       never falls, and widget_clicks still holds the callbacks, so the driver
+       can click a control inside a window that is gone. Measured before this
+       change on multiwindow_demo: four widgets stranded per open/close cycle,
+       and a label inside the closed window still answering /widget/{id} with
+       "visible":true. */
+    NSView* cv = [w contentView];
+    if (cv) {
+        for (NSView* sub in [[cv subviews] copy]) unregister_view_tree(sub);
+        unregister_view_tree(cv);
+    }
+}
+@end
+static AetherWindowDelegate* aeui_window_delegate = nil;
 
 // Wrap a window's root in an AetherOverlayHost (as the primary gets in
 // applicationDidFinishLaunching), so EACH window has its own overlay layer and
@@ -3136,7 +3172,11 @@ int aether_ui_window_create_impl(const char* title, int width, int height) {
     // dangling pointer the /windows route then reads). We manage the lifetime.
     [win setReleasedWhenClosed:NO];
     [win setTitle:[NSString stringWithUTF8String:title ? title : ""]];
+    if (!aeui_window_delegate) aeui_window_delegate = [[AetherWindowDelegate alloc] init];
+    [win setDelegate:aeui_window_delegate];
     [extra_windows addObject:win];
+    if (!extra_window_live) extra_window_live = [NSMutableArray array];
+    [extra_window_live addObject:@1];
     return (int)[extra_windows count];
 }
 
@@ -3197,9 +3237,14 @@ void aether_ui_window_set_title_impl(int win_handle, const char* title) {
     [w setTitle:[NSString stringWithUTF8String:title ? title : ""]];
 }
 int aether_ui_window_is_open_impl(int win_handle) {
-    NSWindow* w = mac_window_for_handle(win_handle);
-    // A closed NSWindow is released/hidden; visible OR the primary counts live.
-    return (w && ([w isVisible] || w == primary_window)) ? 1 : 0;
+    if (win_handle == 1) return primary_window ? 1 : 0;
+    // Extras answer from the recorded flag, not from -isVisible: headless never
+    // orders a window onto the desktop, so visibility cannot tell an open
+    // window from a closed one there. windowWillClose: is what clears it, so a
+    // window shut from its own title bar is reported too.
+    int idx = win_handle - 2;
+    if (!extra_window_live || idx < 0 || idx >= (int)[extra_window_live count]) return 0;
+    return [extra_window_live[idx] intValue];
 }
 int aether_ui_widget_window_impl(int widget_handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(widget_handle);

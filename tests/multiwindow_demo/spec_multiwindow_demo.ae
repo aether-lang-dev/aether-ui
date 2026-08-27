@@ -76,6 +76,47 @@ main() {
             b = uidriver.get_body("/windows")
             spec.assert_contains(b, "\"id\":1,\"title\":\"Multi-window demo\",\"live\":true", "window 1 still live")
         }
+
+        // Regression: /windows reported an OPEN secondary window as not live.
+        // The macOS backend inferred it from -isVisible for want of a delegate
+        // to observe a close, and headless never orders a window onto the
+        // desktop, so a window that window_show() had opened read false. The
+        // case below it, asserting live:false after a close, therefore passed
+        // on a lie: the answer was false the whole time. gtk4 and win32 have
+        // always kept an explicit flag; macOS now does too.
+        spec.it("an OPEN second window reports live, not merely visible") callback {
+            o = uidriver.widget_id_by_text("open window 2")
+            uidriver.post_ok("/widget/${o}/click", "open window 2 again")
+            ok = uidriver.wait_body_contains("/windows", "\"title\":\"Window 2\",\"live\":true", 20)
+            spec.assert_true(ok, "an open window 2 reports live:true")
+        }
+
+        // Regression: closing a window must UNREGISTER its widget subtree, not
+        // just flip the window's own flag. It did not, so every open/close
+        // cycle stranded the window's widgets: the census never fell and a
+        // label inside a closed window still answered /widget/{id} with
+        // "visible":true. On GTK4 that was worse than a leak -- `widgets`
+        // holds raw unreffed pointers and destroying the window finalizes its
+        // children, so the stale entries dangled.
+        spec.it("closing a window unregisters the widgets inside it") callback {
+            c = uidriver.widget_id_by_text("close window 2")
+            uidriver.post_ok("/widget/${c}/click", "close window 2")
+
+            b = uidriver.get_body("/widgets")
+            stale = uidriver.count_occurrences(b, "\"text\":\"Second window\"")
+            spec.assert_eq(stale, 0, "no label from the closed window is left registered")
+
+            base = uidriver.count_occurrences(b, "\"id\":")
+            o = uidriver.widget_id_by_text("open window 2")
+            uidriver.post_ok("/widget/${o}/click", "open once more")
+            opened = uidriver.count_occurrences(uidriver.get_body("/widgets"), "\"id\":")
+            spec.assert_gt(opened, base, "opening registers the new window's widgets")
+
+            c2 = uidriver.widget_id_by_text("close window 2")
+            uidriver.post_ok("/widget/${c2}/click", "close it again")
+            after = uidriver.count_occurrences(uidriver.get_body("/widgets"), "\"id\":")
+            spec.assert_eq(after, base, "the census returns to its pre-open baseline")
+        }
     }
     spec.run_summary(fw)
 }

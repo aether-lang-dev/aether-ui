@@ -42,6 +42,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holder, so every dialog ever opened stayed alive as a real window.
   `spec_overlay_demo` gained two cases covering it; they fail on the previous
   code and pass now.
+- Closing a window now unregisters the widgets inside it, on all three
+  backends. Each backend flipped the window's own `live` flag and stopped
+  there, so every open/close cycle stranded the window's whole widget subtree:
+  the census never fell, and a label inside a closed window still answered
+  `/widget/{id}` with `"visible":true`. Measured on `multiwindow_demo`, the
+  registry went 11, 15, 19 over three cycles and accumulated a stale label
+  each time; it now returns to its baseline after every close.
+  On GTK4 this was worse than a leak, for the same reason as the overlay case:
+  the registry holds raw, unreffed `GtkWidget*` and destroying a window
+  finalizes its children, so the stale entries were dangling pointers. The
+  unregister runs from the `destroy` handler, which covers a close from the
+  title bar as well as `window_close`.
+- macOS reports an open secondary window as open. It had no window delegate, so
+  it inferred the answer from `-isVisible`, and the headless contract is that a
+  window is never ordered onto the desktop: a window `window_show` had opened
+  read as closed, and `/windows` said `live:false` for it while GTK4 and Win32,
+  which both keep an explicit flag, said true for the same program. The
+  existing spec asserting `live:false` after a close was therefore passing on
+  an answer that had been false all along. macOS now keeps the same explicit
+  flag, cleared from `windowWillClose:` so a title-bar close is observed too.
+  `spec_multiwindow_demo` gained two cases; both fail on the previous code.
 
 ### Added
 

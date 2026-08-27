@@ -401,6 +401,8 @@ static void widget_hash_insert(HWND h, int handle) {
     widget_hash[slot].handle = handle;
 }
 
+static void mark_subtree_dead(HWND hwnd);
+
 static Widget* widget_at(int handle) {
     if (handle < 1 || handle > widget_count) return NULL;
     return widgets[handle - 1];
@@ -1554,6 +1556,15 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
+            /* Mark the window's WIDGETS dead as well, not just the window. The
+               registry never shrinks and Windows recycles HWND values, so the
+               `dead` flag is the only thing that tells the driver a widget is
+               gone -- the same rule clear_children, remove_child and
+               navstack_pop each document. It has to happen here, on the
+               parent's WM_DESTROY, because the children have not been
+               destroyed yet and GetWindow can still enumerate them; by their
+               own WM_DESTROY the tree is already coming apart. */
+            mark_subtree_dead(hwnd);
             // Multi-window: mark this window dead; quit the loop only when the
             // last live window is gone.
             for (int i = 0; i < w32_window_count; i++)
