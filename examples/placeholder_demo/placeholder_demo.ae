@@ -1,0 +1,31 @@
+// Aether UI placeholder example: hint text on every field kind.
+//
+// textfield/securefield honoured their placeholder on all three backends.
+// TEXTAREA honoured it on WIN32 ONLY -- macOS discarded the argument with a
+// bare (void)placeholder and GTK4 never referenced it -- so the one platform
+// with no CI was the only one where it worked.
+//
+// Neither could be seen from outside either: nothing reported a placeholder,
+// so no spec could have caught it. /widgets now carries a "placeholder" field.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack, textfield, securefield, textarea,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    main_root = root_vstack(10) {
+        text("Placeholder demo")
+        _f = textfield("your name") callback |v: string| { }
+        _s = securefield("your password") callback |v: string| { }
+        _a = textarea("tell us more") callback |v: string| { }
+    }
+
+    app = ui.app_create("Placeholder demo", 360, 320)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

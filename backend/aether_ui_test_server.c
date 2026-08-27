@@ -344,6 +344,27 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         }
     }
 
+    /* Hint text, when the widget has any. Emitted for every widget kind that
+       takes one rather than gated on type, because textfield, securefield and
+       textarea all accept it and the backends store it the same way. Without
+       this nothing outside could see that the argument was honoured on Win32
+       alone -- textarea dropped it on the other two and no test could tell. */
+    {
+        const char* ph = aether_ui_placeholder_impl(handle);
+        if (ph && *ph) {
+            char pe[256]; int j = 0;
+            for (const unsigned char* q = (const unsigned char*)ph;
+                 *q && j < (int)sizeof(pe) - 2; q++) {
+                unsigned char ch = *q;
+                if (ch == '"' || ch == '\\') { pe[j++] = '\\'; pe[j++] = (char)ch; }
+                else if (ch < 0x20) { pe[j++] = ' '; }
+                else pe[j++] = (char)ch;
+            }
+            pe[j] = '\0';
+            n += snprintf(buf + n, bufsize - n, ",\"placeholder\":\"%s\"", pe);
+        }
+    }
+
     if (strcmp(type, "text") == 0) {
         static const char* an[] = {"start", "middle", "end"};
         static const char* tr[] = {"none", "head", "middle", "tail"};

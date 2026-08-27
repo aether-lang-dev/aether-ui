@@ -111,6 +111,10 @@ void aether_ui_picker_set_selected(int handle, int index);
 int aether_ui_picker_get_selected(int handle);
 
 int aether_ui_textarea_create(const char* placeholder, void* boxed_closure);
+/* The hint text a textfield/securefield/textarea was created with, or ""
+   when it has none. Exists so the driver can observe it: the argument was
+   honoured on Win32 alone and nothing could see that from outside. */
+const char* aether_ui_placeholder_impl(int handle);
 void aether_ui_textarea_set_text(int handle, const char* text);
 char* aether_ui_textarea_get_text(int handle);
 

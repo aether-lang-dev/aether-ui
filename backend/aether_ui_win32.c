@@ -219,6 +219,7 @@ typedef struct {
     int font_weight_set;      // 1 = bold/normal was EXPLICITLY set (readback)
     wchar_t* font_family;     // face name for apply_font (owned; NULL default)
     char* font_family_u8;     // utf8 twin for driver readback (owned)
+    char* placeholder_u8;     // hint text, for driver readback (owned)
 
     // Fixed sizing (0 = auto)
     int pref_width;
@@ -2844,6 +2845,10 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
                      (LPARAM)utf8_to_wide(placeholder));
     }
     int handle = register_widget_typed(h, WK_TEXTFIELD);
+    if (placeholder && *placeholder) {
+        Widget* pw = widget_at(handle);
+        if (pw) { free(pw->placeholder_u8); pw->placeholder_u8 = _strdup(placeholder); }
+    }
     Widget* w = widget_at(handle);
     if (w) { w->on_change = (AeClosure*)boxed_closure; w->pref_height = 24; }
     return handle;
@@ -2861,6 +2866,10 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
     int handle = register_widget_typed(h, WK_SECUREFIELD);
+    if (placeholder && *placeholder) {
+        Widget* pw = widget_at(handle);
+        if (pw) { free(pw->placeholder_u8); pw->placeholder_u8 = _strdup(placeholder); }
+    }
     Widget* w = widget_at(handle);
     if (w) { w->on_change = (AeClosure*)boxed_closure; w->pref_height = 24; }
     return handle;
@@ -3014,6 +3023,11 @@ int aether_ui_picker_get_selected(int handle) {
     return (int)SendMessageW(w->hwnd, CB_GETCURSEL, 0, 0);
 }
 
+const char* aether_ui_placeholder_impl(int handle) {
+    Widget* w = widget_at(handle);
+    return (w && w->placeholder_u8) ? w->placeholder_u8 : "";
+}
+
 int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     ensure_win_init();
     HWND h = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -3027,6 +3041,10 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
     int handle = register_widget_typed(h, WK_TEXTAREA);
+    if (placeholder && *placeholder) {
+        Widget* pw = widget_at(handle);
+        if (pw) { free(pw->placeholder_u8); pw->placeholder_u8 = _strdup(placeholder); }
+    }
     Widget* w = widget_at(handle);
     if (w) { w->on_change = (AeClosure*)boxed_closure; w->pref_height = 120; }
     return handle;

@@ -30,6 +30,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-lssl -lcrypto -lz -lnghttp2 -lpcre2-8` for libaether.a's transitive deps
   and the `bldr` module links the runtime into the fan-out ORCHESTRATOR, where
   the old `build` module did not.
+- A `textarea`'s placeholder is honoured on macOS and GTK4, not Win32 alone.
+  macOS discarded the argument with a bare `(void)placeholder` and GTK4 never
+  referenced it, so hint text in a multi-line box worked only on the one
+  platform with no CI. Neither toolkit offers the property the field versions
+  use -- `placeholderString` belongs to `NSTextField` and `placeholder-text` to
+  `GtkEntry`, while a textarea is a text VIEW -- so macOS draws the hint from a
+  `NSTextView` subclass when the buffer is empty, and GTK4 overlays a dimmed
+  label on the view, kept in sync from the buffer's own `changed` signal so it
+  is right however the text arrives.
+
+### Added
+
+- `/widgets` reports a `placeholder` field. Nothing exposed one before, which
+  is why the gap above could not be caught: the argument was accepted by every
+  backend and honoured by one, and no test could tell. It covers `textfield`
+  and `securefield` too, which already worked and were equally unobserved.
+
+### Notes
+
+- `examples/placeholder_demo` and `tests/placeholder_demo/` (3 assertions, CI
+  Phase 5e17, spec-matrix suite `placeholder`). The textarea case is the
+  regression test: on the previous macOS code it reports absent while the other
+  two still report their text, which isolates the gap to the textarea rather
+  than to the new readback.
 
 ### Fixed
 

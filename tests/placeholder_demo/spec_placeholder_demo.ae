@@ -1,0 +1,58 @@
+// spec_placeholder_demo.ae — every field kind keeps its placeholder.
+//
+// textfield and securefield honoured theirs on all three backends. TEXTAREA
+// honoured it on WIN32 ONLY: macOS discarded the argument with a bare
+// (void)placeholder, GTK4 never referenced it at all. So the single platform
+// with no CI was the only one where it worked.
+//
+// It was also unobservable: nothing reported a placeholder, so no spec could
+// have caught it. /widgets now carries a "placeholder" field, which is what
+// makes this assertable at all -- and it retroactively covers the two field
+// kinds that already worked and were equally untested.
+//
+// The textarea case is the regression test: it reports absent on the previous
+// macOS code while the other two still report their text, which is what
+// isolates the gap to the textarea rather than to the new readback.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/placeholder_demo &
+//   UI_SPEC=placeholder_demo/spec_placeholder_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.json
+
+placeholder_of(wtype: string) -> string {
+    id = uidriver.widget_id_of(wtype, "")
+    if id == 0 { return "" }
+    body = uidriver.get_body("/widget/${id}")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = uidriver.field_str(v, "placeholder")
+    json.json_free(v)
+    return r
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "field placeholders over AetherUIDriver") {
+        spec.it("a textfield keeps its placeholder") callback {
+            spec.assert_str_eq(placeholder_of("textfield"), "your name",
+                               "textfield hint")
+        }
+
+        spec.it("a securefield keeps its placeholder") callback {
+            spec.assert_str_eq(placeholder_of("securefield"), "your password",
+                               "securefield hint")
+        }
+
+        // The one that was broken on two of three backends.
+        spec.it("a TEXTAREA keeps its placeholder too") callback {
+            spec.assert_str_eq(placeholder_of("textarea"), "tell us more",
+                               "textarea hint")
+        }
+    }
+    spec.run_summary(fw)
+}
