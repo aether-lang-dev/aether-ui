@@ -1,0 +1,65 @@
+// spec_canvasclip_demo.ae — canvas_clip_rect actually clips.
+//
+// The demo clips to the top-left 50x50 quadrant and then fills the WHOLE
+// 100x100 canvas red. Correct behaviour: red inside the quadrant, not red
+// outside it.
+//
+// This primitive was a SILENT NO-OP ON WIN32 (the impl discarded its
+// arguments; the paint replay had no case for it), so every AeVG live scene
+// drew past its viewport there, since vg/live.ae emits one of these at
+// scene-flush start to enforce SVG overflow:hidden.
+//
+// It survived because its only test, vg/test/test_canvas_clip.ae, asserted
+// nothing about clipping -- it wrote a PNG, checked the write returned 1, and
+// told a human to "inspect" -- and was not in any CI run list, so it never ran
+// at all. This spec asserts pixels, and runs on both backends CI has.
+//
+// HONEST SCOPE: there is no Windows CI, so this does not prove the win32 fix.
+// It pins the contract that fix now implements, and stops macOS and GTK4
+// regressing.
+//
+// Asserted as "inside is red, outside is NOT red" rather than against an exact
+// background value: the offscreen replay's background differs per backend
+// (macOS reads 0x00000000 outside, a cairo surface may read white), and
+// pinning one would be a test of the backend's wash, not of clipping.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/canvasclip_demo &
+//   UI_SPEC=canvasclip_demo/spec_canvasclip_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.json
+
+// 0xFFFF0000 packed AARRGGBB, as a signed int.
+red() -> int { return -65536 }
+
+pixel_at(x: int, y: int) -> int {
+    body = uidriver.get_body("/canvas/1/pixel?x=${x}&y=${y}&w=100&h=100")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "canvas clip over AetherUIDriver") {
+        spec.it("paints inside the clip rect") callback {
+            spec.assert_eq(pixel_at(25, 25), red(), "centre of the clipped quadrant is filled")
+            spec.assert_eq(pixel_at(10, 40), red(), "another point inside is filled")
+        }
+
+        // The decisive one: without a working clip the fill covers the whole
+        // canvas, so these read red too.
+        spec.it("does NOT paint outside the clip rect") callback {
+            spec.assert_true(pixel_at(75, 75) != red(), "past both edges is unpainted")
+            spec.assert_true(pixel_at(75, 25) != red(), "past the right edge is unpainted")
+            spec.assert_true(pixel_at(25, 75) != red(), "past the bottom edge is unpainted")
+        }
+    }
+    spec.run_summary(fw)
+}

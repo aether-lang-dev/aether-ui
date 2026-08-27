@@ -5558,7 +5558,14 @@ typedef enum {
        cairo_push_group since the feature landed; win32's pair were empty
        stubs, which is why mememe.svg (a <g opacity="0.5"> of three
        overlapping strokes) rendered fully opaque here. */
-    CV_GROUP_BEGIN, CV_GROUP_END
+    CV_GROUP_BEGIN, CV_GROUP_END,
+    /* Intersect the clip with (x,y,w,h) for the rest of the frame's
+       replay. AeVG emits one at scene-flush start (vg/live.ae) to
+       enforce the SVG viewport's overflow:hidden, so without it every
+       live scene drew past its viewport edge on this backend alone.
+       Appended at the END: the values are positional and the replay
+       switches index off them. */
+    CV_CLIP
 } CanvasCmdKind;
 
 typedef struct {
@@ -5866,7 +5873,10 @@ void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
 // Viewport clip — no-op on Win32 for now (GTK-verified feature).
 void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
                                       double w, double h) {
-    (void)canvas_id; (void)x; (void)y; (void)w; (void)h;
+    CanvasCmd c = {0};
+    c.k = CV_CLIP; c.p0 = (float)x; c.p1 = (float)y;
+    c.p2 = (float)w; c.p3 = (float)h;
+    canvas_add_cmd(canvas_id, c);
 }
 
 void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
@@ -6232,6 +6242,10 @@ static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
 static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) {
     // Plain GDI replay — GDI+ bindings from C are clunky; for a first
     // pass this delivers lines + filled rects with correct pixels.
+    /* Start each replay from NO clip. The read_pixel path reuses one cached
+       DC across calls (rp_dc), so a clip left behind by the previous replay
+       would intersect with this one and shrink the visible area every frame. */
+    SelectClipRgn(mem, NULL);
     // White background
     RECT full = { 0, 0, width, height };
     HBRUSH white = (HBRUSH)GetStockObject(WHITE_BRUSH);
@@ -6245,6 +6259,14 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
         switch (cmd->k) {
             case CV_CLEAR:
                 FillRect(mem, &full, white);
+                break;
+            case CV_CLIP:
+                /* IntersectClipRect is exactly the documented semantic:
+                   intersect the CURRENT clip, persisting for the rest of the
+                   replay. GDI takes an exclusive right/bottom edge. */
+                IntersectClipRect(mem, (int)cmd->p0, (int)cmd->p1,
+                                  (int)(cmd->p0 + cmd->p2),
+                                  (int)(cmd->p1 + cmd->p3));
                 break;
             case CV_LINE: {
                 MoveToEx(mem, (int)cmd->p0, (int)cmd->p1, NULL);
@@ -6627,6 +6649,11 @@ __declspec(dllimport) int __stdcall GdipClosePathFigure(GpPath* path);
 __declspec(dllimport) int __stdcall GdipSetClipPath(GpGraphics* g, GpPath* path,
     int combineMode);
 __declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
+/* CombineMode 1 = Intersect, which is the documented semantic of
+   canvas_clip_rect: narrow the CURRENT clip, never widen it. */
+#define GDIP_COMBINE_INTERSECT 1
+__declspec(dllimport) int __stdcall GdipSetClipRectI(GpGraphics* g,
+    int x, int y, int width, int height, int combineMode);
 __declspec(dllimport) int __stdcall GdipStartPathFigure(GpPath* path);
 __declspec(dllimport) int __stdcall GdipFillPath(GpGraphics* g, GpBrush* brush,
                                                  GpPath* path);
@@ -6780,6 +6807,10 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
     /* The reason this renderer exists, alongside alpha. GDI has no AA at
        all, so every diagonal edge is a staircase. */
     GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
+    /* Start from no clip. The read_pixel path reuses one cached DC across
+       calls, so a clip left by the previous replay would intersect with this
+       one and shrink the visible area a little more every frame. */
+    GdipResetClip(g);
 
     GpPen* cur_pen = NULL;
     /* Group-layer stack. `g` is redirected at CV_GROUP_BEGIN to draw into an
@@ -6845,6 +6876,16 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 GdipDisposeImage(bmp);
                 break;
             }
+            case CV_CLIP:
+                /* Applied to `g`, which the group-layer stack redirects: a
+                   clip emitted INSIDE a group therefore applies to that
+                   layer, and one emitted outside applies to the frame. The
+                   viewport clip AeVG emits at scene-flush start is always
+                   outside, which is the case that matters here. */
+                GdipSetClipRectI(g, (int)cmd->p0, (int)cmd->p1,
+                                 (int)cmd->p2, (int)cmd->p3,
+                                 GDIP_COMBINE_INTERSECT);
+                break;
             case CV_CLEAR: {
                 GpBrush* br = NULL;
                 if (GdipCreateSolidFill(0xFFFFFFFF, &br) == 0) {

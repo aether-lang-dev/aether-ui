@@ -94,6 +94,7 @@ SUITES=(
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
   "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
   "canvasscroll|examples/canvasscroll_demo|canvasscroll_demo/spec_canvasscroll_demo|"
+  "canvasclip|examples/canvasclip_demo|canvasclip_demo/spec_canvasclip_demo|"
   "listbox|examples/listbox_demo|listbox_demo/spec_listbox_demo|"
   "navstack|examples/navstackdemo|navstackdemo/spec_navstackdemo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"
