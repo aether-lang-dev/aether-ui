@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- macOS honours SVG `spreadMethod` on gradients. `extend` (0=pad, 1=reflect,
+  2=repeat) was dropped with a "not yet honored" note, so every gradient
+  rendered as pad while GTK4 (`CAIRO_EXTEND_*`) and Win32 both honoured it.
+  Measured through the driver on a red-to-blue band spanning x=0..50 of a
+  200-wide canvas with repeat: x=55, 75, 105 and 150 all read `0x0000FF`, flat
+  blue to the edge. They now cycle back through red every 50px.
+  CoreGraphics genuinely has no reflect or repeat -- `CGGradient` offers pad
+  and nothing else -- so rather than ask the gradient to tile, the stops are
+  pre-tiled: a stop list covering `reps` copies either side is built in
+  gradient-parameter space and the axis (or radius) is stretched by the same
+  factor, so tile k lands where the k-th repeat belongs. Reflect mirrors odd
+  tiles. `reps` comes from the clip bounding box projected onto the gradient
+  axis, so it covers exactly what is visible, and is clamped because a
+  degenerate axis would otherwise ask for an enormous stop array.
+  Offsets are clamped and kept non-decreasing: `CGGradient` requires a
+  monotonic location array and misdraws silently otherwise.
+
+### Notes
+
+- `examples/gradspread_demo` and `tests/gradspread_demo/` (5 assertions, CI
+  Phase 5e16, spec-matrix suite `gradspread`) cover it. Asserted by channel
+  comparison rather than exact colours, because the value at a sample depends
+  on antialiasing and per-backend rounding and pinning one would test the
+  rasteriser instead of the spread. Two of the three cases fail on the previous
+  code.
+
+### Fixed
+
 - macOS paints `style_hover` and `style_active` instead of only recording them.
   The colour went into an associated object that nothing but the driver's own
   readback ever consulted; no draw path used it, so a control styled with

@@ -1,0 +1,60 @@
+// Aether UI gradient spreadMethod example.
+//
+// extend = SVG spreadMethod: 0=pad, 1=reflect, 2=repeat. CoreGraphics has no
+// reflect/repeat -- CGGradient offers pad and nothing else -- so the macOS
+// backend dropped the argument with a "not yet honored" note and rendered
+// EVERY gradient as pad, while GTK4 (cairo CAIRO_EXTEND_*) and win32 both
+// honoured it. An SVG with spreadMethod="repeat" was silently wrong here.
+//
+// The canvas draws one 200x60 band with a red->blue gradient over only the
+// FIRST QUARTER of its width, extend=2 (repeat). Under pad, everything past
+// x=50 is the end colour (blue) for good. Under repeat, the band restarts:
+// x=60 is near the start colour again.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack, canvas_create,
+    canvas_begin_path, canvas_move_to, canvas_line_to, canvas_close_path,
+    canvas_fill_linear_gradient, enable_test_server_root)
+import std.os (os_getenv)
+import std.floatarr
+
+main() {
+    cv = 0
+    main_root = root_vstack(10) {
+        text("Gradient spread demo")
+        cv = canvas_create(200, 60)
+    }
+
+    // Two stops: red at 0, blue at 1.
+    offsets, _e1 = floatarr.new(2)
+    floatarr.set_unchecked(offsets, 0, 0.0)
+    floatarr.set_unchecked(offsets, 1, 1.0)
+    rgba, _e2 = floatarr.new(8)
+    floatarr.set_unchecked(rgba, 0, 1.0)  // red
+    floatarr.set_unchecked(rgba, 1, 0.0)
+    floatarr.set_unchecked(rgba, 2, 0.0)
+    floatarr.set_unchecked(rgba, 3, 1.0)
+    floatarr.set_unchecked(rgba, 4, 0.0)  // blue
+    floatarr.set_unchecked(rgba, 5, 0.0)
+    floatarr.set_unchecked(rgba, 6, 1.0)
+    floatarr.set_unchecked(rgba, 7, 1.0)
+
+    // The path to fill: the whole 200x60 canvas.
+    canvas_begin_path(cv)
+    canvas_move_to(cv, 0.0, 0.0)
+    canvas_line_to(cv, 200.0, 0.0)
+    canvas_line_to(cv, 200.0, 60.0)
+    canvas_line_to(cv, 0.0, 60.0)
+    canvas_close_path(cv)
+    // Gradient axis spans only x=0..50, so x>50 is where spread shows.
+    canvas_fill_linear_gradient(cv, 0.0, 0.0, 50.0, 0.0, 2, offsets, rgba,
+                                0.0, 2, 0, 0)
+
+    app = ui.app_create("Gradient spread demo", 320, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

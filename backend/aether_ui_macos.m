@@ -4321,6 +4321,7 @@ typedef struct {
     int iw, ih;     // DRAW_IMAGE pixel dims
     double gx1, gy1, gx2, gy2, gr, gfx, gfy;  // gradient geometry
     double grad_line_width;  // 0 → fill; >0 → stroke at this width
+    int grad_extend;         // SVG spreadMethod: 0=pad, 1=reflect, 2=repeat
     /* The ELLIPSE a gradientTransform (or a non-square objectBoundingBox)
        produces: semi-axes and tilt. gr keeps the old scalar answer, so a
        command with grx == 0 renders exactly as it always did. */
@@ -4443,6 +4444,57 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
 /* Defined below, next to aeui_metrics_font so the drawing and measuring
    fonts stay one resolver. */
 static NSFont* aeui_resolve_font(double size, const char* stack);
+/* SVG spreadMethod on CoreGraphics.
+   CGGradient has no reflect/repeat: kCGGradientDrawsBefore/AfterEndLocation is
+   pad and nothing else, so `extend` was dropped here and every gradient
+   rendered as pad -- reflect and repeat silently wrong, while GTK4 (cairo
+   CAIRO_EXTEND_*) and win32 both honoured them.
+
+   The fix is to stop asking the gradient to tile and hand it a stop list that
+   ALREADY covers the tiles. Given `reps` copies either side of the original
+   band, build stops across [-reps, 1+reps] in gradient-parameter space and
+   renormalise to 0..1; the caller then stretches the axis (or the radius) by
+   the same factor, so tile k lands exactly where the k-th repeat belongs.
+   Reflect mirrors odd tiles, which is the whole difference between the two
+   modes. Offsets are clamped and kept non-decreasing: CGGradient requires a
+   monotonic location array and silently misdraws otherwise.
+
+   Returns the new stop count, or 0 to fall back to the plain path. */
+static int aeui_expand_gradient_stops(const CanvasCmd* c, int reps, int reflect,
+                                      CGFloat** out_comps, CGFloat** out_locs) {
+    int n = c->n_stops;
+    if (n <= 0 || reps < 1) return 0;
+    int tiles = 2 * reps + 1;
+    int total = tiles * n;
+    CGFloat* comps = (CGFloat*)malloc(sizeof(CGFloat) * total * 4);
+    CGFloat* locs  = (CGFloat*)malloc(sizeof(CGFloat) * total);
+    if (!comps || !locs) { free(comps); free(locs); return 0; }
+    double span = (double)tiles;
+    int w = 0;
+    double prev = 0.0;
+    for (int t = -reps; t <= reps; t++) {
+        int mirrored = reflect && ((t & 1) != 0);
+        for (int k = 0; k < n; k++) {
+            int si = mirrored ? (n - 1 - k) : k;
+            double off = c->stop_off[si];
+            if (mirrored) off = 1.0 - off;
+            double u = ((double)(t + reps) + off) / span;
+            if (u < 0.0) u = 0.0;
+            if (u > 1.0) u = 1.0;
+            if (u < prev) u = prev;      // CGGradient needs non-decreasing
+            prev = u;
+            locs[w] = (CGFloat)u;
+            comps[w*4+0] = c->stop_rgba[si*4+0];
+            comps[w*4+1] = c->stop_rgba[si*4+1];
+            comps[w*4+2] = c->stop_rgba[si*4+2];
+            comps[w*4+3] = c->stop_rgba[si*4+3];
+            w++;
+        }
+    }
+    *out_comps = comps; *out_locs = locs;
+    return w;
+}
+
 static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                                 int start, int end) {
     if (!cg || !cs) return;
@@ -4625,19 +4677,83 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
             }
             case CANVAS_FILL_LINEAR:
             case CANVAS_FILL_RADIAL: {
+                // Axis/radius actually drawn: stretched when the stops were
+                // pre-tiled for reflect/repeat, the originals otherwise.
+                double gx1e = c->gx1, gy1e = c->gy1;
+                double gx2e = c->gx2, gy2e = c->gy2;
+                double gre  = c->gr;
                 if (c->n_stops > 0) {
                     CGColorSpaceRef gcs = CGColorSpaceCreateDeviceRGB();
-                    CGFloat* comps = (CGFloat*)malloc(sizeof(CGFloat) * c->n_stops * 4);
-                    CGFloat* locs  = (CGFloat*)malloc(sizeof(CGFloat) * c->n_stops);
-                    for (int si = 0; si < c->n_stops; si++) {
-                        comps[si*4+0] = c->stop_rgba[si*4+0];
-                        comps[si*4+1] = c->stop_rgba[si*4+1];
-                        comps[si*4+2] = c->stop_rgba[si*4+2];
-                        comps[si*4+3] = c->stop_rgba[si*4+3];
-                        locs[si] = c->stop_off[si];
+                    CGFloat* comps = NULL; CGFloat* locs = NULL;
+                    int ncomp = 0;
+                    /* reflect/repeat: pre-tile the stops and stretch the axis
+                       by the same factor (see aeui_expand_gradient_stops).
+                       `reps` only has to cover what is visible; the clip is
+                       already the path being filled, so its bounding box in
+                       gradient-parameter units is the honest bound. Clamped:
+                       a degenerate axis would otherwise ask for a vast stop
+                       array, and past a few hundred tiles nothing is
+                       distinguishable anyway. */
+                    if (c->grad_extend == 1 || c->grad_extend == 2) {
+                        CGRect cb = CGContextGetClipBoundingBox(cg);
+                        double reach;
+                        if (c->type == CANVAS_FILL_LINEAR) {
+                            double ax = c->gx2 - c->gx1, ay = c->gy2 - c->gy1;
+                            double len2 = ax*ax + ay*ay;
+                            reach = 2.0;
+                            if (len2 > 1e-9) {
+                                double worst = 0.0;
+                                double xs[2] = { CGRectGetMinX(cb), CGRectGetMaxX(cb) };
+                                double ys[2] = { CGRectGetMinY(cb), CGRectGetMaxY(cb) };
+                                for (int qi = 0; qi < 2; qi++)
+                                    for (int qj = 0; qj < 2; qj++) {
+                                        double t = ((xs[qi] - c->gx1) * ax
+                                                  + (ys[qj] - c->gy1) * ay) / len2;
+                                        double d = (t < 0.0) ? -t : (t > 1.0 ? t - 1.0 : 0.0);
+                                        if (d > worst) worst = d;
+                                    }
+                                reach = worst;
+                            }
+                        } else {
+                            double r = c->gr > 0.0 ? c->gr : 1.0;
+                            double dx = fmax(fabs(CGRectGetMinX(cb) - c->gx1),
+                                             fabs(CGRectGetMaxX(cb) - c->gx1));
+                            double dy = fmax(fabs(CGRectGetMinY(cb) - c->gy1),
+                                             fabs(CGRectGetMaxY(cb) - c->gy1));
+                            reach = sqrt(dx*dx + dy*dy) / r;
+                        }
+                        int reps = (int)ceil(reach) + 1;
+                        if (reps < 1) reps = 1;
+                        if (reps > 64) reps = 64;
+                        ncomp = aeui_expand_gradient_stops(c, reps,
+                                    c->grad_extend == 1, &comps, &locs);
+                        if (ncomp > 0) {
+                            double span = 2.0 * reps + 1.0;
+                            if (c->type == CANVAS_FILL_LINEAR) {
+                                double ax = c->gx2 - c->gx1, ay = c->gy2 - c->gy1;
+                                gx1e = c->gx1 - ax * reps;
+                                gy1e = c->gy1 - ay * reps;
+                                gx2e = c->gx1 + ax * (reps + 1);
+                                gy2e = c->gy1 + ay * (reps + 1);
+                            } else {
+                                gre = c->gr * span;
+                            }
+                        }
+                    }
+                    if (ncomp <= 0) {
+                        comps = (CGFloat*)malloc(sizeof(CGFloat) * c->n_stops * 4);
+                        locs  = (CGFloat*)malloc(sizeof(CGFloat) * c->n_stops);
+                        for (int si = 0; si < c->n_stops; si++) {
+                            comps[si*4+0] = c->stop_rgba[si*4+0];
+                            comps[si*4+1] = c->stop_rgba[si*4+1];
+                            comps[si*4+2] = c->stop_rgba[si*4+2];
+                            comps[si*4+3] = c->stop_rgba[si*4+3];
+                            locs[si] = c->stop_off[si];
+                        }
+                        ncomp = c->n_stops;
                     }
                     CGGradientRef grad = CGGradientCreateWithColorComponents(
-                        gcs, comps, locs, c->n_stops);
+                        gcs, comps, locs, ncomp);
                     if (grad) {
                         // Clip to the current path (or its stroked
                         // outline for a gradient stroke), then draw.
@@ -4651,8 +4767,8 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                         CGContextClip(cg);  // uses current path as clip
                         if (c->type == CANVAS_FILL_LINEAR) {
                             CGContextDrawLinearGradient(cg, grad,
-                                CGPointMake(c->gx1, c->gy1),
-                                CGPointMake(c->gx2, c->gy2),
+                                CGPointMake(gx1e, gy1e),
+                                CGPointMake(gx2e, gy2e),
                                 kCGGradientDrawsBeforeStartLocation |
                                 kCGGradientDrawsAfterEndLocation);
                         } else if (c->grx > 0 && c->gry > 0 &&
@@ -4686,13 +4802,14 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                             CGContextScaleCTM(cg, c->grx, c->gry);
                             CGContextDrawRadialGradient(cg, grad,
                                 CGPointMake(fdx / c->grx, fdy / c->gry), 0,
-                                CGPointMake(0, 0), 1.0,
+                                CGPointMake(0, 0),
+                                (c->gr > 0.0) ? (gre / c->gr) : 1.0,
                                 kCGGradientDrawsBeforeStartLocation |
                                 kCGGradientDrawsAfterEndLocation);
                         } else {
                             CGContextDrawRadialGradient(cg, grad,
                                 CGPointMake(c->gfx, c->gfy), 0,
-                                CGPointMake(c->gx1, c->gy1), c->gr,
+                                CGPointMake(c->gx1, c->gy1), gre,
                                 kCGGradientDrawsBeforeStartLocation |
                                 kCGGradientDrawsAfterEndLocation);
                         }
@@ -5329,10 +5446,10 @@ void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
         double x1, double y1, double x2, double y2,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join) {
-    (void)extend; // spreadMethod not yet honored on the CoreGraphics backend
     CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR,
                       .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
-                      .grad_line_width = line_width, .iw = cap, .ih = join };
+                      .grad_line_width = line_width, .grad_extend = extend,
+                      .iw = cap, .ih = join };
     macos_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);
 }
@@ -5341,10 +5458,10 @@ void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
         double cx, double cy, double radius, double fx, double fy,
         int n_stops, void* offsets, void* rgba, double line_width, int extend,
         int cap, int join, double rx, double ry, double rot_deg) {
-    (void)extend; // spreadMethod not yet honored on the CoreGraphics backend
     CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
                       .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
-                      .grad_line_width = line_width, .iw = cap, .ih = join,
+                      .grad_line_width = line_width, .grad_extend = extend,
+                      .iw = cap, .ih = join,
                       .grx = rx, .gry = ry, .grot = rot_deg };
     macos_copy_stops(&cmd, n_stops, offsets, rgba);
     canvas_add_cmd(canvas_id, cmd);

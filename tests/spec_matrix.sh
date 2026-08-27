@@ -97,6 +97,7 @@ SUITES=(
   "canvasclip|examples/canvasclip_demo|canvasclip_demo/spec_canvasclip_demo|"
   "groupalpha|examples/groupalpha_demo|groupalpha_demo/spec_groupalpha_demo|"
   "hoverpaint|examples/hoverpaint_demo|hoverpaint_demo/spec_hoverpaint_demo|"
+  "gradspread|examples/gradspread_demo|gradspread_demo/spec_gradspread_demo|"
   "listbox|examples/listbox_demo|listbox_demo/spec_listbox_demo|"
   "navstack|examples/navstackdemo|navstackdemo/spec_navstackdemo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"
