@@ -5441,6 +5441,12 @@ static void unregister_view_tree(NSView* v) {
     widget_classes[h - 1] = NULL;
     widget_clicks[h - 1] = NULL;
     widget_weights[h - 1] = 0;
+    // Per-handle state added outside this array set has to be released here
+    // too. Handles are monotonic, so nothing INHERITS a dead widget's payload
+    // and this is not a correctness bug; it is a leak, and an unbounded one,
+    // because every list rebuild (each_update, vlist, listbox_update all clear
+    // and repopulate) retires a row and takes its handle out of use forever.
+    aeui_drag_path_set(h, NULL);
 }
 
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {

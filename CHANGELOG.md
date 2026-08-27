@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- Widget removal now releases the per-handle state that lives outside the core
+  registry arrays. On macOS a retired `draggable()` widget kept its drag payload
+  string; on Windows a retired tinted `image()` or `file_icon()` kept its base
+  bitmap and icon. Handles are never recycled, so nothing inherited the stale
+  value, but nothing freed it either: every list rebuild (`each_update`,
+  `vlist`, `listbox_update`) retires its rows, so a list that repopulates leaked
+  once per row per rebuild. On Windows those were GDI objects, which a process
+  has a hard quota of, so a long-lived tinted list could eventually stop drawing.
+  GTK4 was already correct here, it attaches the same state with
+  `g_object_set_data_full` and the widget's own finalize releases it.
+
 ### Added
 
 - **macOS desktop notifications now post for real — `NSUserNotification`**

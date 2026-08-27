@@ -8306,9 +8306,33 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
 // Mark a widget and every descendant registered under it as dead, so the
 // driver stops listing them. Walks the live child tree BEFORE DestroyWindow
 // tears it down (afterwards GetWindow can't enumerate it).
+// Release the per-handle state a retired widget owned. Handles are monotonic,
+// so nothing inherits it and this is not a correctness bug; it is a leak, and
+// on Windows a GDI one, which matters more than a stray malloc: a process has
+// a hard handle quota (10,000 by default), and every list rebuild retires its
+// rows. A tinted list that repopulates often would eventually stop drawing.
+static void w32_release_handle_state(int h) {
+    if (h < 1) return;
+    if (h <= w32_tint_len) {
+        if (w32_tint_base[h - 1]) { DeleteObject(w32_tint_base[h - 1]);
+                                    w32_tint_base[h - 1] = NULL; }
+        if (w32_tint_icon[h - 1]) { DestroyIcon(w32_tint_icon[h - 1]);
+                                    w32_tint_icon[h - 1] = NULL; }
+        w32_tint_rgb[h - 1] = 0;
+    }
+    if (h <= w32_drag_paths_len && w32_drag_paths[h - 1]) {
+        free(w32_drag_paths[h - 1]);
+        w32_drag_paths[h - 1] = NULL;
+    }
+}
+
 static void mark_subtree_dead(HWND hwnd) {
     int h = handle_for_hwnd(hwnd);
-    if (h > 0) { Widget* w = widget_at(h); if (w) w->dead = 1; }
+    if (h > 0) {
+        Widget* w = widget_at(h);
+        if (w) w->dead = 1;
+        w32_release_handle_state(h);
+    }
     HWND c = GetWindow(hwnd, GW_CHILD);
     while (c) {
         HWND next = GetWindow(c, GW_HWNDNEXT);
