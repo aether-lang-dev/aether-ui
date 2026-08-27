@@ -729,6 +729,9 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=sheet_demo/spec_sheet_demo \
     run_server_test "$(EX_BIN sheet_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" sheet_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 5e11: AetherUIDriver timer spec ==="
 # G_DEBUG=fatal-criticals on purpose, and only here. GTK4's timer_cancel used
 # to hand the raw GSource id to g_source_remove, so cancelling twice raised a
