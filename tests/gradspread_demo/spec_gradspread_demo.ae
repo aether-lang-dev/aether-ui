@@ -1,0 +1,65 @@
+// spec_gradspread_demo.ae — SVG spreadMethod is honoured (extend=2, repeat).
+//
+// The canvas is 200 wide; the gradient axis spans only x=0..50, red -> blue,
+// with extend=2. Under PAD everything past x=50 is the end colour for good.
+// Under REPEAT the band restarts, so x=55 is near red again.
+//
+// CoreGraphics has no reflect/repeat -- CGGradient offers pad and nothing
+// else -- so macOS dropped the argument behind a "not yet honored" note and
+// rendered every gradient as pad, while GTK4 (cairo CAIRO_EXTEND_*) and win32
+// honoured it. Measured before the fix: x=55, 75, 105 and 150 all read
+// 0x0000FF, flat blue to the edge.
+//
+// Asserted by CHANNEL COMPARISON, not exact colours: the exact value at a
+// sample depends on antialiasing and per-backend rounding, and pinning one
+// would make this a test of the rasteriser. "Redder than blue" versus "bluer
+// than red" is the actual claim, and it is what pad cannot satisfy.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/gradspread_demo &
+//   UI_SPEC=gradspread_demo/spec_gradspread_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.json
+
+pixel_at(x: int) -> int {
+    body = uidriver.get_body("/canvas/1/pixel?x=${x}&y=30&w=200&h=60")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+
+red_of(px: int) -> int   { return (px / 65536) % 256 }
+blue_of(px: int) -> int  { return px % 256 }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "gradient spreadMethod over AetherUIDriver") {
+        spec.it("interpolates across the gradient's own band") callback {
+            a = pixel_at(2)
+            b = pixel_at(48)
+            spec.assert_true(red_of(a) > blue_of(a), "start of the band is red")
+            spec.assert_true(blue_of(b) > red_of(b), "end of the band is blue")
+        }
+
+        // The decisive one: pad can only ever hold the end colour out here.
+        spec.it("repeats past the end of the band instead of holding the end") callback {
+            p = pixel_at(55)
+            spec.assert_true(red_of(p) > blue_of(p),
+                             "just past the band the gradient has restarted")
+        }
+
+        spec.it("keeps repeating, not just once") callback {
+            p2 = pixel_at(105)
+            spec.assert_true(red_of(p2) > blue_of(p2), "a second repeat begins")
+            mid = pixel_at(98)
+            spec.assert_true(blue_of(mid) > red_of(mid), "and ends blue before it")
+        }
+    }
+    spec.run_summary(fw)
+}
