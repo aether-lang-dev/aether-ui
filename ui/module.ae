@@ -632,8 +632,12 @@ canvas_on_move(cid: int, cb: fn) {
 // canvas_on_key(cid, cb) — fire cb(key_name) on a key press while the canvas
 // has focus. key_name is the GDK/platform key name string (e.g. "Left",
 // "space", "a"). Drives game-style input (falling-blocks, etc.); the canvas is
-// made focusable and grabs focus on registration. Real on GTK4; no-op on
-// backends without a key bridge yet (macos/win32 stubs).
+// made focusable and grabs focus on registration.
+//
+// REAL ON ALL THREE BACKENDS: GTK4 via its key controller, macOS via
+// -[AetherCanvasView keyDown:], win32 via WM_KEYDOWN in canvas_wnd_proc, each
+// normalising to the same key-name strings. The "macos/win32 stubs" this
+// comment used to claim stopped being true when those two landed.
 canvas_on_key(cid: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_canvas_on_key_impl(cid, boxed)
@@ -651,7 +655,11 @@ canvas_on_key_release(cid: int, cb: fn) {
 // canvas_on_release(cid, cb) — fire cb(x, y) (canvas-local px) when the pointer
 // button is released. Pairs with canvas_on_click (press) + canvas_on_move to
 // form a press→drag→release swipe (the Rubik's cube uses it to read a swipe's
-// direction). Real on GTK4; no-op on backends without a release bridge yet.
+// direction).
+//
+// REAL ON ALL THREE BACKENDS: GTK4 via its gesture controller, macOS via
+// -[AetherCanvasView mouseUp:], win32 via WM_LBUTTONUP in canvas_wnd_proc.
+// The "no release bridge yet" this comment used to claim is long stale.
 canvas_on_release(cid: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_canvas_on_release_impl(cid, boxed)
@@ -750,7 +758,13 @@ split_set_position(handle: int, px: int) {
 // space n : m. Children that expand along the axis (spacer()) count as
 // weight 1. Calling weight() swaps the parent stack onto our own layout
 // manager (GtkBoxLayout has no weight concept) — per-stack opt-in, other
-// stacks are untouched. GTK4 only; no-op on win32/macOS for now.
+// stacks are untouched.
+//
+// REAL ON ALL THREE BACKENDS: GTK4 via its flex layout, macOS by recording the
+// weight and re-running aeui_apply_flex on the parent NSStackView, win32 by
+// feeding it into the stack measure pass. spec_weightclamp_demo asserts the
+// min-clamp on macOS and Linux in CI. This comment claimed "GTK4 only" long
+// after the other two landed, the same rot on_layout's comment records.
 weight(handle: int, n: int) {
     aether_ui_widget_weight_impl(handle, n)
 }
@@ -1309,7 +1323,11 @@ set_hidden(handle: int, hidden: int) -> int {
 
 // Append a right-click context-menu item to a widget; cb fires when chosen.
 //   context_menu_item(row, "Copy path") callback { ... }
-// GTK4 has the full popover implementation; AppKit/Win32 are no-op stubs.
+// REAL ON ALL THREE BACKENDS: GTK4 pops a popover, macOS hands the items to
+// -[NSView setMenu:] and AppKit pops them on right-click natively, win32 pops
+// a TrackPopupMenu from WM_CONTEXTMENU. spec_context_menu covers it on macOS
+// and Linux in CI. "AppKit/Win32 are no-op stubs" has not been true since
+// those landed.
 // shortcut("Ctrl+R") callback { … } — a per-window accelerator (Swing
 // InputMap WHEN_IN_FOCUSED_WINDOW; SwiftUI .keyboardShortcut). Fires no
 // matter which widget has focus: an entry swallows plain keys but never
@@ -3467,7 +3485,16 @@ on_select(lbp: ptr, cb: fn) {
 }
 
 // Generic CSS-class styling (the selection-visual primitive, exported for
-// apps too; GTK-only — no-op stubs elsewhere).
+// apps too).
+//
+// The CLASS LIST is tracked on all three backends -- it is how the driver's
+// `classes` field reports selection state, and how .aui-row-selected works
+// everywhere. What is GTK4-only is STYLING FROM it: GTK4 has a stylesheet
+// engine that matches these classes, AppKit and Win32 do not, so a class
+// changes what a spec can read but not what the widget looks like there.
+// "no-op stubs elsewhere" understated it in a way that reads as "does
+// nothing", which would send an app looking for a workaround it does not
+// need.
 // transition(handle, prop, ms, easing) — QML-Behavior-ALIKE: declare once,
 // every subsequent change of `prop` on this widget TWEENS instead of
 // snapping. v1 props: "opacity" (style_opacity routes through CSS so the
