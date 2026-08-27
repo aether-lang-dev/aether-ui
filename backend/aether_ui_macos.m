@@ -3954,6 +3954,16 @@ void aether_ui_sheet_dismiss_impl(int handle) {
     [NSBezierPath clipRect:b];                    // crop the overflow
     [img drawInRect:dst fromRect:NSZeroRect
           operation:NSCompositingOperationSourceOver fraction:1.0];
+    // AppKit applies contentTintColor when IT draws a template image. This
+    // path draws the image itself, so the tint would be silently dropped and
+    // the widget would report a tint it was not showing. SourceIn keeps the
+    // alpha just drawn and replaces its colour, which is the same result by
+    // hand.
+    NSColor* tint = [self contentTintColor];
+    if (tint) {
+        [tint set];
+        NSRectFillUsingOperation(dst, NSCompositingOperationSourceIn);
+    }
     [NSGraphicsContext restoreGraphicsState];
 }
 @end
