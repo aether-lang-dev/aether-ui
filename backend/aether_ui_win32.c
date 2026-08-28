@@ -209,6 +209,7 @@ typedef struct {
     int active_set;
     COLORREF active_bg;
     int is_hovered;            // tracked via WM_MOUSEMOVE/WM_MOUSELEAVE
+    int is_pressed;            // driver /press-/release + real button msgs
     double opacity; // 0.0–1.0; <0 = no override
 
     // Fonts
@@ -782,6 +783,7 @@ static int w32_fills_cross(int kind) {
 // every descendant inherited zero heights, and driver geometry (and real
 // rendering) was flat. Bottom-up natural sizing is how GTK/AppKit behave.
 static void measure_widget(Widget* w, int* out_w, int* out_h);
+static int  w32_measure_grid_natural(HWND grid_hwnd, int* out_w, int* out_h); /* fwd; grids live below */
 static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
     StackLayout* sl = &sw->stack;
     int total = 0, cross = 0, n = 0;
@@ -835,6 +837,17 @@ static void measure_widget(Widget* w, int* out_w, int* out_h) {
         return;
     }
     // Containers: bottom-up natural size (see measure_stack_natural).
+    if (w->kind == WK_GRID) {
+        /* A grid had NO natural measure, so anywhere its size was derived
+           bottom-up (a scrollview's document view: scrollbg's "doc has a
+           height — got 0") it reported nothing. Natural = per-column max
+           widths + per-row max heights + spacings, span-1 approximation. */
+        if (w32_measure_grid_natural(w->hwnd, out_w, out_h)) {
+            if (w->pref_width > 0)  *out_w = w->pref_width;
+            if (w->pref_height > 0) *out_h = w->pref_height;
+            return;
+        }
+    }
     if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK
         || w->kind == WK_TABS || w->kind == WK_SPLITVIEW) {
         measure_stack_natural(w, out_w, out_h);
@@ -924,6 +937,14 @@ static void measure_widget(Widget* w, int* out_w, int* out_h) {
 // descendant (expand propagates up).
 static int w32_subtree_greedy(Widget* w, int orientation) {
     if (!w) return 0;
+    /* fill_width/fill_height record an explicit ask as pref == -1
+       (match_parent_*). The greedy test only knew KINDS, so a plain
+       vstack body under a pinned toolbar took none of the window's
+       new pixels — barfill's "every new pixel to the body: got 0".
+       An explicit fill beats any kind heuristic. Orientation: 1 =
+       vstack (primary is height), else horizontal. */
+    if (orientation == 1 && w->pref_height == -1) return 1;
+    if (orientation != 1 && w->pref_width  == -1) return 1;
     if (w->kind == WK_SPLITVIEW || w->kind == WK_SCROLLVIEW) return 1;
     if (w->kind == WK_CANVAS) return 1;   // GTK4 canvases hexpand/vexpand
                                           // regardless of their initial dims
@@ -1104,8 +1125,15 @@ static void stack_do_layout(HWND stack_hwnd) {
             // greedy even with initial dims — GTK expands canvases created
             // WITH sizes. The veto only stops PROPAGATED greed (a pinned
             // sidebar containing a scrollview keeps its pinned width).
-            int intrinsic = (cw->kind == WK_CANVAS || cw->kind == WK_SPLITVIEW
-                             || cw->kind == WK_SCROLLVIEW);
+            /* A canvas stays intrinsically greedy ONLY while unpinned:
+               gp's treemap (canvas_create WITH dims, no ui.width) must
+               keep growing, but svg_image pins width()/height() after
+               computing the SVG's aspect — and the greed was stretching
+               its 120x60 badge across the row (svgimage: got 361). An
+               explicit pref is the app's decision on this axis. */
+            int intrinsic = (cw->kind == WK_SPLITVIEW
+                             || cw->kind == WK_SCROLLVIEW
+                             || (cw->kind == WK_CANVAS && !pinned_primary));
             if (mc[i].weight == 0 && (intrinsic || !pinned_primary)
                 && w32_subtree_greedy(cw, orientation))
                 mc[i].weight = 1;
@@ -1187,6 +1215,14 @@ static void stack_do_layout(HWND stack_hwnd) {
     // client width — the source-first child (now enumerated first, since
     // add_child pushes to Z-bottom) lands rightmost.
     int rtl = (orientation == 0 && sl->rtl);
+    /* Cross-axis pin veto: fills-cross kinds (canvas etc.) stretch across
+       the stack UNLESS the app pinned that axis (svg_image's height in an
+       hstack row — got 132 for a 60px badge). measure_widget already
+       returns the pref when set, so honouring it here is just refusing
+       the stretch. */
+    #define W32_CROSS_PINNED(i, vstack_) ({ \
+        Widget* _cw = widget_at(handle_for_hwnd(children[(i)])); \
+        _cw ? ((vstack_) ? _cw->pref_width > 0 : _cw->pref_height > 0) : 0; })
     int client_w = client.right - client.left;
     int cur = (orientation == 1) ? sl->padding_top : sl->padding_left;
     for (int i = 0; i < nchildren; i++) {
@@ -1199,7 +1235,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             w = avail_w - mc[i].margin_l - mc[i].margin_r;
             if (mc[i].measured_w > 0 && mc[i].measured_w < w
                 && !mc[i].is_spacer && mc[i].weight == 0
-                && !w32_fills_cross(mc[i].kind)) {
+                && (!w32_fills_cross(mc[i].kind) || W32_CROSS_PINNED(i, 1))) {
                 if (sl->alignment == 1)
                     x = sl->padding_left + mc[i].margin_l + (w - mc[i].measured_w) / 2;
                 else if (sl->alignment == 2)
@@ -1220,7 +1256,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             h = avail_h - mc[i].margin_t - mc[i].margin_b;
             if (mc[i].measured_h > 0 && mc[i].measured_h < h
                 && !mc[i].is_spacer && mc[i].weight == 0
-                && !w32_fills_cross(mc[i].kind)) {
+                && (!w32_fills_cross(mc[i].kind) || W32_CROSS_PINNED(i, 0))) {
                 if (sl->alignment == 1)
                     y = sl->padding_top + mc[i].margin_t + (h - mc[i].measured_h) / 2;
                 else if (sl->alignment == 2)
@@ -1283,6 +1319,10 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     return 0;
                 }
             }
+            if (w2 && w2->active_set) {   /* container st_active press */
+                w2->is_pressed = 1;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_MOUSEMOVE: {
@@ -1295,10 +1335,36 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 stack_do_layout(hwnd);
                 return 0;
             }
+            /* Container hover: st_hover on a row was stored but invisible
+               to a REAL pointer — only subclassed controls tracked hover.
+               Same TrackMouseEvent dance they use. */
+            if (w3 && w3->hover_set && !w3->is_hovered) {
+                w3->is_hovered = 1;
+                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+                TrackMouseEvent(&tme);
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
+        case WM_MOUSELEAVE: {
+            int h3 = handle_for_hwnd(hwnd);
+            Widget* w3 = widget_at(h3);
+            if (w3 && w3->is_hovered) {
+                w3->is_hovered = 0;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_LBUTTONUP:
             if (GetCapture() == hwnd) { ReleaseCapture(); return 0; }
+            {
+                int h3 = handle_for_hwnd(hwnd);
+                Widget* w3 = widget_at(h3);
+                if (w3 && w3->is_pressed) {
+                    w3->is_pressed = 0;
+                    InvalidateRect(hwnd, NULL, TRUE);
+                }
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
 
         case WM_MOUSEWHEEL: {
@@ -1320,17 +1386,28 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         case WM_ERASEBKGND: {
             int h = handle_for_hwnd(hwnd);
             Widget* w = widget_at(h);
-            if (w && w->bg.has_value) {
+            /* Effective state colour: active beats hover beats base — the
+               same ladder the ownerdraw button paint uses. Containers
+               STORED st_hover/st_active but never painted them (the aecs
+               gap hoverpaint finally specs): a hovered row kept its base. */
+            if (w && (w->bg.has_value
+                      || (w->hover_set && w->is_hovered)
+                      || (w->active_set && w->is_pressed))) {
                 HDC hdc = (HDC)wp;
                 RECT r;
                 GetClientRect(hwnd, &r);
-                HBRUSH br = CreateSolidBrush(w->bg.color);
+                COLORREF bg = w->bg.has_value ? w->bg.color
+                                              : GetSysColor(COLOR_BTNFACE);
+                if (w->hover_set && w->is_hovered)  bg = w->hover_bg;
+                if (w->active_set && w->is_pressed) bg = w->active_bg;
+                HBRUSH br = CreateSolidBrush(bg);
                 FillRect(hdc, &r, br);
                 DeleteObject(br);
                 return 1;
             }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
+
 
         case WM_COMMAND: {
             // Forward control notifications from children to their registered
@@ -5049,23 +5126,18 @@ int aether_ui_file_icon_create(const char* path) {
     return register_widget_typed(h, WK_IMAGE);
 }
 
-void aether_ui_file_icon_set(int handle, const char* path) {
-    Widget* w = widget_at(handle);
-    if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
-    HICON ic = w32_icon_for_path(path);
-    if (!ic) return;
-    // The STATIC owns whatever it held; replace and destroy the old one, or a
-    // listing that re-icons its rows on every repaint leaks a handle a row.
-    HICON old = (HICON)SendMessageW(w->hwnd, STM_SETICON, (WPARAM)ic, 0);
-    if (old && old != ic) DestroyIcon(old);
-    InvalidateRect(w->hwnd, NULL, TRUE);
-}
 
 int aether_ui_image_has_content(int handle) {
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_IMAGE || !w->hwnd) return 0;
     LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
-    UINT kind = (st & SS_ICON) ? IMAGE_ICON : IMAGE_BITMAP;
+    /* SS_ICON (0x3) and SS_BITMAP (0xE) are ENUM VALUES in the low style
+       bits, not flags: `st & SS_ICON` is truthy for a BITMAP-styled static
+       (0xE & 0x3 = 2), which made every TINTED icon (tint switches the
+       control to SS_BITMAP) query IMAGE_ICON, get NULL, and report
+       has_image:false while its tinted bitmap sat right there. Compare
+       under SS_TYPEMASK, the documented way. */
+    UINT kind = ((st & SS_TYPEMASK) == SS_ICON) ? IMAGE_ICON : IMAGE_BITMAP;
     return SendMessageW(w->hwnd, STM_GETIMAGE, kind, 0) ? 1 : 0;
 }
 
@@ -5201,7 +5273,7 @@ void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) 
     // not stack.
     HBITMAP base = w32_tint_base[handle - 1];
     if (!base) {
-        if (st & SS_ICON) {
+        if ((st & SS_TYPEMASK) == SS_ICON) {   /* enum, not flag — see has_content */
             HICON ic = (HICON)SendMessageW(w->hwnd, STM_GETIMAGE, IMAGE_ICON, 0);
             if (!ic) return;
             ICONINFO ii;
@@ -5248,15 +5320,57 @@ int aether_ui_image_get_tint(int handle) {
     return (v & 0x1000000) ? v : -1;
 }
 
+void aether_ui_file_icon_set(int handle, const char* path) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
+    HICON ic = w32_icon_for_path(path);
+    if (!ic) return;
+    /* A TINTED widget is in SS_BITMAP mode showing a recoloured DIB;
+       STM_SETICON there displays nothing (the recycled-row rebind case —
+       "expected 0 empty, got 1"). Return it to icon mode, drop the tint
+       artifacts, rebind, then re-apply the stored tint so the tint
+       SURVIVES the rebind — the spec's exact contract. */
+    int retint = aether_ui_image_get_tint(handle);
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    if ((st & SS_TYPEMASK) != SS_ICON) {
+        st = (st & ~SS_TYPEMASK) | SS_ICON;
+        SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+        if (handle >= 1 && handle <= w32_tint_len) {
+            HBITMAP shown = (HBITMAP)SendMessageW(w->hwnd, STM_GETIMAGE,
+                                                  IMAGE_BITMAP, 0);
+            if (shown) DeleteObject(shown);
+            if (w32_tint_base[handle - 1]) DeleteObject(w32_tint_base[handle - 1]);
+            if (w32_tint_icon[handle - 1]) DestroyIcon(w32_tint_icon[handle - 1]);
+            w32_tint_base[handle - 1] = NULL;
+            w32_tint_icon[handle - 1] = NULL;
+            w32_tint_rgb[handle - 1] = 0;
+        }
+    }
+    // The STATIC owns whatever it held; replace and destroy the old one, or a
+    // listing that re-icons its rows on every repaint leaks a handle a row.
+    HICON old = (HICON)SendMessageW(w->hwnd, STM_SETICON, (WPARAM)ic, 0);
+    if (old && old != ic) DestroyIcon(old);
+    if (retint >= 0) {
+        aether_ui_image_set_tint(handle, 1,
+            ((retint >> 16) & 0xFF) / 255.0,
+            ((retint >> 8)  & 0xFF) / 255.0,
+            ( retint        & 0xFF) / 255.0);
+    }
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+static void w32_image_apply_fill(int handle);  /* defined with the GDI+ decls below */
+
 void aether_ui_image_set_fill(int handle, int mode) {
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
-    int eff = (mode == 3) ? 3 : 0;
-    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
-    if (eff == 3) st |= SS_REALSIZECONTROL;
-    else          st &= ~SS_REALSIZECONTROL;
-    SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
-    w->image_fill = eff;
+    if (mode < 0 || mode > 3) mode = 0;
+    /* Store the mode ACTUALLY APPLIED. contain/cover used to degrade to
+       original ("not wired"); they are wired now — a pre-scaled DIB derived
+       from the kept original — so all four modes are effective and the
+       /widgets fill field round-trips (the imagefill spec's contract). */
+    w->image_fill = mode;
+    w32_image_apply_fill(handle);
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
@@ -5267,7 +5381,11 @@ int aether_ui_image_get_fill(int handle) {
 
 void aether_ui_image_set_size(int handle, int width, int height) {
     Widget* w = widget_at(handle);
-    if (w) { w->pref_width = width; w->pref_height = height; }
+    if (w) {
+        w->pref_width = width; w->pref_height = height;
+        if (w->kind == WK_IMAGE && (w->image_fill == 1 || w->image_fill == 2))
+            w32_image_apply_fill(handle);   /* contain/cover derive at box size */
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5539,6 +5657,33 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
     ge->items[ge->item_count].col_span = col_span;
     ge->item_count++;
     grid_do_layout(g->hwnd);
+}
+
+static int w32_measure_grid_natural(HWND grid_hwnd, int* out_w, int* out_h) {
+    GridEntry* ge = grid_for_hwnd(grid_hwnd);
+    if (!ge) return 0;
+    int colw[64] = {0}, rowh[64] = {0};
+    int maxr = 0, maxc = 0;
+    for (int i = 0; i < ge->item_count; i++) {
+        Widget* cw = widget_at(handle_for_hwnd(ge->items[i].hwnd));
+        if (!cw || cw->dead) continue;
+        int mw = 0, mh = 0;
+        measure_widget(cw, &mw, &mh);
+        int r = ge->items[i].row, c = ge->items[i].col;
+        if (r < 0 || r >= 64 || c < 0 || c >= 64) continue;
+        if (mw > colw[c]) colw[c] = mw;
+        if (mh > rowh[r]) rowh[r] = mh;
+        if (r > maxr) maxr = r;
+        if (c > maxc) maxc = c;
+    }
+    int tw = 0, th = 0;
+    for (int c = 0; c <= maxc; c++) tw += colw[c];
+    for (int r = 0; r <= maxr; r++) th += rowh[r];
+    if (maxc > 0) tw += ge->col_spacing * maxc;
+    if (maxr > 0) th += ge->row_spacing * maxr;
+    *out_w = tw;
+    *out_h = th;
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -6647,6 +6792,97 @@ __declspec(dllimport) int __stdcall GdipDrawImageRectRectI(GpGraphics* g,
     void* image, int dstx, int dsty, int dstw, int dsth,
     int srcx, int srcy, int srcw, int srch, int srcUnit,
     const void* imageAttributes, void* callback, void* callbackData);
+__declspec(dllimport) int __stdcall GdipGetImageWidth(void* image, UINT* w);
+__declspec(dllimport) int __stdcall GdipGetImageHeight(void* image, UINT* h);
+
+/* contain/cover for image widgets: keep the ORIGINAL bitmap per handle and
+   show a derived DIB scaled into the widget's box — contain letterboxes
+   (transparent bars), cover centre-crops. original/stretch restore the
+   original (stretch via SS_REALSIZECONTROL, as before). */
+static HBITMAP* w32_imgfill_orig = NULL;
+static int      w32_imgfill_len  = 0;
+static void w32_imgfill_slots(int handle) {
+    if (handle <= w32_imgfill_len) return;
+    int want = handle + 8;
+    w32_imgfill_orig = (HBITMAP*)realloc(w32_imgfill_orig, sizeof(HBITMAP) * want);
+    for (int i = w32_imgfill_len; i < want; i++) w32_imgfill_orig[i] = NULL;
+    w32_imgfill_len = want;
+}
+
+static void w32_image_apply_fill(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_IMAGE || !w->hwnd) return;
+    w32_imgfill_slots(handle);
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    if ((st & SS_TYPEMASK) == SS_ICON) return;   /* file icons: no fill modes */
+    int mode = w->image_fill;
+
+    HBITMAP orig = w32_imgfill_orig[handle - 1];
+    if (!orig) {
+        orig = (HBITMAP)SendMessageW(w->hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0);
+        if (!orig) return;
+        w32_imgfill_orig[handle - 1] = orig;
+    }
+
+    if (mode == 0 || mode == 3) {
+        if (mode == 3) st |= SS_REALSIZECONTROL; else st &= ~SS_REALSIZECONTROL;
+        SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+        HBITMAP shown = (HBITMAP)SendMessageW(w->hwnd, STM_SETIMAGE,
+                                              IMAGE_BITMAP, (LPARAM)orig);
+        if (shown && shown != orig) DeleteObject(shown);
+        return;
+    }
+
+    int bw = w->pref_width, bh = w->pref_height;
+    if (bw <= 0 || bh <= 0) {
+        RECT r; GetClientRect(w->hwnd, &r);
+        bw = r.right; bh = r.bottom;
+    }
+    if (bw <= 0 || bh <= 0) return;
+
+    ensure_gdiplus();
+    void* src = NULL;
+    if (GdipCreateBitmapFromHBITMAP(orig, NULL, &src) != 0 || !src) return;
+    UINT iw = 0, ih = 0;
+    GdipGetImageWidth(src, &iw);
+    GdipGetImageHeight(src, &ih);
+    if (iw == 0 || ih == 0) { GdipDisposeImage(src); return; }
+
+    void* dstbmp = NULL;
+    if (GdipCreateBitmapFromScan0(bw, bh, 0, GDIP_FMT_32BPP_ARGB, NULL, &dstbmp) != 0
+        || !dstbmp) { GdipDisposeImage(src); return; }
+    GpGraphics* g = NULL;
+    if (GdipGetImageGraphicsContext(dstbmp, &g) == 0 && g) {
+        double sx = (double)bw / iw, sy = (double)bh / ih;
+        if (mode == 1) {                     /* contain: fit, letterbox */
+            double sc = sx < sy ? sx : sy;
+            int dw = (int)(iw * sc + 0.5), dh = (int)(ih * sc + 0.5);
+            GdipDrawImageRectRectI(g, src, (bw - dw) / 2, (bh - dh) / 2, dw, dh,
+                                   0, 0, (int)iw, (int)ih, 2 /*UnitPixel*/,
+                                   NULL, NULL, NULL);
+        } else {                             /* cover: fill, centre-crop */
+            double sc = sx > sy ? sx : sy;
+            int sw2 = (int)(bw / sc + 0.5), sh2 = (int)(bh / sc + 0.5);
+            if (sw2 > (int)iw) sw2 = (int)iw;
+            if (sh2 > (int)ih) sh2 = (int)ih;
+            GdipDrawImageRectRectI(g, src, 0, 0, bw, bh,
+                                   ((int)iw - sw2) / 2, ((int)ih - sh2) / 2,
+                                   sw2, sh2, 2 /*UnitPixel*/,
+                                   NULL, NULL, NULL);
+        }
+        GdipDeleteGraphics(g);
+    }
+    HBITMAP derived = NULL;
+    GdipCreateHBITMAPFromBitmap(dstbmp, &derived, 0);
+    GdipDisposeImage(dstbmp);
+    GdipDisposeImage(src);
+    if (!derived) return;
+    st &= ~SS_REALSIZECONTROL;
+    SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+    HBITMAP shown = (HBITMAP)SendMessageW(w->hwnd, STM_SETIMAGE,
+                                          IMAGE_BITMAP, (LPARAM)derived);
+    if (shown && shown != orig) DeleteObject(shown);
+}
 /* Path construction + clipping: what turns a gradient from "fill the bounding
    box" into "fill the actual shape". */
 __declspec(dllimport) int __stdcall GdipAddPathLine2I(GpPath* path,
@@ -8618,7 +8854,14 @@ static int colorref_to_packed(COLORREF c) {
 
 int aether_ui_styled_bg_impl(int handle) {
     Widget* w = widget_at(handle);
-    if (!w || !w->bg.has_value) return -1;
+    if (!w) return -1;
+    /* EFFECTIVE colour — what this widget is painting right now, state
+       ladder included, so a spec can tell "hover painted" from "hover
+       recorded". Mirrors both paint sites (ownerdraw button, container
+       erase). */
+    if (w->active_set && w->is_pressed) return colorref_to_packed(w->active_bg);
+    if (w->hover_set && w->is_hovered)  return colorref_to_packed(w->hover_bg);
+    if (!w->bg.has_value) return -1;
     return colorref_to_packed(w->bg.color);
 }
 
@@ -8740,6 +8983,26 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 strcmp(ctx->sval, "Tab") != 0 &&
                 strcmp(ctx->sval, "Shift+Tab") != 0) {
                 ctx->retval = aeui_win32_fire_shortcut(ctx->sval);
+                if (!ctx->retval) {
+                    /* Nothing bound wanted it: fall through to the any-key
+                       handler, the same path a REAL keystroke takes above
+                       (and the same fall-through GTK4's dispatch does).
+                       Without this the keyhandler suite was 0/6 on win32 —
+                       the closure was stored and the real-key path fired
+                       it, but the DRIVER route stopped at shortcut-miss.
+                       Mods bits mirror GTK4's split: Shift=1, Control=2,
+                       Alt=4, Super=8. */
+                    const char* rest = ctx->sval;
+                    int kmods = 0;
+                    for (;;) {
+                        if      (strncmp(rest, "Ctrl+",  5) == 0) { kmods |= 2; rest += 5; }
+                        else if (strncmp(rest, "Shift+", 6) == 0) { kmods |= 1; rest += 6; }
+                        else if (strncmp(rest, "Alt+",   4) == 0) { kmods |= 4; rest += 4; }
+                        else if (strncmp(rest, "Super+", 6) == 0) { kmods |= 8; rest += 6; }
+                        else break;
+                    }
+                    ctx->retval = aether_ui_window_key_deliver(rest, kmods);
+                }
                 ctx->result = 0;
                 ctx->done = 1;
                 return 0;
@@ -8972,6 +9235,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             }
             case AETHER_DRV_PRESS:
                 if (w) {
+                    w->is_pressed = 1;   /* containers: no BM_ state */
                     SendMessageW(w->hwnd, BM_SETSTATE, TRUE, 0);
                     InvalidateRect(w->hwnd, NULL, TRUE);
                     UpdateWindow(w->hwnd);
@@ -8980,6 +9244,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 break;
             case AETHER_DRV_RELEASE:
                 if (w) {
+                    w->is_pressed = 0;
                     SendMessageW(w->hwnd, BM_SETSTATE, FALSE, 0);
                     InvalidateRect(w->hwnd, NULL, TRUE);
                     UpdateWindow(w->hwnd);
