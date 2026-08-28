@@ -1125,15 +1125,24 @@ static void stack_do_layout(HWND stack_hwnd) {
             // greedy even with initial dims — GTK expands canvases created
             // WITH sizes. The veto only stops PROPAGATED greed (a pinned
             // sidebar containing a scrollview keeps its pinned width).
-            /* A canvas stays intrinsically greedy ONLY while unpinned:
-               gp's treemap (canvas_create WITH dims, no ui.width) must
-               keep growing, but svg_image pins width()/height() after
-               computing the SVG's aspect — and the greed was stretching
-               its 120x60 badge across the row (svgimage: got 361). An
-               explicit pref is the app's decision on this axis. */
+            /* A PIN MEANS "this is exactly my size" — stop expanding.
+               This is GTK4's documented rule (aether_ui_set_width: "A
+               pinned width normally means 'this is exactly my size' — so
+               stop expanding to fill the parent... EXCEPT on a weighted
+               child"), and win32 not implementing it is why svg_image's
+               aspect-computed badge was stretched across its row.
+               Measured: GTK4 lays golden_gallery's pinned canvases at
+               240x160 where win32 gave them 275x187 — the win32 goldens
+               were blessed against that divergence and are re-blessed
+               with this commit.
+               The weight carve-out matters for the same reason it does on
+               GTK4: on a weighted child, width() is a MINIMUM (flex
+               basis), so pinning it would make the weight unsatisfiable. */
+            int weighted = (mc[i].weight > 0);
             int intrinsic = (cw->kind == WK_SPLITVIEW
                              || cw->kind == WK_SCROLLVIEW
-                             || (cw->kind == WK_CANVAS && !pinned_primary));
+                             || (cw->kind == WK_CANVAS
+                                 && (!pinned_primary || weighted)));
             if (mc[i].weight == 0 && (intrinsic || !pinned_primary)
                 && w32_subtree_greedy(cw, orientation))
                 mc[i].weight = 1;

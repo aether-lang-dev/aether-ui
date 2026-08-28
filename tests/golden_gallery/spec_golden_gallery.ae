@@ -35,6 +35,25 @@ main() {
             spec.assert_contains(body, "\"canvas\"", "canvases present")
         }
 
+        // GEOMETRY, before pixels. The gallery pins each canvas to
+        // GG_W x GG_H (240x160) with ui.width/height, and a pin means "this
+        // is exactly my size" — GTK4 documents that rule in
+        // aether_ui_set_width and every backend owes it.
+        //
+        // WHY THIS EXISTS: win32 ignored the pin and stretched these
+        // canvases to 275x187. The signature is sampled in CANVAS
+        // coordinates, so the pixel check stayed green against references
+        // blessed at the stretched size — a backend could disagree with the
+        // others about layout indefinitely and this suite would not notice.
+        // That is what let the divergence sit until an unrelated layout fix
+        // surfaced it. Assert the size the app ASKED for, on every backend.
+        spec.it("each canvas is laid out at the size it was pinned to") callback {
+            body = uidriver.get_body("/widgets")
+            n240 = uidriver.count_occurrences(body, "\"w\":240,\"h\":160")
+            spec.assert_eq(n240, 4,
+                "all four canvases are 240x160 — a pin is not a suggestion")
+        }
+
         spec.it("every canvas matches its blessed golden") callback {
             b = uidriver.widget_id_of("button", "Check")
             spec.assert_gt(b, 0, "check button")
