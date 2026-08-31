@@ -29,6 +29,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5e18, spec-matrix suite `multikey`). Verified against every key-driven suite
   — listbox, keyhandler, shortcut, wshortcut, canvasscroll, navstack, overlay,
   40 assertions — since this changes the dispatch path all of them share.
+- Three more stale platform claims, found by re-running the sweep from the
+  earlier round with looser phrasing — the first regex missed all three because
+  none of them says "only" or "no-op" in the shape it matched.
+  - `canvas_render_range_rgba` said it is unsupported on "win32/macOS today".
+    macOS has had a real `CGBitmapContext` path (which un-premultiplies on the
+    way out, since this contract is non-premultiplied) for some time; Win32 is
+    the only backend that returns 0.
+  - `tray_set_icon_template` said "No-op on Linux/Win". Every backend routes to
+    the same shared tray registry, so the flag is recorded — and driver-visible
+    — everywhere. What is macOS-only is applying it, since an `NSStatusItem`
+    renders a template image mono and adaptive while SNI and `Shell_NotifyIcon`
+    have no equivalent.
+  - `notify_request_permission` was described as a "macOS-only permission
+    prompt". Nothing prompts on any backend: macOS delivers through
+    `NSUserNotification`, which needs no runtime grant, and all three return
+    granted. The comment read as though a dialog appears on macOS, which it
+    does not and never did on this path.
+  - `listbox_reorderable` said "a native drag gesture (GTK4 drag source/target)
+    calls the same move on drop", which reads as how the gesture is implemented
+    rather than where it exists. The gesture is GTK4-only: AppKit and Win32
+    record the drop closure but start no drag, and the only thing that fires it
+    there is the driver's route, which supplies the source index itself. So a
+    user can drag to reorder on Linux and nowhere else; `listbox_move` is the
+    portable path.
 
 ### Added
 

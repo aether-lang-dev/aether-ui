@@ -3437,9 +3437,18 @@ listbox_update(lbp: ptr, items: ptr) {
 }
 
 // listbox_reorderable(spacing, render): a listbox whose rows can be REORDERED.
-// listbox_move(from, to) moves an item and re-renders; a native drag gesture
-// (GTK4 drag source/target) calls the same move on drop. on_reorder(lb) is
-// notified of every move so the app can persist the new order.
+// listbox_move(from, to) moves an item and re-renders, on every backend, and
+// on_reorder(lb) is notified of each move so the app can persist the order.
+//
+// THE DRAG GESTURE ITSELF IS GTK4-ONLY. There, a real drag source/target pair
+// carries the source row's index and calls the same move on drop. AppKit and
+// Win32 record the drop closure but start no drag: the only thing that fires
+// it is the driver's /widget/{id}/drop route, which supplies the source index
+// itself. So a user can reorder by dragging on Linux and not on the other two,
+// where reordering has to go through listbox_move.
+//
+// The old wording named GTK4 in a parenthesis, which reads as "this is how the
+// gesture is implemented" rather than "this is the only place it exists".
 listbox_reorderable(_ctx: ptr, spacing: int, render: fn) -> ptr {
     return _listbox_make_reorder(_ctx, spacing, render)
 }
@@ -4622,8 +4631,13 @@ canvas_cmd_count(cid: int) -> int {
 // canvas_render_range_rgba — render command range [start, end) offscreen and
 // copy it out as tightly packed, non-premultiplied RGBA8 (width*height*4
 // bytes) into `out`. Returns bytes written, 0 on error or where the backend
-// does not support it (win32/macOS today — callers must treat 0 as "cannot
-// cache" and fall back to drawing inline).
+// does not support it; callers must treat 0 as "cannot cache" and fall back to
+// drawing inline.
+//
+// Real on GTK4 (a cairo image surface) and on macOS (a CGBitmapContext, which
+// un-premultiplies on the way out since this contract is non-premultiplied).
+// WIN32 IS THE ONLY ONE THAT RETURNS 0: this comment used to name macOS as
+// unsupported too, long after the CoreGraphics path landed.
 canvas_render_range_rgba(cid: int, start: int, end: int, ox: float, oy: float,
                          width: int, height: int, out: ptr, out_len: int) -> int {
     return aether_ui_canvas_render_range_rgba_impl(cid, start, end, ox, oy, width, height, out, out_len)
@@ -4968,8 +4982,14 @@ tray_set_icon_for_state(tray_id: int, state_handle: int,
     return tray_id
 }
 
-// macOS template-mode toggle. 1 = template (mono adaptive light/dark);
-// 0 = full-colour. No-op on Linux/Win.
+// Template-mode toggle. 1 = template (mono, adapting to light/dark);
+// 0 = full-colour.
+//
+// RECORDED on all three -- every backend routes to the same shared tray
+// registry, so the driver reports the flag everywhere. What is macOS-only is
+// APPLYING it: an NSStatusItem renders a template image mono and adaptive,
+// while SNI and Shell_NotifyIcon have no equivalent. "No-op on Linux/Win"
+// overstated it in the direction that reads as "does not record either".
 tray_set_icon_template(tray_id: int, is_template: int) -> int {
     aether_ui_tray_set_icon_template_impl(tray_id, is_template)
     return tray_id
@@ -5002,9 +5022,17 @@ notify_full(title: string, body: string, icon_path: string, tag: string,
     return aether_ui_notify_full_impl(title, body, icon_path, tag, boxed)
 }
 
-// macOS-only permission prompt. Returns 1 on platforms that don't
-// require it (Linux, Win). Apps that want to prompt at startup call
-// this; otherwise the first notify_full() is best-effort.
+// Returns 1 (granted) on every backend today, and PROMPTS ON NONE of them.
+// macOS delivers through NSUserNotification, which needs no runtime grant --
+// the modern UNUserNotificationCenter would, but it requires a signed .app
+// bundle the CLI apps are not (see the notifications entry in CHANGELOG).
+// Linux talks to the notification daemon over D-Bus with nothing to prompt
+// for, and Windows toasts need no grant either.
+//
+// Kept as the call site for a future backend that DOES prompt; calling it at
+// startup stays the right shape. This comment used to describe it as a
+// "macOS-only permission prompt", which reads as though macOS puts a dialog
+// up -- it does not, and never did on this path.
 notify_request_permission() {
     return aether_ui_notify_request_permission_impl()
 }
