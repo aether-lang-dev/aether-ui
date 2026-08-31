@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- CI fails if any spec drops its `run_summary` verdict. Since aether v0.613.0
+  `run_summary` returns the verdict rather than `exit()`-ing, and
+  `run_server_test` judges a spec purely by process exit status, so a bare
+  `spec.run_summary(fw)` as the last statement makes a failing suite report
+  green — silence that looks like success, which is the worst failure mode a
+  harness has.
+  This was already documented in `ci.yml`, in capitals, directly above the
+  pin. The comment did not prevent 83 specs being converted to the bare form
+  in a single commit, and nothing in the pipeline could have said so. Hence a
+  check rather than a note. Verified by reintroducing the bare form in one
+  spec and confirming the guard names that file and line.
+
 ### Fixed
 
 - Every spec returns its `run_summary` verdict again. A previous change in this
