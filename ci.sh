@@ -237,6 +237,37 @@ AEVG_GTK_NEEDS_DISPLAY=" test_group_pixels "
 # for any module that imports std.regex / std.cryptography / std.http
 # / std.zlib. The earlier per-dep workaround is no longer needed.
 
+# ---------------------------------------------------------------------------
+# Guard: every spec must RETURN its run_summary verdict.
+#
+# Since aether v0.613.0, run_summary returns the verdict (0 green / 1 failed)
+# rather than exit()-ing, so that cleanup after a run -- arena.destroy,
+# server_stop, sqlite.close -- is not skipped on exactly the failing runs where
+# a leaked arena or an orphaned listener does the most damage. run_server_test
+# below judges a spec purely by its process exit status, and main()'s return
+# value IS that status.
+#
+# So a bare `spec.run_summary(fw)` as the last statement discards the verdict
+# and A FAILING SUITE REPORTS GREEN. That is the worst failure mode a test
+# harness has: silence that looks like success.
+#
+# This was already documented in ci.yml, in capitals, directly above the pin.
+# A comment did not stop it happening anyway -- 83 specs were converted to the
+# bare form in one commit and CI could not have told anyone. Hence a check
+# rather than a note.
+echo "=== Phase 0a: specs return their run_summary verdict ==="
+bare_verdict=$(grep -rn --include='spec_*.ae' -E '^[[:space:]]*spec\.run_summary\(' \
+                    "$ROOT/tests" "$ROOT/vg/test" 2>/dev/null || true)
+if [ -n "$bare_verdict" ]; then
+    echo "  FAIL: these specs drop the verdict, so a failing run would report green:"
+    echo "$bare_verdict" | sed 's/^/       /'
+    echo "       use: return spec.run_summary(fw)"
+    FAIL=$((FAIL + 1))
+else
+    echo "  OK   every spec returns its verdict"
+fi
+
+echo
 echo "=== Phase 0: AeVG unit tests (pure Aether) ==="
 for t in "${AEVG_TESTS[@]}"; do
     src="vg/test/${t}.ae"
