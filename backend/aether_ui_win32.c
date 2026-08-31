@@ -6451,6 +6451,15 @@ static int win32_use_gdiplus(void) {
     return cached;
 }
 
+/* NOTE: this path has no CV_GROUP_BEGIN/END case and that is deliberate, not
+   an oversight. Compositing a group means painting a layer once at the group
+   alpha, which needs per-pixel alpha; GDI drawing does not maintain an alpha
+   channel, so a layer blended back with AlphaBlend would either wash the
+   backdrop where the group drew nothing or need a sentinel-colour guess about
+   which pixels it touched. A group therefore renders opaque here, which is the
+   documented fidelity trade of the legacy renderer, and is why GDI+ is the
+   default. tests/win32/win32_runtime_test.c asserts group opacity on GDI+ and
+   skips it here for this reason. */
 static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height);
 static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height);
 
