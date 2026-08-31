@@ -4968,15 +4968,146 @@ void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
 // (same replay as canvas_write_png). Returns packed 0xAARRGGBB, or -1 on
 // error. The honest primitive for pixel assertions (group opacity, shadows)
 // in headless tests and the driver's /canvas/{id}/pixel route.
-/* Native collection backing: not implemented on this backend, so the DSL
-   keeps its composed window path. Answering 0 here is the whole contract;
-   the rest exist so the symbols resolve. */
-int aether_ui_native_list_available_impl(void) { return 0; }
-int aether_ui_native_list_create_impl(int horizontal, int window_rows) { return 0; }
-void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) { }
-void aether_ui_native_list_set_count_impl(int handle, int count) { }
-void aether_ui_native_list_scroll_to_impl(int handle, int index) { }
-int aether_ui_native_list_first_visible_impl(int handle) { return 0; }
+/* ── Native collection backing for vlist ────────────────────────────
+   GtkListView realizes only the rows its viewport needs and recycles the
+   widgets behind them, so virtualization becomes the platform's job instead
+   of window arithmetic in the DSL. Rows are built by calling back into the
+   Aether render closure with (index, container_handle), the same closure the
+   composed path uses, so the driver observes rows identically either way.
+
+   The factory's phases matter here. setup creates a row container ONCE per
+   recycled widget; bind fills it for whatever position it now shows and so
+   must first clear what the previous position left; teardown unregisters it.
+   That last one is not optional: the registry holds a raw GtkWidget*, so a
+   row torn down without unregistering leaves a dangling pointer the driver
+   will happily walk. */
+
+#define AEUI_LIST_ROW_H 24
+
+typedef struct {
+    AeClosure* builder;
+    int        n;
+} AeuiListState;
+
+static void aeui_list_setup(GtkSignalListItemFactory* factory,
+                            GtkListItem* item, gpointer user_data) {
+    int handle = aether_ui_vstack_create(0);
+    GtkWidget* box = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!box) return;
+    gtk_widget_set_size_request(box, -1, AEUI_LIST_ROW_H);
+    g_object_set_data(G_OBJECT(item), "aeui-row-handle", GINT_TO_POINTER(handle));
+    gtk_list_item_set_child(item, box);
+}
+
+static void aeui_list_bind(GtkSignalListItemFactory* factory,
+                           GtkListItem* item, gpointer user_data) {
+    AeuiListState* st = (AeuiListState*)user_data;
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
+    if (!st || handle <= 0) return;
+    /* The widget is recycled, so whatever the previous position drew has to
+       go before this one draws. */
+    aether_ui_clear_children_impl(handle);
+    if (st->builder && st->builder->fn) {
+        guint pos = gtk_list_item_get_position(item);
+        ((void(*)(void*, intptr_t, intptr_t))st->builder->fn)(
+            st->builder->env, (intptr_t)pos, (intptr_t)handle);
+    }
+}
+
+static void aeui_list_teardown(GtkSignalListItemFactory* factory,
+                               GtkListItem* item, gpointer user_data) {
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
+    if (handle <= 0) return;
+    GtkWidget* box = (GtkWidget*)aether_ui_get_widget(handle);
+    if (box) unregister_widget_tree(box);
+    g_object_set_data(G_OBJECT(item), "aeui-row-handle", GINT_TO_POINTER(0));
+}
+
+int aether_ui_native_list_available_impl(void) { return 1; }
+
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
+    /* A horizontal list has no GtkListView shape here; the DSL keeps its
+       composed path for those rather than pretending otherwise. */
+    if (horizontal) return 0;
+    ensure_gtk_init();
+
+    int rows = window_rows > 0 ? window_rows : 10;
+
+    AeuiListState* st = g_new0(AeuiListState, 1);
+
+    GtkStringList* model = gtk_string_list_new(NULL);
+    GtkNoSelection* sel = gtk_no_selection_new(G_LIST_MODEL(model));
+    GtkListItemFactory* factory = gtk_signal_list_item_factory_new();
+    g_signal_connect(factory, "setup", G_CALLBACK(aeui_list_setup), st);
+    g_signal_connect(factory, "bind", G_CALLBACK(aeui_list_bind), st);
+    g_signal_connect(factory, "teardown", G_CALLBACK(aeui_list_teardown), st);
+
+    GtkWidget* list = gtk_list_view_new(GTK_SELECTION_MODEL(sel), factory);
+
+    GtkWidget* scrolled = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), list);
+    /* The viewport is the window the list was asked for. Without a fixed
+       height the scrolled window takes whatever the parent box gives it and
+       realizes an arbitrary number of rows. */
+    gtk_widget_set_size_request(scrolled, -1, rows * AEUI_LIST_ROW_H);
+
+    g_object_set_data(G_OBJECT(scrolled), "aeui-list-state", st);
+    g_object_set_data(G_OBJECT(scrolled), "aeui-list-model", model);
+    g_object_set_data(G_OBJECT(scrolled), "aeui-list-view", list);
+
+    return aether_ui_register_widget(scrolled);
+}
+
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    if (st) st->builder = (AeClosure*)builder;
+}
+
+void aether_ui_native_list_set_count_impl(int handle, int count) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    GtkStringList* model = g_object_get_data(G_OBJECT(w), "aeui-list-model");
+    if (!st || !model) return;
+    int n = count < 0 ? 0 : count;
+
+    /* The model supplies POSITIONS only; a row's content comes from the
+       Aether side by index, so these strings are never read. */
+    guint have = g_list_model_get_n_items(G_LIST_MODEL(model));
+    gtk_string_list_splice(model, 0, have, NULL);
+    for (int i = 0; i < n; i++) gtk_string_list_append(model, "");
+    st->n = n;
+}
+
+void aether_ui_native_list_scroll_to_impl(int handle, int index) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    if (!st || st->n <= 0) return;
+    int i = index < 0 ? 0 : (index >= st->n ? st->n - 1 : index);
+    GtkAdjustment* adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(w));
+    if (!adj) return;
+    /* Rows are a fixed height here, so the requested index maps straight to a
+       scroll offset and lands at the TOP of the viewport, which is what
+       vlist_scroll_to means by the window's first row. */
+    double target = (double)i * (double)AEUI_LIST_ROW_H;
+    double maxv = gtk_adjustment_get_upper(adj) - gtk_adjustment_get_page_size(adj);
+    if (maxv < 0.0) maxv = 0.0;
+    if (target > maxv) target = maxv;
+    gtk_adjustment_set_value(adj, target);
+}
+
+int aether_ui_native_list_first_visible_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return 0;
+    GtkAdjustment* adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(w));
+    if (!adj) return 0;
+    return (int)(gtk_adjustment_get_value(adj) / (double)AEUI_LIST_ROW_H);
+}
 
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height) {
