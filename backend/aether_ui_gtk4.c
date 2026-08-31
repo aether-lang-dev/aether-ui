@@ -4292,7 +4292,10 @@ typedef enum {
     CANVAS_FILL_RADIAL, // fill current path with a radial gradient
     CANVAS_CLIP_RECT,   // intersect the clip region with rect (x,y,w,h)
     CANVAS_GROUP_BEGIN, // cairo_push_group — composite following cmds offscreen
-    CANVAS_GROUP_END    // pop group, paint at alpha (x) — TRUE group opacity
+    CANVAS_GROUP_END,   // pop group, paint at alpha (x) — TRUE group opacity
+    /* Drop the clips added since this compositing scope began, back to its
+       baseline. Appended at the END: the values are positional. */
+    CANVAS_RESET_CLIP
 } CanvasCmdType;
 
 typedef struct {
@@ -4497,6 +4500,10 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
     if (!cs) return;
     if (start < 0) start = 0;
     if (end > cs->count) end = cs->count;
+    /* INVARIANT: every cairo_save here has exactly one matching restore, and
+       CANVAS_RESET_CLIP restores/re-saves in place. Breaking the pairing
+       leaks clip state into the next frame. */
+    cairo_save(cr);
     for (int i = start; i < end; i++) {
         CanvasCmd* c = &cs->cmds[i];
         switch (c->type) {
@@ -4535,6 +4542,16 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 cairo_rectangle(cr, c->x, c->y, c->w, c->h);
                 cairo_clip(cr);
                 cairo_new_path(cr);  // clear the path the rectangle added
+                break;
+            case CANVAS_RESET_CLIP:
+                // Drop every clip added since this compositing scope began,
+                // back to the baseline (the widget's own bounds, or the
+                // group's clip at GROUP_BEGIN). Restoring also rolls back
+                // source/line width, which is harmless: every drawing command
+                // sets its own before it paints.
+                cairo_restore(cr);
+                cairo_save(cr);
+                cairo_new_path(cr);
                 break;
             case CANVAS_ARC:
                 // Append an arc to the current path. w = radius,
@@ -4720,13 +4737,16 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 // group, then paint it ONCE at the group alpha — overlapping
                 // children don't double-darken (the reason this exists).
                 cairo_push_group(cr);
+                cairo_save(cr);
                 break;
             case CANVAS_GROUP_END:
+                cairo_restore(cr);
                 cairo_pop_group_to_source(cr);
                 cairo_paint_with_alpha(cr, c->x);
                 break;
         }
     }
+    cairo_restore(cr);
 }
 
 static void canvas_replay(cairo_t* cr, CanvasState* cs) {
@@ -5430,8 +5450,7 @@ void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
 }
 
 void aether_ui_canvas_reset_clip_impl(int canvas_id) {
-    CanvasState* cs = get_canvas_state(canvas_id);
-    if (cs) cs->paint_clip_count = 0;
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_RESET_CLIP });
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,

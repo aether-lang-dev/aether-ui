@@ -1,0 +1,62 @@
+// spec_canvasresetclip_demo.ae — canvas_reset_clip actually widens the clip.
+//
+// The demo clips to the top-left 50x50, fills the whole canvas red, resets the
+// clip, then fills the bottom-right 50x50 blue.
+//
+// canvas_reset_clip did NOT undo canvas_clip_rect on any backend. The two
+// verbs sit next to each other in the export list and read as a pair, but
+// reset cleared the one-shot paint clip belonging to canvas_set_clip_rects --
+// a different mechanism -- so the scene clip stayed in force and every later
+// draw outside it was silently discarded. Nothing caught it because the verb
+// had no caller anywhere in the tree: no example, no test, no AeVG scene.
+//
+// "bottom-right is blue" is the decisive assertion: that quadrant lies wholly
+// outside the old clip, so before the fix it stayed background.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/canvasresetclip_demo &
+//   UI_SPEC=canvasresetclip_demo/spec_canvasresetclip_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.json
+
+// Packed AARRGGBB as signed ints.
+red() -> int { return -65536 }
+blue() -> int { return -16776961 }
+
+pixel_at(x: int, y: int) -> int {
+    body = uidriver.get_body("/canvas/1/pixel?x=${x}&y=${y}&w=100&h=100")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "canvas reset-clip over AetherUIDriver") {
+        spec.it("still clips the fill made before the reset") callback {
+            spec.assert_eq(pixel_at(25, 25), red(), "inside the clip is red")
+            spec.assert_true(pixel_at(75, 25) != red(), "outside it is not red")
+        }
+
+        // The decisive one: this quadrant is outside the clip that was in
+        // force, so it paints only if the reset widened the clip back.
+        spec.it("paints outside the old clip after the reset") callback {
+            spec.assert_eq(pixel_at(75, 75), blue(), "the reset let the fill through")
+            spec.assert_eq(pixel_at(60, 90), blue(), "another point in the new fill")
+        }
+
+        // A reset widens back to the canvas, not to everything: the two
+        // untouched quadrants stay background.
+        spec.it("widens only back to the canvas") callback {
+            spec.assert_true(pixel_at(25, 75) != red(), "bottom-left took no red")
+            spec.assert_true(pixel_at(25, 75) != blue(), "bottom-left took no blue")
+        }
+    }
+    return spec.run_summary(fw)
+}

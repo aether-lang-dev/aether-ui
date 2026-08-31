@@ -5777,7 +5777,11 @@ typedef enum {
        live scene drew past its viewport edge on this backend alone.
        Appended at the END: the values are positional and the replay
        switches index off them. */
-    CV_CLIP
+    CV_CLIP,
+    /* Drop the clips added since this scope began. Both replay paths have a
+       real reset (SelectClipRgn(NULL) / GdipResetClip), so unlike the cairo
+       and CoreGraphics backends this needs no saved baseline. */
+    CV_RESET_CLIP
 } CanvasCmdKind;
 
 typedef struct {
@@ -6114,8 +6118,9 @@ void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
 }
 
 void aether_ui_canvas_reset_clip_impl(int canvas_id) {
-    if (canvas_id < 1 || canvas_id > canvas_count) return;
-    canvases[canvas_id - 1].paint_clip_count = 0;
+    CanvasCmd c = {0};
+    c.k = CV_RESET_CLIP;
+    canvas_add_cmd(canvas_id, c);
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
@@ -6485,6 +6490,11 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
                 IntersectClipRect(mem, (int)cmd->p0, (int)cmd->p1,
                                   (int)(cmd->p0 + cmd->p2),
                                   (int)(cmd->p1 + cmd->p3));
+                break;
+            case CV_RESET_CLIP:
+                /* Back to the memory DC's full bitmap, which is the canvas
+                   bounds, so a reset can never widen past the canvas. */
+                SelectClipRgn(mem, NULL);
                 break;
             case CV_LINE: {
                 MoveToEx(mem, (int)cmd->p0, (int)cmd->p1, NULL);
@@ -7194,6 +7204,12 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 GdipSetClipRectI(g, (int)cmd->p0, (int)cmd->p1,
                                  (int)cmd->p2, (int)cmd->p3,
                                  GDIP_COMBINE_INTERSECT);
+                break;
+            case CV_RESET_CLIP:
+                /* Resets `g`, which the group-layer stack redirects, so a
+                   reset inside a group drops that layer's clips and leaves
+                   the frame's own clip alone. */
+                GdipResetClip(g);
                 break;
             case CV_CLEAR: {
                 GpBrush* br = NULL;
