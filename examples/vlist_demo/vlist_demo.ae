@@ -28,7 +28,7 @@ main() {
         k = k + 1
     }
 
-    window("virtualized list", 300, 320) {
+    window("virtualized list", 320, 560) {
         vstack(8) {
             first_lbl = text("first: 0")
             v = vlist("v", 10, |item: ptr, i: int, parent: int| {
