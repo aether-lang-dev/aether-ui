@@ -5890,6 +5890,159 @@ void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
         [NSValue valueWithPointer:on_scroll], OBJC_ASSOCIATION_RETAIN);
 }
 
+// ── Native collection backing for vlist ─────────────────────────────
+// NSTableView realizes only the rows its viewport needs and discards the
+// rest, so virtualization becomes the platform's job instead of window
+// arithmetic in the DSL. Each row is built by calling back into the Aether
+// render closure with (index, container_handle); the container is an ordinary
+// registered widget, so the driver observes rows exactly as it did when the
+// list was composed by hand.
+//
+// CRITICAL: a discarded row must leave the widget registry as well. The
+// registry holds a STRONG reference, so without the didRemoveRowView: hook
+// every row ever scrolled past stays alive, the registry grows without bound,
+// and "virtualized" becomes a claim the driver can see is false.
+
+@interface AetherListSource : NSObject <NSTableViewDataSource, NSTableViewDelegate>
+@property (nonatomic, assign) AeClosure* builder;
+@property (nonatomic, assign) NSInteger rowCount;
+@end
+
+@implementation AetherListSource
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
+    return self.rowCount;
+}
+
+- (NSView*)tableView:(NSTableView*)tableView
+  viewForTableColumn:(NSTableColumn*)tableColumn
+                 row:(NSInteger)row {
+    int container = aether_ui_vstack_create(0);
+    AeClosure* b = self.builder;
+    if (b && b->fn) {
+        ((void(*)(void*, intptr_t, intptr_t))b->fn)(b->env,
+                                                    (intptr_t)row,
+                                                    (intptr_t)container);
+    }
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(container);
+    return v;
+}
+
+- (void)tableView:(NSTableView*)tableView
+  didRemoveRowView:(NSTableRowView*)rowView
+            forRow:(NSInteger)row {
+    for (NSView* sub in [rowView subviews]) {
+        unregister_view_tree(sub);
+    }
+}
+
+@end
+
+int aether_ui_native_list_available_impl(void) { return 1; }
+
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
+    // horizontal lists have no NSTableView shape; the DSL keeps its composed
+    // path for those rather than pretending otherwise.
+    if (horizontal) return 0;
+
+    // A fixed row height and a viewport sized to window_rows is what makes
+    // this deterministic: the list was already told how many rows it should
+    // show, so it sizes itself to exactly that. Without an explicit frame the
+    // table has no laid-out viewport until a window presents it, and headless
+    // it would realize an arbitrary number of rows and refuse to scroll.
+    int rows = window_rows > 0 ? window_rows : 10;
+    CGFloat rowH = 24.0;
+
+    NSScrollView* scroll = [[NSScrollView alloc]
+        initWithFrame:NSMakeRect(0, 0, 320, rowH * (CGFloat)rows)];
+    [scroll setHasVerticalScroller:YES];
+    [scroll setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [scroll setDrawsBackground:NO];
+
+    NSTableView* table = [[NSTableView alloc] init];
+    NSTableColumn* col = [[NSTableColumn alloc] initWithIdentifier:@"aeui"];
+    [col setResizingMask:NSTableColumnAutoresizingMask];
+    [table addTableColumn:col];
+    [table setHeaderView:nil];
+    [table setRowHeight:rowH];
+    [table setFrame:NSMakeRect(0, 0, 320, rowH * (CGFloat)rows)];
+    [table setSelectionHighlightStyle:NSTableViewSelectionHighlightStyleRegular];
+    [table setBackgroundColor:[NSColor clearColor]];
+
+    AetherListSource* src = [[AetherListSource alloc] init];
+    src.builder = NULL;
+    src.rowCount = 0;
+    [table setDataSource:src];
+    [table setDelegate:src];
+    // dataSource/delegate are weak, so the source has to be owned by something
+    // that outlives them.
+    objc_setAssociatedObject(scroll, "aeui_list_src", src, OBJC_ASSOCIATION_RETAIN);
+    objc_setAssociatedObject(scroll, "aeui_list_table", table, OBJC_ASSOCIATION_RETAIN);
+
+    [scroll setDocumentView:table];
+    // Pin the viewport to the requested window. Inside an NSStackView the
+    // frame alone is advisory: the stack resizes its arrangedSubviews, which
+    // would leave the list showing however many rows happened to fit.
+    [[[scroll heightAnchor] constraintEqualToConstant:rowH * (CGFloat)rows]
+        setActive:YES];
+    return register_widget_typed((__bridge void*)scroll, AUI_VSTACK);
+}
+
+static NSTableView* aeui_list_table(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return nil;
+    return (NSTableView*)objc_getAssociatedObject(v, "aeui_list_table");
+}
+
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    AetherListSource* src = objc_getAssociatedObject(v, "aeui_list_src");
+    if (src) src.builder = (AeClosure*)builder;
+}
+
+void aether_ui_native_list_set_count_impl(int handle, int count) {
+    NSTableView* t = aeui_list_table(handle);
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!t || !v) return;
+    AetherListSource* src = objc_getAssociatedObject(v, "aeui_list_src");
+    if (!src) return;
+    src.rowCount = count < 0 ? 0 : count;
+    [t reloadData];
+    // The enclosing scroll view must lay out too, or visibleRect stays empty
+    // headless and rowsInRect answers nothing.
+    NSScrollView* sv = (NSScrollView*)v;
+    [sv layoutSubtreeIfNeeded];
+    [t layoutSubtreeIfNeeded];
+}
+
+void aether_ui_native_list_scroll_to_impl(int handle, int index) {
+    NSTableView* t = aeui_list_table(handle);
+    if (!t) return;
+    NSInteger n = [t numberOfRows];
+    if (n <= 0) return;
+    NSInteger i = index < 0 ? 0 : (index >= n ? n - 1 : index);
+    // Put the requested row at the TOP of the viewport rather than merely
+    // making it visible: vlist_scroll_to names the first row of the window,
+    // and scrollRowToVisible would leave it at the bottom when scrolling down.
+    NSRect rect = [t rectOfRow:i];
+    NSScrollView* sv = [t enclosingScrollView];
+    if (sv) {
+        NSClipView* clip = [sv contentView];
+        [clip scrollToPoint:NSMakePoint(0, rect.origin.y)];
+        [sv reflectScrolledClipView:clip];
+        [sv layoutSubtreeIfNeeded];
+    }
+    [t layoutSubtreeIfNeeded];
+}
+
+int aether_ui_native_list_first_visible_impl(int handle) {
+    NSTableView* t = aeui_list_table(handle);
+    if (!t) return 0;
+    NSRange r = [t rowsInRect:[t visibleRect]];
+    return (int)r.location;
+}
+
 int aether_ui_fire_scroll(int container_handle, int dy) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(container_handle);
     if (!v) return 0;

@@ -8440,6 +8440,16 @@ static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
     DeleteDC(mem);
 }
 
+/* Native collection backing: not implemented on this backend, so the DSL
+   keeps its composed window path. Answering 0 here is the whole contract;
+   the rest exist so the symbols resolve. */
+int aether_ui_native_list_available_impl(void) { return 0; }
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) { return 0; }
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) { }
+void aether_ui_native_list_set_count_impl(int handle, int count) { }
+void aether_ui_native_list_scroll_to_impl(int handle, int index) { }
+int aether_ui_native_list_first_visible_impl(int handle) { return 0; }
+
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height) {
     // Replay the canvas's command buffer into a memory bitmap and read one

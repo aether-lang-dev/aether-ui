@@ -307,6 +307,18 @@ void aether_ui_widget_add_css_class_impl(int handle, const char* cls);
 void aether_ui_widget_remove_css_class_impl(int handle, const char* cls);
 void aether_ui_canvas_group_begin_impl(int canvas_id);
 void aether_ui_canvas_group_end_impl(int canvas_id, double alpha);
+/* Native collection backing for vlist. A backend that answers 1 to
+   native_list_available builds rows by calling the row builder closure as
+   (env, index, container_handle); the container is an ordinary registered
+   widget, so the driver sees rows the same way it did when the list was
+   composed by hand. A backend answering 0 keeps the composed window path. */
+int  aether_ui_native_list_available_impl(void);
+int  aether_ui_native_list_create_impl(int horizontal, int window_rows);
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder);
+void aether_ui_native_list_set_count_impl(int handle, int count);
+void aether_ui_native_list_scroll_to_impl(int handle, int index);
+int  aether_ui_native_list_first_visible_impl(int handle);
+
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height);
 int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,

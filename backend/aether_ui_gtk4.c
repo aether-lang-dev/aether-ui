@@ -4968,6 +4968,16 @@ void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
 // (same replay as canvas_write_png). Returns packed 0xAARRGGBB, or -1 on
 // error. The honest primitive for pixel assertions (group opacity, shadows)
 // in headless tests and the driver's /canvas/{id}/pixel route.
+/* Native collection backing: not implemented on this backend, so the DSL
+   keeps its composed window path. Answering 0 here is the whole contract;
+   the rest exist so the symbols resolve. */
+int aether_ui_native_list_available_impl(void) { return 0; }
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) { return 0; }
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) { }
+void aether_ui_native_list_set_count_impl(int handle, int count) { }
+void aether_ui_native_list_scroll_to_impl(int handle, int index) { }
+int aether_ui_native_list_first_visible_impl(int handle) { return 0; }
+
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height) {
     CanvasState* cs = get_canvas_state(canvas_id);

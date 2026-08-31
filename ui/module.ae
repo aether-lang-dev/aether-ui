@@ -490,6 +490,12 @@ extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 // target; on drop of another row, fire on_drop(source_index).
 extern aether_ui_row_drag_reorder_impl(row_handle: int, index: int, on_drop: ptr)
 extern aether_ui_vlist_attach_scroll_impl(container_handle: int, on_scroll: ptr)
+extern aether_ui_native_list_available_impl() -> int
+extern aether_ui_native_list_create_impl(horizontal: int, window_rows: int) -> int
+extern aether_ui_native_list_set_row_builder_impl(handle: int, row_builder: ptr)
+extern aether_ui_native_list_set_count_impl(handle: int, count: int)
+extern aether_ui_native_list_scroll_to_impl(handle: int, index: int)
+extern aether_ui_native_list_first_visible_impl(handle: int) -> int
 extern aether_ui_on_click_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_remove_child_impl(parent_handle: int, child_handle: int)
 extern aether_ui_clear_children_impl(handle: int)
@@ -4241,26 +4247,58 @@ struct VList {
     render: ptr,        // boxed |item, absolute_i, parent|
     items: ptr,         // the full std.list (not owned)
     window: int,        // max rows realized at once
-    first: int          // current window start index
+    first: int,         // current window start index
+    native: int         // 1 = the backend realizes rows, not _vlist_render
 }
 
 vlist(_ctx: ptr, orientation: string, window: int, render: fn) -> ptr {
-    h = 0
-    if string.equals(orientation, "h") == 1 {
-        h = aether_ui_hstack_create(2)
-    } else {
-        h = aether_ui_vstack_create(2)
-    }
-    if _ctx != 0 {
-        aether_ui_widget_add_child_ctx(_ctx, h)
-    }
-    v = malloc(40) as *VList
-    v.container = h
+    v = malloc(48) as *VList
     v.render = box_closure(render)
     v.items = null
     v.window = window
     v.first = 0
+    v.native = 0
+
+    // Prefer the backend's own collection view when it has one: it realizes
+    // the rows its viewport needs and discards the rest, which is the same
+    // guarantee the composed window gives but with the platform's scrolling,
+    // selection and row reuse rather than reimplementations of them.
+    h = 0
+    if string.equals(orientation, "h") == 0 {
+        if aether_ui_native_list_available_impl() == 1 {
+            h = aether_ui_native_list_create_impl(0, window)
+            if h != 0 {
+                v.native = 1
+                aether_ui_native_list_set_row_builder_impl(h,
+                    box_closure(|i: int, parent: int| { _vlist_build_row(v, i, parent) }))
+            }
+        }
+    }
+    if h == 0 {
+        if string.equals(orientation, "h") == 1 {
+            h = aether_ui_hstack_create(2)
+        } else {
+            h = aether_ui_vstack_create(2)
+        }
+    }
+    v.container = h
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, h)
+    }
     return v as ptr
+}
+
+// Build one row into the container the backend hands us. Same render closure
+// and same absolute index as the composed path, so a row looks identical
+// either way.
+_vlist_build_row(v: *VList, i: int, parent: int) {
+    if v.items == null { return }
+    n = list.size(v.items)
+    if i < 0 { return }
+    if i >= n { return }
+    it, _e = list.get(v.items, i)
+    r = unbox_closure(v.render)
+    _each_invoke(r, it, i, parent)
 }
 
 // Render the current window [first, first+window) of `items` into the
@@ -4284,6 +4322,10 @@ vlist_set(vp: ptr, items: ptr) {
     v = vp as *VList
     v.items = items
     v.first = 0
+    if v.native == 1 {
+        aether_ui_native_list_set_count_impl(v.container, list.size(items))
+        return
+    }
     _vlist_render(v)
 }
 
@@ -4300,6 +4342,10 @@ vlist_scroll_to(vp: ptr, index: int) {
     if f < 0 { f = 0 }
     if f > maxfirst { f = maxfirst }
     v.first = f
+    if v.native == 1 {
+        aether_ui_native_list_scroll_to_impl(v.container, f)
+        return
+    }
     _vlist_render(v)
 }
 
@@ -4310,6 +4356,9 @@ vlist_count(vp: ptr) -> int {
 }
 vlist_window_first(vp: ptr) -> int {
     v = vp as *VList
+    if v.native == 1 {
+        return aether_ui_native_list_first_visible_impl(v.container)
+    }
     return v.first
 }
 
