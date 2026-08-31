@@ -4987,10 +4987,15 @@ void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
 typedef struct {
     AeClosure* builder;
     int        n;
+    int        n_setup;     /* diagnostics: how many row widgets were made */
+    int        n_bind;      /* how many were filled for a position */
+    int        n_unbind;    /* how many were recycled back out */
 } AeuiListState;
 
 static void aeui_list_setup(GtkSignalListItemFactory* factory,
                             GtkListItem* item, gpointer user_data) {
+    AeuiListState* sst = (AeuiListState*)user_data;
+    if (sst) sst->n_setup++;
     int handle = aether_ui_vstack_create(0);
     GtkWidget* box = (GtkWidget*)aether_ui_get_widget(handle);
     if (!box) return;
@@ -5004,6 +5009,7 @@ static void aeui_list_bind(GtkSignalListItemFactory* factory,
     AeuiListState* st = (AeuiListState*)user_data;
     int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
     if (!st || handle <= 0) return;
+    st->n_bind++;
     /* The widget is recycled, so whatever the previous position drew has to
        go before this one draws. */
     aether_ui_clear_children_impl(handle);
@@ -5022,6 +5028,8 @@ static void aeui_list_bind(GtkSignalListItemFactory* factory,
    AppKit's didRemoveRowView: is this hook, not the destruction one. */
 static void aeui_list_unbind(GtkSignalListItemFactory* factory,
                              GtkListItem* item, gpointer user_data) {
+    AeuiListState* ust = (AeuiListState*)user_data;
+    if (ust) ust->n_unbind++;
     int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
     if (handle > 0) aether_ui_clear_children_impl(handle);
 }
@@ -5154,14 +5162,15 @@ void aether_ui_native_list_scroll_to_impl(int handle, int index) {
     if (target > maxv) target = maxv;
     gtk_adjustment_set_value(adj, target);
     if (getenv("AETHER_UI_LIST_DEBUG")) {
-        GtkWidget* lv = g_object_get_data(G_OBJECT(w), "aeui-list-view");
         fprintf(stderr,
-                "[list/scroll] i=%d sw_h=%d list_h=%d page=%.1f upper=%.1f val=%.1f\n",
+                "[list/scroll] i=%d sw_h=%d page=%.1f upper=%.1f val=%.1f "
+                "setup=%d bind=%d unbind=%d live=%d\n",
                 i, gtk_widget_get_height(w),
-                lv ? gtk_widget_get_height(lv) : -1,
                 gtk_adjustment_get_page_size(adj),
                 gtk_adjustment_get_upper(adj),
-                gtk_adjustment_get_value(adj));
+                gtk_adjustment_get_value(adj),
+                st->n_setup, st->n_bind, st->n_unbind,
+                st->n_bind - st->n_unbind);
     }
 }
 
