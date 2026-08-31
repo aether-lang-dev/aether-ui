@@ -23,6 +23,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "aether_ui_backend.h"
 
 // aether_ui_win32.c reads canvas gradient stops and paint clip rects out of a
@@ -97,6 +98,10 @@ static void canvas_clip_and_reset(void) {
 }
 
 int main(void) {
+    // Unbuffered: under Wine a fault would otherwise discard everything this
+    // has printed, which is exactly the run you most need the output from.
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     const char* r = getenv("AETHER_UI_WIN32_RENDERER");
     if (r && strcmp(r, "legacy") == 0) renderer = "legacy";
     printf("win32 runtime test (renderer: %s)\n", renderer);

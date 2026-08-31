@@ -222,5 +222,12 @@ jobs:
             sleep 1
           done
           wineboot --init 2>/dev/null || true
-          wine /tmp/aether_ui_win32_test.exe
-          AETHER_UI_WIN32_RENDERER=legacy wine /tmp/aether_ui_win32_test.exe
+          # A crash must FAIL this step, not hang it: Wine's default action is
+          # to start winedbg and wait forever, which burns the job timeout and
+          # reports nothing useful.
+          wine reg add 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug' \
+            /v Debugger /t REG_SZ /d 'false' /f >/dev/null 2>&1 || true
+          echo "== renderer: gdiplus =="
+          timeout 180 wine /tmp/aether_ui_win32_test.exe
+          echo "== renderer: legacy =="
+          AETHER_UI_WIN32_RENDERER=legacy timeout 180 wine /tmp/aether_ui_win32_test.exe
