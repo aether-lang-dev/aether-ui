@@ -14,12 +14,17 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS (pass 1): the lifecycle, widget registry, stack layout and the core
-// widgets (text, button, textfield/securefield, toggle, slider) are REAL. The
-// rest of the 287-function ABI is present as honest, compiling `// TODO(ios)`
-// stubs at the foot of the file, so the backend links and is gated by the iOS
-// SDK compile check in ci.sh. Each later pass moves a section out of the stub
-// block into a real implementation, exactly as the Win32/AppKit backends grew.
+// STATUS: 68 of the 287 ABI functions are REAL; the rest are honest, compiling
+// `// TODO(ios)` stubs at the foot of the file, so the backend links and is
+// gated by the iOS SDK compile check in ci.sh (Phase 1e). Each pass moves a
+// section out of the stub block into a real implementation, as the Win32/AppKit
+// backends grew.
+//   pass 1 — lifecycle, widget registry, stack layout, core widgets (text,
+//            button, textfield/securefield, toggle, slider).
+//   pass 2 — visibility/enablement, text getters+truncation, accessibility
+//            (UIAccessibility), image (UIImageView), progress bar
+//            (UIProgressView), text area (UITextView), scroll view
+//            (UIScrollView), picker (UIButton + UIMenu).
 //
 // Build (simulator, from ci.sh Phase 1e):
 //   clang -fobjc-arc -target arm64-apple-ios-simulator -isysroot <SimSDK> \
@@ -32,6 +37,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreText/CoreText.h>
 #import <ImageIO/ImageIO.h>
+#import <objc/runtime.h>          // objc_setAssociatedObject (a11y strings)
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -590,19 +596,358 @@ double aether_ui_slider_get_value(int handle) {
 }
 
 // ===========================================================================
-// UNIMPLEMENTED — pass 1 stubs.
+// Pass 2 — static content, basic controls, visibility and accessibility.
+// Ported out of the stub block below into real UIKit implementations, mirroring
+// the corresponding AppKit sections of aether_ui_macos.m.
+// ===========================================================================
+
+// --- Widget visibility / enablement -----------------------------------------
+void aether_ui_widget_set_hidden(int handle, int hidden) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) v.hidden = (hidden != 0);
+}
+
+void aether_ui_set_enabled(int handle, int enabled) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    BOOL on = (enabled != 0);
+    if ([v isKindOfClass:[UIControl class]]) ((UIControl*)v).enabled = on;
+    v.userInteractionEnabled = on;
+    v.alpha = on ? 1.0 : 0.4;   // the AppKit backend dims a disabled control too
+}
+
+void aether_ui_set_enabled_ctx(void* ctx, int enabled) {
+    aether_ui_set_enabled((int)(intptr_t)ctx, enabled);
+}
+
+// --- Text getters / truncation ----------------------------------------------
+int aether_ui_text_get_wrap(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UILabel class]])
+        return ((UILabel*)v).numberOfLines == 0 ? 1 : 0;
+    return 0;
+}
+
+int aether_ui_text_get_anchor(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UILabel class]]) return 0;
+    switch (((UILabel*)v).textAlignment) {
+        case NSTextAlignmentCenter: return 1;
+        case NSTextAlignmentRight:  return 2;
+        default:                    return 0;
+    }
+}
+
+void aether_ui_text_set_truncate(int handle, int mode) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UILabel class]]) return;
+    UILabel* l = (UILabel*)v;
+    NSLineBreakMode lb;
+    if (mode == 1)      lb = NSLineBreakByTruncatingHead;
+    else if (mode == 2) lb = NSLineBreakByTruncatingMiddle;
+    else if (mode == 3) lb = NSLineBreakByTruncatingTail;
+    else lb = (l.numberOfLines == 0) ? NSLineBreakByWordWrapping
+                                     : NSLineBreakByClipping;
+    l.lineBreakMode = lb;
+    if (mode != 0 && l.numberOfLines != 0) l.numberOfLines = 1;
+}
+
+int aether_ui_text_get_truncate(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UILabel class]]) return 0;
+    switch (((UILabel*)v).lineBreakMode) {
+        case NSLineBreakByTruncatingHead:   return 1;
+        case NSLineBreakByTruncatingMiddle: return 2;
+        case NSLineBreakByTruncatingTail:   return 3;
+        default:                            return 0;
+    }
+}
+
+const char* aether_ui_placeholder_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UITextField class]]) {
+        NSString* p = ((UITextField*)v).placeholder;
+        if (p) return p.UTF8String;
+    }
+    return "";
+}
+
+// --- Accessibility — stored per-view + mapped onto UIAccessibility ----------
+static const char kA11yRole;
+static const char kA11yName;
+static const char kA11yDesc;
+
+static void a11y_store(UIView* v, const void* key, const char* s) {
+    objc_setAssociatedObject(v, key,
+        s ? [NSString stringWithUTF8String:s] : nil,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void a11y_copy(char* dst, int sz, NSString* s) {
+    if (sz <= 0) return;
+    const char* c = s ? s.UTF8String : "";
+    if (!c) c = "";
+    strncpy(dst, c, (size_t)sz - 1);
+    dst[sz - 1] = '\0';
+}
+
+void aether_ui_a11y_set_role_impl(int handle, const char* role) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) a11y_store(v, &kA11yRole, role);
+}
+
+void aether_ui_a11y_set_label_impl(int handle, const char* name) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    a11y_store(v, &kA11yName, name);
+    v.isAccessibilityElement = YES;
+    v.accessibilityLabel = name ? [NSString stringWithUTF8String:name] : nil;
+}
+
+void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    a11y_store(v, &kA11yDesc, desc);
+    v.accessibilityHint = desc ? [NSString stringWithUTF8String:desc] : nil;
+}
+
+void aether_ui_a11y_get_impl(int handle, char* role, int rolesz,
+                             char* name, int namesz, char* desc, int descsz) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    a11y_copy(role, rolesz, v ? objc_getAssociatedObject(v, &kA11yRole) : nil);
+    a11y_copy(name, namesz, v ? objc_getAssociatedObject(v, &kA11yName) : nil);
+    a11y_copy(desc, descsz, v ? objc_getAssociatedObject(v, &kA11yDesc) : nil);
+}
+
+// --- Image — UIImageView ----------------------------------------------------
+static const char kImgTint;
+
+static UIViewContentMode image_mode_for(int mode) {
+    switch (mode) {
+        case 1:  return UIViewContentModeScaleAspectFit;  // proportional up/down
+        case 3:  return UIViewContentModeScaleToFill;     // axes independently
+        default: return UIViewContentModeCenter;          // none
+    }
+}
+
+static int image_register(UIImage* img) {
+    UIImageView* iv = [[UIImageView alloc] initWithImage:img];
+    iv.translatesAutoresizingMaskIntoConstraints = NO;
+    iv.contentMode = UIViewContentModeCenter;
+    iv.clipsToBounds = YES;
+    return register_widget_typed((__bridge void*)iv, AUI_IMAGE);
+}
+
+int aether_ui_image_create(const char* filepath) {
+    UIImage* img = (filepath && *filepath)
+        ? [UIImage imageWithContentsOfFile:[NSString stringWithUTF8String:filepath]]
+        : nil;
+    return image_register(img);
+}
+
+int aether_ui_image_from_bytes(const char* data, int length) {
+    UIImage* img = nil;
+    if (data && length > 0) {
+        NSData* d = [NSData dataWithBytes:data length:(NSUInteger)length];
+        img = [UIImage imageWithData:d];
+    }
+    return image_register(img);
+}
+
+void aether_ui_image_set_fill(int handle, int mode) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UIImageView class]])
+        ((UIImageView*)v).contentMode = image_mode_for(mode);
+}
+
+int aether_ui_image_get_fill(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIImageView class]]) return 0;
+    switch (((UIImageView*)v).contentMode) {
+        case UIViewContentModeScaleAspectFit: return 1;
+        case UIViewContentModeScaleToFill:    return 3;
+        default:                              return 2;
+    }
+}
+
+void aether_ui_image_set_size(int handle, int width, int height) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    if (width > 0)  [v.widthAnchor  constraintEqualToConstant:width].active  = YES;
+    if (height > 0) [v.heightAnchor constraintEqualToConstant:height].active = YES;
+}
+
+void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIImageView class]]) return;
+    UIImageView* iv = (UIImageView*)v;
+    objc_setAssociatedObject(iv, &kImgTint, @(on != 0),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (on) {
+        iv.image = [iv.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        iv.tintColor = [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+    } else {
+        iv.image = [iv.image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
+}
+
+int aether_ui_image_get_tint(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIImageView class]]) return 0;
+    NSNumber* n = objc_getAssociatedObject(v, &kImgTint);
+    return (n && n.boolValue) ? 1 : 0;
+}
+
+int aether_ui_image_has_content(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UIImageView class]])
+        return ((UIImageView*)v).image != nil ? 1 : 0;
+    return 0;
+}
+
+// --- Progress bar — UIProgressView ------------------------------------------
+int aether_ui_progressbar_create(double fraction) {
+    UIProgressView* p = [[UIProgressView alloc]
+        initWithProgressViewStyle:UIProgressViewStyleDefault];
+    p.translatesAutoresizingMaskIntoConstraints = NO;
+    p.progress = (float)fraction;
+    return register_widget_typed((__bridge void*)p, AUI_PROGRESSBAR);
+}
+
+void aether_ui_progressbar_set_fraction(int handle, double fraction) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UIProgressView class]])
+        ((UIProgressView*)v).progress = (float)fraction;
+}
+
+// --- Text area — UITextView -------------------------------------------------
+@interface AeuiTextViewDelegate : NSObject <UITextViewDelegate>
+@property (nonatomic, assign) AeClosure* closure;
+@end
+@implementation AeuiTextViewDelegate
+- (void)textViewDidChange:(UITextView*)tv {
+    if (self.closure && self.closure->fn) {
+        const char* cs = tv.text ? tv.text.UTF8String : "";
+        ((void(*)(void*, const char*))self.closure->fn)(self.closure->env, cs);
+    }
+}
+@end
+
+int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
+    (void)placeholder;  // UITextView has no native placeholder (pass 3)
+    UITextView* tv = [[UITextView alloc] init];
+    tv.translatesAutoresizingMaskIntoConstraints = NO;
+    tv.editable = YES;
+    tv.font = [UIFont systemFontOfSize:UIFont.systemFontSize];
+    if (boxed_closure) {
+        AeuiTextViewDelegate* d = [[AeuiTextViewDelegate alloc] init];
+        d.closure = (AeClosure*)boxed_closure;
+        tv.delegate = d;
+        retain_target(d);
+    }
+    return register_widget_typed((__bridge void*)tv, AUI_TEXTAREA);
+}
+
+void aether_ui_textarea_set_text(int handle, const char* text) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UITextView class]])
+        ((UITextView*)v).text = [NSString stringWithUTF8String:text ? text : ""];
+}
+
+char* aether_ui_textarea_get_text(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UITextView class]]) {
+        UITextView* tv = (UITextView*)v;
+        const char* cs = tv.text ? tv.text.UTF8String : "";
+        return strdup(cs ? cs : "");   // caller owns (char*, not const char*)
+    }
+    return strdup("");
+}
+
+// --- Scroll view — UIScrollView ---------------------------------------------
+// A bare scroller for now; content sizing/inner stack is a pass-3 refinement.
+int aether_ui_scrollview_create(void) {
+    UIScrollView* sv = [[UIScrollView alloc] init];
+    sv.translatesAutoresizingMaskIntoConstraints = NO;
+    return register_widget_typed((__bridge void*)sv, AUI_SCROLLVIEW);
+}
+
+// --- Picker — a UIButton driving a UIMenu (iPad-friendly; iOS 14+) ----------
+@interface AeuiPicker : UIButton
+@property (nonatomic, strong) NSMutableArray<NSString*>* items;
+@property (nonatomic, assign) int selectedIndex;
+@property (nonatomic, assign) AeClosure* closure;
+- (void)rebuildMenu;
+@end
+@implementation AeuiPicker
+- (void)rebuildMenu {
+    NSMutableArray<UIAction*>* actions = [NSMutableArray array];
+    for (NSUInteger i = 0; i < self.items.count; i++) {
+        NSUInteger idx = i;
+        UIAction* a = [UIAction actionWithTitle:self.items[i] image:nil
+                                     identifier:nil
+                                        handler:^(__kindof UIAction* action) {
+            (void)action;
+            self.selectedIndex = (int)idx;
+            [self setTitle:self.items[idx] forState:UIControlStateNormal];
+            if (self.closure && self.closure->fn)
+                ((void(*)(void*, intptr_t))self.closure->fn)(
+                    self.closure->env, (intptr_t)idx);
+            [self rebuildMenu];
+        }];
+        a.state = (self.selectedIndex == (int)i) ? UIMenuElementStateOn
+                                            : UIMenuElementStateOff;
+        [actions addObject:a];
+    }
+    self.menu = [UIMenu menuWithTitle:@"" children:actions];
+    self.showsMenuAsPrimaryAction = YES;
+}
+@end
+
+int aether_ui_picker_create(void* boxed_closure) {
+    AeuiPicker* p = [AeuiPicker buttonWithType:UIButtonTypeSystem];
+    p.translatesAutoresizingMaskIntoConstraints = NO;
+    p.items = [NSMutableArray array];
+    p.selectedIndex = 0;
+    p.closure = (AeClosure*)boxed_closure;
+    [p rebuildMenu];
+    return register_widget_typed((__bridge void*)p, AUI_PICKER);
+}
+
+void aether_ui_picker_add_item(int handle, const char* item) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[AeuiPicker class]]) return;
+    AeuiPicker* p = (AeuiPicker*)v;
+    [p.items addObject:[NSString stringWithUTF8String:item ? item : ""]];
+    if (p.items.count == 1)
+        [p setTitle:p.items[0] forState:UIControlStateNormal];
+    [p rebuildMenu];
+}
+
+void aether_ui_picker_set_selected(int handle, int index) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[AeuiPicker class]]) return;
+    AeuiPicker* p = (AeuiPicker*)v;
+    if (index < 0 || index >= (int)p.items.count) return;
+    p.selectedIndex = index;
+    [p setTitle:p.items[index] forState:UIControlStateNormal];
+    [p rebuildMenu];
+}
+
+int aether_ui_picker_get_selected(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[AeuiPicker class]]) return ((AeuiPicker*)v).selectedIndex;
+    return 0;
+}
+
+// ===========================================================================
+// UNIMPLEMENTED — later-pass stubs.
 //
 // Every remaining ABI entry the app can call, defined so the backend links.
 // Each returns a safe default and is a TODO for a later pass that ports the
-// corresponding AppKit section of aether_ui_macos.m to UIKit. They are
-// grouped only by return type; the real work moves them OUT of this block
-// into proper sections above, exactly as the Win32/AppKit backends grew.
+// corresponding AppKit section of aether_ui_macos.m to UIKit. The real work
+// moves them OUT of this block into proper sections above, as pass 2 did.
 // ===========================================================================
 
-void aether_ui_a11y_get_impl(int handle, char* role, int rolesz, char* name, int namesz, char* desc, int descsz) { }  // TODO(ios)
-void aether_ui_a11y_set_description_impl(int handle, const char* desc) { }  // TODO(ios)
-void aether_ui_a11y_set_label_impl(int handle, const char* name) { }  // TODO(ios)
-void aether_ui_a11y_set_role_impl(int handle, const char* role) { }  // TODO(ios)
 void aether_ui_alert_impl(const char* title, const char* message) { }  // TODO(ios)
 void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert) { }  // TODO(ios)
 void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) { }  // TODO(ios)
@@ -674,14 +1019,6 @@ int aether_ui_form_create(void) { return 0; }  // TODO(ios)
 int aether_ui_form_section_create(const char* title) { return 0; }  // TODO(ios)
 int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) { return 0; }  // TODO(ios)
 void aether_ui_grid_place(int grid_handle, int child_handle, int row, int col, int row_span, int col_span) { }  // TODO(ios)
-int aether_ui_image_create(const char* filepath) { return 0; }  // TODO(ios)
-int aether_ui_image_from_bytes(const char* data, int length) { return 0; }  // TODO(ios)
-int aether_ui_image_get_fill(int handle) { return 0; }  // TODO(ios)
-int aether_ui_image_get_tint(int handle) { return 0; }  // TODO(ios)
-int aether_ui_image_has_content(int handle) { return 0; }  // TODO(ios)
-void aether_ui_image_set_fill(int handle, int mode) { }  // TODO(ios)
-void aether_ui_image_set_size(int handle, int width, int height) { }  // TODO(ios)
-void aether_ui_image_set_tint(int handle, int on, double r, double g, double b) { }  // TODO(ios)
 void aether_ui_match_parent_height(int handle) { }  // TODO(ios)
 void aether_ui_match_parent_width(int handle) { }  // TODO(ios)
 void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) { }  // TODO(ios)
@@ -715,15 +1052,7 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle, int anchor, 
 void aether_ui_overlay_set_material_impl(int overlay_handle, const char* kind) { }  // TODO(ios)
 void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_overlay_set_transition_impl(int overlay_handle, const char* kind, int ms) { }  // TODO(ios)
-void aether_ui_picker_add_item(int handle, const char* item) { }  // TODO(ios)
-int aether_ui_picker_create(void* boxed_closure) { return 0; }  // TODO(ios)
-int aether_ui_picker_get_selected(int handle) { return 0; }  // TODO(ios)
-void aether_ui_picker_set_selected(int handle, int index) { }  // TODO(ios)
-const char* aether_ui_placeholder_impl(int handle) { return ""; }  // TODO(ios)
-int aether_ui_progressbar_create(double fraction) { return 0; }  // TODO(ios)
-void aether_ui_progressbar_set_fraction(int handle, double fraction) { }  // TODO(ios)
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
-int aether_ui_scrollview_create(void) { return 0; }  // TODO(ios)
 void aether_ui_seal_subtree_impl(int handle) { }  // TODO(ios)
 void aether_ui_seal_widget_impl(int handle) { }  // TODO(ios)
 void aether_ui_set_alignment(int handle, int alignment) { }  // TODO(ios)
@@ -735,8 +1064,6 @@ void aether_ui_set_corner_radius(int handle, double radius) { }  // TODO(ios)
 void aether_ui_set_corner_radius_ctx(void* ctx, double radius) { }  // TODO(ios)
 void aether_ui_set_distribution(int handle, int distribution) { }  // TODO(ios)
 void aether_ui_set_edge_insets(int handle, double top, double right, double bottom, double left) { }  // TODO(ios)
-void aether_ui_set_enabled(int handle, int enabled) { }  // TODO(ios)
-void aether_ui_set_enabled_ctx(void* ctx, int enabled) { }  // TODO(ios)
 void aether_ui_set_focusable_impl(int handle, int on) { }  // TODO(ios)
 void aether_ui_set_font_bold(int handle, int bold) { }  // TODO(ios)
 void aether_ui_set_font_bold_ctx(void* ctx, int bold) { }  // TODO(ios)
@@ -797,15 +1124,8 @@ int aether_ui_tabs_create(void* boxed_closure) { return 0; }  // TODO(ios)
 void aether_ui_tabs_select(int tabs_handle, int index) { }  // TODO(ios)
 int aether_ui_tabs_selected(int tabs_handle) { return 0; }  // TODO(ios)
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) { }  // TODO(ios)
-int aether_ui_text_get_anchor(int handle) { return 0; }  // TODO(ios)
-int aether_ui_text_get_truncate(int handle) { return 0; }  // TODO(ios)
-int aether_ui_text_get_wrap(int handle) { return 0; }  // TODO(ios)
 double aether_ui_text_measure(double size, const char* text) { return 0.0; }  // TODO(ios)
 void aether_ui_text_set_string(int handle, const char* text) { }  // TODO(ios)
-void aether_ui_text_set_truncate(int handle, int mode) { }  // TODO(ios)
-int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) { return 0; }  // TODO(ios)
-char* aether_ui_textarea_get_text(int handle) { return (void*)0; }  // TODO(ios)
-void aether_ui_textarea_set_text(int handle, const char* text) { }  // TODO(ios)
 void aether_ui_timer_cancel_impl(int timer_id) { }  // TODO(ios)
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) { return 0; }  // TODO(ios)
 int aether_ui_toast_impl(int win_handle, const char* text, int ms) { return 0; }  // TODO(ios)
@@ -831,7 +1151,6 @@ const char* aether_ui_widget_kind_impl(int handle) { return ""; }  // TODO(ios)
 int aether_ui_widget_parent_impl(int handle) { return 0; }  // TODO(ios)
 void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) { }  // TODO(ios)
 void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) { }  // TODO(ios)
-void aether_ui_widget_set_hidden(int handle, int hidden) { }  // TODO(ios)
 void aether_ui_widget_weight_impl(int handle, int n) { }  // TODO(ios)
 int aether_ui_widget_window_impl(int widget_handle) { return 0; }  // TODO(ios)
 void aether_ui_window_close_impl(int win_handle) { }  // TODO(ios)
