@@ -5119,14 +5119,13 @@ static void aeui_list_fill_model(GtkWidget* w, AeuiListState* st,
    ten and then recycle within that set forever: the counters showed bind and
    unbind both climbing while live stayed pinned at 206.
    So the model waits for a real viewport. */
-static void aeui_list_page_size_changed(GObject* adj, GParamSpec* pspec,
-                                        gpointer user_data) {
+static void aeui_list_viewport_settled(GtkAdjustment* adj, gpointer user_data) {
     GtkWidget* w = GTK_WIDGET(user_data);
     AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
     GtkStringList* model = g_object_get_data(G_OBJECT(w), "aeui-list-model");
     if (!st || !model) return;
     if (st->pending_n < 0) return;
-    if (gtk_adjustment_get_page_size(GTK_ADJUSTMENT(adj)) <= 0.0) return;
+    if (gtk_adjustment_get_page_size(adj) <= 0.0) return;
 
     int n = st->pending_n;
     st->pending_n = -1;
