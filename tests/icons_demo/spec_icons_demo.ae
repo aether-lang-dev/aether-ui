@@ -55,7 +55,7 @@ main() {
             spec.assert_contains(body, "heart path length: 97", "heart geometry intact")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 count_canvases(body: string) -> int {

@@ -45,5 +45,5 @@ main() {
             spec.assert_true(ok4, "Left went back up")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

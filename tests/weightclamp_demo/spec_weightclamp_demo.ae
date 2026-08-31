@@ -35,5 +35,5 @@ main() {
             spec.assert_true(d <= 24, "C/D split roughly equally (C=${wc} D=${wd})")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

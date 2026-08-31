@@ -97,5 +97,5 @@ main() {
             spec.assert_eq(after, base, "the census returns to its baseline")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

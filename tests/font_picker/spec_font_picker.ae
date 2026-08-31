@@ -182,7 +182,7 @@ main() {
                 "closing fires the app's handler")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // The first font row. Rows are hstacks inside the listbox whose first

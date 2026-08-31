@@ -66,5 +66,5 @@ main() {
                 "the swipe rotated a layer (cube is no longer solved)")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

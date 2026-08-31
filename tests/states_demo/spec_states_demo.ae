@@ -70,5 +70,5 @@ main() {
                 "cardtitle.text colour came from the declared block")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

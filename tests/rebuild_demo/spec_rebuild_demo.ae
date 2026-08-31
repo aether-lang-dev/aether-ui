@@ -100,5 +100,5 @@ main() {
             spec.assert_eq(st, 404, "clicking a removed row is refused")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

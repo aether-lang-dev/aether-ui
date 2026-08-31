@@ -4,11 +4,57 @@
 // independent.
 import std.spec
 import uidriver
+import std.json
 import std.string
 
 // The id of the first disclosure button reading `glyph` (▸ or ▾).
 disclosure(glyph: string) -> int {
     return uidriver.widget_id_by_text(glyph)
+}
+
+// The first widget carrying an a11y role, and the row currently holding the
+// selection class. Both read /widgets rather than a label, so they keep
+// working whatever the fixture contains.
+first_role_widget(role: string) -> int {
+    b = uidriver.get_body("/widgets")
+    v, _je = json.parse(b)
+    if v == null { return 0 }
+    n = json.json_array_size(v)
+    i = 0
+    found = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if w != null {
+            if string.equals(uidriver.field_str(w, "role"), role) == 1 {
+                found = uidriver.field_int(w, "id")
+                i = n
+            }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
+}
+
+selected_row_id() -> int {
+    b = uidriver.get_body("/widgets")
+    v, _je2 = json.parse(b)
+    if v == null { return 0 }
+    n = json.json_array_size(v)
+    i = 0
+    found = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if w != null {
+            if string.contains(uidriver.field_str(w, "classes"), "aui-row-selected") == 1 {
+                found = uidriver.field_int(w, "id")
+                i = n
+            }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
 }
 
 main() {
@@ -44,6 +90,27 @@ main() {
             gone = uidriver.wait_body_contains("/widgets", "\"text\":\"report.pdf\"", 3)
             spec.assert_eq(gone, 0, "children hidden after collapse")
         }
+
+        // tree composes a listbox for its body, so it inherits the keyboard
+        // navigation and focusable rows listbox gained. Asserted here rather
+        // than assumed: nothing else pins it, and a future refactor moving
+        // tree off listbox would silently take arrow-key navigation with it --
+        // and with that the only way to reach these rows without a mouse --
+        // while every other tree assertion kept passing.
+        spec.it("rows are keyboard-navigable (inherited from listbox)") callback {
+            r = first_role_widget("listitem")
+            spec.assert_gt(r, 0, "a row with the listitem role exists")
+            uidriver.post_ok("/widget/${r}/click", "select the first row")
+            first = selected_row_id()
+            spec.assert_eq(first, r, "the clicked row is selected")
+
+            uidriver.window_key("Down")
+            second = selected_row_id()
+            spec.assert_true(second != first, "Down moved to another row")
+
+            uidriver.window_key("Up")
+            spec.assert_eq(selected_row_id(), first, "Up came back")
+        }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

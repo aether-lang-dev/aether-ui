@@ -84,5 +84,5 @@ main() {
             spec.assert_eq(nofire, 0, "plain b is NOT a shortcut")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

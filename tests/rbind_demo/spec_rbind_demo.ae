@@ -56,5 +56,5 @@ main() {
             spec.assert_eq(gone, 0, "rows cleared after empty")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -48,5 +48,5 @@ main() {
                 "the primary window is still live")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

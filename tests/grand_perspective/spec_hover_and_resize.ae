@@ -45,5 +45,5 @@ main() {
             spec.assert_true(ok, "double-click drills at the new scale")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

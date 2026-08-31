@@ -48,5 +48,5 @@ main() {
             spec.assert_true(ok, "double-click reported index 2")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

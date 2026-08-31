@@ -162,5 +162,5 @@ main() {
             spec.assert_eq(after, base, "a second cycle also returns to baseline")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

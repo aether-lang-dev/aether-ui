@@ -29,5 +29,5 @@ main() {
             spec.assert_eq(gone, 0, "old row cleared")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

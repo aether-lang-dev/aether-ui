@@ -50,5 +50,5 @@ main() {
                 "one contain")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

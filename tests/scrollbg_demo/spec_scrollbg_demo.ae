@@ -80,5 +80,5 @@ main() {
                 "and the unstyled one does NOT report it")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }
