@@ -19,6 +19,25 @@ row_count() -> int {
     return n
 }
 
+// The widget that owns native scroll, found by asking rather than by walking
+// a fixed number of levels. A vlist backed by a native collection view wraps
+// each row in its own cell container, so the owner is row 0's grandparent
+// there and its parent when the list is composed by hand. A dy=0 step is a
+// no-op that still reports whether a handler is attached, so this probes
+// behaviour instead of tree shape.
+scroll_owner(from_id: int) -> int {
+    id = from_id
+    hops = 0
+    while hops < 4 {
+        id = uidriver.widget_int_field_by_id(id, "parent")
+        if id <= 0 { return 0 }
+        body = uidriver.post_body("/widget/${id}/scroll?dy=0")
+        if string.contains(body, "\"fired\":true") == 1 { return id }
+        hops = hops + 1
+    }
+    return 0
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -67,7 +86,7 @@ main() {
             spec.assert_true(okt, "back at the top")
 
             r0 = uidriver.widget_id_by_text("row 0")
-            container = uidriver.widget_int_field_by_id(r0, "parent")
+            container = scroll_owner(r0)
             spec.assert_gt(container, 0, "vlist container found")
 
             // dy=1 → window slides forward one row: 0..9 becomes 1..10.
