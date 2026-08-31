@@ -4406,7 +4406,8 @@ typedef enum {
        which is the same defect the win32 comment records for mememe.svg
        (a <g opacity="0.5"> of three overlapping strokes).
        Appended at the END: the values are positional. */
-    CANVAS_GROUP_BEGIN, CANVAS_GROUP_END
+    CANVAS_GROUP_BEGIN, CANVAS_GROUP_END,
+    CANVAS_RESET_CLIP
 } CanvasCmdType;
 
 typedef struct {
@@ -4600,6 +4601,10 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
     if (start < 0) start = 0;
     if (end > cs->count) end = cs->count;
     {
+    /* INVARIANT: every CGContextSaveGState here has exactly one matching
+       restore, and CANVAS_RESET_CLIP restores/re-saves in place. CoreGraphics
+       has no reset-clip call, so the pairing IS the mechanism. */
+    CGContextSaveGState(cg);
     for (int i = start; i < end; i++) {
         CanvasCmd* c = &cs->cmds[i];
         switch (c->type) {
@@ -4650,20 +4655,28 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                 CGContextSaveGState(cg);
                 CGContextSetAlpha(cg, ga);
                 CGContextBeginTransparencyLayer(cg, NULL);
+                CGContextSaveGState(cg);
                 break;
             }
             case CANVAS_GROUP_END:
                 /* The alpha was applied at BEGIN; ending the layer composites
                    it once, which is the whole point -- painting each child at
                    the group alpha instead makes overlaps double-darken. */
+                CGContextRestoreGState(cg);
                 CGContextEndTransparencyLayer(cg);
                 CGContextRestoreGState(cg);
                 break;
             case CANVAS_CLIP_RECT:
-                // Intersects the current clip and persists for the rest of the
-                // frame (SVG viewport overflow:hidden). The context is fresh
-                // each drawRect:, so there is nothing to restore.
+                // Intersects the current clip and persists until the scope
+                // ends or CANVAS_RESET_CLIP drops it (SVG overflow:hidden).
                 CGContextClipToRect(cg, CGRectMake(c->x, c->y, c->w, c->h));
+                break;
+            case CANVAS_RESET_CLIP:
+                // Drop every clip added since this compositing scope began.
+                // CoreGraphics cannot widen a clip, so the saved baseline is
+                // the only way back; re-save so the next reset still works.
+                CGContextRestoreGState(cg);
+                CGContextSaveGState(cg);
                 break;
             case CANVAS_FILL_RECT:
                 CGContextSetRGBFillColor(cg, c->r, c->g, c->b, c->a);
@@ -4925,6 +4938,7 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                 break;
         }
     }
+    CGContextRestoreGState(cg);
     }
 }
 
@@ -5341,8 +5355,7 @@ void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
 }
 
 void aether_ui_canvas_reset_clip_impl(int canvas_id) {
-    CanvasState* cs = get_canvas_state(canvas_id);
-    if (cs) cs->paint_clip_count = 0;
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_RESET_CLIP });
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,

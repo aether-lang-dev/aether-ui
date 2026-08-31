@@ -1,0 +1,45 @@
+// Aether UI canvas reset-clip example: canvas_reset_clip(cid).
+//
+// canvas_clip_rect narrows the clip and, until this landed, NOTHING widened it
+// again: a scene that clipped to its viewport stayed clipped for the rest of
+// the frame. canvas_reset_clip was exported next to it and read as the undo,
+// but it cleared the unrelated one-shot paint clip that canvas_set_clip_rects
+// sets, so calling it left the viewport clip in force and silently dropped
+// everything drawn afterwards outside the clip.
+//
+// This canvas clips to the top-left quadrant and fills the WHOLE canvas red,
+// so red lands only in that quadrant. It then resets the clip and fills the
+// BOTTOM-RIGHT quadrant blue. Correct behaviour: red top-left, blue
+// bottom-right. With a reset that does nothing the blue never appears.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack,
+    canvas_create, canvas_clip_rect, canvas_reset_clip, canvas_fill_rect,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    cv = 0
+    main_root = root_vstack(10) {
+        text("Canvas reset-clip demo")
+        cv = canvas_create(100, 100)
+    }
+
+    // Clip to the top-left 50x50, then fill all 100x100 red: only the
+    // quadrant takes paint.
+    canvas_clip_rect(cv, 0.0, 0.0, 50.0, 50.0)
+    canvas_fill_rect(cv, 0.0, 0.0, 100.0, 100.0, 1.0, 0.0, 0.0, 1.0)
+
+    // Drop that clip, then fill the opposite quadrant. It lies wholly outside
+    // the old clip, so it paints only if the reset took effect.
+    canvas_reset_clip(cv)
+    canvas_fill_rect(cv, 50.0, 50.0, 50.0, 50.0, 0.0, 0.0, 1.0, 1.0)
+
+    app = ui.app_create("Canvas reset-clip demo", 320, 240)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

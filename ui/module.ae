@@ -4510,6 +4510,12 @@ canvas_set_clip_rects(cid: int, rects: ptr, n: int) {
     aether_ui_canvas_set_clip_rects_impl(cid, rects, n)
 }
 
+// canvas_reset_clip — undo the canvas_clip_rect calls made since the current
+// compositing scope began (the canvas itself, or the innermost canvas_group).
+// Without it a clip could only be escaped by ending the frame, so anything
+// drawn after a viewport clip stayed cut to it. It does NOT touch the
+// one-shot paint clip that canvas_set_clip_rects sets; clear that with
+// canvas_set_clip_rects(cid, 0, 0), or let the next paint clear it.
 canvas_reset_clip(cid: int) {
     aether_ui_canvas_reset_clip_impl(cid)
 }
