@@ -5101,8 +5101,16 @@ void aether_ui_native_list_set_count_impl(int handle, int count) {
     /* The model supplies POSITIONS only; a row's content comes from the
        Aether side by index, so these strings are never read. */
     guint have = g_list_model_get_n_items(G_LIST_MODEL(model));
-    gtk_string_list_splice(model, 0, have, NULL);
-    for (int i = 0; i < n; i++) gtk_string_list_append(model, "");
+    /* ONE splice, not n appends. Every append emits items-changed and
+       GtkListView reacts to each, so building a 1000 row model row by row
+       makes it realize and bind against whatever viewport it has at the time,
+       which during window construction is nothing. Splicing once gives it a
+       single change to respond to, after which it realizes lazily against the
+       real viewport. */
+    const char** blanks = g_new0(const char*, (gsize)n + 1);
+    for (int i = 0; i < n; i++) blanks[i] = "";
+    gtk_string_list_splice(model, 0, have, (const char* const*)blanks);
+    g_free(blanks);
     st->n = n;
 
     /* Deliberately NO layout pump here. vlist_set runs while the window is
