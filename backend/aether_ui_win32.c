@@ -8645,56 +8645,6 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 }
 
 // ---------------------------------------------------------------------------
-// Animation: opacity interpolation via WM_TIMER.
-// ---------------------------------------------------------------------------
-typedef struct {
-    int widget_handle;
-    double start, target;
-    int duration_ms;
-    DWORD start_tick;
-    int timer_id;
-} Animation;
-static Animation* anims = NULL;
-static int anim_count = 0;
-static int anim_cap = 0;
-
-static void CALLBACK anim_tick(HWND hwnd, UINT msg, UINT_PTR id, DWORD now) {
-    (void)hwnd; (void)msg; (void)now;
-    for (int i = 0; i < anim_count; i++) {
-        if ((UINT_PTR)anims[i].timer_id != id) continue;
-        DWORD elapsed = GetTickCount() - anims[i].start_tick;
-        double t = (double)elapsed / (double)anims[i].duration_ms;
-        if (t >= 1.0) t = 1.0;
-        double v = anims[i].start + (anims[i].target - anims[i].start) * t;
-        aether_ui_set_opacity(anims[i].widget_handle, v);
-        if (t >= 1.0) {
-            KillTimer(NULL, anims[i].timer_id);
-            // swap-delete
-            anims[i] = anims[anim_count - 1];
-            anim_count--;
-        }
-        return;
-    }
-}
-
-void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) {
-    if (anim_count >= anim_cap) {
-        anim_cap = anim_cap == 0 ? 8 : anim_cap * 2;
-        anims = (Animation*)realloc(anims, sizeof(Animation) * anim_cap);
-    }
-    Widget* w = widget_at(handle);
-    double start = (w && w->opacity >= 0) ? w->opacity : 1.0;
-    Animation* a = &anims[anim_count++];
-    a->widget_handle = handle;
-    a->start = start;
-    a->target = target;
-    a->duration_ms = duration_ms > 0 ? duration_ms : 200;
-    a->start_tick = GetTickCount();
-    a->timer_id = next_timer_id++;
-    SetTimer(NULL, a->timer_id, 16, (TIMERPROC)anim_tick);
-}
-
-// ---------------------------------------------------------------------------
 // Widget manipulation: remove/clear children.
 // ---------------------------------------------------------------------------
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {

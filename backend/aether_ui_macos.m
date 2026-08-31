@@ -5887,14 +5887,6 @@ int aether_ui_fire_scroll(int container_handle, int dy) {
     return 1;
 }
 
-void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) {
-    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (!v) return;
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* ctx) {
-        ctx.duration = (double)duration_ms / 1000.0;
-        [[v animator] setAlphaValue:target];
-    } completionHandler:nil];
-}
 
 // ---------------------------------------------------------------------------
 // Widget manipulation — remove / clear children.

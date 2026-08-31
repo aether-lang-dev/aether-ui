@@ -53,6 +53,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     there is the driver's route, which supplies the source index itself. So a
     user can drag to reorder on Linux and nowhere else; `listbox_move` is the
     portable path.
+### Removed
+
+- `aether_ui_animate_opacity_impl`, a second animation API that nothing used
+  and that snapped instead of animating on GTK4. It was declared in the backend
+  header and as a DSL extern, implemented three times, and called from
+  precisely nowhere — no DSL verb wrapped it, and no example, app or test
+  referenced it. GTK4's implementation set the opacity immediately, under a
+  comment saying so ("For simplicity, set immediately"), so anyone who did find
+  it in the header and use it would have got an instant jump on Linux and a
+  real fade on the other two.
+  Animated opacity already has one working path — `transition()` plus
+  `style_opacity()`, which is CSS on GTK4 and a real tween on macOS and Win32,
+  and is what `transitions_demo`, `overlaytr_demo` and `states_demo` exercise.
+  Keeping a second, half-implemented one alongside it is the "two of a thing"
+  case, and the half that was broken was the one on the primary platform.
+  Win32's `Animation` struct, its array and its `anim_tick` timer proc went
+  with it: they existed solely to serve this entry point.
 
 ### Added
 

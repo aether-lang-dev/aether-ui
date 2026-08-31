@@ -491,7 +491,6 @@ extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_row_drag_reorder_impl(row_handle: int, index: int, on_drop: ptr)
 extern aether_ui_vlist_attach_scroll_impl(container_handle: int, on_scroll: ptr)
 extern aether_ui_on_click_impl(handle: int, boxed_closure: ptr)
-extern aether_ui_animate_opacity_impl(handle: int, target: float, duration_ms: int)
 extern aether_ui_remove_child_impl(parent_handle: int, child_handle: int)
 extern aether_ui_clear_children_impl(handle: int)
 

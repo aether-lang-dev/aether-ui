@@ -6153,12 +6153,6 @@ void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
 
 // Animation — opacity and position
 
-void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms) {
-    GtkWidget* w = aether_ui_get_widget(handle);
-    if (!w) return;
-    // For simplicity, set immediately (proper animation needs GLib timer)
-    gtk_widget_set_opacity(w, target);
-}
 
 // Widget removal: the mirror of aether_ui_widget_add_child_ctx / grid_place.
 //
