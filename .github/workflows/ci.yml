@@ -154,7 +154,7 @@ jobs:
   win32-crosscheck:
     name: win32-crosscheck
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -182,10 +182,10 @@ jobs:
       # whose import library is missing compiles perfectly and fails at link.
       # Dropping -lole32 leaves the step above at 0 errors while this one
       # reports __imp_CoCreateInstance.
-      - name: Link the Win32 backend
+      - name: Build the Win32 runtime test
         run: |
-          x86_64-w64-mingw32-gcc -o /tmp/aether_ui_win32_link.exe \
-            tests/win32/link_stub.c \
+          x86_64-w64-mingw32-gcc -o /tmp/aether_ui_win32_test.exe \
+            tests/win32/win32_runtime_test.c \
             backend/aether_ui_win32.c \
             backend/aether_ui_test_server.c \
             backend/aether_ui_system_extras.c \
@@ -193,4 +193,34 @@ jobs:
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi \
             -luxtheme -lws2_32 -lbcrypt
-          echo "linked: $(ls -l /tmp/aether_ui_win32_link.exe | awk '{print $5}') bytes"
+          echo "linked: $(ls -l /tmp/aether_ui_win32_test.exe | awk '{print $5}') bytes"
+
+      - name: Install Wine
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo -E apt-get install -y --no-install-recommends wine xvfb x11-utils
+
+      # A primitive that compiles, links, and paints nothing looks exactly
+      # like one that works, which is how canvas_clip_rect stayed a silent
+      # no-op here for the life of the backend. This RUNS the thing and
+      # asserts on rendered pixels, once per renderer: canvas_replay_to_dc
+      # dispatches to a GDI+ path and a legacy GDI path that implement
+      # clipping with entirely different calls, so one passing says nothing
+      # about the other.
+      - name: Run the Win32 backend under Wine
+        env:
+          WINEDEBUG: -all
+          # Skip the Mono/Gecko installer prompts: nothing here is managed code.
+          WINEDLLOVERRIDES: mscoree=d;mshtml=d
+          DISPLAY: ":99"
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          for i in $(seq 1 30); do
+            xdpyinfo -display :99 >/dev/null 2>&1 && break
+            sleep 1
+          done
+          wineboot --init 2>/dev/null || true
+          wine /tmp/aether_ui_win32_test.exe
+          AETHER_UI_WIN32_RENDERER=legacy wine /tmp/aether_ui_win32_test.exe
