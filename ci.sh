@@ -555,6 +555,60 @@ else
 fi
 
 echo
+echo "=== Phase 1e: iOS/iPadOS (UIKit) backend compile+link check ==="
+# The UIKit backend is, like Win32, one nobody here can RUN: there is no iOS leg
+# in CI and no iOS build of libaether. But the iOS SDK ships with Xcode, so its
+# sources can be COMPILED and LINKED against the real UIKit frameworks in a few
+# seconds — the difference between "mirrors the other backends" and "is known to
+# build". -Wall -Werror, the same ratchet Phase 1d holds the Win32 backend to.
+# The shared driver/system sources are checked here too, since they must compile
+# for iOS (BSD sockets + POSIX; no AppKit) just as they do for Windows.
+IOS_SDK="$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null)"
+if [ -n "$IOS_SDK" ] && [ -d "$IOS_SDK" ]; then
+    IOS_CLANG="$(xcrun --sdk iphonesimulator -f clang 2>/dev/null)"
+    IOS_TGT="arm64-apple-ios17.0-simulator"
+    ios_fail=0
+    for src in backend/aether_ui_uikit.m \
+               backend/aether_ui_test_server.c \
+               backend/aether_ui_system_extras.c; do
+        if "$IOS_CLANG" -fobjc-arc -fsyntax-only -Wall -Werror \
+                -target "$IOS_TGT" -isysroot "$IOS_SDK" -Ibackend "$ROOT/$src" \
+                > "/tmp/ci_ios_$(basename "$src").log" 2>&1; then
+            echo "  OK   $(basename "$src")"
+        else
+            echo "  FAIL $(basename "$src")"
+            grep -E ": (error|warning):" "/tmp/ci_ios_$(basename "$src").log" \
+                | head -10 | sed 's/^/       /'
+            ios_fail=1
+        fi
+    done
+    # Syntax is not the whole story (Phase 1d's lesson): a framework whose symbols
+    # are missing compiles fine and fails at link. tests/ios/link_stub.c supplies
+    # the handful of libaether symbols the backend reads (there is no iOS build of
+    # libaether here) plus a main(), so the link proves every -framework resolves.
+    if [ "$ios_fail" -eq 0 ]; then
+        if "$IOS_CLANG" -fobjc-arc -target "$IOS_TGT" -isysroot "$IOS_SDK" -Ibackend \
+                "$ROOT/backend/aether_ui_uikit.m" \
+                "$ROOT/backend/aether_ui_test_server.c" \
+                "$ROOT/backend/aether_ui_system_extras.c" \
+                "$ROOT/tests/ios/link_stub.c" \
+                -framework UIKit -framework Foundation -framework QuartzCore \
+                -framework CoreText -framework ImageIO \
+                -o /tmp/ci_ios_link > /tmp/ci_ios_link.log 2>&1; then
+            echo "  OK   links against the UIKit frameworks"
+        else
+            echo "  FAIL link"
+            grep -iE "undefined|error:" /tmp/ci_ios_link.log | head -10 | sed 's/^/       /'
+            ios_fail=1
+        fi
+    fi
+    [ "$ios_fail" -eq 0 ] || FAIL=$((FAIL + 1))
+else
+    # Say so rather than passing quietly, exactly as Phase 1d does for mingw.
+    echo "  SKIP no iOS SDK (install Xcode + the iOS platform to enable)"
+fi
+
+echo
 echo "=== Phase 2: smoke-launch non-driver examples ==="
 for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))
