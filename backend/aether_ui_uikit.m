@@ -35,8 +35,11 @@
 //            — renders on iOS from the same .ae source as desktop.
 //   pass 4 — timers (NSTimer, drives vg.live's refresh loop), a real headless
 //            run loop so the driver server stays alive and serves (matching the
-//            other backends), and a one-shot headless canvas snapshot facility
-//            (AETHER_UI_SNAPSHOT_DIR) for windowless PNG capture.
+//            other backends), a one-shot headless canvas snapshot facility
+//            (AETHER_UI_SNAPSHOT_DIR) for windowless PNG capture, and the
+//            AetherUIDriver test server (enable_test_server + a hooks table) so
+//            the backend is driver-capable — it binds and serves the canvas
+//            pixel routes under Mac Catalyst.
 //
 // Build (simulator, from ci.sh Phase 1e):
 //   clang -fobjc-arc -target arm64-apple-ios-simulator -isysroot <SimSDK> \
@@ -54,6 +57,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "aether_ui_backend.h"
+#include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
 
 // ---------------------------------------------------------------------------
 // Closure struct — must match Aether codegen's _AeClosure layout (identical to
@@ -2221,7 +2225,58 @@ void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const
 void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) { }  // TODO(ios)
 int aether_ui_dark_mode_check(void) { return 0; }  // TODO(ios)
 void aether_ui_enable_test_server_ctx(int port, void* ctx) { }  // TODO(ios)
-void aether_ui_enable_test_server_impl(int port, int root_handle) { }  // TODO(ios)
+// --- AetherUIDriver hooks ---------------------------------------------------
+// Enough for the server to run and serve the canvas pixel routes (which call
+// aether_ui_canvas_read_pixel_impl directly, no hook) plus the cheap scalar
+// queries. The rest stay NULL — the shared server treats a NULL hook as 501 and
+// omits the field, so a partial table is safe. A full driver (widget geometry,
+// dispatch_action) is a later pass. Every hook here reads only plain state, no
+// off-main UIView mutation.
+static int hook_widget_count(void) { return widget_count; }
+static const char* hook_widget_type(int handle) { (void)handle; return ""; }
+static int hook_toggle_active(int handle) { return aether_ui_toggle_get_active(handle); }
+static double hook_slider_value(int handle) { return aether_ui_slider_get_value(handle); }
+static void hook_widget_a11y(int handle, char* role, int rolesz,
+                             char* name, int namesz, char* desc, int descsz) {
+    aether_ui_a11y_get_impl(handle, role, rolesz, name, namesz, desc, descsz);
+}
+static int hook_canvas_debug(int canvas_id, int* area, int* commands,
+                             int* w, int* h) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    if (area) *area = cs->last_paint_area;
+    if (commands) *commands = cs->count;   // immediate-mode: current buffer size
+    if (w) *w = cs->created_w;
+    if (h) *h = cs->created_h;
+    return 0;
+}
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
+                                      int* clip_paints, int* last_clip_area) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    if (full_paints) *full_paints = cs->paint_full_count;
+    if (clip_paints) *clip_paints = cs->paint_clip_count_total;
+    if (last_clip_area) *last_clip_area = cs->last_clip_area;
+    return 0;
+}
+
+static const AetherDriverHooks uikit_driver_hooks = {
+    .widget_count          = hook_widget_count,
+    .widget_type           = hook_widget_type,
+    .toggle_active         = hook_toggle_active,
+    .slider_value          = hook_slider_value,
+    .widget_a11y           = hook_widget_a11y,
+    .canvas_debug          = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
+};
+
+static int uikit_test_server_started = 0;
+void aether_ui_enable_test_server_impl(int port, int root_handle) {
+    (void)root_handle;   // banner injection is a later pass
+    if (uikit_test_server_started) return;   // idempotent (env + explicit call)
+    uikit_test_server_started = 1;
+    aether_ui_test_server_start(port, &uikit_driver_hooks);
+}
 int aether_ui_file_icon_create(const char* path) { return 0; }  // TODO(ios)
 void aether_ui_file_icon_set(int handle, const char* path) { }  // TODO(ios)
 char* aether_ui_file_open(const char* title, const char* start_dir) { return (void*)0; }  // TODO(ios)
