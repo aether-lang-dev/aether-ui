@@ -55,6 +55,22 @@ jobs:
           # can find, and it prints a backtrace when a debugger is present.
           sudo sysctl -w kernel.core_pattern=/tmp/core.%e.%p
 
+      # macOS keeps Homebrew out of clang's default library search path
+      # (/usr/lib is searched; /opt/homebrew/lib is not, and openssl@3 is
+      # keg-only on top of that). Linux finds these in system paths, which is
+      # why only this leg needs the step.
+      #
+      # It became load-bearing with the Shape A conversion: `ae cflags --libs`
+      # emits -lssl -lcrypto -lz -lnghttp2 -lpcre2-8 for libaether.a's
+      # transitive deps, and the aeb `bldr` module links the runtime into the
+      # fan-out ORCHESTRATOR, where the old `build` module did not. So the
+      # orchestrator now needs these at link time and the build stops with
+      # `ld: library 'ssl' not found` before a single node runs.
+      - name: Make Homebrew's libraries linkable
+        if: runner.os == 'macOS'
+        run: |
+          echo "LIBRARY_PATH=$(brew --prefix openssl@3)/lib:$(brew --prefix)/lib:${LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       # Both toolchains, matching bootstrap.sh: ci.sh drives the per-target
       # .build.ae files through aeb, so ae alone is not enough. Installed
       # directly rather than via bootstrap.sh, which would also run a build.

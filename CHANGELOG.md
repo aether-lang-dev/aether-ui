@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified rather than assumed: with this repo's existing v0.553.0 and aeb
   v0.283 the whole fan-out builds, exit 0 with 0 failed nodes, while the same
   ae against v0.282 fails every node.
+- The macOS leg makes Homebrew's libraries linkable. Getting past the type
+  error above exposed the next one: `ld: library 'ssl' not found`. macOS
+  searches `/usr/lib` and not `/opt/homebrew/lib`, and `openssl@3` is keg-only
+  besides, while Linux finds these in system paths. It became load-bearing with
+  the same conversion, because `ae cflags --libs` emits
+  `-lssl -lcrypto -lz -lnghttp2 -lpcre2-8` for libaether.a's transitive deps
+  and the `bldr` module links the runtime into the fan-out ORCHESTRATOR, where
+  the old `build` module did not.
 
 ### Fixed
 
