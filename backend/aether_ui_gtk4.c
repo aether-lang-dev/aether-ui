@@ -4990,6 +4990,8 @@ typedef struct {
     int        n_setup;     /* diagnostics: how many row widgets were made */
     int        n_bind;      /* how many were filled for a position */
     int        n_unbind;    /* how many were recycled back out */
+    int        pending_n;   /* count waiting for a real viewport, -1 = none */
+    gulong     page_handler;
 } AeuiListState;
 
 static void aeui_list_setup(GtkSignalListItemFactory* factory,
@@ -5054,6 +5056,7 @@ int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
     int rows = window_rows > 0 ? window_rows : 10;
 
     AeuiListState* st = g_new0(AeuiListState, 1);
+    st->pending_n = -1;
 
     GtkStringList* model = gtk_string_list_new(NULL);
     GtkNoSelection* sel = gtk_no_selection_new(G_LIST_MODEL(model));
@@ -5098,6 +5101,42 @@ void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
     if (st) st->builder = (AeClosure*)builder;
 }
 
+static void aeui_list_fill_model(GtkWidget* w, AeuiListState* st,
+                                 GtkStringList* model, int n) {
+    guint have = g_list_model_get_n_items(G_LIST_MODEL(model));
+    /* ONE splice, not n appends: every append emits items-changed and
+       GtkListView responds to each. */
+    const char** blanks = g_new0(const char*, (gsize)n + 1);
+    for (int i = 0; i < n; i++) blanks[i] = "";
+    gtk_string_list_splice(model, 0, have, (const char* const*)blanks);
+    g_free(blanks);
+    st->n = n;
+}
+
+/* GtkListView decides its working set the FIRST time the model is populated
+   and never shrinks it afterwards. Populating during window construction,
+   when the page size is still zero, made it realize 206 rows for a window of
+   ten and then recycle within that set forever: the counters showed bind and
+   unbind both climbing while live stayed pinned at 206.
+   So the model waits for a real viewport. */
+static void aeui_list_page_size_changed(GObject* adj, GParamSpec* pspec,
+                                        gpointer user_data) {
+    GtkWidget* w = GTK_WIDGET(user_data);
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    GtkStringList* model = g_object_get_data(G_OBJECT(w), "aeui-list-model");
+    if (!st || !model) return;
+    if (st->pending_n < 0) return;
+    if (gtk_adjustment_get_page_size(GTK_ADJUSTMENT(adj)) <= 0.0) return;
+
+    int n = st->pending_n;
+    st->pending_n = -1;
+    if (st->page_handler) {
+        g_signal_handler_disconnect(adj, st->page_handler);
+        st->page_handler = 0;
+    }
+    aeui_list_fill_model(w, st, model, n);
+}
+
 void aether_ui_native_list_set_count_impl(int handle, int count) {
     GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
     if (!w) return;
@@ -5108,18 +5147,6 @@ void aether_ui_native_list_set_count_impl(int handle, int count) {
 
     /* The model supplies POSITIONS only; a row's content comes from the
        Aether side by index, so these strings are never read. */
-    guint have = g_list_model_get_n_items(G_LIST_MODEL(model));
-    /* ONE splice, not n appends. Every append emits items-changed and
-       GtkListView reacts to each, so building a 1000 row model row by row
-       makes it realize and bind against whatever viewport it has at the time,
-       which during window construction is nothing. Splicing once gives it a
-       single change to respond to, after which it realizes lazily against the
-       real viewport. */
-    const char** blanks = g_new0(const char*, (gsize)n + 1);
-    for (int i = 0; i < n; i++) blanks[i] = "";
-    gtk_string_list_splice(model, 0, have, (const char* const*)blanks);
-    g_free(blanks);
-    st->n = n;
 
     /* Deliberately NO layout pump here. vlist_set runs while the window is
        still being built, so the viewport is still zero; pumping the main
