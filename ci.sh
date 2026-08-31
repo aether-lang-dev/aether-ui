@@ -1148,8 +1148,16 @@ echo "=== Phase 7: AetherUIDriver LisMusic port spec ==="
 if [ "$SPEC_OK" -eq 1 ] && [ "$LISMUSIC_BUILT" -eq 1 ]; then
     rm -f "$ROOT/history.db"
     export LIS_OFFLINE=1
+    # .build.contrib.ae nodes emit under target/build.contrib/ (the node TYPE
+    # routes the output tree), so the binary never lands under target/build/.
+    # Prefer that tree, fall back to target/build/ for an older aeb — same
+    # resolution spec_matrix.sh uses. Without this the launch read the wrong
+    # tree and reported "test server never responded" for a binary sitting
+    # built in the right one.
+    LISMUSIC_BIN="$ROOT/target/build.contrib/apps/LisMusic/bin/LisMusic"
+    [ -x "$LISMUSIC_BIN" ] || LISMUSIC_BIN="$ROOT/target/build/apps/LisMusic/bin/LisMusic"
     UI_SPEC=LisMusic/spec_lismusic \
-    run_server_test "$ROOT/target/build/apps/LisMusic/bin/LisMusic" \
+    run_server_test "$LISMUSIC_BIN" \
                     "$SCRIPT_DIR/tests/run_spec.sh" lismusic || FAIL=$((FAIL + 1))
     unset LIS_OFFLINE
     rm -f "$ROOT/history.db"
