@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- CI builds again. `9c84d786` converted all 109 build nodes to aeb Shape A
+  (`bldr.build() {}`, b-free), but the pipeline pins `AEB_REF` to v0.282, which
+  has no `bldr` module at all: every node failed type-checking with
+  `Undefined function 'bldr.build'`, the fan-out scheduled nothing, and main
+  went red for four consecutive commits. The pin moves to v0.283, the first
+  release carrying `bldr`.
+  It is a strict move forward: v0.282 was pinned for b1bfa5e (encode_name
+  ae-escapes a dot-prefixed fan-out root, so `.all.ae` links), which v0.283
+  also carries. The `AETHER_REF` pin is untouched, because `bldr` is aeb's
+  module and the ae compiler needed no change to type-check against it -
+  verified rather than assumed: with this repo's existing v0.553.0 and aeb
+  v0.283 the whole fan-out builds, exit 0 with 0 failed nodes, while the same
+  ae against v0.282 fails every node.
+
+### Fixed
+
 - Win32 stroked canvas text honours its font family. The `CV_STROKE_TEXT` draw
   already called `gdip_resolve_family(cmd->font_family)`; it was the command
   builder that never filled the field in, discarding the argument with a bare
