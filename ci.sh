@@ -525,11 +525,13 @@ if [ -n "$W32_CC" ]; then
     # reports __imp_CoCreateInstance and three more.
     #
     # The only thing between this and a real binary is the libaether runtime,
-    # which has no Windows build here; tests/win32/link_stub.c supplies it and
-    # says what to do when it stops being enough.
+    # which has no Windows build here; tests/win32/win32_runtime_test.c
+    # supplies it and says what to do when it stops being enough. That file is
+    # also the binary CI runs under Wine, so this link uses the same sources
+    # the runtime check does rather than a second stub that could drift.
     if [ "$w32_fail" -eq 0 ]; then
         if "$W32_CC" -o /tmp/ci_w32_link.exe \
-                "$ROOT/tests/win32/link_stub.c" \
+                "$ROOT/tests/win32/win32_runtime_test.c" \
                 "$ROOT/backend/aether_ui_win32.c" \
                 "$ROOT/backend/aether_ui_test_server.c" \
                 "$ROOT/backend/aether_ui_system_extras.c" \
