@@ -1999,26 +1999,31 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     if (!cs) return -1;
     __block int result = -1;
     void (^work)(void) = ^{
+        // Let CoreGraphics own the backing store (NULL data, auto stride): iOS
+        // rejects CGBitmapContextCreate with a caller-supplied buffer for this
+        // pixel format and returns NULL, unlike macOS. The write_png and
+        // render_range paths already use this form; read back via GetData.
         CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
-        unsigned char* buf = calloc((size_t)width * (size_t)height, 4);
-        if (!buf) { CGColorSpaceRelease(cspace); return; }
         CGContextRef cg = CGBitmapContextCreate(
-            buf, (size_t)width, (size_t)height, 8, (size_t)width * 4, cspace,
+            NULL, (size_t)width, (size_t)height, 8, 0, cspace,
             kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
         CGColorSpaceRelease(cspace);
-        if (!cg) { free(buf); return; }
+        if (!cg) return;
         // Canvas coords are y-down; the bitmap is y-up (see canvas_write_png).
         CGContextTranslateCTM(cg, 0, height);
         CGContextScaleCTM(cg, 1.0, -1.0);
         UIGraphicsPushContext(cg);
         canvas_replay(cg, cs);
         UIGraphicsPopContext();
+        unsigned char* data = (unsigned char*)CGBitmapContextGetData(cg);
+        size_t stride = CGBitmapContextGetBytesPerRow(cg);
+        if (data) {
+            // RGBA8 big-endian: byte order in memory is R,G,B,A.
+            unsigned char* p8 = data + (size_t)py * stride + (size_t)px * 4;
+            result = ((int)p8[3] << 24) | ((int)p8[0] << 16)
+                   | ((int)p8[1] << 8) | (int)p8[2];
+        }
         CGContextRelease(cg);
-        // RGBA8 big-endian: byte order in memory is R,G,B,A.
-        unsigned char* p8 = buf + ((size_t)py * (size_t)width + (size_t)px) * 4;
-        result = ((int)p8[3] << 24) | ((int)p8[0] << 16)
-               | ((int)p8[1] << 8) | (int)p8[2];
-        free(buf);
     };
     if ([NSThread isMainThread]) work();
     else dispatch_sync(dispatch_get_main_queue(), work);

@@ -602,6 +602,39 @@ if [ -n "$IOS_SDK" ] && [ -d "$IOS_SDK" ]; then
             ios_fail=1
         fi
     fi
+    # Compiling and linking prove it builds; they prove nothing about the
+    # pixels. UIKit runs natively on macOS via Mac Catalyst, so drive the REAL
+    # canvas ABI (aether_ui_uikit.m's Core Graphics executor), read the pixels
+    # back with canvas_read_pixel and assert the colours — no simulator, device
+    # or iOS build of libaether. This is what turns "is known to build" into "is
+    # known to render". See tests/ios/render_probe.m. (macOS-host only.)
+    if [ "$ios_fail" -eq 0 ]; then
+        MAC_SDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+        CAT_FW="$MAC_SDK/System/iOSSupport/System/Library/Frameworks"
+        MAC_CLANG="$(xcrun --sdk macosx -f clang 2>/dev/null)"
+        if [ -n "$MAC_SDK" ] && [ -d "$CAT_FW" ]; then
+            if "$MAC_CLANG" -fobjc-arc -target "$(uname -m)-apple-ios15.0-macabi" \
+                    -isysroot "$MAC_SDK" -iframework "$CAT_FW" -Ibackend \
+                    "$ROOT/tests/ios/render_probe.m" \
+                    "$ROOT/backend/aether_ui_uikit.m" \
+                    "$ROOT/backend/aether_ui_test_server.c" \
+                    "$ROOT/backend/aether_ui_system_extras.c" \
+                    -framework UIKit -framework Foundation -framework QuartzCore \
+                    -framework CoreGraphics -framework CoreText -framework ImageIO \
+                    -o /tmp/ci_ios_render > /tmp/ci_ios_render.log 2>&1 \
+               && AETHER_UI_RENDER_PROBE_PNG=/tmp/ci_ios_render.png \
+                    /tmp/ci_ios_render >> /tmp/ci_ios_render.log 2>&1; then
+                echo "  OK   canvas renders (pixels checked via Mac Catalyst)"
+            else
+                echo "  FAIL render probe"
+                grep -iE "FAIL|error:|undefined" /tmp/ci_ios_render.log \
+                    | head -10 | sed 's/^/       /'
+                ios_fail=1
+            fi
+        else
+            echo "  SKIP render probe (no Mac Catalyst SDK on this host)"
+        fi
+    fi
     [ "$ios_fail" -eq 0 ] || FAIL=$((FAIL + 1))
 else
     # Say so rather than passing quietly, exactly as Phase 1d does for mingw.
