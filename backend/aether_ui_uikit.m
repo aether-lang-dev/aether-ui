@@ -2080,6 +2080,26 @@ int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
     return -1;
 }
 
+// --- Native list (NSTableView-backed on AppKit) -----------------------------
+// The AppKit backend added a native windowed list; the UIKit equivalent is a
+// UITableView/UICollectionView with cell reuse, a later pass. Report NOT
+// available so apps fall back to the portable stack/scroll vlist, and stub the
+// rest so the ABI links.
+int aether_ui_native_list_available_impl(void) { return 0; }
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
+    (void)horizontal; (void)window_rows; return 0;
+}
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
+    (void)handle; (void)builder;
+}
+void aether_ui_native_list_set_count_impl(int handle, int count) {
+    (void)handle; (void)count;
+}
+void aether_ui_native_list_scroll_to_impl(int handle, int index) {
+    (void)handle; (void)index;
+}
+int aether_ui_native_list_first_visible_impl(int handle) { (void)handle; return 0; }
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
