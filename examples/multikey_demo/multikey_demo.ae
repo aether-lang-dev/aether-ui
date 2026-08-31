@@ -1,0 +1,51 @@
+// Aether UI multi-handler key example.
+//
+// window_on_key used to keep a SINGLE closure: every registration replaced the
+// last, so a second window_on_key silently disabled the first. ui.on_key() is
+// built on it, so two on_key() calls on different widgets left only the later
+// one working, with no error anywhere -- the earlier handler simply stopped
+// existing.
+//
+// Found while giving listbox keyboard navigation: registering a handler per
+// row left only the FINAL row's arrows alive.
+//
+// Two independent counters here, each with its own window_on_key. A correct
+// implementation advances BOTH on every key; the old one advanced only the
+// second.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, root_vstack, window_on_key,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    a = 0
+    b = 0
+    la = 0
+    lb = 0
+
+    main_root = root_vstack(10) {
+        text("Multi-handler key demo")
+        la = text("a: 0")
+        lb = text("b: 0")
+    }
+
+    window_on_key(|k: string, m: int| {
+        a = a + 1
+        aether_ui_text_set_string(la, "a: ${a}")
+    })
+    window_on_key(|k: string, m: int| {
+        b = b + 1
+        aether_ui_text_set_string(lb, "b: ${b}")
+    })
+
+    app = ui.app_create("Multi-handler key demo", 320, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

@@ -2257,7 +2257,37 @@ void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
 // driver, like this backend's shortcuts: the real WM_KEYDOWN to key-name
 // translation is the same missing piece noted for the shortcut registry
 // above, and lands with it.
-static AeClosure* w32_window_key_closure = NULL;
+/* A LIST, not one slot. Every registration used to overwrite the last, so a
+   second window_on_key silently disabled the first -- and ui.on_key() is built
+   on this, which means two on_key() calls on different widgets left only the
+   later one working, with no error anywhere. The listbox hit exactly that:
+   registering a handler per row left only the final row's arrows alive.
+   Handlers fire in registration order; "handled" stays "at least one ran", so
+   the return value means what it did before. */
+static AeClosure** w32_window_key_closures = NULL;
+static int w32_window_key_closure_count = 0;
+static int w32_window_key_closure_cap = 0;
+
+static void w32_window_key_closure_add(AeClosure* c) {
+    if (!c) return;
+    if (w32_window_key_closure_count >= w32_window_key_closure_cap) {
+        w32_window_key_closure_cap = w32_window_key_closure_cap ? w32_window_key_closure_cap * 2 : 8;
+        w32_window_key_closures = realloc(w32_window_key_closures, sizeof(AeClosure*) * w32_window_key_closure_cap);
+    }
+    w32_window_key_closures[w32_window_key_closure_count++] = c;
+}
+
+static int w32_window_key_closure_fire(const char* key_name, int mods) {
+    if (!key_name) return 0;
+    int fired = 0;
+    for (int i = 0; i < w32_window_key_closure_count; i++) {
+        AeClosure* c = w32_window_key_closures[i];
+        if (!c || !c->fn) continue;
+        ((void(*)(void*, const char*, int))c->fn)(c->env, key_name, mods);
+        fired = 1;
+    }
+    return fired;
+}
 
 // Files dropped on the window. DragAcceptFiles + WM_DROPFILES rather than an
 // OLE IDropTarget: this file speaks the same generation of API throughout,
@@ -2531,14 +2561,11 @@ int aether_ui_window_file_drop_deliver(const char* paths) {
 }
 
 void aether_ui_window_on_key_impl(void* boxed_closure) {
-    w32_window_key_closure = (AeClosure*)boxed_closure;
+    w32_window_key_closure_add((AeClosure*)boxed_closure);
 }
 
 int aether_ui_window_key_deliver(const char* key_name, int mods) {
-    if (!w32_window_key_closure || !w32_window_key_closure->fn || !key_name) return 0;
-    ((void(*)(void*, const char*, int))w32_window_key_closure->fn)(
-        w32_window_key_closure->env, key_name, mods);
-    return 1;
+    return w32_window_key_closure_fire(key_name, mods);
 }
 
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {

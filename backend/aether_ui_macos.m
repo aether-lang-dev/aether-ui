@@ -1268,18 +1268,45 @@ static int shortcut_dispatch(const char* canonical) {
 
 // The any-key handler (ui.window_on_key). One per window, matching the one
 // shortcut registry above.
-static AeClosure* window_key_closure = NULL;
+/* A LIST, not one slot. Every registration used to overwrite the last, so a
+   second window_on_key silently disabled the first -- and ui.on_key() is built
+   on this, which means two on_key() calls on different widgets left only the
+   later one working, with no error anywhere. The listbox hit exactly that:
+   registering a handler per row left only the final row's arrows alive.
+   Handlers fire in registration order; "handled" stays "at least one ran", so
+   the return value means what it did before. */
+static AeClosure** window_key_closures = NULL;
+static int window_key_closure_count = 0;
+static int window_key_closure_cap = 0;
+
+static void window_key_closure_add(AeClosure* c) {
+    if (!c) return;
+    if (window_key_closure_count >= window_key_closure_cap) {
+        window_key_closure_cap = window_key_closure_cap ? window_key_closure_cap * 2 : 8;
+        window_key_closures = realloc(window_key_closures, sizeof(AeClosure*) * window_key_closure_cap);
+    }
+    window_key_closures[window_key_closure_count++] = c;
+}
+
+static int window_key_closure_fire(const char* key_name, int mods) {
+    if (!key_name) return 0;
+    int fired = 0;
+    for (int i = 0; i < window_key_closure_count; i++) {
+        AeClosure* c = window_key_closures[i];
+        if (!c || !c->fn) continue;
+        ((void(*)(void*, const char*, int))c->fn)(c->env, key_name, mods);
+        fired = 1;
+    }
+    return fired;
+}
 static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize);
 
 void aether_ui_window_on_key_impl(void* boxed_closure) {
-    window_key_closure = (AeClosure*)boxed_closure;
+    window_key_closure_add((AeClosure*)boxed_closure);
 }
 
 int aether_ui_window_key_deliver(const char* key_name, int mods) {
-    if (!window_key_closure || !window_key_closure->fn || !key_name) return 0;
-    ((void(*)(void*, const char*, int))window_key_closure->fn)(
-        window_key_closure->env, key_name, mods);
-    return 1;
+    return window_key_closure_fire(key_name, mods);
 }
 
 // Split a canonical combo ("ctrl+shift+a") into its modifier bits and bare
@@ -1333,7 +1360,7 @@ static void ensure_shortcut_monitor(void) {
             // No accelerator wanted it: offer it to the any-key handler, and
             // pass the event on regardless so the focused control still sees
             // what was typed.
-            if (window_key_closure) {
+            if (window_key_closure_count > 0) {
                 char name[64];
                 aeui_key_name_for_event(ev, name, sizeof(name));
                 NSEventModifierFlags f = [ev modifierFlags];
