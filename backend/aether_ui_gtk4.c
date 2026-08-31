@@ -5048,10 +5048,20 @@ int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), list);
-    /* The viewport is the window the list was asked for. Without a fixed
-       height the scrolled window takes whatever the parent box gives it and
-       realizes an arbitrary number of rows. */
-    gtk_widget_set_size_request(scrolled, -1, rows * AEUI_LIST_ROW_H);
+    /* The viewport is exactly the window the list was asked for. size_request
+       is only a MINIMUM: the parent box stretched the scrolled window and
+       GtkListView filled the space, realizing 205 rows instead of 10. Pinning
+       min and max content height, with vexpand off, makes the viewport the
+       window in both directions. */
+    int viewport_h = rows * AEUI_LIST_ROW_H;
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scrolled),
+                                               viewport_h);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scrolled),
+                                               viewport_h);
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scrolled),
+                                                     FALSE);
+    gtk_widget_set_vexpand(scrolled, FALSE);
+    gtk_widget_set_valign(scrolled, GTK_ALIGN_START);
 
     g_object_set_data(G_OBJECT(scrolled), "aeui-list-state", st);
     g_object_set_data(G_OBJECT(scrolled), "aeui-list-model", model);
