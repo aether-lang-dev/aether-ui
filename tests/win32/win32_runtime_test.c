@@ -137,6 +137,60 @@ static void canvas_group_opacity(void) {
     expect_ne(only_a, 0xFFFFFFFFu, "group: and something was painted");
 }
 
+// A gradient stop component outside [0,1] must SATURATE, not wrap. Both
+// replay paths scale the stop by hand into a fixed-width channel, so an
+// over-range component that is not clamped first spills: the GDI+ path shifts
+// it into the neighbouring byte, and the legacy path truncates it into a
+// COLOR16. Either way full red comes out as roughly 40% red.
+//
+// Runs on both renderers, because both do that conversion and each has its
+// own copy of it.
+static void canvas_gradient_stop_clamp(void) {
+    int cid = aether_ui_canvas_create_impl(100, 100);
+    if (cid < 1) {
+        printf("  FAIL [%s] canvas_create returned %d\n", renderer, cid);
+        failures++;
+        return;
+    }
+
+    aether_ui_canvas_begin_path_impl(cid);
+    aether_ui_canvas_move_to_impl(cid, 0.0, 0.0);
+    aether_ui_canvas_line_to_impl(cid, 100.0, 0.0);
+    aether_ui_canvas_line_to_impl(cid, 100.0, 100.0);
+    aether_ui_canvas_line_to_impl(cid, 0.0, 100.0);
+    aether_ui_canvas_close_path_impl(cid);
+
+    double offsets[2] = { 0.0, 1.0 };
+    /* Stop 0 asks for 1.4 red. Saturating gives full red; wrapping gives
+       about 0x66, which is what this exists to catch. */
+    double rgba[8] = { 1.4, 0.0, 0.0, 1.0,
+                       0.0, 0.0, 1.0, 1.0 };
+    aether_ui_canvas_fill_linear_gradient_impl(cid, 0.0, 0.0, 100.0, 0.0,
+                                               2, offsets, rgba,
+                                               0.0, 0, 0, 0);
+
+    unsigned left  = px(cid, 4, 50);
+    unsigned right = px(cid, 95, 50);
+    int lr = (int)((left  >> 16) & 0xFF), lb = (int)(left  & 0xFF);
+    int rr = (int)((right >> 16) & 0xFF), rb = (int)(right & 0xFF);
+
+    if (lr >= 200) {
+        printf("  ok   [%s] gradient: the over-range stop saturated (R=%d)\n",
+               renderer, lr);
+    } else {
+        printf("  FAIL [%s] gradient: over-range stop wrapped instead of "
+               "saturating (R=%d, wanted >= 200)\n", renderer, lr);
+        failures++;
+    }
+    if (lb <= 80 && rb >= 180 && rr <= 80) {
+        printf("  ok   [%s] gradient: ran red to blue across the box\n", renderer);
+    } else {
+        printf("  FAIL [%s] gradient: ramp wrong (left B=%d, right R=%d B=%d)\n",
+               renderer, lb, rr, rb);
+        failures++;
+    }
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -148,6 +202,7 @@ int main(void) {
 
     canvas_clip_and_reset();
     canvas_group_opacity();
+    canvas_gradient_stop_clamp();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);

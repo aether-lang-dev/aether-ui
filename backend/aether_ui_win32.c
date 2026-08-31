@@ -6460,6 +6460,18 @@ static int win32_use_gdiplus(void) {
    documented fidelity trade of the legacy renderer, and is why GDI+ is the
    default. tests/win32/win32_runtime_test.c asserts group opacity on GDI+ and
    skips it here for this reason. */
+/* A gradient stop scaled into a COLOR16 must SATURATE, not wrap. Casting
+   straight through truncates: a stop asking for 1.4 red computes 91749, which
+   lands as 26213, i.e. about 40% red. Negative components wrap to near
+   maximum the same way. This is the 16-bit twin of what w32_clamp_byte does
+   for the GDI+ path's byte packing. */
+static COLOR16 w32_stop_color16(double v) {
+    double s = v * 65535.0 + 0.5;
+    if (s <= 0.0) return 0;
+    if (s >= 65535.0) return 65535;
+    return (COLOR16)s;
+}
+
 static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height);
 static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height);
 
@@ -6661,14 +6673,14 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) 
                         int s0 = 0, s1 = cmd->n_stops - 1;
                         TRIVERTEX v[2];
                         v[0].x = mnx; v[0].y = mny;
-                        v[0].Red   = (COLOR16)(cmd->stop_rgba[s0*4+0]*65535);
-                        v[0].Green = (COLOR16)(cmd->stop_rgba[s0*4+1]*65535);
-                        v[0].Blue  = (COLOR16)(cmd->stop_rgba[s0*4+2]*65535);
+                        v[0].Red   = w32_stop_color16(cmd->stop_rgba[s0*4+0]);
+                        v[0].Green = w32_stop_color16(cmd->stop_rgba[s0*4+1]);
+                        v[0].Blue  = w32_stop_color16(cmd->stop_rgba[s0*4+2]);
                         v[0].Alpha = 0;
                         v[1].x = mxx; v[1].y = mxy;
-                        v[1].Red   = (COLOR16)(cmd->stop_rgba[s1*4+0]*65535);
-                        v[1].Green = (COLOR16)(cmd->stop_rgba[s1*4+1]*65535);
-                        v[1].Blue  = (COLOR16)(cmd->stop_rgba[s1*4+2]*65535);
+                        v[1].Red   = w32_stop_color16(cmd->stop_rgba[s1*4+0]);
+                        v[1].Green = w32_stop_color16(cmd->stop_rgba[s1*4+1]);
+                        v[1].Blue  = w32_stop_color16(cmd->stop_rgba[s1*4+2]);
                         v[1].Alpha = 0;
                         GRADIENT_RECT gr = { 0, 1 };
                         GradientFill(mem, v, 2, &gr, 1, GRADIENT_FILL_RECT_H);
