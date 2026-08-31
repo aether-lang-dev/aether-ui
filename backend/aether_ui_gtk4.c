@@ -5145,6 +5145,16 @@ void aether_ui_native_list_scroll_to_impl(int handle, int index) {
     if (maxv < 0.0) maxv = 0.0;
     if (target > maxv) target = maxv;
     gtk_adjustment_set_value(adj, target);
+    if (getenv("AETHER_UI_LIST_DEBUG")) {
+        GtkWidget* lv = g_object_get_data(G_OBJECT(w), "aeui-list-view");
+        fprintf(stderr,
+                "[list/scroll] i=%d sw_h=%d list_h=%d page=%.1f upper=%.1f val=%.1f\n",
+                i, gtk_widget_get_height(w),
+                lv ? gtk_widget_get_height(lv) : -1,
+                gtk_adjustment_get_page_size(adj),
+                gtk_adjustment_get_upper(adj),
+                gtk_adjustment_get_value(adj));
+    }
 }
 
 int aether_ui_native_list_first_visible_impl(int handle) {
