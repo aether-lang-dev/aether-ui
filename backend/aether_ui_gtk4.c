@@ -1804,7 +1804,17 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
                          G_CALLBACK(aeui_textarea_sync_placeholder), hint);
         aeui_textarea_sync_placeholder(pbuf, hint);
         g_object_set_data(G_OBJECT(textview), "aeui-placeholder-label", hint);
+        /* Stashed on BOTH halves, because the two backends disagree about
+           which one IS the textarea: this backend reports the TEXT VIEW as
+           "textarea" (GTK_IS_TEXT_VIEW) and the scrolled window as
+           "scrollview", while AppKit registers the SCROLL VIEW as
+           AUI_TEXTAREA and its inner view as AUI_TEXTAREA_INNER. So a spec
+           that looks a textarea up by type gets a different widget per
+           platform. Answering from either handle costs one extra pointer and
+           means the readback does not depend on that disagreement. */
         g_object_set_data_full(G_OBJECT(scrolled), "aeui-placeholder",
+                               g_strdup(placeholder), g_free);
+        g_object_set_data_full(G_OBJECT(textview), "aeui-placeholder",
                                g_strdup(placeholder), g_free);
     } else {
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), textview);
