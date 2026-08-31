@@ -870,7 +870,7 @@ _nav_page_factory() -> int {
 }
 
 builder nav_page(nav_handle: int, title: string) with _nav_page_factory {
-    aether_ui_navstack_push(nav_handle, title, _builder)
+    nav_push(nav_handle, title, _builder)
 }
 
 nav_pop(nav_handle: int) {
