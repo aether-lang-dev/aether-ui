@@ -593,7 +593,7 @@ if [ -n "$IOS_SDK" ] && [ -d "$IOS_SDK" ]; then
                 "$ROOT/backend/aether_ui_system_extras.c" \
                 "$ROOT/tests/ios/link_stub.c" \
                 -framework UIKit -framework Foundation -framework QuartzCore \
-                -framework CoreText -framework ImageIO \
+                -framework CoreGraphics -framework CoreText -framework ImageIO \
                 -o /tmp/ci_ios_link > /tmp/ci_ios_link.log 2>&1; then
             echo "  OK   links against the UIKit frameworks"
         else

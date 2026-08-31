@@ -14,7 +14,7 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: 68 of the 287 ABI functions are REAL; the rest are honest, compiling
+// STATUS: 110 of the 287 ABI functions are REAL; the rest are honest, compiling
 // `// TODO(ios)` stubs at the foot of the file, so the backend links and is
 // gated by the iOS SDK compile check in ci.sh (Phase 1e). Each pass moves a
 // section out of the stub block into a real implementation, as the Win32/AppKit
@@ -25,6 +25,13 @@
 //            (UIAccessibility), image (UIImageView), progress bar
 //            (UIProgressView), text area (UITextView), scroll view
 //            (UIScrollView), picker (UIButton + UIMenu).
+//   pass 3 — the CANVAS: a UIView replaying a Core Graphics command buffer
+//            (paths, fills, strokes, arcs, gradients, images, clips, group
+//            opacity, text), touch→click/move/release, on_resize, text metrics,
+//            and the headless offscreen render/read-pixel/write-PNG paths. The
+//            CG/CoreText executor is lifted verbatim from the AppKit backend
+//            (identical APIs), so every vg app — rubiks_cube, boing, the clocks
+//            — renders on iOS from the same .ae source as desktop.
 //
 // Build (simulator, from ci.sh Phase 1e):
 //   clang -fobjc-arc -target arm64-apple-ios-simulator -isysroot <SimSDK> \
@@ -940,12 +947,1145 @@ int aether_ui_picker_get_selected(int handle) {
 }
 
 // ===========================================================================
+// Pass 3 — the canvas: a UIView that replays a command buffer via Core
+// Graphics, the iOS counterpart of aether_ui_macos.m's NSView canvas. Core
+// Graphics and Core Text are identical on macOS and iOS, so the command
+// executor, gradients, images and offscreen PNG/pixel readback are lifted
+// verbatim; only the view/event plumbing, font resolution and the
+// current-graphics-context handling for text are UIKit-specific. This is
+// what makes the vg apps (rubiks_cube, boing, the clocks, ...) render on iOS
+// from the same .ae source as desktop. UIView is already top-left/y-down, so
+// no isFlipped is needed; the command buffer's y-down coords replay directly.
+// ===========================================================================
+
+typedef enum {
+    CANVAS_BEGIN_PATH,
+    CANVAS_MOVE_TO,
+    CANVAS_LINE_TO,
+    CANVAS_STROKE,
+    CANVAS_FILL_RECT,
+    CANVAS_CLEAR,
+    CANVAS_ARC,
+    CANVAS_CLOSE_PATH,
+    CANVAS_FILL,
+    CANVAS_FILL_TEXT,
+    CANVAS_STROKE_TEXT,   /* SVG stroke on <text>: outline over the fill */
+    CANVAS_DRAW_IMAGE,
+    CANVAS_FILL_LINEAR,
+    CANVAS_FILL_RADIAL,
+    CANVAS_CLIP_RECT,
+    /* True group opacity: composite everything between BEGIN and END
+       into one transparency layer, then paint that layer ONCE at the
+       group alpha, so overlapping children do not double-darken.
+       GTK4 has had it via cairo_push_group since the feature landed and
+       win32 gained it later; this backend's pair stayed empty stubs,
+       which is the same defect the win32 comment records for mememe.svg
+       (a <g opacity="0.5"> of three overlapping strokes).
+       Appended at the END: the values are positional. */
+    CANVAS_GROUP_BEGIN, CANVAS_GROUP_END,
+    CANVAS_RESET_CLIP
+} CanvasCmdType;
+
+typedef struct {
+    CanvasCmdType type;
+    double x, y;
+    double r, g, b, a;
+    double w, h;
+    double a0, a1;   // ARC start/end angle
+    char* text;     // FILL_TEXT string (owned)
+    unsigned char* pixels;  // DRAW_IMAGE RGBA8888 buffer (owned)
+    int iw, ih;     // DRAW_IMAGE pixel dims
+    double gx1, gy1, gx2, gy2, gr, gfx, gfy;  // gradient geometry
+    double grad_line_width;  // 0 → fill; >0 → stroke at this width
+    int grad_extend;         // SVG spreadMethod: 0=pad, 1=reflect, 2=repeat
+    /* The ELLIPSE a gradientTransform (or a non-square objectBoundingBox)
+       produces: semi-axes and tilt. gr keeps the old scalar answer, so a
+       command with grx == 0 renders exactly as it always did. */
+    double grx, gry, grot;
+    char* font_family;       /* owned; raw CSS stack, NULL when unset */
+    int n_stops;
+    double* stop_off;   // owned: offsets
+    double* stop_rgba;  // owned: n_stops*4 colour comps
+} CanvasCmd;
+
+typedef struct {
+    CanvasCmd* cmds;
+    int count;
+    int capacity;
+    int widget_handle;
+    AeClosure* on_move;    // pointer-move hook (canvas-local x,y); null = none
+    AeClosure* on_click;   // press   (canvas-local x,y)
+    AeClosure* on_release; // release (canvas-local x,y) — completes a drag
+    AeClosure* on_key;     // key-down (key name: "Left", "a", "space", …)
+    AeClosure* on_key_release; // key-up (same key names; driver-driven for now)
+    AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
+    AeClosure* on_scroll;  // wheel / two-finger scroll (dx,dy); see scrollWheel:
+    int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
+    double* paint_clip_rects;
+    int paint_clip_count;
+    int paint_clip_capacity;
+    // Last-paint metrics for GET /canvas/{id}/debug — the compositor
+    // instrumentation. `area` is the summed clip-rect area when the paint
+    // was clipped, else the whole allocation, matching gtk4 and win32.
+    int last_paint_w, last_paint_h;
+    int last_paint_area, last_paint_count;
+    // Cumulative full/clipped repaint counts and the last clipped paint's
+    // summed area, matching gtk4 and win32 so the Stage-2.5 clip regression
+    // reads the same numbers on all three backends.
+    int paint_full_count, paint_clip_count_total, last_clip_area;
+} CanvasState;
+
+static CanvasState* canvas_states = NULL;
+static int canvas_state_count = 0;
+static int canvas_state_capacity = 0;
+
+extern double floatarr_get_raw(void* arr, int i);
+
+static CanvasState* get_canvas_state(int canvas_id) {
+    if (canvas_id < 1 || canvas_id > canvas_state_count) return NULL;
+    return &canvas_states[canvas_id - 1];
+}
+
+static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return;
+    if (cs->count >= cs->capacity) {
+        cs->capacity = cs->capacity == 0 ? 64 : cs->capacity * 2;
+        cs->cmds = realloc(cs->cmds, sizeof(CanvasCmd) * cs->capacity);
+    }
+    cs->cmds[cs->count++] = cmd;
+}
+
+static void canvas_apply_paint_clip(CGContextRef cg, CanvasState* cs) {
+    if (!cg || !cs || cs->paint_clip_count <= 0) return;
+    CGContextBeginPath(cg);
+    for (int i = 0; i < cs->paint_clip_count; i++) {
+        double* r = &cs->paint_clip_rects[i * 4];
+        if (r[2] > 0.0 && r[3] > 0.0) {
+            CGContextAddRect(cg, CGRectMake(r[0], r[1], r[2], r[3]));
+        }
+    }
+    CGContextClip(cg);
+}
+
+/* SVG spreadMethod on CoreGraphics.
+   CGGradient has no reflect/repeat: kCGGradientDrawsBefore/AfterEndLocation is
+   pad and nothing else, so `extend` was dropped here and every gradient
+   rendered as pad -- reflect and repeat silently wrong, while GTK4 (cairo
+   CAIRO_EXTEND_*) and win32 both honoured them.
+
+   The fix is to stop asking the gradient to tile and hand it a stop list that
+   ALREADY covers the tiles. Given `reps` copies either side of the original
+   band, build stops across [-reps, 1+reps] in gradient-parameter space and
+   renormalise to 0..1; the caller then stretches the axis (or the radius) by
+   the same factor, so tile k lands exactly where the k-th repeat belongs.
+   Reflect mirrors odd tiles, which is the whole difference between the two
+   modes. Offsets are clamped and kept non-decreasing: CGGradient requires a
+   monotonic location array and silently misdraws otherwise.
+
+   Returns the new stop count, or 0 to fall back to the plain path. */
+static int aeui_expand_gradient_stops(const CanvasCmd* c, int reps, int reflect,
+                                      CGFloat** out_comps, CGFloat** out_locs) {
+    int n = c->n_stops;
+    if (n <= 0 || reps < 1) return 0;
+    int tiles = 2 * reps + 1;
+    int total = tiles * n;
+    CGFloat* comps = (CGFloat*)malloc(sizeof(CGFloat) * total * 4);
+    CGFloat* locs  = (CGFloat*)malloc(sizeof(CGFloat) * total);
+    if (!comps || !locs) { free(comps); free(locs); return 0; }
+    double span = (double)tiles;
+    int w = 0;
+    double prev = 0.0;
+    for (int t = -reps; t <= reps; t++) {
+        int mirrored = reflect && ((t & 1) != 0);
+        for (int k = 0; k < n; k++) {
+            int si = mirrored ? (n - 1 - k) : k;
+            double off = c->stop_off[si];
+            if (mirrored) off = 1.0 - off;
+            double u = ((double)(t + reps) + off) / span;
+            if (u < 0.0) u = 0.0;
+            if (u > 1.0) u = 1.0;
+            if (u < prev) u = prev;      // CGGradient needs non-decreasing
+            prev = u;
+            locs[w] = (CGFloat)u;
+            comps[w*4+0] = c->stop_rgba[si*4+0];
+            comps[w*4+1] = c->stop_rgba[si*4+1];
+            comps[w*4+2] = c->stop_rgba[si*4+2];
+            comps[w*4+3] = c->stop_rgba[si*4+3];
+            w++;
+        }
+    }
+    *out_comps = comps; *out_locs = locs;
+    return w;
+}
+
+// Resolve a CSS font stack to a UIFont — the UIKit twin of the AppKit
+// aeui_resolve_font. font-family is a prioritised list: walk it and take the
+// first face UIKit can instantiate, mapping the generic CSS families.
+static UIFont* aeui_resolve_font(double size, const char* stack) {
+    CGFloat sz = (size > 0 ? size : 16.0);
+    if (stack && stack[0]) {
+        NSString* all = [NSString stringWithUTF8String:stack];
+        for (NSString* raw in [all componentsSeparatedByString:@","]) {
+            NSString* name = [raw stringByTrimmingCharactersInSet:
+                [NSCharacterSet characterSetWithCharactersInString:@" \t'\""]];
+            if ([name length] == 0) continue;
+            NSString* lower = [name lowercaseString];
+            if ([lower isEqualToString:@"serif"])
+                return [UIFont fontWithName:@"TimesNewRomanPSMT" size:sz]
+                       ?: [UIFont fontWithName:@"Times New Roman" size:sz]
+                       ?: [UIFont systemFontOfSize:sz];
+            if ([lower isEqualToString:@"sans-serif"])
+                return [UIFont fontWithName:@"Helvetica" size:sz]
+                       ?: [UIFont systemFontOfSize:sz];
+            if ([lower isEqualToString:@"monospace"])
+                return [UIFont fontWithName:@"Menlo" size:sz]
+                       ?: [UIFont fontWithName:@"Courier" size:sz]
+                       ?: [UIFont monospacedSystemFontOfSize:sz weight:UIFontWeightRegular];
+            if ([lower isEqualToString:@"cursive"] ||
+                [lower isEqualToString:@"fantasy"])
+                return [UIFont systemFontOfSize:sz];
+            UIFont* f = [UIFont fontWithName:name size:sz];
+            if (f) return f;
+        }
+    }
+    return [UIFont systemFontOfSize:sz];
+}
+
+static UIFont* aeui_metrics_font(double size) {
+    return [UIFont systemFontOfSize:(size > 0 ? size : 16.0)];
+}
+
+@interface AetherCanvasView : UIView
+@property (assign) int canvasId;
+@property (assign) CGSize aeuiLastSize;
+@end
+
+static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
+                                int start, int end) {
+    if (!cg || !cs) return;
+    if (start < 0) start = 0;
+    if (end > cs->count) end = cs->count;
+    {
+    /* INVARIANT: every CGContextSaveGState here has exactly one matching
+       restore, and CANVAS_RESET_CLIP restores/re-saves in place. CoreGraphics
+       has no reset-clip call, so the pairing IS the mechanism. */
+    CGContextSaveGState(cg);
+    for (int i = start; i < end; i++) {
+        CanvasCmd* c = &cs->cmds[i];
+        switch (c->type) {
+            case CANVAS_BEGIN_PATH:
+                CGContextBeginPath(cg);
+                break;
+            case CANVAS_MOVE_TO:
+                CGContextMoveToPoint(cg, c->x, c->y);
+                break;
+            case CANVAS_LINE_TO:
+                CGContextAddLineToPoint(cg, c->x, c->y);
+                break;
+            case CANVAS_STROKE: {
+                CGContextSetRGBStrokeColor(cg, c->r, c->g, c->b, c->a);
+                CGContextSetLineWidth(cg, c->x);  // line_width stored in x
+                // cap/join ride in iw/ih (0=butt/miter 1=round 2=square/
+                // bevel — ui.canvas_stroke_cj's contract). These were
+                // HARDCODED round, which the stroker suite's cross-renderer
+                // pixel gate caught the first time macOS pixels were real:
+                // a round-capped native stroke vs a butt/miter geometric
+                // outline agreed on only 77% of samples.
+                CGLineCap lc = kCGLineCapButt;
+                if (c->iw == 1) lc = kCGLineCapRound;
+                if (c->iw == 2) lc = kCGLineCapSquare;
+                CGLineJoin lj = kCGLineJoinMiter;
+                if (c->ih == 1) lj = kCGLineJoinRound;
+                if (c->ih == 2) lj = kCGLineJoinBevel;
+                CGContextSetLineCap(cg, lc);
+                CGContextSetLineJoin(cg, lj);
+                CGContextStrokePath(cg);
+                break;
+            }
+            case CANVAS_GROUP_BEGIN: {
+                /* CoreGraphics applies a transparency layer's alpha from the
+                   gstate AT BEGIN, but the alpha only arrives with the END
+                   command. The buffer is fully built before replay, so look
+                   ahead for the matching END and set it now. Depth-counted:
+                   a nested group's END must not be mistaken for this one's. */
+                double ga = 1.0;
+                int depth = 1;
+                for (int j = i + 1; j < end; j++) {
+                    if (cs->cmds[j].type == CANVAS_GROUP_BEGIN) depth++;
+                    else if (cs->cmds[j].type == CANVAS_GROUP_END) {
+                        depth--;
+                        if (depth == 0) { ga = cs->cmds[j].x; break; }
+                    }
+                }
+                CGContextSaveGState(cg);
+                CGContextSetAlpha(cg, ga);
+                CGContextBeginTransparencyLayer(cg, NULL);
+                CGContextSaveGState(cg);
+                break;
+            }
+            case CANVAS_GROUP_END:
+                /* The alpha was applied at BEGIN; ending the layer composites
+                   it once, which is the whole point -- painting each child at
+                   the group alpha instead makes overlaps double-darken. */
+                CGContextRestoreGState(cg);
+                CGContextEndTransparencyLayer(cg);
+                CGContextRestoreGState(cg);
+                break;
+            case CANVAS_CLIP_RECT:
+                // Intersects the current clip and persists until the scope
+                // ends or CANVAS_RESET_CLIP drops it (SVG overflow:hidden).
+                CGContextClipToRect(cg, CGRectMake(c->x, c->y, c->w, c->h));
+                break;
+            case CANVAS_RESET_CLIP:
+                // Drop every clip added since this compositing scope began.
+                // CoreGraphics cannot widen a clip, so the saved baseline is
+                // the only way back; re-save so the next reset still works.
+                CGContextRestoreGState(cg);
+                CGContextSaveGState(cg);
+                break;
+            case CANVAS_FILL_RECT:
+                CGContextSetRGBFillColor(cg, c->r, c->g, c->b, c->a);
+                CGContextFillRect(cg, CGRectMake(c->x, c->y, c->w, c->h));
+                break;
+            case CANVAS_ARC:
+                // CGContextAddArc appends to the current path. w = radius,
+                // a0/a1 = start/end angle. clockwise=0 to match cairo's
+                // positive-angle direction on a flipped (isFlipped) view.
+                CGContextAddArc(cg, c->x, c->y, c->w, c->a0, c->a1, 0);
+                break;
+            case CANVAS_CLOSE_PATH:
+                CGContextClosePath(cg);
+                break;
+            case CANVAS_FILL:
+                CGContextSetRGBFillColor(cg, c->r, c->g, c->b, c->a);
+                /* SVG fill-rule; iw carries 1 for evenodd. CoreGraphics has
+                   a separate entry point rather than a mode flag. */
+                if (c->iw) CGContextEOFillPath(cg);
+                else       CGContextFillPath(cg);
+                break;
+            case CANVAS_STROKE_TEXT: {
+                /* SVG stroke on <text>. Was a no-op here, so a glyph whose
+                   visible colour comes from its STROKE rendered as the bare
+                   fill -- bloglines.svg is <text stroke="white"> with no
+                   fill, which takes SVG's default BLACK and came out a solid
+                   black B where librsvg draws a white one.
+
+                   AppKit has no "stroke this string" call, but the text
+                   attributes do: a POSITIVE NSStrokeWidthAttributeName means
+                   stroke-only (negative would mean fill AND stroke). It is
+                   expressed as a PERCENTAGE OF FONT SIZE, not points, hence
+                   the conversion. Emitted after the fill for the same run, so
+                   the outline sits on top -- matching GTK4's
+                   cairo_text_path + stroke. */
+                if (c->text && c->w > 0) {
+                    NSString* s2 = [NSString stringWithUTF8String:c->text];
+                    UIColor* col = [UIColor colorWithRed:c->r green:c->g
+                                                    blue:c->b alpha:c->a];
+                    UIFont* font = aeui_resolve_font(c->w, c->font_family);
+                    double pct = (c->h / c->w) * 100.0;
+                    if (pct <= 0.0) pct = 1.0;
+                    NSDictionary* attrs = @{
+                        NSFontAttributeName: font,
+                        NSStrokeColorAttributeName: col,
+                        NSForegroundColorAttributeName: [UIColor clearColor],
+                        NSStrokeWidthAttributeName: @(pct)
+                    };
+                    CGFloat ascent = [font ascender];
+                    [s2 drawAtPoint:CGPointMake(c->x, c->y - ascent)
+                        withAttributes:attrs];
+                }
+                break;
+            }
+            case CANVAS_FILL_TEXT: {
+                if (c->text) {
+                    NSString* s = [NSString stringWithUTF8String:c->text];
+                    UIColor* col = [UIColor colorWithRed:c->r green:c->g
+                                                    blue:c->b alpha:c->a];
+                    UIFont* font = aeui_resolve_font(c->w, c->font_family);
+                    NSDictionary* attrs = @{
+                        NSFontAttributeName: font,
+                        NSForegroundColorAttributeName: col
+                    };
+                    // cairo's text origin is the baseline; NSString draws
+                    // from the top-left, so offset up by the ascender.
+                    CGFloat ascent = [font ascender];
+                    [s drawAtPoint:CGPointMake(c->x, c->y - ascent)
+                        withAttributes:attrs];
+                }
+                break;
+            }
+            case CANVAS_DRAW_IMAGE: {
+                if (c->pixels && c->iw > 0 && c->ih > 0) {
+                    // RGBA8888, non-premultiplied — CoreGraphics can
+                    // consume that directly via kCGImageAlphaLast.
+                    CGColorSpaceRef cs2 = CGColorSpaceCreateDeviceRGB();
+                    CGDataProviderRef prov = CGDataProviderCreateWithData(
+                        NULL, c->pixels, c->iw * c->ih * 4, NULL);
+                    CGImageRef img = CGImageCreate(
+                        c->iw, c->ih, 8, 32, c->iw * 4, cs2,
+                        kCGImageAlphaLast | kCGBitmapByteOrderDefault,
+                        prov, NULL, false, kCGRenderingIntentDefault);
+                    if (img) {
+                        // Dest extent: w/h carry the SCALED size when the
+                        // command came from draw_image_scaled (CGContext-
+                        // DrawImage scales source to dest natively); zero
+                        // means an unscaled draw_image — use pixel dims.
+                        // This is what un-stubbed the "AppKit blits 1:1 for
+                        // now" limitation: ebiten's set_scale presents a
+                        // small logical framebuffer upscaled to the canvas,
+                        // which rendered postage-stamp sized here.
+                        double ddw = c->w > 0 ? c->w : (double)c->iw;
+                        double ddh = c->h > 0 ? c->h : (double)c->ih;
+                        // The view isFlipped (top-left origin), so draw
+                        // into a rect at (x,y). CGContextDrawImage uses a
+                        // bottom-left origin; flip the y within the rect.
+                        CGContextSaveGState(cg);
+                        CGContextTranslateCTM(cg, c->x, c->y + ddh);
+                        CGContextScaleCTM(cg, 1.0, -1.0);
+                        CGContextDrawImage(cg,
+                            CGRectMake(0, 0, ddw, ddh), img);
+                        CGContextRestoreGState(cg);
+                        CGImageRelease(img);
+                    }
+                    CGDataProviderRelease(prov);
+                    CGColorSpaceRelease(cs2);
+                }
+                break;
+            }
+            case CANVAS_FILL_LINEAR:
+            case CANVAS_FILL_RADIAL: {
+                // Axis/radius actually drawn: stretched when the stops were
+                // pre-tiled for reflect/repeat, the originals otherwise.
+                double gx1e = c->gx1, gy1e = c->gy1;
+                double gx2e = c->gx2, gy2e = c->gy2;
+                double gre  = c->gr;
+                if (c->n_stops > 0) {
+                    CGColorSpaceRef gcs = CGColorSpaceCreateDeviceRGB();
+                    CGFloat* comps = NULL; CGFloat* locs = NULL;
+                    int ncomp = 0;
+                    /* reflect/repeat: pre-tile the stops and stretch the axis
+                       by the same factor (see aeui_expand_gradient_stops).
+                       `reps` only has to cover what is visible; the clip is
+                       already the path being filled, so its bounding box in
+                       gradient-parameter units is the honest bound. Clamped:
+                       a degenerate axis would otherwise ask for a vast stop
+                       array, and past a few hundred tiles nothing is
+                       distinguishable anyway. */
+                    if (c->grad_extend == 1 || c->grad_extend == 2) {
+                        CGRect cb = CGContextGetClipBoundingBox(cg);
+                        double reach;
+                        if (c->type == CANVAS_FILL_LINEAR) {
+                            double ax = c->gx2 - c->gx1, ay = c->gy2 - c->gy1;
+                            double len2 = ax*ax + ay*ay;
+                            reach = 2.0;
+                            if (len2 > 1e-9) {
+                                double worst = 0.0;
+                                double xs[2] = { CGRectGetMinX(cb), CGRectGetMaxX(cb) };
+                                double ys[2] = { CGRectGetMinY(cb), CGRectGetMaxY(cb) };
+                                for (int qi = 0; qi < 2; qi++)
+                                    for (int qj = 0; qj < 2; qj++) {
+                                        double t = ((xs[qi] - c->gx1) * ax
+                                                  + (ys[qj] - c->gy1) * ay) / len2;
+                                        double d = (t < 0.0) ? -t : (t > 1.0 ? t - 1.0 : 0.0);
+                                        if (d > worst) worst = d;
+                                    }
+                                reach = worst;
+                            }
+                        } else {
+                            double r = c->gr > 0.0 ? c->gr : 1.0;
+                            double dx = fmax(fabs(CGRectGetMinX(cb) - c->gx1),
+                                             fabs(CGRectGetMaxX(cb) - c->gx1));
+                            double dy = fmax(fabs(CGRectGetMinY(cb) - c->gy1),
+                                             fabs(CGRectGetMaxY(cb) - c->gy1));
+                            reach = sqrt(dx*dx + dy*dy) / r;
+                        }
+                        int reps = (int)ceil(reach) + 1;
+                        if (reps < 1) reps = 1;
+                        if (reps > 64) reps = 64;
+                        ncomp = aeui_expand_gradient_stops(c, reps,
+                                    c->grad_extend == 1, &comps, &locs);
+                        if (ncomp > 0) {
+                            double span = 2.0 * reps + 1.0;
+                            if (c->type == CANVAS_FILL_LINEAR) {
+                                double ax = c->gx2 - c->gx1, ay = c->gy2 - c->gy1;
+                                gx1e = c->gx1 - ax * reps;
+                                gy1e = c->gy1 - ay * reps;
+                                gx2e = c->gx1 + ax * (reps + 1);
+                                gy2e = c->gy1 + ay * (reps + 1);
+                            } else {
+                                gre = c->gr * span;
+                            }
+                        }
+                    }
+                    if (ncomp <= 0) {
+                        comps = (CGFloat*)malloc(sizeof(CGFloat) * c->n_stops * 4);
+                        locs  = (CGFloat*)malloc(sizeof(CGFloat) * c->n_stops);
+                        for (int si = 0; si < c->n_stops; si++) {
+                            comps[si*4+0] = c->stop_rgba[si*4+0];
+                            comps[si*4+1] = c->stop_rgba[si*4+1];
+                            comps[si*4+2] = c->stop_rgba[si*4+2];
+                            comps[si*4+3] = c->stop_rgba[si*4+3];
+                            locs[si] = c->stop_off[si];
+                        }
+                        ncomp = c->n_stops;
+                    }
+                    CGGradientRef grad = CGGradientCreateWithColorComponents(
+                        gcs, comps, locs, ncomp);
+                    if (grad) {
+                        // Clip to the current path (or its stroked
+                        // outline for a gradient stroke), then draw.
+                        CGContextSaveGState(cg);
+                        if (c->grad_line_width > 0) {
+                            CGContextSetLineWidth(cg, c->grad_line_width);
+                            CGContextSetLineCap(cg, kCGLineCapRound);
+                            CGContextSetLineJoin(cg, kCGLineJoinRound);
+                            CGContextReplacePathWithStrokedPath(cg);
+                        }
+                        CGContextClip(cg);  // uses current path as clip
+                        if (c->type == CANVAS_FILL_LINEAR) {
+                            CGContextDrawLinearGradient(cg, grad,
+                                CGPointMake(gx1e, gy1e),
+                                CGPointMake(gx2e, gy2e),
+                                kCGGradientDrawsBeforeStartLocation |
+                                kCGGradientDrawsAfterEndLocation);
+                        } else if (c->grx > 0 && c->gry > 0 &&
+                                   (fabs(c->grx - c->gry) > 0.01 ||
+                                    fabs(c->grot) > 0.01)) {
+                            /* A TRUE ELLIPSE. CGContextDrawRadialGradient
+                               only draws circles, but the CTM is ours to
+                               bend: translate to the centre, rotate by the
+                               tilt, scale the axes, then draw a UNIT circle
+                               in that space. Already inside a
+                               SaveGState/RestoreGState pair, so the CTM
+                               change cannot leak.
+
+                               The focal point is transformed the same way --
+                               per axis, de-rotated first -- because it lives
+                               in the same space. Collapsing it to one
+                               distance is only right for a circle and cost
+                               intertwingly.svg +2.90 when GTK4 landed. */
+                            double fdx = c->gfx - c->gx1;
+                            double fdy = c->gfy - c->gy1;
+                            if (fabs(c->grot) > 0.01) {
+                                double a = -c->grot * M_PI / 180.0;
+                                double ca = cos(a), sa = sin(a);
+                                double tx = fdx * ca - fdy * sa;
+                                double ty = fdx * sa + fdy * ca;
+                                fdx = tx; fdy = ty;
+                            }
+                            CGContextTranslateCTM(cg, c->gx1, c->gy1);
+                            if (fabs(c->grot) > 0.01)
+                                CGContextRotateCTM(cg, c->grot * M_PI / 180.0);
+                            CGContextScaleCTM(cg, c->grx, c->gry);
+                            CGContextDrawRadialGradient(cg, grad,
+                                CGPointMake(fdx / c->grx, fdy / c->gry), 0,
+                                CGPointMake(0, 0),
+                                (c->gr > 0.0) ? (gre / c->gr) : 1.0,
+                                kCGGradientDrawsBeforeStartLocation |
+                                kCGGradientDrawsAfterEndLocation);
+                        } else {
+                            CGContextDrawRadialGradient(cg, grad,
+                                CGPointMake(c->gfx, c->gfy), 0,
+                                CGPointMake(c->gx1, c->gy1), gre,
+                                kCGGradientDrawsBeforeStartLocation |
+                                kCGGradientDrawsAfterEndLocation);
+                        }
+                        CGContextRestoreGState(cg);
+                        CGGradientRelease(grad);
+                    }
+                    free(comps);
+                    free(locs);
+                    CGColorSpaceRelease(gcs);
+                }
+                break;
+            }
+            case CANVAS_CLEAR:
+                break;
+        }
+    }
+    CGContextRestoreGState(cg);
+    }
+}
+
+static void canvas_replay(CGContextRef cg, CanvasState* cs) {
+    if (!cs) return;
+    canvas_replay_range(cg, cs, 0, cs->count);
+}
+
+// How many commands the buffer currently holds. Bracket a piece of drawing
+// with two reads and the difference is that drawing's contiguous slice.
+int aether_ui_canvas_cmd_count_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->count : -1;
+}
+
+
+int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
+                                            double ox, double oy,
+                                            int width, int height,
+                                            unsigned char* out, int out_len) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !out || width <= 0 || height <= 0) return 0;
+    int need = width * height * 4;
+    if (out_len < need) return 0;
+
+    CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef cg = CGBitmapContextCreate(
+        NULL, (size_t)width, (size_t)height, 8, 0, cspace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cspace);
+    if (!cg) return 0;
+
+    CGContextTranslateCTM(cg, 0, height);
+    CGContextScaleCTM(cg, 1.0, -1.0);
+    CGContextTranslateCTM(cg, -ox, -oy);
+
+    UIGraphicsPushContext(cg);
+    canvas_replay_range(cg, cs, start, end);
+    UIGraphicsPopContext();
+
+    unsigned char* data = (unsigned char*)CGBitmapContextGetData(cg);
+    size_t stride = CGBitmapContextGetBytesPerRow(cg);
+    if (!data) { CGContextRelease(cg); return 0; }
+    for (int y = 0; y < height; y++) {
+        unsigned char* row = data + (size_t)y * stride;
+        unsigned char* dst = out + (size_t)y * width * 4;
+        for (int x = 0; x < width; x++) {
+            unsigned int r = row[x * 4 + 0];
+            unsigned int g = row[x * 4 + 1];
+            unsigned int b = row[x * 4 + 2];
+            unsigned int a = row[x * 4 + 3];
+            if (a != 0 && a != 255) {
+                r = (r * 255 + a / 2) / a;
+                g = (g * 255 + a / 2) / a;
+                b = (b * 255 + a / 2) / a;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b > 255) b = 255;
+            }
+            dst[x * 4 + 0] = (unsigned char)r;
+            dst[x * 4 + 1] = (unsigned char)g;
+            dst[x * 4 + 2] = (unsigned char)b;
+            dst[x * 4 + 3] = (unsigned char)a;
+        }
+    }
+    CGContextRelease(cg);
+    return need;
+}
+
+@implementation AetherCanvasView
+- (void)drawRect:(CGRect)rect {
+    (void)rect;
+    CGContextRef cg = UIGraphicsGetCurrentContext();
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cg) return;
+    if (cs) {
+        CGRect b = self.bounds;
+        int pw = (int)(b.size.width + 0.5), ph = (int)(b.size.height + 0.5);
+        double a = 0.0;
+        for (int i = 0; i < cs->paint_clip_count; i++) {
+            double* r = &cs->paint_clip_rects[i * 4];
+            if (r[2] > 0.0 && r[3] > 0.0) a += r[2] * r[3];
+        }
+        cs->last_paint_w = pw;
+        cs->last_paint_h = ph;
+        cs->last_paint_count = cs->count;
+        if (cs->paint_clip_count > 0) {
+            cs->last_clip_area = (int)(a + 0.5);
+            cs->last_paint_area = cs->last_clip_area;
+            cs->paint_clip_count_total++;
+        } else {
+            cs->last_clip_area = 0;
+            cs->last_paint_area = pw * ph;
+            cs->paint_full_count++;
+        }
+    }
+    // The drawRect context is already the current UIKit context, so text draws
+    // correctly without an explicit push here.
+    if (cs && cs->paint_clip_count > 0) {
+        CGContextSaveGState(cg);
+        canvas_apply_paint_clip(cg, cs);
+        canvas_replay(cg, cs);
+        CGContextRestoreGState(cg);
+        cs->paint_clip_count = 0;
+    } else {
+        canvas_replay(cg, cs);
+    }
+}
+
+// Touch → the same press/move/release closures the AppKit mouse path drives.
+// locationInView is already canvas coords (top-left origin, y down).
+- (void)fireTouch:(NSSet<UITouch*>*)touches closure:(AeClosure*)c {
+    if (!c || !c->fn) return;
+    UITouch* t = touches.anyObject;
+    if (!t) return;
+    CGPoint p = [t locationInView:self];
+    ((void(*)(void*, double, double))c->fn)(c->env, p.x, p.y);
+}
+- (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+    (void)event;
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (cs) [self fireTouch:touches closure:cs->on_click];
+}
+- (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+    (void)event;
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (cs) [self fireTouch:touches closure:cs->on_move];
+}
+- (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+    (void)event;
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (cs) [self fireTouch:touches closure:cs->on_release];
+}
+- (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+    (void)event;
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (cs) [self fireTouch:touches closure:cs->on_release];
+}
+
+// on_resize on a real allocation change — the vg scene re-maps its viewBox.
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGSize sz = self.bounds.size;
+    if ((int)lround(sz.width) == (int)lround(self.aeuiLastSize.width)
+        && (int)lround(sz.height) == (int)lround(self.aeuiLastSize.height)) return;
+    self.aeuiLastSize = sz;
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || !cs->on_resize || !cs->on_resize->fn) return;
+    int w = (int)lround(sz.width), h = (int)lround(sz.height);
+    if (w == cs->last_w && h == cs->last_h) return;
+    cs->last_w = w; cs->last_h = h;
+    AeClosure* c = cs->on_resize;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+    });
+}
+@end
+
+int aether_ui_canvas_create_impl(int width, int height) {
+    AetherCanvasView* v = [[AetherCanvasView alloc]
+        initWithFrame:CGRectMake(0, 0, width, height)];
+    v.translatesAutoresizingMaskIntoConstraints = NO;
+    v.contentMode = UIViewContentModeRedraw;   // re-run drawRect on resize
+    v.aeuiLastSize = CGSizeZero;
+    // Natural size, not a cage: low-priority size constraints + low hugging so
+    // the canvas is the slack-taker (its vg scene rescales to fill), exactly as
+    // the AppKit backend arranges (priority 150 / hugging 1).
+    NSLayoutConstraint* wc = [v.widthAnchor constraintEqualToConstant:width];
+    NSLayoutConstraint* hc = [v.heightAnchor constraintEqualToConstant:height];
+    wc.priority = 150; hc.priority = 150;
+    wc.active = YES;   hc.active = YES;
+    [v setContentHuggingPriority:1 forAxis:UILayoutConstraintAxisHorizontal];
+    [v setContentHuggingPriority:1 forAxis:UILayoutConstraintAxisVertical];
+
+    if (canvas_state_count >= canvas_state_capacity) {
+        canvas_state_capacity = canvas_state_capacity == 0 ? 16 : canvas_state_capacity * 2;
+        canvas_states = realloc(canvas_states, sizeof(CanvasState) * canvas_state_capacity);
+    }
+    CanvasState* cs = &canvas_states[canvas_state_count];
+    memset(cs, 0, sizeof(*cs));
+    canvas_state_count++;
+    int canvas_id = canvas_state_count;
+    v.canvasId = canvas_id;
+    cs->widget_handle = register_widget_typed((__bridge void*)v, AUI_CANVAS);
+    return canvas_id;
+}
+
+int aether_ui_canvas_get_widget(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->widget_handle : 0;
+}
+
+void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_resize = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_click = (AeClosure*)boxed_closure;
+}
+
+
+void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_move = (AeClosure*)boxed_closure;  // delivered by touchesMoved:
+}
+
+// Keyboard input on a canvas. No-op stub for now — the AppKit bridge would
+// route NSView keyDown: → key-name string into the closure (mirrors the GTK4
+// GtkEventControllerKey path). The Linux backend is the reference impl.
+void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key = (AeClosure*)boxed_closure;
+}
+
+// Key-up on a canvas. Stored (and driver-drivable via POST /canvas/{id}/keyup)
+// like on_key; the real NSView keyUp: bridge lands with the keyDown: one.
+void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key_release = (AeClosure*)boxed_closure;
+}
+
+/* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
+   scroll controller). Stubbed so the ABI stays uniform across backends. */
+/* Gesture probe: GTK4-only diagnostic. Stubbed for ABI uniformity. */
+void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
+    (void)canvas_id; (void)boxed_closure;
+}
+
+void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_scroll = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_release = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_canvas_begin_path_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_BEGIN_PATH });
+}
+
+void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_MOVE_TO, .x = x, .y = y });
+}
+
+void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_LINE_TO, .x = x, .y = y });
+}
+
+void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b,
+                                  double a, double line_width, int cap, int join) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_STROKE, .r = r, .g = g, .b = b, .a = a, .x = line_width,
+        .iw = cap, .ih = join
+    });
+}
+
+void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
+                                     double w, double h,
+                                     double r, double g, double b, double a) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_FILL_RECT, .x = x, .y = y, .w = w, .h = h,
+        .r = r, .g = g, .b = b, .a = a
+    });
+}
+
+// Viewport clip — no-op on AppKit for now (GTK-verified feature; AppKit can
+// add a CGContextClip path later).
+void aether_ui_canvas_group_begin_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_BEGIN });
+}
+void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
+    // Alpha rides in x, matching the GTK4 record (cairo_paint_with_alpha(c->x)).
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_END, .x = alpha });
+}
+
+void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
+                                     double w, double h) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_CLIP_RECT, .x = x, .y = y, .w = w, .h = h });
+}
+
+void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !rects || n <= 0) {
+        if (cs) cs->paint_clip_count = 0;
+        return;
+    }
+    if (n > cs->paint_clip_capacity) {
+        cs->paint_clip_capacity = n;
+        cs->paint_clip_rects = realloc(cs->paint_clip_rects, sizeof(double) * n * 4);
+    }
+    if (!cs->paint_clip_rects) {
+        cs->paint_clip_count = 0;
+        cs->paint_clip_capacity = 0;
+        return;
+    }
+    for (int i = 0; i < n * 4; i++) {
+        cs->paint_clip_rects[i] = floatarr_get_raw(rects, i);
+    }
+    cs->paint_clip_count = n;
+}
+
+void aether_ui_canvas_reset_clip_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_RESET_CLIP });
+}
+
+void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
+                                double start_angle, double end_angle) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_ARC, .x = cx, .y = cy, .w = radius,
+        .a0 = start_angle, .a1 = end_angle
+    });
+}
+
+void aether_ui_canvas_close_path_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLOSE_PATH });
+}
+
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a,
+                                int even_odd) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a, .iw = even_odd
+    });
+}
+
+void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text,
+                                      double x, double y, double font_size,
+                                      int font_flags, const char* font_family,
+                                      double r, double g, double b, double a) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size,
+        .iw = font_flags,
+        .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
+        .text = text ? strdup(text) : NULL
+    });
+}
+
+// Stroke (outline) text — STUB. AppKit outline is CGContextSetTextDrawingMode
+// (kCGTextStroke) or a CGPath from CTFont; deferred to when we're next on the
+// Mac mini. No-op keeps the ABI linkable (the GTK4 backend is real).
+void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text,
+                                        double x, double y, double font_size,
+                                        double line_width, int font_flags,
+                                        const char* font_family,
+                                        double r, double g, double b, double a) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_STROKE_TEXT, .x = x, .y = y, .w = font_size,
+        .h = line_width, .iw = font_flags,
+        .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
+        .text = text ? strdup(text) : NULL
+    });
+}
+
+double aether_ui_text_measure(double size, const char* text) {
+    if (!text || !text[0]) return 0.0;
+    NSString* s = [NSString stringWithUTF8String:text];
+    if (!s) return 0.0;
+    return (double)[s sizeWithAttributes:@{
+        NSFontAttributeName: aeui_metrics_font(size)
+    }].width;
+}
+double aether_ui_font_ascent(double size)  { return (double)[aeui_metrics_font(size) ascender]; }
+double aether_ui_font_descent(double size) { return (double)-[aeui_metrics_font(size) descender]; }
+double aether_ui_font_height(double size)  { return (double)[aeui_metrics_font(size) lineHeight]; }
+
+void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
+                                       int iw, int ih,
+                                       const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    unsigned char* owned = (unsigned char*)malloc(iw * ih * 4);
+    if (!owned) return;
+    memcpy(owned, rgba, iw * ih * 4);
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .pixels = owned, .iw = iw, .ih = ih
+    });
+}
+
+// Scaled draw — REAL now (was a 1:1 stub that ignored dw/dh, which made
+// every upscaled presentation — the Ebiten port's set_scale framebuffer,
+// video_frame's fitted region — render at source-pixel size on this
+// backend only). The command carries the dest extent in w/h and the
+// executor hands CGContextDrawImage a dest rect of that size; CG scales
+// natively, same as GTK4's cairo path and win32's StretchBlt.
+void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
+                                       double dw, double dh, int iw, int ih,
+                                       const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    unsigned char* owned = (unsigned char*)malloc(iw * ih * 4);
+    if (!owned) return;
+    memcpy(owned, rgba, iw * ih * 4);
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .w = dw, .h = dh,
+        .pixels = owned, .iw = iw, .ih = ih
+    });
+}
+
+extern double floatarr_get_unchecked(void* arr, int i);
+
+static void macos_copy_stops(CanvasCmd* c, int n_stops,
+                              void* offsets, void* rgba) {
+    c->n_stops = n_stops;
+    c->stop_off = (double*)malloc(sizeof(double) * (n_stops > 0 ? n_stops : 1));
+    c->stop_rgba = (double*)malloc(sizeof(double) * (n_stops > 0 ? n_stops*4 : 1));
+    for (int i = 0; i < n_stops; i++) {
+        c->stop_off[i] = floatarr_get_unchecked(offsets, i);
+        c->stop_rgba[i*4+0] = floatarr_get_unchecked(rgba, i*4+0);
+        c->stop_rgba[i*4+1] = floatarr_get_unchecked(rgba, i*4+1);
+        c->stop_rgba[i*4+2] = floatarr_get_unchecked(rgba, i*4+2);
+        c->stop_rgba[i*4+3] = floatarr_get_unchecked(rgba, i*4+3);
+    }
+}
+
+void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id,
+        double x1, double y1, double x2, double y2,
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join) {
+    CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR,
+                      .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
+                      .grad_line_width = line_width, .grad_extend = extend,
+                      .iw = cap, .ih = join };
+    macos_copy_stops(&cmd, n_stops, offsets, rgba);
+    canvas_add_cmd(canvas_id, cmd);
+}
+
+void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id,
+        double cx, double cy, double radius, double fx, double fy,
+        int n_stops, void* offsets, void* rgba, double line_width, int extend,
+        int cap, int join, double rx, double ry, double rot_deg) {
+    CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL,
+                      .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
+                      .grad_line_width = line_width, .grad_extend = extend,
+                      .iw = cap, .ih = join,
+                      .grx = rx, .gry = ry, .grot = rot_deg };
+    macos_copy_stops(&cmd, n_stops, offsets, rgba);
+    canvas_add_cmd(canvas_id, cmd);
+}
+
+void aether_ui_canvas_clear_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return;
+    for (int i = 0; i < cs->count; i++) {
+        CanvasCmd* c = &cs->cmds[i];
+        if (c->type == CANVAS_FILL_TEXT && c->text) {
+            free(c->text); c->text = NULL;
+        }
+        if (c->type == CANVAS_DRAW_IMAGE && c->pixels) {
+            free(c->pixels); c->pixels = NULL;
+        }
+        if (c->type == CANVAS_FILL_LINEAR || c->type == CANVAS_FILL_RADIAL) {
+            free(c->stop_off);  c->stop_off = NULL;
+            free(c->stop_rgba); c->stop_rgba = NULL;
+        }
+    }
+    cs->count = 0;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
+    if (v) [v setNeedsDisplay];
+}
+
+void aether_ui_canvas_redraw_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
+    if (v) [v setNeedsDisplay];
+}
+
+int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
+                                     int width, int height) {
+    // Replay the command buffer into a CGBitmapContext and read one pixel
+    // — the same headless route canvas_write_png takes (and the same
+    // contract as GTK4's cairo replay). Was a -1 stub, which made every
+    // pixel probe read as ink and let colour-comparison specs pass
+    // vacuously on this backend.
+    if (px < 0 || py < 0 || px >= width || py >= height) return -1;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return -1;
+    __block int result = -1;
+    void (^work)(void) = ^{
+        CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
+        unsigned char* buf = calloc((size_t)width * (size_t)height, 4);
+        if (!buf) { CGColorSpaceRelease(cspace); return; }
+        CGContextRef cg = CGBitmapContextCreate(
+            buf, (size_t)width, (size_t)height, 8, (size_t)width * 4, cspace,
+            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(cspace);
+        if (!cg) { free(buf); return; }
+        // Canvas coords are y-down; the bitmap is y-up (see canvas_write_png).
+        CGContextTranslateCTM(cg, 0, height);
+        CGContextScaleCTM(cg, 1.0, -1.0);
+        UIGraphicsPushContext(cg);
+        canvas_replay(cg, cs);
+        UIGraphicsPopContext();
+        CGContextRelease(cg);
+        // RGBA8 big-endian: byte order in memory is R,G,B,A.
+        unsigned char* p8 = buf + ((size_t)py * (size_t)width + (size_t)px) * 4;
+        result = ((int)p8[3] << 24) | ((int)p8[0] << 16)
+               | ((int)p8[1] << 8) | (int)p8[2];
+        free(buf);
+    };
+    if ([NSThread isMainThread]) work();
+    else dispatch_sync(dispatch_get_main_queue(), work);
+    return result;
+}
+
+int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
+                                     int width, int height) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !path || width <= 0 || height <= 0) return 0;
+    CGColorSpaceRef cspace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef cg = CGBitmapContextCreate(
+        NULL, (size_t)width, (size_t)height, 8, 0, cspace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cspace);
+    if (!cg) return 0;
+    // Command buffer is y-down (top-left); a bitmap context is y-up — flip.
+    CGContextTranslateCTM(cg, 0, height);
+    CGContextScaleCTM(cg, 1.0, -1.0);
+    // Text draws into the CURRENT UIKit context, so back it with this bitmap for
+    // the replay (the AppKit backend does the same via NSGraphicsContext).
+    UIGraphicsPushContext(cg);
+    canvas_replay(cg, cs);
+    UIGraphicsPopContext();
+    CGImageRef img = CGBitmapContextCreateImage(cg);
+    CGContextRelease(cg);
+    if (!img) return 0;
+    NSString* p = [NSString stringWithUTF8String:path];
+    NSURL* url = [NSURL fileURLWithPath:p];
+    CGImageDestinationRef dest = CGImageDestinationCreateWithURL(
+        (__bridge CFURLRef)url, (__bridge CFStringRef)@"public.png", 1, NULL);
+    if (!dest) { CGImageRelease(img); return 0; }
+    CGImageDestinationAddImage(dest, img, NULL);
+    BOOL ok = CGImageDestinationFinalize(dest);
+    CFRelease(dest);
+    CGImageRelease(img);
+    return ok ? 1 : 0;
+}
+
+void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
+                                          int iw, int ih,
+                                          const unsigned char* rgba, int byte_len) {
+    aether_ui_canvas_draw_image_impl(canvas_id, x, y, iw, ih, rgba, byte_len);
+}
+
+/* ptr-typed twin of the scaled blit, mirroring draw_image_impl_ptr: the
+   Aether type system distinguishes string vs ptr, C does not. */
+void aether_ui_canvas_draw_image_scaled_impl_ptr(int canvas_id, double x, double y,
+                                                 double dw, double dh, int iw, int ih,
+                                                 const unsigned char* rgba, int byte_len) {
+    aether_ui_canvas_draw_image_scaled_impl(canvas_id, x, y, dw, dh, iw, ih, rgba, byte_len);
+}
+
+// No retained paint surface on this backend yet (Stage 2.5b), so there is
+// nothing to sample. -1 = "cannot answer", distinct from 0 = "painted
+// nothing".
+int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
+    (void)canvas_id;
+    return -1;
+}
+
+// ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
 // Every remaining ABI entry the app can call, defined so the backend links.
-// Each returns a safe default and is a TODO for a later pass that ports the
-// corresponding AppKit section of aether_ui_macos.m to UIKit. The real work
-// moves them OUT of this block into proper sections above, as pass 2 did.
+// Each returns a safe default and is a TODO for a later pass. The real work
+// moves them OUT of this block into proper sections above, as passes 1-3 did.
 // ===========================================================================
 
 void aether_ui_alert_impl(const char* title, const char* message) { }  // TODO(ios)
@@ -953,44 +2093,6 @@ void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert
 void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) { }  // TODO(ios)
 void aether_ui_bind_text_impl(int state_handle, int widget_handle, int decimals) { }  // TODO(ios)
 void aether_ui_bind_value(int state_handle, int widget_handle) { }  // TODO(ios)
-void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius, double start_angle, double end_angle) { }  // TODO(ios)
-void aether_ui_canvas_begin_path_impl(int canvas_id) { }  // TODO(ios)
-void aether_ui_canvas_clear_impl(int canvas_id) { }  // TODO(ios)
-void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y, double w, double h) { }  // TODO(ios)
-void aether_ui_canvas_close_path_impl(int canvas_id) { }  // TODO(ios)
-int aether_ui_canvas_cmd_count_impl(int canvas_id) { return 0; }  // TODO(ios)
-int aether_ui_canvas_create_impl(int width, int height) { return 0; }  // TODO(ios)
-void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y, int iw, int ih, const unsigned char* rgba, int byte_len) { }  // TODO(ios)
-void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y, int iw, int ih, const unsigned char* rgba, int byte_len) { }  // TODO(ios)
-void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y, double dw, double dh, int iw, int ih, const unsigned char* rgba, int byte_len) { }  // TODO(ios)
-void aether_ui_canvas_draw_image_scaled_impl_ptr(int canvas_id, double x, double y, double dw, double dh, int iw, int ih, const unsigned char* rgba, int byte_len) { }  // TODO(ios)
-void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a, int even_odd) { }  // TODO(ios)
-void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id, double x1, double y1, double x2, double y2, int n_stops, void* offsets, void* rgba, double line_width, int extend, int cap, int join) { }  // TODO(ios)
-void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id, double cx, double cy, double radius, double fx, double fy, int n_stops, void* offsets, void* rgba, double line_width, int extend, int cap, int join, double rx, double ry, double rot_deg) { }  // TODO(ios)
-void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y, double w, double h, double r, double g, double b, double a) { }  // TODO(ios)
-void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text, double x, double y, double font_size, int font_flags, const char* font_family, double r, double g, double b, double a) { }  // TODO(ios)
-void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-int aether_ui_canvas_get_widget(int canvas_id) { return 0; }  // TODO(ios)
-void aether_ui_canvas_group_begin_impl(int canvas_id) { }  // TODO(ios)
-void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) { }  // TODO(ios)
-void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) { }  // TODO(ios)
-void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y) { }  // TODO(ios)
-void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) { }  // TODO(ios)
-int aether_ui_canvas_painted_pixels_impl(int canvas_id) { return 0; }  // TODO(ios)
-int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py, int width, int height) { return 0; }  // TODO(ios)
-void aether_ui_canvas_redraw_impl(int canvas_id) { }  // TODO(ios)
-int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end, double ox, double oy, int width, int height, unsigned char* out, int out_len) { return 0; }  // TODO(ios)
-void aether_ui_canvas_reset_clip_impl(int canvas_id) { }  // TODO(ios)
-void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) { }  // TODO(ios)
-void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b, double a, double line_width, int cap, int join) { }  // TODO(ios)
-void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text, double x, double y, double font_size, double line_width, int font_flags, const char* font_family, double r, double g, double b, double a) { }  // TODO(ios)
-int aether_ui_canvas_write_png_impl(int canvas_id, const char* path, int width, int height) { return 0; }  // TODO(ios)
 char* aether_ui_clipboard_read_impl(void) { return (void*)0; }  // TODO(ios)
 void aether_ui_clipboard_write_impl(const char* text) { }  // TODO(ios)
 void aether_ui_close_window_by_handle_impl(int win_handle) { }  // TODO(ios)
@@ -1012,9 +2114,6 @@ int aether_ui_fire_scroll(int container_handle, int dy) { return 0; }  // TODO(i
 int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
 void aether_ui_focus_impl(int handle) { }  // TODO(ios)
 int aether_ui_focused_widget(void) { return 0; }  // TODO(ios)
-double aether_ui_font_ascent(double size) { return 0.0; }  // TODO(ios)
-double aether_ui_font_descent(double size) { return 0.0; }  // TODO(ios)
-double aether_ui_font_height(double size) { return 0.0; }  // TODO(ios)
 int aether_ui_form_create(void) { return 0; }  // TODO(ios)
 int aether_ui_form_section_create(const char* title) { return 0; }  // TODO(ios)
 int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) { return 0; }  // TODO(ios)
@@ -1124,7 +2223,6 @@ int aether_ui_tabs_create(void* boxed_closure) { return 0; }  // TODO(ios)
 void aether_ui_tabs_select(int tabs_handle, int index) { }  // TODO(ios)
 int aether_ui_tabs_selected(int tabs_handle) { return 0; }  // TODO(ios)
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) { }  // TODO(ios)
-double aether_ui_text_measure(double size, const char* text) { return 0.0; }  // TODO(ios)
 void aether_ui_text_set_string(int handle, const char* text) { }  // TODO(ios)
 void aether_ui_timer_cancel_impl(int timer_id) { }  // TODO(ios)
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) { return 0; }  // TODO(ios)

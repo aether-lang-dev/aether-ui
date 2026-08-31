@@ -77,6 +77,7 @@ builder ui_backend(root: string) {
         link_flag("-framework UIKit")       // AppKit's iOS counterpart
         link_flag("-framework Foundation")
         link_flag("-framework QuartzCore")
+        link_flag("-framework CoreGraphics")  // canvas: CGBitmapContext/CGGradient
         link_flag("-framework CoreText")    // text metrics (vg.text_extent)
         link_flag("-framework ImageIO")     // headless canvas_write_png
     }
