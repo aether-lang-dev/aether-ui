@@ -1948,6 +1948,8 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     [field setBezeled:YES];
     if (placeholder && *placeholder) {
         [field setPlaceholderString:[NSString stringWithUTF8String:placeholder]];
+        objc_setAssociatedObject(field, "aeui-placeholder",
+            [NSString stringWithUTF8String:placeholder], OBJC_ASSOCIATION_RETAIN);
     }
     if (boxed_closure) {
         AetherTextFieldDelegate* d = [[AetherTextFieldDelegate alloc] init];
@@ -2013,6 +2015,8 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
     [field setTranslatesAutoresizingMaskIntoConstraints:NO];
     if (placeholder && *placeholder) {
         [field setPlaceholderString:[NSString stringWithUTF8String:placeholder]];
+        objc_setAssociatedObject(field, "aeui-placeholder",
+            [NSString stringWithUTF8String:placeholder], OBJC_ASSOCIATION_RETAIN);
     }
     if (boxed_closure) {
         AetherTextFieldDelegate* d = [[AetherTextFieldDelegate alloc] init];
@@ -2232,9 +2236,45 @@ int aether_ui_picker_get_selected(int handle) {
 }
 @end
 
+/* NSTextView has no placeholderString -- that is NSTextField's, and the
+   textarea is a text VIEW inside a scroll view. So the hint is drawn: the
+   subclass paints it in the disabled-text colour whenever the buffer is empty
+   and the view is not being edited, which is what AppKit's own field does and
+   what GtkTextView needs a hand-rolled equivalent for too. Win32 got this for
+   free from EM_SETCUEBANNER and was the only backend honouring the argument. */
+@interface AetherPlaceholderTextView : NSTextView
+@property (copy) NSString* aeuiPlaceholder;
+@end
+@implementation AetherPlaceholderTextView
+- (void)drawRect:(NSRect)dirty {
+    [super drawRect:dirty];
+    if (!self.aeuiPlaceholder || [self.aeuiPlaceholder length] == 0) return;
+    if ([[self string] length] > 0) return;
+    NSDictionary* attrs = @{
+        NSFontAttributeName: ([self font] ? [self font]
+                                          : [NSFont systemFontOfSize:0]),
+        NSForegroundColorAttributeName: [NSColor disabledControlTextColor]
+    };
+    // Inset by the container's own origin so the hint sits where typed text
+    // will, rather than hard against the view's edge.
+    NSPoint at = NSMakePoint([self textContainerInset].width + 2.0,
+                             [self textContainerInset].height);
+    [self.aeuiPlaceholder drawAtPoint:at withAttributes:attrs];
+}
+@end
+
+const char* aether_ui_placeholder_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return "";
+    NSString* ph = objc_getAssociatedObject(v, "aeui-placeholder");
+    return ph ? [ph UTF8String] : "";
+}
+
 int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
-    (void)placeholder;
-    NSTextView* tv = [[NSTextView alloc] init];
+    AetherPlaceholderTextView* tv = [[AetherPlaceholderTextView alloc] init];
+    if (placeholder && *placeholder) {
+        tv.aeuiPlaceholder = [NSString stringWithUTF8String:placeholder];
+    }
     [tv setRichText:NO];
     [tv setEditable:YES];
     [tv setSelectable:YES];
@@ -2257,6 +2297,10 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
 
     int scroll_handle = register_widget_typed((__bridge void*)scrollView, AUI_TEXTAREA);
     register_widget_typed((__bridge void*)tv, AUI_TEXTAREA_INNER);
+    if (placeholder && *placeholder) {
+        objc_setAssociatedObject(scrollView, "aeui-placeholder",
+            [NSString stringWithUTF8String:placeholder], OBJC_ASSOCIATION_RETAIN);
+    }
     return scroll_handle;
 }
 

@@ -1437,6 +1437,8 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     GtkWidget* entry = gtk_entry_new();
     if (placeholder && *placeholder) {
         gtk_entry_set_placeholder_text(GTK_ENTRY(entry), placeholder);
+        g_object_set_data_full(G_OBJECT(entry), "aeui-placeholder",
+                               g_strdup(placeholder), g_free);
     }
     if (boxed_closure) {
         g_signal_connect(entry, "changed", G_CALLBACK(on_entry_changed), boxed_closure);
@@ -1472,6 +1474,8 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
         GtkWidget* text_widget = gtk_widget_get_first_child(entry);
         if (text_widget && GTK_IS_TEXT(text_widget)) {
             gtk_text_set_placeholder_text(GTK_TEXT(text_widget), placeholder);
+        g_object_set_data_full(G_OBJECT(entry), "aeui-placeholder",
+                               g_strdup(placeholder), g_free);
         }
     }
     if (boxed_closure) {
@@ -1743,6 +1747,25 @@ static void on_textbuffer_changed(GtkTextBuffer* buffer, gpointer data) {
     }
 }
 
+/* GtkTextView has no placeholder-text property -- that is GtkEntry's, and the
+   textarea is a text VIEW. The idiomatic GTK4 substitute is an overlay: a
+   dimmed label sitting on top of the view, hidden the moment the buffer is
+   non-empty. Kept in sync from the buffer's own "changed" signal, so it is
+   correct however the text arrives (typed, pasted, or set by the app through
+   textarea_set_text). */
+static void aeui_textarea_sync_placeholder(GtkTextBuffer* buf, gpointer data) {
+    GtkWidget* label = GTK_WIDGET(data);
+    if (!GTK_IS_WIDGET(label)) return;
+    gtk_widget_set_visible(label, gtk_text_buffer_get_char_count(buf) == 0);
+}
+
+const char* aether_ui_placeholder_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return "";
+    const char* p = (const char*)g_object_get_data(G_OBJECT(w), "aeui-placeholder");
+    return p ? p : "";
+}
+
 int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     ensure_gtk_init();
     GtkWidget* textview = gtk_text_view_new();
@@ -1755,9 +1778,47 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     // Wrap in a scrolled window
     GtkWidget* scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scrolled), 80);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), textview);
     gtk_widget_set_vexpand(scrolled, TRUE);
     gtk_widget_set_hexpand(scrolled, TRUE);
+
+    if (placeholder && *placeholder) {
+        /* The overlay wraps the TEXT VIEW, not the scrolled window, so the
+           hint scrolls and clips with the content instead of floating over
+           the frame. The label must not take input, or it would eat clicks
+           meant for the view underneath it. */
+        GtkWidget* ov = gtk_overlay_new();
+        gtk_overlay_set_child(GTK_OVERLAY(ov), textview);
+        GtkWidget* hint = gtk_label_new(placeholder);
+        gtk_widget_set_halign(hint, GTK_ALIGN_START);
+        gtk_widget_set_valign(hint, GTK_ALIGN_START);
+        gtk_widget_set_margin_start(hint, 6);
+        gtk_widget_set_margin_top(hint, 4);
+        gtk_widget_set_can_target(hint, FALSE);
+        gtk_widget_set_can_focus(hint, FALSE);
+        gtk_widget_add_css_class(hint, "dim-label");
+        gtk_overlay_add_overlay(GTK_OVERLAY(ov), hint);
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), ov);
+
+        GtkTextBuffer* pbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview));
+        g_signal_connect(pbuf, "changed",
+                         G_CALLBACK(aeui_textarea_sync_placeholder), hint);
+        aeui_textarea_sync_placeholder(pbuf, hint);
+        g_object_set_data(G_OBJECT(textview), "aeui-placeholder-label", hint);
+        /* Stashed on BOTH halves, because the two backends disagree about
+           which one IS the textarea: this backend reports the TEXT VIEW as
+           "textarea" (GTK_IS_TEXT_VIEW) and the scrolled window as
+           "scrollview", while AppKit registers the SCROLL VIEW as
+           AUI_TEXTAREA and its inner view as AUI_TEXTAREA_INNER. So a spec
+           that looks a textarea up by type gets a different widget per
+           platform. Answering from either handle costs one extra pointer and
+           means the readback does not depend on that disagreement. */
+        g_object_set_data_full(G_OBJECT(scrolled), "aeui-placeholder",
+                               g_strdup(placeholder), g_free);
+        g_object_set_data_full(G_OBJECT(textview), "aeui-placeholder",
+                               g_strdup(placeholder), g_free);
+    } else {
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), textview);
+    }
 
     if (boxed_closure) {
         GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview));
