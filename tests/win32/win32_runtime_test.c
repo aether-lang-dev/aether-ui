@@ -97,6 +97,46 @@ static void canvas_clip_and_reset(void) {
     expect_ne(px(cid, 25, 75), BLUE, "reset: the untouched quadrant stayed clear");
 }
 
+// True group opacity: two overlapping opaque rects inside one group, painted
+// once at the group alpha. The property that matters is that the overlap is
+// the SAME colour as the parts either rect covers alone. Painting each child
+// at the alpha instead makes the overlap darker, which is the defect the
+// feature exists to prevent, and it is asserted as an equality so it does not
+// depend on the exact blend arithmetic.
+//
+// GDI+ ONLY, and deliberately so. The legacy replay has no group case at all:
+// compositing a layer needs per-pixel alpha and GDI has none, which is why
+// GDI+ is the default renderer. Asserting it on legacy would be asserting a
+// limitation of the API rather than anything about this code.
+static void canvas_group_opacity(void) {
+    if (strcmp(renderer, "gdiplus") != 0) {
+        printf("  skip [%s] group opacity: needs per-pixel alpha, GDI has none\n",
+               renderer);
+        return;
+    }
+
+    int cid = aether_ui_canvas_create_impl(100, 100);
+    if (cid < 1) {
+        printf("  FAIL [%s] canvas_create returned %d\n", renderer, cid);
+        failures++;
+        return;
+    }
+
+    aether_ui_canvas_group_begin_impl(cid);
+    aether_ui_canvas_fill_rect_impl(cid,  0.0, 0.0, 60.0, 60.0, 1.0, 0.0, 0.0, 1.0);
+    aether_ui_canvas_fill_rect_impl(cid, 40.0, 0.0, 60.0, 60.0, 1.0, 0.0, 0.0, 1.0);
+    aether_ui_canvas_group_end_impl(cid, 0.5);
+
+    unsigned only_a  = px(cid, 20, 30);
+    unsigned overlap = px(cid, 50, 30);
+    unsigned only_b  = px(cid, 80, 30);
+
+    expect_eq(overlap, only_a, "group: the overlap did not double-darken");
+    expect_eq(only_b,  only_a, "group: both children blended alike");
+    expect_ne(only_a, RED,        "group: the alpha was actually applied");
+    expect_ne(only_a, 0xFFFFFFFFu, "group: and something was painted");
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -107,6 +147,7 @@ int main(void) {
     printf("win32 runtime test (renderer: %s)\n", renderer);
 
     canvas_clip_and_reset();
+    canvas_group_opacity();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);
