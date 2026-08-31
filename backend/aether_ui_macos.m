@@ -2904,6 +2904,9 @@ static NSAccessibilityRole aeui_ns_role(const char* role) {
     if (!strcmp(role, "image"))       return NSAccessibilityImageRole;
     if (!strcmp(role, "group"))       return NSAccessibilityGroupRole;
     if (!strcmp(role, "list"))        return NSAccessibilityListRole;
+    if (!strcmp(role, "table"))       return NSAccessibilityTableRole;
+    if (!strcmp(role, "columnheader")) return NSAccessibilityColumnRole;
+    if (!strcmp(role, "row"))         return NSAccessibilityRowRole;
     if (!strcmp(role, "listitem"))    return NSAccessibilityRowRole;
     if (!strcmp(role, "tab"))         return NSAccessibilityRadioButtonRole;
     if (!strcmp(role, "tablist"))     return NSAccessibilityTabGroupRole;
@@ -2928,6 +2931,8 @@ static const char* aeui_role_name_from_ns(NSAccessibilityRole r) {
     if ([r isEqualToString:NSAccessibilityImageRole])             return "image";
     if ([r isEqualToString:NSAccessibilityGroupRole])             return "group";
     if ([r isEqualToString:NSAccessibilityListRole])              return "list";
+    if ([r isEqualToString:NSAccessibilityTableRole])             return "table";
+    if ([r isEqualToString:NSAccessibilityColumnRole])            return "columnheader";
     if ([r isEqualToString:NSAccessibilityRowRole])               return "listitem";
     if ([r isEqualToString:NSAccessibilityTabGroupRole])          return "tablist";
     if ([r isEqualToString:NSAccessibilityMenuRole])              return "menu";

@@ -242,6 +242,23 @@ main() {
             uidriver.window_key("Up")
             spec.assert_eq(selected_row_id(), first, "Up came back")
         }
+
+        // Structure, not just content. Before this the table announced nothing
+        // to assistive tech: an unlabelled stack of buttons above a list. The
+        // ROWS already announced correctly (listbox gives them the listitem
+        // role, which AppKit maps to NSAccessibilityRowRole), so the structure
+        // was described from the row down but never from the table in.
+        spec.it("announces itself as a table with column headers") callback {
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "\"role\":\"table\"",
+                                 "the table announces the table role")
+            spec.assert_contains(b, "\"role\":\"columnheader\"",
+                                 "its headers announce as column headers")
+            hdrs = uidriver.count_occurrences(b, "\"role\":\"columnheader\"")
+            spec.assert_gt(hdrs, 1, "every column gets a header role, not just one")
+            spec.assert_contains(b, "\"role\":\"listitem\"",
+                                 "rows still announce as rows")
+        }
     }
     return spec.run_summary(fw)
 }
