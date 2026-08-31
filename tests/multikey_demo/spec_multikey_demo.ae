@@ -56,5 +56,5 @@ main() {
             spec.assert_str_eq(label("b: "), "3", "second handler still live")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

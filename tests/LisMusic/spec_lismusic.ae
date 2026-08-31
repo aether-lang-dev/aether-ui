@@ -86,5 +86,5 @@ main() {
             uidriver.post_ok("/widget/${pb}/click", "toggle play/pause")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

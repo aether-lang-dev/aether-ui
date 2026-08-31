@@ -48,5 +48,5 @@ main() {
             spec.assert_str_eq(txt, "Yellow", "label shows Yellow")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

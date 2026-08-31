@@ -86,5 +86,5 @@ main() {
                 "no icon widget is left empty")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

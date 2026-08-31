@@ -63,5 +63,5 @@ main() {
             spec.assert_str_eq(row_bg(), "#336699", "base colour restored")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

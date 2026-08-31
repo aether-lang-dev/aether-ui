@@ -62,5 +62,5 @@ main() {
             spec.assert_true(ok2, "delete flow armed by the shortcut")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

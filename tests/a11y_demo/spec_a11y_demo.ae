@@ -72,5 +72,5 @@ main() {
                 "the heading role is in /widgets")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

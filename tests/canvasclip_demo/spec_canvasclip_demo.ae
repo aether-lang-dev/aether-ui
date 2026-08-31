@@ -61,5 +61,5 @@ main() {
             spec.assert_true(pixel_at(25, 75) != red(), "past the bottom edge is unpainted")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

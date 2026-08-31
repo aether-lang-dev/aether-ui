@@ -43,5 +43,5 @@ main() {
             spec.assert_true(ok, "Ctrl+K Ctrl+S fired the chord")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

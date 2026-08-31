@@ -67,5 +67,5 @@ main() {
                 "a sheet with no colour leaves the old colour — no CSS-style revert")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

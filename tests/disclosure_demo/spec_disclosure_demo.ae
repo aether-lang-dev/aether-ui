@@ -71,7 +71,7 @@ main() {
                 "no section still open")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }
 
 // Does at least one widget report BOTH visible:false and h:0? Scans each

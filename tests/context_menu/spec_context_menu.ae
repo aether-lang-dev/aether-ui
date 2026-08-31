@@ -45,5 +45,5 @@ main() {
             spec.assert_true(ok, "button renamed via its menu")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }
