@@ -87,5 +87,5 @@ main() {
                 "the bar is still its pinned height")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

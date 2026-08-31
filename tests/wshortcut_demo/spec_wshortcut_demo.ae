@@ -42,5 +42,5 @@ main() {
             spec.assert_str_eq(status(), "city", "the city scope won, not name")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

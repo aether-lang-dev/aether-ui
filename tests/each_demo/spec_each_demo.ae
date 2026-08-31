@@ -74,5 +74,5 @@ main() {
             spec.assert_true(ok2, "fresh per-item closure fires correctly")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

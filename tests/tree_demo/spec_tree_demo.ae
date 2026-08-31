@@ -112,5 +112,5 @@ main() {
             spec.assert_eq(selected_row_id(), first, "Up came back")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

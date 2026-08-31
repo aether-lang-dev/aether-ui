@@ -82,5 +82,5 @@ main() {
             spec.assert_contains(body, "\"classes\":\"chip\"", "class carried")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

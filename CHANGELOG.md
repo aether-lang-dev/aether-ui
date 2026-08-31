@@ -9,17 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The spec suite compiles under current aether. 79 of the 83 specs ended with
-  `return spec.run_summary(fw)`, but `run_summary` returns void — the pinned
-  ae (v0.553.0) tolerates returning a void expression and the current one
-  (v0.613.0) rejects it with `assigning to 'int' from incompatible type
-  'void'`. So the suite could not be compiled by any newer toolchain, and
-  bumping `AETHER_REF` would have broken 79 specs at once. The `return` is
-  dropped; it never carried anything, because `run_summary` sets the process
-  status itself with `exit(1)` when a case fails.
-  Verified rather than assumed: a spec run against no server still reports its
-  failures and still exits 1 (29 failing, rc=1), so failure detection is
-  unchanged.
+- Every spec returns its `run_summary` verdict again. A previous change in this
+  series stripped the `return` from 83 of them on the strength of a local
+  `~/.aether` stdlib where `run_summary` was void and called `exit(1)` — a
+  stale install, not what CI resolves. The repo had already moved to aether
+  v0.613.0, where `run_summary` RETURNS its verdict so that cleanup after a run
+  is not skipped on exactly the failing runs that need it, and `ci.sh` judges a
+  spec purely by the process exit status (`local rc=$?` / `return $rc`). A bare
+  call therefore discards the verdict, and the workflow comment says plainly
+  what that costs: a failing suite reports green. All 83 now return it,
+  including four that were bare before and would have had the same problem.
 
 ### Added
 

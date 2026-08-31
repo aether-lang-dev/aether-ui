@@ -69,7 +69,7 @@ main() {
             spec.assert_true(ink1 > 60, "still inked after rotate (${ink1})")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }
 
 // The "v0: x,y" payload, or "" if absent.

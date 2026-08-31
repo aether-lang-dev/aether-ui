@@ -113,5 +113,5 @@ main() {
             spec.assert_true(ok1, "resize re-fired on_layout with the new width")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }
