@@ -14,9 +14,10 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: 110 of the 287 ABI functions are REAL; the rest are honest, compiling
-// `// TODO(ios)` stubs at the foot of the file, so the backend links and is
-// gated by the iOS SDK compile check in ci.sh (Phase 1e). Each pass moves a
+// STATUS: ~118 of the 287 ABI functions are REAL; the rest are honest,
+// compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
+// and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
+// which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
 // section out of the stub block into a real implementation, as the Win32/AppKit
 // backends grew.
 //   pass 1 — lifecycle, widget registry, stack layout, core widgets (text,
@@ -32,6 +33,10 @@
 //            CG/CoreText executor is lifted verbatim from the AppKit backend
 //            (identical APIs), so every vg app — rubiks_cube, boing, the clocks
 //            — renders on iOS from the same .ae source as desktop.
+//   pass 4 — timers (NSTimer, drives vg.live's refresh loop), a real headless
+//            run loop so the driver server stays alive and serves (matching the
+//            other backends), and a one-shot headless canvas snapshot facility
+//            (AETHER_UI_SNAPSHOT_DIR) for windowless PNG capture.
 //
 // Build (simulator, from ci.sh Phase 1e):
 //   clang -fobjc-arc -target arm64-apple-ios-simulator -isysroot <SimSDK> \
@@ -228,11 +233,40 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
     g_root_handle = root_handle;
 }
 
+// Headless canvas snapshot — defined in the canvas section (needs canvas_states
+// in scope). Writes every canvas to <dir>/canvas_<id>.png through the same
+// offscreen write_png path the goldens use.
+static void aeui_snapshot_canvases(const char* dir);
+static void aeui_prime_canvases(void);
+
 void aether_ui_app_run_raw(int app_handle) {
     (void)app_handle;
-    // Under headless CI there is no host to run a UIApplication against, and the
-    // compile gate never reaches here — so return rather than block.
-    if (aeui_is_headless()) return;
+    // Headless: there is no host to run a UIApplication against, but the process
+    // must STAY ALIVE so the driver test server (started before this in
+    // surface_run_impl) can serve — the widget tree and canvas command buffer
+    // are already built by the window(){} block body. A bare CFRunLoop keeps us
+    // alive AND services the main queue, which is required because the server
+    // thread's read_pixel/redraw routes marshal to main via dispatch. This is
+    // what lets the UIKit backend be driven headlessly (e.g. under Mac Catalyst)
+    // exactly as the AppKit/GTK4/win32 backends are. /shutdown exits the process.
+    if (aeui_is_headless()) {
+        // One-shot headless render: dump every canvas to PNG and exit, so an
+        // app's scene can be captured with no window, driver or display —
+        // house rule #4 (everything renderable renders via write_png).
+        const char* snap = getenv("AETHER_UI_SNAPSHOT_DIR");
+        if (snap && snap[0]) {
+            // Give each canvas its allocation (on_resize never fires with no
+            // window, so the vg viewBox→px map would stay degenerate), then let
+            // refresh timers run so an ANIMATED scene (vg.live scene_set_
+            // refreshing) emits a frame into the command buffer before capture.
+            aeui_prime_canvases();
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, false);
+            aeui_snapshot_canvases(snap);
+            return;
+        }
+        CFRunLoopRun();
+        return;
+    }
     @autoreleasepool {
         char arg0[] = "aether-ui";
         char* argv[] = { arg0, NULL };
@@ -1033,6 +1067,7 @@ typedef struct {
     // summed area, matching gtk4 and win32 so the Stage-2.5 clip regression
     // reads the same numbers on all three backends.
     int paint_full_count, paint_clip_count_total, last_clip_area;
+    int created_w, created_h;  // natural size at creation (for headless snapshot)
 } CanvasState;
 
 static CanvasState* canvas_states = NULL;
@@ -1689,6 +1724,8 @@ int aether_ui_canvas_create_impl(int width, int height) {
     int canvas_id = canvas_state_count;
     v.canvasId = canvas_id;
     cs->widget_handle = register_widget_typed((__bridge void*)v, AUI_CANVAS);
+    cs->created_w = width;
+    cs->created_h = height;
     return canvas_id;
 }
 
@@ -2063,6 +2100,39 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
     return ok ? 1 : 0;
 }
 
+// Headless one-shot snapshot: write every canvas to <dir>/canvas_<id>.png at
+// its natural (creation) size, through the offscreen write_png path. Lets an
+// app's rendered scene be captured with no window/driver/display — used by
+// aether_ui_app_run_raw when AETHER_UI_SNAPSHOT_DIR is set.
+// Deliver each canvas its natural size through on_resize, and lay the view out
+// at that size, so a vg scene that maps its viewBox to the allocation has a
+// non-degenerate one before the first headless frame.
+static void aeui_prime_canvases(void) {
+    for (int id = 1; id <= canvas_state_count; id++) {
+        CanvasState* cs = get_canvas_state(id);
+        if (!cs) continue;
+        int w = cs->created_w > 0 ? cs->created_w : 512;
+        int h = cs->created_h > 0 ? cs->created_h : 512;
+        UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
+        if (v) { v.frame = CGRectMake(0, 0, w, h); [v layoutIfNeeded]; }
+        if (cs->on_resize && cs->on_resize->fn)
+            ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
+                cs->on_resize->env, (intptr_t)w, (intptr_t)h);
+    }
+}
+
+static void aeui_snapshot_canvases(const char* dir) {
+    for (int id = 1; id <= canvas_state_count; id++) {
+        CanvasState* cs = get_canvas_state(id);
+        if (!cs) continue;
+        int w = cs->created_w > 0 ? cs->created_w : 512;
+        int h = cs->created_h > 0 ? cs->created_h : 512;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/canvas_%d.png", dir, id);
+        aether_ui_canvas_write_png_impl(id, path, w, h);
+    }
+}
+
 void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
                                           int iw, int ih,
                                           const unsigned char* rgba, int byte_len) {
@@ -2083,6 +2153,32 @@ void aether_ui_canvas_draw_image_scaled_impl_ptr(int canvas_id, double x, double
 int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
     (void)canvas_id;
     return -1;
+}
+
+// --- Timers — NSTimer on the main run loop, firing the closure each tick ----
+// This is what drives vg.live's refresh loop (scene_set_refreshing) and any
+// app animation; without it a refreshing scene never repaints. 1-based ids into
+// a keep-alive array; cancel invalidates in place.
+static NSMutableArray<NSTimer*>* g_timers = nil;
+
+int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
+    if (!boxed_closure) return 0;
+    if (!g_timers) g_timers = [NSMutableArray array];
+    AeClosure* c = (AeClosure*)boxed_closure;
+    NSTimeInterval iv = (interval_ms > 0 ? interval_ms : 1) / 1000.0;
+    NSTimer* t = [NSTimer scheduledTimerWithTimeInterval:iv repeats:YES
+        block:^(NSTimer* timer) {
+            (void)timer;
+            if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+        }];
+    [g_timers addObject:t];
+    return (int)g_timers.count;   // 1-based id
+}
+
+void aether_ui_timer_cancel_impl(int timer_id) {
+    if (!g_timers || timer_id < 1 || timer_id > (int)g_timers.count) return;
+    NSTimer* t = g_timers[timer_id - 1];
+    if ((id)t != [NSNull null]) [t invalidate];
 }
 
 // --- Native list (NSTableView-backed on AppKit) -----------------------------
@@ -2249,8 +2345,6 @@ void aether_ui_tabs_select(int tabs_handle, int index) { }  // TODO(ios)
 int aether_ui_tabs_selected(int tabs_handle) { return 0; }  // TODO(ios)
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_text_set_string(int handle, const char* text) { }  // TODO(ios)
-void aether_ui_timer_cancel_impl(int timer_id) { }  // TODO(ios)
-int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) { return 0; }  // TODO(ios)
 int aether_ui_toast_impl(int win_handle, const char* text, int ms) { return 0; }  // TODO(ios)
 void aether_ui_toggle_set_group(int handle, int group_with) { }  // TODO(ios)
 int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
