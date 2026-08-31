@@ -282,7 +282,7 @@ main() {
             spec.assert_true(ok2, "Up returns to the title line")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }
 
 // First integer right after `key` in body; -1 if absent.

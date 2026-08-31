@@ -142,5 +142,5 @@ main() {
             spec.assert_contains(bd, "\"bg\":\"#e57373\"", "error reached the danger class")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

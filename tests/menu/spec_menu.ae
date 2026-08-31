@@ -67,5 +67,5 @@ main() {
                 "the second declared item is on the SAME menu")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

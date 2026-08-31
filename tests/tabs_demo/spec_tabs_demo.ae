@@ -63,5 +63,5 @@ main() {
             spec.assert_true(ok, "back on tab 0")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

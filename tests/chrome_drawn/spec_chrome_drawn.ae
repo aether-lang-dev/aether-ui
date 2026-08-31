@@ -85,5 +85,5 @@ main() {
                 "some canvas centre shows the chrome body bg (#F3F4F6)")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

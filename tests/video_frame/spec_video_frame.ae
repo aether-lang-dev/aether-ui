@@ -131,5 +131,5 @@ main() {
             spec.assert_eq(has, 1, "the presentation clock is reported")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

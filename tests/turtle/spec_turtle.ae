@@ -88,5 +88,5 @@ main() {
                 "still 100% after ~2s of doing nothing")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

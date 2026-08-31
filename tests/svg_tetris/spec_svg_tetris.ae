@@ -50,5 +50,5 @@ main() {
             spec.assert_true(ok, "P-key toggles pause via canvas_on_key")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

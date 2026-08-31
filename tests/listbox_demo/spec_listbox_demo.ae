@@ -172,5 +172,5 @@ main() {
             spec.assert_eq(selected_row(), first, "Up at the start stays put")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

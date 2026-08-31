@@ -66,5 +66,5 @@ main() {
             spec.assert_str_eq(counts(), "2 out: 1", "a single event, whatever its size")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

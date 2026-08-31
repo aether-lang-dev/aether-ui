@@ -57,5 +57,5 @@ main() {
             spec.assert_true(ok, "guard after trash (no selection)")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

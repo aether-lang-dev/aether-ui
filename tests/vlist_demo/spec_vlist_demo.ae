@@ -80,5 +80,5 @@ main() {
             spec.assert_eq(gone, 0, "row 0 scrolled out of the window")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

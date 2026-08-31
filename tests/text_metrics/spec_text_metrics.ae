@@ -42,5 +42,5 @@ main() {
             spec.assert_true(a > 0.0, "ascent positive")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

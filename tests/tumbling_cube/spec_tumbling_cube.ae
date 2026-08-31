@@ -125,5 +125,5 @@ main() {
                 "second drag counted")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

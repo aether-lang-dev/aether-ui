@@ -44,5 +44,5 @@ main() {
                 "Rescan live when idle")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

@@ -45,5 +45,5 @@ main() {
             spec.assert_eq(selected_count(), 1, "one row remains selected")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

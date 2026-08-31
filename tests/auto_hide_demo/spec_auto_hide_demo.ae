@@ -43,5 +43,5 @@ main() {
                 "sidebar hidden again after Close")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

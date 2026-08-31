@@ -120,5 +120,5 @@ main() {
             spec.assert_true(ok, "Ctrl+R reached the same command")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

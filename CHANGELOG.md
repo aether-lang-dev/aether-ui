@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The spec suite compiles under current aether. 79 of the 83 specs ended with
+  `return spec.run_summary(fw)`, but `run_summary` returns void — the pinned
+  ae (v0.553.0) tolerates returning a void expression and the current one
+  (v0.613.0) rejects it with `assigning to 'int' from incompatible type
+  'void'`. So the suite could not be compiled by any newer toolchain, and
+  bumping `AETHER_REF` would have broken 79 specs at once. The `return` is
+  dropped; it never carried anything, because `run_summary` sets the process
+  status itself with `exit(1)` when a case fails.
+  Verified rather than assumed: a spec run against no server still reports its
+  failures and still exits 1 (29 failing, rc=1), so failure detection is
+  unchanged.
+
+### Added
+
+- `table` and `tree` assert that their rows are keyboard-navigable. Both
+  compose a `listbox` for their body, so both inherited the focusable rows and
+  arrow-key navigation listbox gained — a wider effect than that change
+  claimed. Nothing pinned it, though: a future refactor moving either off
+  listbox would have taken arrow-key navigation with it, and with that the only
+  way to reach those rows without a mouse, while every other assertion in both
+  suites kept passing. `spec_table_demo` goes 13 to 14 cases and
+  `spec_tree_demo` 3 to 4.
+
+### Fixed
+
 - `window_on_key` supports more than one handler. It kept a single closure, so
   every registration replaced the last and a second `window_on_key` silently
   disabled the first. `on_key` is built on it, which means two `on_key` calls

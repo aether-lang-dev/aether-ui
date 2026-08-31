@@ -115,5 +115,5 @@ main() {
             spec.assert_true(ok3, "light again")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

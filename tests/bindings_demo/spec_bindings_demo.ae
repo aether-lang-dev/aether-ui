@@ -109,5 +109,5 @@ main() {
             spec.assert_true(okv, "idle label visible again")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }

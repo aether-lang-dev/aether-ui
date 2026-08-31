@@ -34,5 +34,5 @@ main() {
             spec.assert_contains(body, "w10=2942", "width readout exact")
         }
     }
-    return spec.run_summary(fw)
+    spec.run_summary(fw)
 }
