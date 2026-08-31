@@ -5091,6 +5091,29 @@ void aether_ui_native_list_set_count_impl(int handle, int count) {
     gtk_string_list_splice(model, 0, have, NULL);
     for (int i = 0; i < n; i++) gtk_string_list_append(model, "");
     st->n = n;
+
+    /* vlist_set runs while the window is still being built, so no layout pass
+       has happened yet and GtkListView has no allocation to virtualize
+       against. Pump the pending main-context work so the size-allocate cycle
+       runs now; this is the GTK spelling of AppKit's layoutSubtreeIfNeeded. */
+    GtkWidget* list = g_object_get_data(G_OBJECT(w), "aeui-list-view");
+    if (list) {
+        int guard = 0;
+        while (g_main_context_pending(NULL) && guard < 1000) {
+            g_main_context_iteration(NULL, FALSE);
+            guard++;
+        }
+    }
+    if (getenv("AETHER_UI_LIST_DEBUG")) {
+        GtkAdjustment* a =
+            gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(w));
+        fprintf(stderr,
+                "[list] n=%d sw_h=%d list_h=%d page=%.1f upper=%.1f\n",
+                n, gtk_widget_get_height(w),
+                list ? gtk_widget_get_height(list) : -1,
+                a ? gtk_adjustment_get_page_size(a) : -1.0,
+                a ? gtk_adjustment_get_upper(a) : -1.0);
+    }
 }
 
 void aether_ui_native_list_scroll_to_impl(int handle, int index) {

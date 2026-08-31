@@ -975,6 +975,7 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=polish_demo/spec_polish_demo \
     run_server_test "$(EX_BIN polish_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" polish_demo || FAIL=$((FAIL + 1))
+    AETHER_UI_LIST_DEBUG=1 \
     UI_SPEC=vlist_demo/spec_vlist_demo \
     run_server_test "$(EX_BIN vlist_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" vlist_demo || FAIL=$((FAIL + 1))
