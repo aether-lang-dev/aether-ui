@@ -3680,6 +3680,11 @@ int aeui_window_key_fire(const char* combo) {
 // ui.focus(handle) — explicit focus. The default Tab order is GTK's
 // focus chain over the build order; this is the override for when a
 // flow needs it (dialog primary field etc.).
+void aether_ui_set_focusable_impl(int handle, int on) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (w) gtk_widget_set_focusable(w, on ? TRUE : FALSE);
+}
+
 void aether_ui_focus_impl(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w) gtk_widget_grab_focus(w);

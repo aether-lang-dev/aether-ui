@@ -33,7 +33,7 @@ exports (
     set_button_label, set_hidden, set_window_title,
     context_menu_item, context_menu_item_accel,
     shortcut, shortcut_when, shortcut_chord, widget_shortcut,
-    window_on_key, on_key, on_file_drop, draggable, focus, focused_widget,
+    window_on_key, on_key, on_file_drop, draggable, focus, set_focusable, focused_widget,
     set_slider, get_slider, set_progress,
     bg_color, text_color, font_size, font_bold, corner_radius,
     opacity, enabled, tooltip, onclick,
@@ -208,6 +208,7 @@ extern aether_ui_widget_draggable_file_impl(handle: int, path: string)
 extern aether_ui_shortcut_when_impl(combo: string, closure: ptr, enabled: ptr)
 extern aether_ui_shortcut_chord_impl(first: string, second: string, closure: ptr)
 extern aether_ui_focus_impl(handle: int)
+extern aether_ui_set_focusable_impl(handle: int, on: int)
 extern aether_ui_focused_widget() -> int
 
 extern aether_ui_state_create(initial: float) -> int
@@ -1434,6 +1435,14 @@ on_key(widget: int, cb: fn) {
 
 // focused_widget() -> the registry handle of the widget with keyboard focus
 // (0 = none). The building block for per-widget shortcut scopes.
+// set_focusable(handle, on) — let a widget take keyboard focus. Native
+// controls decide for themselves; a CONTAINER (a stack used as a list row)
+// accepts none by default on any backend, which is what kept listbox rows
+// unreachable by keyboard despite carrying the listitem role.
+set_focusable(handle: int, on: int) {
+    aether_ui_set_focusable_impl(handle, on)
+}
+
 focused_widget() -> int {
     return aether_ui_focused_widget()
 }
@@ -3280,9 +3289,63 @@ _listbox_apply_selection(lb: *ListBox, i: int) {
     }
 }
 
+// Is the keyboard focus inside this listbox? Asked of the row handles rather
+// than of a stored "focused row", so it stays right when rows are rebuilt.
+_listbox_owns_focus(lbp: ptr) -> int {
+    lb = lbp as *ListBox
+    if lb.rows == null { return 0 }
+    f = focused_widget()
+    if f <= 0 { return 0 }
+    n = listbox_count(lbp)
+    i = 0
+    while i < n {
+        if intarr_get_raw(lb.rows, i) == f { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Arrow/Home/End navigation. Selection moves through the SAME path a click
+// takes, so on_select fires and the .aui-row-selected class moves exactly as
+// it would for a mouse -- one selection path, not two that can disagree.
+// Clamped rather than wrapped: a list that jumps from the last row back to the
+// first on Down is the behaviour every platform list deliberately avoids.
+_listbox_key(lbp: ptr, k: string, m: int) {
+    lb = lbp as *ListBox
+    n = listbox_count(lbp)
+    if n <= 0 { return }
+    cur = lb.selected
+    next = cur
+    if string.equals(k, "Down") == 1 {
+        if cur < 0 { next = 0 } else if cur + 1 < n { next = cur + 1 }
+    } else if string.equals(k, "Up") == 1 {
+        if cur < 0 { next = 0 } else if cur > 0 { next = cur - 1 }
+    } else if string.equals(k, "Home") == 1 {
+        next = 0
+    } else if string.equals(k, "End") == 1 {
+        next = n - 1
+    } else {
+        return
+    }
+    if next == cur { return }
+    _listbox_row_clicked(lbp, next)
+    _listbox_focus_row(lb, next)
+}
+
+// Keep focus on the selected row, so the next arrow key is delivered to a row
+// that is still in the list rather than to whichever one happened to be
+// focused before.
+_listbox_focus_row(lb: *ListBox, i: int) {
+    if lb.rows == null { return }
+    if i < 0 { return }
+    h = intarr_get_raw(lb.rows, i)
+    if h > 0 { focus(h) }
+}
+
 _listbox_row_clicked(lbp: ptr, i: int) {
     lb = lbp as *ListBox
     _listbox_apply_selection(lb, i)
+    _listbox_focus_row(lb, i)
     if lb.on_sel != null {
         cb = unbox_closure(lb.on_sel)
         _listbox_invoke_sel(cb, i)
@@ -3322,8 +3385,21 @@ _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
         _od = on_double_click(row) callback { _listbox_row_double(lbp, i) }
         // Built-in a11y: each row is a listitem so an AT sees list structure.
         _ar = a11y_role(row, "listitem")
+        // ...and REACHABLE, which the role alone does not make it. A plain
+        // container accepts no focus on any of the three backends, so before
+        // this a listbox announced itself as a list to an AT and then could
+        // not be moved through without a mouse.
+        set_focusable(row, 1)
     }
     _agl = a11y_role(each_parent(lb.group), "list")
+    // ONE key handler for the whole listbox, not one per row. window_on_key
+    // keeps a SINGLE closure -- each registration replaces the last -- so a
+    // per-row on_key leaves only the final row's handler alive, and arrows do
+    // nothing anywhere else. Registered here, outside the each, it also
+    // survives listbox_update rebuilding every row.
+    window_on_key(|k: string, m: int| {
+        if _listbox_owns_focus(lbp) == 1 { _listbox_key(lbp, k, m) }
+    })
     return lbp
 }
 

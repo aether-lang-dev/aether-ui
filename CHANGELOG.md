@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- Listbox rows are keyboard-navigable. Up/Down move the selection, Home/End
+  jump to the ends, and all four clamp rather than wrap. Selection moves
+  through the same path a click takes, so `on_select` fires and
+  `.aui-row-selected` moves exactly as it would for a mouse; there is one
+  selection path, not two that can disagree.
+  This closes a real accessibility gap rather than adding a convenience: a
+  listbox already gave its rows the `listitem` role, so assistive tech was
+  told "this is a list" about something that could not be reached without a
+  mouse. It is also the concrete thing native `NSTableView`/`GtkListView`
+  backing would have provided for free (see #8) — the a11y roles already map
+  natively on both, and `vlist` already recycles, so keyboard navigation was
+  the substantive remainder.
+- `set_focusable(handle, on)` on all three backends, the prerequisite. Native
+  controls decide focus by their own rules, but a container accepts none by
+  default anywhere: `gtk_widget_set_focusable` on GTK4, `WS_TABSTOP` on Win32,
+  and on macOS an `NSStackView` subclass whose `acceptsFirstResponder` answers
+  from a flag — `NSView` returns NO and offers no setter, so a plain container
+  could never be focused however hard `focus()` tried. The flag defaults to
+  off, so an unmarked stack behaves exactly as before.
+
+### Notes
+
+- The listbox registers ONE key handler for the whole list rather than one per
+  row. `window_on_key` keeps a single closure and each registration replaces
+  the last, so a per-row `on_key` leaves only the final row's handler alive and
+  arrows do nothing anywhere else. Worth knowing more generally: two `on_key`
+  calls on different widgets silently disable the first.
+
 ### Fixed
 
 - CI builds again. `9c84d786` converted all 109 build nodes to aeb Shape A

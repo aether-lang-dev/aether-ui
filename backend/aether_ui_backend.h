@@ -644,6 +644,11 @@ void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
 void aether_ui_shortcut_chord_impl(const char* first_combo,
                                    const char* second_combo,
                                    void* boxed_closure);
+/* Make a widget able to TAKE keyboard focus. Native controls decide this by
+   their own rules; a container (a stack used as a list row, say) cannot accept
+   focus by default on any of the three backends, so a list is announced to
+   assistive tech as a list and then cannot be reached without a mouse. */
+void aether_ui_set_focusable_impl(int handle, int on);
 void aether_ui_focus_impl(int handle);
 // Registry handle of the currently keyboard-focused widget (0 = none). Safe on
 // the UI thread; used by per-widget shortcut scopes.

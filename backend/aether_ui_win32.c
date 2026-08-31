@@ -2698,6 +2698,16 @@ static int aeui_win32_fire_shortcut(const char* combo) {
     }
     return fired;
 }
+void aether_ui_set_focusable_impl(int handle, int on) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return;
+    /* WS_TABSTOP is what makes a window reachable by Tab and focusable by
+       SetFocus in a dialog-style chain. */
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    SetWindowLongPtrW(w->hwnd, GWL_STYLE,
+                      on ? (st | WS_TABSTOP) : (st & ~(LONG_PTR)WS_TABSTOP));
+}
+
 void aether_ui_focus_impl(int handle) {
     Widget* w = widget_at(handle);
     if (w) SetFocus(w->hwnd);
