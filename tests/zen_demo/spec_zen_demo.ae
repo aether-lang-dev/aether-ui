@@ -100,7 +100,14 @@ main() {
             sv = uidriver.widget_id_by_text("Solarized")
             uidriver.post_ok("/widget/${sv}/click", "install solarized pair")
             ok = uidriver.wait_body_contains("/widgets", "skin: solarized", 20)
-            spec.assert_true(ok, "pair installed (light first)")
+            spec.assert_true(ok, "pair installed")
+            // Pin the appearance before reading the light half. Without this
+            // the case inherits whatever mode the machine is in and fails on
+            // a dark-mode desktop, which is a property of the developer's
+            // settings rather than of the pair.
+            uidriver.post_ok("/appearance?dark=0", "start from light")
+            okl = uidriver.wait_body_contains("/widgets", "\"bg\":\"#fdf6e3\"", 20)
+            spec.assert_true(okl, "light half installed")
             b = uidriver.get_body("/widgets")
             spec.assert_contains(b, "\"bg\":\"#fdf6e3\"", "base3 light background")
             v = body_of("Two roads diverged in a yellow wood,")
