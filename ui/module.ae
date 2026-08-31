@@ -3437,9 +3437,18 @@ listbox_update(lbp: ptr, items: ptr) {
 }
 
 // listbox_reorderable(spacing, render): a listbox whose rows can be REORDERED.
-// listbox_move(from, to) moves an item and re-renders; a native drag gesture
-// (GTK4 drag source/target) calls the same move on drop. on_reorder(lb) is
-// notified of every move so the app can persist the new order.
+// listbox_move(from, to) moves an item and re-renders, on every backend, and
+// on_reorder(lb) is notified of each move so the app can persist the order.
+//
+// THE DRAG GESTURE ITSELF IS GTK4-ONLY. There, a real drag source/target pair
+// carries the source row's index and calls the same move on drop. AppKit and
+// Win32 record the drop closure but start no drag: the only thing that fires
+// it is the driver's /widget/{id}/drop route, which supplies the source index
+// itself. So a user can reorder by dragging on Linux and not on the other two,
+// where reordering has to go through listbox_move.
+//
+// The old wording named GTK4 in a parenthesis, which reads as "this is how the
+// gesture is implemented" rather than "this is the only place it exists".
 listbox_reorderable(_ctx: ptr, spacing: int, render: fn) -> ptr {
     return _listbox_make_reorder(_ctx, spacing, render)
 }

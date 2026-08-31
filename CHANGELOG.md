@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `NSUserNotification`, which needs no runtime grant, and all three return
     granted. The comment read as though a dialog appears on macOS, which it
     does not and never did on this path.
+  - `listbox_reorderable` said "a native drag gesture (GTK4 drag source/target)
+    calls the same move on drop", which reads as how the gesture is implemented
+    rather than where it exists. The gesture is GTK4-only: AppKit and Win32
+    record the drop closure but start no drag, and the only thing that fires it
+    there is the driver's route, which supplies the source index itself. So a
+    user can drag to reorder on Linux and nowhere else; `listbox_move` is the
+    portable path.
 
 ### Added
 
