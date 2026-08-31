@@ -176,5 +176,5 @@ main() {
             spec.assert_contains(b, "yan", "yan back")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

@@ -176,5 +176,5 @@ main() {
             spec.assert_eq(hitBlue + hitGreen, 1, "exactly one of the pair applied")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

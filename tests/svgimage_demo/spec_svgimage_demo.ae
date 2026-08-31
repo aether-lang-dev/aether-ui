@@ -60,5 +60,5 @@ main() {
             spec.assert_eq(n, 2, "no phantom canvas for the file that is not there")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

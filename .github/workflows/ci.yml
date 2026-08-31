@@ -85,11 +85,25 @@ jobs:
           # in this repo. A default pin means upstream lands in this pipeline
           # when someone bumps this line, not whenever a release is cut.
           #
-          # v0.553.0 is the first release carrying the aether#1658 fix, so the
-          # pin is a tag again rather than the commit it was pinned to while
-          # that release was still being cut. A repository variable still
-          # overrides, for testing a candidate without a commit.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.553.0' }}
+          # v0.553.0 was the first release carrying the aether#1658 fix, so the
+          # pin became a tag again rather than the commit it was pinned to
+          # while that release was still being cut. A repository variable
+          # still overrides, for testing a candidate without a commit.
+          #
+          # v0.613.0 (2026-08-31): std.spec's run_summary RETURNS its verdict
+          # (0 green / 1 failed) instead of exit(1)-ing, so cleanup after the
+          # run — arena.destroy, server_stop, sqlite.close — stops being
+          # skipped on exactly the failing runs where a leaked arena or an
+          # orphaned listener does the most damage.
+          #
+          # THE FOOTGUN THIS BUMP CARRIES, and why every spec here changed
+          # with it: a BARE `spec.run_summary(fw)` as the last statement now
+          # silently turns a failing suite GREEN. main() has no return
+          # annotation and its return value is the process exit status, so
+          # dropping the verdict exits 0 regardless of results. All 81 call
+          # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`
+          # as of this commit; a new spec MUST return it too.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.613.0' }}
           # v0.283 is the first release carrying aeb's `bldr` module.
           # 9c84d786 converted all 109 build nodes to aeb Shape A
           # (`bldr.build() {}`, b-free); v0.282 has no `bldr` at all, so every

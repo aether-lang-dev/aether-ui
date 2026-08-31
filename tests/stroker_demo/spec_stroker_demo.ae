@@ -84,7 +84,7 @@ main() {
                 "no phantom hit")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }
 
 // First integer right after `key` in body; -1 if absent.

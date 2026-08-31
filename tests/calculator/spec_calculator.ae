@@ -78,5 +78,5 @@ main() {
                 "banner present in the widget tree")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

@@ -45,5 +45,5 @@ main() {
             spec.assert_eq(gone, 0, "children hidden after collapse")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

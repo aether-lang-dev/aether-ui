@@ -92,5 +92,5 @@ main() {
             spec.assert_true(body1 != body2, "b is STILL running after the double cancel")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }

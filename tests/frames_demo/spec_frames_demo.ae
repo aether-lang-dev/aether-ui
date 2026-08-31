@@ -314,5 +314,5 @@ main() {
             spec.assert_contains(body2, "hit: Beta at 200,130", "closed alpha no longer hits")
         }
     }
-    spec.run_summary(fw)
+    return spec.run_summary(fw)
 }
