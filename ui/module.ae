@@ -3778,6 +3778,12 @@ table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
     // ONE widget into the parent: header + body wrapped in a vstack (a
     // scrollview parent takes a single child; two attachments would clobber).
     wrap = vstack(_ctx, 2)
+    // Built-in a11y: the whole thing IS a table, and each header button IS a
+    // column header. Without these an AT saw an unlabelled stack of buttons
+    // above a list -- the rows already announce as rows (listbox gives them
+    // the listitem role, which AppKit maps to NSAccessibilityRowRole), so the
+    // structure was announced from the row down but never from the table in.
+    _art = a11y_role(wrap, "table")
     // Header row: one flat button per column, at the column's width.
     hdr = hstack(wrap, 8)
     nc = list.size(cols)
@@ -3787,6 +3793,7 @@ table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
         col = cp as *TableCol
         hb = btn(hdr, col.title) callback { _table_header_clicked(tp, ci) }
         _w1 = width(hb, col.w)
+        _arh = a11y_role(hb, "columnheader")
         ci = ci + 1
     }
     // Body: a listbox whose row template renders one cell per column. A plain

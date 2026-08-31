@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A `table` announces itself as a table, and its headers as column headers.
+  Before this it announced nothing structural: assistive tech saw an unlabelled
+  stack of buttons above a list. The ROWS were already right, because `table`
+  composes a `listbox` and those rows carry the `listitem` role — which AppKit
+  already maps to `NSAccessibilityRowRole` — so the structure was described
+  from the row down but never from the table in.
+  `table`, `columnheader` and `row` join the role vocabulary on all three
+  backends: `GTK_ACCESSIBLE_ROLE_TABLE` / `_COLUMN_HEADER` / `_ROW`,
+  `NSAccessibilityTableRole` / `ColumnRole` / `RowRole`, and
+  `ROLE_SYSTEM_TABLE` / `_COLUMNHEADER` / `_ROW`. macOS also reads the two new
+  ones back, so the driver reports the effective role rather than only the
+  requested one.
+  `spec_table_demo` gains a case; three of its assertions fail without the
+  change.
+
+### Added
+
 - CI fails if any spec drops its `run_summary` verdict. Since aether v0.613.0
   `run_summary` returns the verdict rather than `exit()`-ing, and
   `run_server_test` judges a spec purely by process exit status, so a bare

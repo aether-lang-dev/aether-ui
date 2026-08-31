@@ -3908,6 +3908,9 @@ static long w32_msaa_role(const char* role) {
     if (!strcmp(role, "heading"))     return ROLE_SYSTEM_STATICTEXT;
     if (!strcmp(role, "image"))       return ROLE_SYSTEM_GRAPHIC;
     if (!strcmp(role, "group"))       return ROLE_SYSTEM_GROUPING;
+    if (!strcmp(role, "table"))       return ROLE_SYSTEM_TABLE;
+    if (!strcmp(role, "columnheader")) return ROLE_SYSTEM_COLUMNHEADER;
+    if (!strcmp(role, "row"))         return ROLE_SYSTEM_ROW;
     if (!strcmp(role, "list"))        return ROLE_SYSTEM_LIST;
     if (!strcmp(role, "listitem"))    return ROLE_SYSTEM_LISTITEM;
     if (!strcmp(role, "tab"))         return ROLE_SYSTEM_PAGETAB;
