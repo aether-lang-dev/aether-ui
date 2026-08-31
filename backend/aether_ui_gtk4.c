@@ -5014,6 +5014,18 @@ static void aeui_list_bind(GtkSignalListItemFactory* factory,
     }
 }
 
+/* A recycled row must leave NOTHING behind, and in GTK4 that is unbind, not
+   teardown. GtkListView pools its widgets: teardown fires only when the pool
+   itself is destroyed, so hanging the cleanup there left every row that had
+   ever been bound still registered with its last content. The driver then saw
+   205 rows for a window of 10, which is the pool's size and not the list's.
+   AppKit's didRemoveRowView: is this hook, not the destruction one. */
+static void aeui_list_unbind(GtkSignalListItemFactory* factory,
+                             GtkListItem* item, gpointer user_data) {
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
+    if (handle > 0) aether_ui_clear_children_impl(handle);
+}
+
 static void aeui_list_teardown(GtkSignalListItemFactory* factory,
                                GtkListItem* item, gpointer user_data) {
     int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
@@ -5040,6 +5052,7 @@ int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
     GtkListItemFactory* factory = gtk_signal_list_item_factory_new();
     g_signal_connect(factory, "setup", G_CALLBACK(aeui_list_setup), st);
     g_signal_connect(factory, "bind", G_CALLBACK(aeui_list_bind), st);
+    g_signal_connect(factory, "unbind", G_CALLBACK(aeui_list_unbind), st);
     g_signal_connect(factory, "teardown", G_CALLBACK(aeui_list_teardown), st);
 
     GtkWidget* list = gtk_list_view_new(GTK_SELECTION_MODEL(sel), factory);
