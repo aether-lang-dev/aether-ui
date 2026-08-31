@@ -510,7 +510,6 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure);
 void aether_ui_on_click_impl(int handle, void* boxed_closure);
 
 // Animation
-void aether_ui_animate_opacity_impl(int handle, double target, int duration_ms);
 
 // Widget manipulation
 void aether_ui_remove_child_impl(int parent_handle, int child_handle);
