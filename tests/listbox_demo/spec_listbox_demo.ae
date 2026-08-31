@@ -22,6 +22,32 @@ row_of(txt: string) -> int {
     return uidriver.widget_int_field_by_id(lbl, "parent")
 }
 
+// The row handle currently carrying the selection class, or 0. Label-free on
+// purpose: by the time the keyboard cases run, earlier cases have replaced the
+// list contents, so asserting against a fixed row label would be asserting
+// which fixture happens to be loaded rather than what the keys did.
+selected_row() -> int {
+    b = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(b)
+    if v == null { return 0 }
+    n = json.json_array_size(v)
+    i = 0
+    found = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if w != null {
+            c = uidriver.field_str(w, "classes")
+            if string.contains(c, "aui-row-selected") == 1 {
+                found = uidriver.field_int(w, "id")
+                i = n
+            }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
+}
+
 row_classes(txt: string) -> string {
     r = row_of(txt)
     if r == 0 { return "" }
@@ -99,6 +125,51 @@ main() {
             spec.assert_true(ok, "counter reads 202")
             b = uidriver.get_body("/widgets")
             spec.assert_contains(b, "person 203", "last person present in /widgets")
+        }
+
+        // Keyboard navigation. A listbox carried the `listitem` a11y role but
+        // had no key handling and no focusable rows, so assistive tech was told
+        // "this is a list" about something unreachable without a mouse. Rows
+        // are focusable now and the listbox owns one key handler.
+        //
+        // Selection moves through the SAME path a click takes, so these read
+        // the very .aui-row-selected class the click cases above assert -- one
+        // selection path, not two that can disagree.
+        spec.it("Down moves the selection to the next row") callback {
+            r1 = row_of("person 1")
+            uidriver.post_ok("/widget/${r1}/click", "click row 1")
+            spec.assert_contains(row_classes("person 1"), "aui-row-selected",
+                                 "row 1 selected to start from")
+            uidriver.window_key("Down")
+            spec.assert_contains(row_classes("person 2"), "aui-row-selected",
+                                 "Down selected row 2")
+            spec.assert_true(string.contains(row_classes("person 1"),
+                                             "aui-row-selected") == 0,
+                             "and row 1 released it")
+        }
+
+        spec.it("Up moves it back") callback {
+            uidriver.window_key("Up")
+            spec.assert_contains(row_classes("person 1"), "aui-row-selected",
+                                 "Up returned to row 1")
+        }
+
+        // Clamped, not wrapped: a list that jumps from the last row back to the
+        // first on Down is what every platform list deliberately avoids.
+        spec.it("Home/End jump to the ends, and do not wrap past them") callback {
+            uidriver.window_key("End")
+            last = selected_row()
+            spec.assert_gt(last, 0, "End selected a row")
+            uidriver.window_key("Down")
+            spec.assert_eq(selected_row(), last,
+                           "Down at the end stays put rather than wrapping")
+
+            uidriver.window_key("Home")
+            first = selected_row()
+            spec.assert_gt(first, 0, "Home selected a row")
+            spec.assert_true(first != last, "Home and End are different rows")
+            uidriver.window_key("Up")
+            spec.assert_eq(selected_row(), first, "Up at the start stays put")
         }
     }
     spec.run_summary(fw)

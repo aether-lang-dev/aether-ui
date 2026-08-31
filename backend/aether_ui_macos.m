@@ -1392,6 +1392,25 @@ void aether_ui_shortcut_chord_impl(const char* first_combo,
 
 // Explicit keyboard-focus grab. AppKit's equivalent of gtk_widget_grab_focus
 // is makeFirstResponder: on the view's window.
+/* NSView answers NO to acceptsFirstResponder and there is no setter, so a
+   plain container can never be focused however hard focus_impl tries. The
+   stacks this backend builds are therefore instances of a subclass that
+   answers from a flag, defaulting to NO -- an unmarked stack behaves exactly
+   as before, and set_focusable is what turns it on. */
+@interface AetherStackView : NSStackView
+@property (assign) BOOL aeuiFocusable;
+@end
+
+void aether_ui_set_focusable_impl(int handle, int on) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    if ([v isKindOfClass:[AetherStackView class]]) {
+        [(AetherStackView*)v setAeuiFocusable:on ? YES : NO];
+    }
+    // Native controls (buttons, fields) accept focus by their own rules and
+    // need nothing here; saying so beats silently doing nothing for them.
+}
+
 void aether_ui_focus_impl(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
@@ -1491,8 +1510,12 @@ void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure) {
     }
 }
 
+@implementation AetherStackView
+- (BOOL)acceptsFirstResponder { return self.aeuiFocusable; }
+@end
+
 int aether_ui_vstack_create(int spacing) {
-    NSStackView* stack = [[NSStackView alloc] init];
+    NSStackView* stack = [[AetherStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationVertical];
     [stack setSpacing:spacing];
     [stack setAlignment:NSLayoutAttributeLeading];
@@ -1883,7 +1906,7 @@ void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
 }
 
 int aether_ui_hstack_create(int spacing) {
-    NSStackView* stack = [[NSStackView alloc] init];
+    NSStackView* stack = [[AetherStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationHorizontal];
     [stack setSpacing:spacing];
     [stack setAlignment:NSLayoutAttributeCenterY];
