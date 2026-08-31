@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- `window_on_key` supports more than one handler. It kept a single closure, so
+  every registration replaced the last and a second `window_on_key` silently
+  disabled the first. `on_key` is built on it, which means two `on_key` calls
+  on different widgets left only the later one working, with no error anywhere
+  and nothing in the driver to show it.
+  Measured on a demo holding two independent counters, each with its own
+  handler: after three keys the previous code reads `a: 0  b: 3` — the first
+  handler never ran at all. It now reads `a: 3  b: 3`.
+  Handlers fire in registration order, and "handled" still means "at least one
+  ran", so the return value means exactly what it did before.
+  Found while giving the listbox keyboard navigation: a handler registered per
+  row left only the final row's arrows alive, which is why that feature has to
+  register once for the whole list.
+
+### Notes
+
+- `examples/multikey_demo` and `tests/multikey_demo/` (3 assertions, CI Phase
+  5e18, spec-matrix suite `multikey`). Verified against every key-driven suite
+  — listbox, keyhandler, shortcut, wshortcut, canvasscroll, navstack, overlay,
+  40 assertions — since this changes the dispatch path all of them share.
+
 ### Added
 
 - Listbox rows are keyboard-navigable. Up/Down move the selection, Home/End

@@ -3437,20 +3437,47 @@ static void aeui_attach_shortcut(AeuiShortcut* s) {
 // THIS combo pressed". Registered in the BUBBLE phase so the shortcut
 // controller (capture phase) still wins, and it returns FALSE so the key
 // carries on to whatever has focus.
-static AeClosure* aeui_window_key_closure = NULL;
+/* A LIST, not one slot. Every registration used to overwrite the last, so a
+   second window_on_key silently disabled the first -- and ui.on_key() is built
+   on this, which means two on_key() calls on different widgets left only the
+   later one working, with no error anywhere. The listbox hit exactly that:
+   registering a handler per row left only the final row's arrows alive.
+   Handlers fire in registration order; "handled" stays "at least one ran", so
+   the return value means what it did before. */
+static AeClosure** aeui_window_key_closures = NULL;
+static int aeui_window_key_closure_count = 0;
+static int aeui_window_key_closure_cap = 0;
+
+static void aeui_window_key_closure_add(AeClosure* c) {
+    if (!c) return;
+    if (aeui_window_key_closure_count >= aeui_window_key_closure_cap) {
+        aeui_window_key_closure_cap = aeui_window_key_closure_cap ? aeui_window_key_closure_cap * 2 : 8;
+        aeui_window_key_closures = realloc(aeui_window_key_closures, sizeof(AeClosure*) * aeui_window_key_closure_cap);
+    }
+    aeui_window_key_closures[aeui_window_key_closure_count++] = c;
+}
+
+static int aeui_window_key_closure_fire(const char* key_name, int mods) {
+    if (!key_name) return 0;
+    int fired = 0;
+    for (int i = 0; i < aeui_window_key_closure_count; i++) {
+        AeClosure* c = aeui_window_key_closures[i];
+        if (!c || !c->fn) continue;
+        ((void(*)(void*, const char*, int))c->fn)(c->env, key_name, mods);
+        fired = 1;
+    }
+    return fired;
+}
 
 int aether_ui_window_key_deliver(const char* key_name, int mods) {
-    if (!aeui_window_key_closure || !aeui_window_key_closure->fn || !key_name) return 0;
-    ((void(*)(void*, const char*, int))aeui_window_key_closure->fn)(
-        aeui_window_key_closure->env, key_name, mods);
-    return 1;
+    return aeui_window_key_closure_fire(key_name, mods);
 }
 
 static gboolean on_window_any_key(GtkEventControllerKey* ctl, guint keyval,
                                   guint keycode, GdkModifierType state,
                                   gpointer data) {
     (void)ctl; (void)keycode; (void)data;
-    if (!aeui_window_key_closure) return FALSE;
+    if (aeui_window_key_closure_count == 0) return FALSE;
     const char* name = gdk_keyval_name(keyval);
     int mods = 0;
     if (state & GDK_SHIFT_MASK)   mods |= 1;
@@ -3512,7 +3539,7 @@ void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
 }
 
 void aether_ui_window_on_key_impl(void* boxed_closure) {
-    aeui_window_key_closure = (AeClosure*)boxed_closure;
+    aeui_window_key_closure_add((AeClosure*)boxed_closure);
     if (!primary_window) return;   // attaches when the window appears
     static int attached = 0;
     if (attached) return;

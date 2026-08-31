@@ -1,0 +1,60 @@
+// spec_multikey_demo.ae — window_on_key supports more than one handler.
+//
+// It used to keep a SINGLE closure: every registration replaced the last, so a
+// second window_on_key silently disabled the first. ui.on_key() is built on it,
+// so two on_key() calls on different widgets left only the later one working,
+// with no error anywhere.
+//
+// Found while giving listbox keyboard navigation: a handler registered per row
+// left only the FINAL row's arrows alive, and the listbox had to register once
+// for the whole list to work at all.
+//
+// The demo holds two independent counters, each with its own window_on_key.
+// Measured on the previous code after three keys: `a: 0  b: 3` -- the first
+// handler never ran. Both must advance.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/multikey_demo &
+//   UI_SPEC=multikey_demo/spec_multikey_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+label(prefix: string) -> string {
+    b = uidriver.get_body("/widgets")
+    key = string.concat("\"text\":\"", prefix)
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + string.length(key), string.length(b))
+    j = string.string_index_of(rest, "\"")
+    if j < 0 { return "" }
+    return string.string_substring(rest, 0, j)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "multiple window_on_key handlers") {
+        spec.it("both counters start at zero") callback {
+            spec.assert_str_eq(label("a: "), "0", "a starts at 0")
+            spec.assert_str_eq(label("b: "), "0", "b starts at 0")
+        }
+
+        // The decisive one: on the previous code a stayed at 0 forever,
+        // because registering b replaced it.
+        spec.it("one key advances BOTH handlers, not just the last registered") callback {
+            uidriver.window_key("x")
+            spec.assert_str_eq(label("a: "), "1", "the FIRST handler ran")
+            spec.assert_str_eq(label("b: "), "1", "the second ran too")
+        }
+
+        spec.it("and keeps doing so") callback {
+            uidriver.window_key("y")
+            uidriver.window_key("z")
+            spec.assert_str_eq(label("a: "), "3", "first handler still live")
+            spec.assert_str_eq(label("b: "), "3", "second handler still live")
+        }
+    }
+    spec.run_summary(fw)
+}
