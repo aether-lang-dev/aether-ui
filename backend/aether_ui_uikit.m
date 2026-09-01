@@ -3310,6 +3310,202 @@ int aether_ui_split_position_impl(int handle) {
     return c ? (int)c.constant : 0;
 }
 
+
+// ===========================================================================
+// Pass 6 wave 6 — in-window overlays (toast / modal / tooltip / dropdown).
+// Drawn inside the key window, never a compositor popup. The table is
+// append-only and monotonic (close flips `live` to 0, never removes) so
+// GET /overlays lists every overlay ever opened — a toast must be observably
+// DEAD, not absent (matches AppKit/GTK4). Headless (no window) still tracks the
+// entry state so specs can observe it; views are added only when a window
+// exists. Modal scrim uses a real UIBlurEffect for "blur", a dim fill otherwise.
+// ===========================================================================
+static int aeui_animations_off(void) {
+    const char* v = getenv("AETHER_UI_NO_ANIMATION");
+    return v && v[0] && v[0] != '0';
+}
+
+typedef struct {
+    UIView* __unsafe_unretained content;   // owned by the window tree
+    UIView* __unsafe_unretained scrim;
+    AeClosure* on_dismiss;
+    int modal, live, exiting, exit_played, trans_ms;
+    char* trans_kind;   // "fade"/"slide-up"/…; NULL = fade
+    char* material;     // "dim" | "blur" | "tint"
+} OverlayEntry;
+static OverlayEntry* overlays = NULL;
+static int overlay_count = 0, overlay_capacity = 0;
+static OverlayEntry* overlay_at(int handle) {
+    if (handle < 1 || handle > overlay_count) return NULL;
+    return &overlays[handle - 1];
+}
+
+@interface AeuiScrimTarget : NSObject
+@property (nonatomic, assign) int overlayHandle;
+@end
+@implementation AeuiScrimTarget
+- (void)tap {
+    OverlayEntry* e = overlay_at(self.overlayHandle);
+    if (!e || !e->live) return;
+    if (e->on_dismiss && e->on_dismiss->fn)   // scrim click is the ONLY dismiss path
+        ((void(*)(void*))e->on_dismiss->fn)(e->on_dismiss->env);
+    aether_ui_overlay_close_impl(self.overlayHandle);
+}
+@end
+
+int aether_ui_overlay_open_impl(int win_handle, int content_handle,
+                                int anchor, int dx, int dy, int modal) {
+    (void)win_handle;
+    if (overlay_count >= overlay_capacity) {
+        overlay_capacity = overlay_capacity == 0 ? 8 : overlay_capacity * 2;
+        overlays = realloc(overlays, sizeof(OverlayEntry) * overlay_capacity);
+    }
+    OverlayEntry* e = &overlays[overlay_count];
+    memset(e, 0, sizeof(*e));
+    e->modal = modal; e->live = 1; e->trans_ms = 0;
+    e->material = strdup("dim");
+    int handle = ++overlay_count;   // 1-based
+
+    UIWindow* w = aeui_key_window();
+    UIView* content = (__bridge UIView*)aether_ui_get_widget(content_handle);
+    if (w && content) {
+        if (modal) {
+            UIView* scrim;
+            if (strcmp(e->material, "blur") == 0) {
+                scrim = [[UIVisualEffectView alloc]
+                    initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+            } else {
+                scrim = [[UIView alloc] init];
+                scrim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.4];
+            }
+            scrim.translatesAutoresizingMaskIntoConstraints = NO;
+            [w addSubview:scrim];
+            [NSLayoutConstraint activateConstraints:@[
+                [scrim.topAnchor constraintEqualToAnchor:w.topAnchor],
+                [scrim.leadingAnchor constraintEqualToAnchor:w.leadingAnchor],
+                [scrim.trailingAnchor constraintEqualToAnchor:w.trailingAnchor],
+                [scrim.bottomAnchor constraintEqualToAnchor:w.bottomAnchor],
+            ]];
+            AeuiScrimTarget* t = [[AeuiScrimTarget alloc] init];
+            t.overlayHandle = handle;
+            [scrim addGestureRecognizer:
+                [[UITapGestureRecognizer alloc] initWithTarget:t action:@selector(tap)]];
+            scrim.userInteractionEnabled = YES;
+            retain_target(t);
+            e->scrim = scrim;
+        }
+        content.translatesAutoresizingMaskIntoConstraints = NO;
+        [w addSubview:content];
+        UILayoutGuide* g = w.safeAreaLayoutGuide;
+        if (anchor == 0) {   // absolute top-left placement (tooltips at a point)
+            [content.leadingAnchor constraintEqualToAnchor:w.leadingAnchor constant:dx].active = YES;
+            [content.topAnchor constraintEqualToAnchor:w.topAnchor constant:dy].active = YES;
+        } else {             // centred, with offset (toasts/modals)
+            [content.centerXAnchor constraintEqualToAnchor:g.centerXAnchor constant:dx].active = YES;
+            [content.centerYAnchor constraintEqualToAnchor:g.centerYAnchor constant:dy].active = YES;
+        }
+        if (!aeui_animations_off()) {   // enter fade
+            content.alpha = 0.0; if (e->scrim) e->scrim.alpha = 0.0;
+            [UIView animateWithDuration:0.15 animations:^{
+                UIView* c = (__bridge UIView*)aether_ui_get_widget(content_handle);
+                c.alpha = 1.0;
+                OverlayEntry* ee = overlay_at(handle);
+                if (ee && ee->scrim) ee->scrim.alpha = 1.0;
+            }];
+        }
+    }
+    return handle;
+}
+
+void aether_ui_overlay_close_impl(int overlay_handle) {
+    OverlayEntry* e = overlay_at(overlay_handle);
+    if (!e || !e->live) return;
+    int h = overlay_handle;
+    void (^finalize)(void) = ^{
+        OverlayEntry* ee = overlay_at(h);
+        if (!ee) return;
+        if (ee->scrim)   [ee->scrim removeFromSuperview];
+        if (ee->content) [ee->content removeFromSuperview];
+        ee->live = 0; ee->exiting = 0;
+    };
+    if (e->trans_ms > 0 && !aeui_animations_off() && e->content) {
+        e->exiting = 1; e->exit_played = 1;
+        [UIView animateWithDuration:(e->trans_ms / 1000.0) animations:^{
+            OverlayEntry* ee = overlay_at(h);
+            if (ee) { if (ee->content) ee->content.alpha = 0.0;
+                      if (ee->scrim)   ee->scrim.alpha = 0.0; }
+        } completion:^(BOOL done){ (void)done; finalize(); }];
+    } else {
+        finalize();
+    }
+}
+
+int  aether_ui_overlay_count_impl(void) { return overlay_count; }
+int  aether_ui_overlay_is_live_impl(int h)    { OverlayEntry* e = overlay_at(h); return e ? e->live : 0; }
+int  aether_ui_overlay_is_modal_impl(int h)   { OverlayEntry* e = overlay_at(h); return e ? e->modal : 0; }
+int  aether_ui_overlay_is_exiting_impl(int h) { OverlayEntry* e = overlay_at(h); return e ? e->exiting : 0; }
+int  aether_ui_overlay_exit_played_impl(int h){ OverlayEntry* e = overlay_at(h); return e ? e->exit_played : 0; }
+void aether_ui_overlay_set_on_dismiss_impl(int h, void* boxed_closure) {
+    OverlayEntry* e = overlay_at(h); if (e) e->on_dismiss = (AeClosure*)boxed_closure;
+}
+void aether_ui_overlay_set_transition_impl(int h, const char* kind, int ms) {
+    OverlayEntry* e = overlay_at(h); if (!e) return;
+    free(e->trans_kind); e->trans_kind = kind ? strdup(kind) : NULL;
+    e->trans_ms = ms;
+}
+void aether_ui_overlay_set_material_impl(int h, const char* kind) {
+    OverlayEntry* e = overlay_at(h); if (!e) return;
+    free(e->material); e->material = strdup(kind ? kind : "dim");
+}
+const char* aether_ui_overlay_material_effective_impl(int h) {
+    OverlayEntry* e = overlay_at(h);
+    return (e && e->material) ? e->material : "dim";
+}
+
+// --- Sheets — a presented UIViewController hosting a body view --------------
+typedef struct { int body_handle; UIViewController* __unsafe_unretained vc; } SheetEntry;
+static SheetEntry* sheets = NULL;
+static int sheet_count = 0, sheet_cap = 0;
+
+int aether_ui_sheet_create_impl(const char* title, int width, int height) {
+    (void)title; (void)width; (void)height;
+    if (sheet_count >= sheet_cap) {
+        sheet_cap = sheet_cap == 0 ? 4 : sheet_cap * 2;
+        sheets = realloc(sheets, sizeof(SheetEntry) * sheet_cap);
+    }
+    sheets[sheet_count].body_handle = 0;
+    sheets[sheet_count].vc = nil;
+    return ++sheet_count;   // 1-based
+}
+void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
+    if (handle < 1 || handle > sheet_count) return;
+    sheets[handle - 1].body_handle = root_handle;
+}
+void aether_ui_sheet_present_impl(int handle) {
+    if (handle < 1 || handle > sheet_count || aeui_is_headless()) return;
+    UIViewController* top = aeui_top_vc();
+    UIView* body = (__bridge UIView*)aether_ui_get_widget(sheets[handle - 1].body_handle);
+    if (!top || !body) return;
+    UIViewController* vc = [[UIViewController alloc] init];
+    vc.view.backgroundColor = [UIColor systemBackgroundColor];
+    body.translatesAutoresizingMaskIntoConstraints = NO;
+    [vc.view addSubview:body];
+    UILayoutGuide* g = vc.view.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [body.topAnchor constraintEqualToAnchor:g.topAnchor],
+        [body.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
+        [body.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
+        [body.bottomAnchor constraintLessThanOrEqualToAnchor:g.bottomAnchor],
+    ]];
+    sheets[handle - 1].vc = vc;
+    [top presentViewController:vc animated:YES completion:nil];
+}
+void aether_ui_sheet_dismiss_impl(int handle) {
+    if (handle < 1 || handle > sheet_count) return;
+    UIViewController* vc = sheets[handle - 1].vc;
+    if (vc) [vc dismissViewControllerAnimated:YES completion:nil];
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -3398,23 +3594,8 @@ int aether_ui_notify_full_impl(const char* title, const char* body, const char* 
 int aether_ui_notify_impl(const char* title, const char* body) { return 0; }  // TODO(ios)
 int aether_ui_notify_request_permission_impl(void) { return 0; }  // TODO(ios)
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_overlay_close_impl(int overlay_handle) { }  // TODO(ios)
-int aether_ui_overlay_count_impl(void) { return 0; }  // TODO(ios)
-int aether_ui_overlay_exit_played_impl(int overlay_handle) { return 0; }  // TODO(ios)
-int aether_ui_overlay_is_exiting_impl(int overlay_handle) { return 0; }  // TODO(ios)
-int aether_ui_overlay_is_live_impl(int overlay_handle) { return 0; }  // TODO(ios)
-int aether_ui_overlay_is_modal_impl(int overlay_handle) { return 0; }  // TODO(ios)
-const char* aether_ui_overlay_material_effective_impl(int overlay_handle) { return ""; }  // TODO(ios)
-int aether_ui_overlay_open_impl(int win_handle, int content_handle, int anchor, int dx, int dy, int modal) { return 0; }  // TODO(ios)
-void aether_ui_overlay_set_material_impl(int overlay_handle, const char* kind) { }  // TODO(ios)
-void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_overlay_set_transition_impl(int overlay_handle, const char* kind, int ms) { }  // TODO(ios)
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
 void aether_ui_set_state_style(int handle, int state, double br, double bg_, double bb, double fr, double fg_, double fb) { }  // TODO(ios)
-int aether_ui_sheet_create_impl(const char* title, int width, int height) { return 0; }  // TODO(ios)
-void aether_ui_sheet_dismiss_impl(int handle) { }  // TODO(ios)
-void aether_ui_sheet_present_impl(int handle) { }  // TODO(ios)
-void aether_ui_sheet_set_body_impl(int handle, int root_handle) { }  // TODO(ios)
 void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_combo, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) { }  // TODO(ios)
@@ -3441,6 +3622,7 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
+
 
 
 
