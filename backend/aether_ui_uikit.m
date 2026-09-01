@@ -530,6 +530,17 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     if (!parent || !child) return;
     if ([parent isKindOfClass:[UIStackView class]]) {
         [(UIStackView*)parent addArrangedSubview:child];
+    } else if (get_widget_type(parent_handle) == AUI_ZSTACK) {
+        // zstack: children overlap, each pinned to fill the parent (z-order =
+        // insertion order, last on top).
+        child.translatesAutoresizingMaskIntoConstraints = NO;
+        [parent addSubview:child];
+        [NSLayoutConstraint activateConstraints:@[
+            [child.topAnchor constraintEqualToAnchor:parent.topAnchor],
+            [child.leadingAnchor constraintEqualToAnchor:parent.leadingAnchor],
+            [child.trailingAnchor constraintEqualToAnchor:parent.trailingAnchor],
+            [child.bottomAnchor constraintEqualToAnchor:parent.bottomAnchor],
+        ]];
     } else {
         [parent addSubview:child];
     }
@@ -2829,6 +2840,143 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
     apply_prop_binding(b);  // seed the field from the state's initial value
 }
 
+
+// ===========================================================================
+// Pass 6 wave 3 — events (tap/double-tap/hover), zstack, focus, sealing, misc.
+// ===========================================================================
+static const char kDblClosure;
+static const char kSealed;
+
+@interface AeuiTapTarget : NSObject
+@property (nonatomic, assign) AeClosure* closure;
+@end
+@implementation AeuiTapTarget
+- (void)fire {
+    if (self.closure && self.closure->fn)
+        ((void(*)(void*))self.closure->fn)(self.closure->env);
+}
+- (void)hover:(UIHoverGestureRecognizer*)g {
+    if (g.state == UIGestureRecognizerStateBegan && self.closure && self.closure->fn)
+        ((void(*)(void*))self.closure->fn)(self.closure->env);
+}
+@end
+
+void aether_ui_on_click_impl(int handle, void* boxed_closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !boxed_closure) return;
+    AeuiTapTarget* t = [[AeuiTapTarget alloc] init];
+    t.closure = (AeClosure*)boxed_closure;
+    UITapGestureRecognizer* tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:t action:@selector(fire)];
+    v.userInteractionEnabled = YES;
+    [v addGestureRecognizer:tap];
+    retain_target(t);
+}
+
+void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !boxed_closure) return;
+    AeuiTapTarget* t = [[AeuiTapTarget alloc] init];
+    t.closure = (AeClosure*)boxed_closure;
+    UITapGestureRecognizer* tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:t action:@selector(fire)];
+    tap.numberOfTapsRequired = 2;
+    v.userInteractionEnabled = YES;
+    [v addGestureRecognizer:tap];
+    retain_target(t);
+    // Also addressable by handle so the driver / fire_double_click can invoke it.
+    objc_setAssociatedObject(v, &kDblClosure, [NSValue valueWithPointer:boxed_closure],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// Driver / programmatic double-click: fire the stored closure. 1 if fired.
+int aether_ui_fire_double_click(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    NSValue* nv = objc_getAssociatedObject(v, &kDblClosure);
+    if (!nv) return 0;
+    AeClosure* c = (AeClosure*)nv.pointerValue;
+    if (c && c->fn) { ((void(*)(void*))c->fn)(c->env); return 1; }
+    return 0;
+}
+
+// Pointer hover (iPad, iOS 13.4+ trackpad/Magic-Keyboard). No-op on plain touch.
+void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !boxed_closure) return;
+    if (@available(iOS 13.0, *)) {
+        AeuiTapTarget* t = [[AeuiTapTarget alloc] init];
+        t.closure = (AeClosure*)boxed_closure;
+        UIHoverGestureRecognizer* h = [[UIHoverGestureRecognizer alloc]
+            initWithTarget:t action:@selector(hover:)];
+        [v addGestureRecognizer:h];
+        retain_target(t);
+    }
+}
+
+// --- zstack — a plain UIView; children overlap-fill (pinned in add_child) ----
+int aether_ui_zstack_create(void) {
+    UIView* v = [[UIView alloc] init];
+    v.translatesAutoresizingMaskIntoConstraints = NO;
+    return register_widget_typed((__bridge void*)v, AUI_ZSTACK);
+}
+
+// --- focus / first responder ------------------------------------------------
+void aether_ui_focus_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) [v becomeFirstResponder];
+}
+int aether_ui_focused_widget(void) {
+    for (int i = 0; i < widget_count; i++)
+        if (widgets[i] && [widgets[i] isFirstResponder]) return i + 1;
+    return 0;
+}
+void aether_ui_set_focusable_impl(int handle, int on) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) v.userInteractionEnabled = (on != 0);
+}
+
+// --- window handle (single window on iOS; primary == 1) ---------------------
+int aether_ui_widget_window_impl(int widget_handle) {
+    return (widget_handle >= 1 && widget_handle <= widget_count) ? 1 : 0;
+}
+
+// --- driver server ctx wrapper ----------------------------------------------
+void aether_ui_enable_test_server_ctx(int port, void* ctx) {
+    aether_ui_enable_test_server_impl(port, (int)(intptr_t)ctx);
+}
+
+// --- sealing (driver "not automatable" marker) ------------------------------
+void aether_ui_seal_widget_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) objc_setAssociatedObject(v, &kSealed, @(1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+void aether_ui_seal_subtree_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    aether_ui_seal_widget_impl(handle);
+    for (UIView* k in v.subviews) {
+        int kh = aether_ui_handle_for_widget((__bridge void*)k);
+        if (kh) aether_ui_seal_subtree_impl(kh);
+    }
+}
+
+// --- single-child container set (navstack pages, etc.) ----------------------
+void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
+    UIView* parent = (__bridge UIView*)aether_ui_get_widget(parent_handle);
+    UIView* child = (__bridge UIView*)aether_ui_get_widget(child_handle);
+    if (!parent || !child) return;
+    for (UIView* k in [parent.subviews copy]) [k removeFromSuperview];
+    child.translatesAutoresizingMaskIntoConstraints = NO;
+    [parent addSubview:child];
+    [NSLayoutConstraint activateConstraints:@[
+        [child.topAnchor constraintEqualToAnchor:parent.topAnchor],
+        [child.leadingAnchor constraintEqualToAnchor:parent.leadingAnchor],
+        [child.trailingAnchor constraintEqualToAnchor:parent.trailingAnchor],
+        [child.bottomAnchor constraintEqualToAnchor:parent.bottomAnchor],
+    ]];
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -2841,7 +2989,6 @@ void aether_ui_alert_impl(const char* title, const char* message) { }  // TODO(i
 void aether_ui_close_window_by_handle_impl(int win_handle) { }  // TODO(ios)
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_enable_test_server_ctx(int port, void* ctx) { }  // TODO(ios)
 // --- AetherUIDriver hooks ---------------------------------------------------
 // Enough for the server to run and serve the canvas pixel routes (which call
 // aether_ui_canvas_read_pixel_impl directly, no hook) plus the cheap scalar
@@ -2900,13 +3047,10 @@ char* aether_ui_file_open(const char* title, const char* start_dir) { return (vo
 char* aether_ui_file_pick_folder(const char* title, const char* start_dir) { return (void*)0; }  // TODO(ios)
 char* aether_ui_file_save(const char* title, const char* default_name) { return (void*)0; }  // TODO(ios)
 int aether_ui_fire_appearance(int dark) { return 0; }  // TODO(ios)
-int aether_ui_fire_double_click(int handle) { return 0; }  // TODO(ios)
 int aether_ui_fire_redo(void) { return 0; }  // TODO(ios)
 int aether_ui_fire_row_drop(int row_handle, int src_index) { return 0; }  // TODO(ios)
 int aether_ui_fire_scroll(int container_handle, int dy) { return 0; }  // TODO(ios)
 int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
-void aether_ui_focus_impl(int handle) { }  // TODO(ios)
-int aether_ui_focused_widget(void) { return 0; }  // TODO(ios)
 int aether_ui_form_create(void) { return 0; }  // TODO(ios)
 int aether_ui_form_section_create(const char* title) { return 0; }  // TODO(ios)
 int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) { return 0; }  // TODO(ios)
@@ -2926,9 +3070,6 @@ void aether_ui_navstack_push(int handle, const char* title, int body_handle) { }
 int aether_ui_notify_full_impl(const char* title, const char* body, const char* icon_path, const char* tag, void* boxed_click) { return 0; }  // TODO(ios)
 int aether_ui_notify_impl(const char* title, const char* body) { return 0; }  // TODO(ios)
 int aether_ui_notify_request_permission_impl(void) { return 0; }  // TODO(ios)
-void aether_ui_on_click_impl(int handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_on_double_click_impl(int handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_on_hover_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_overlay_close_impl(int overlay_handle) { }  // TODO(ios)
 int aether_ui_overlay_count_impl(void) { return 0; }  // TODO(ios)
@@ -2942,9 +3083,6 @@ void aether_ui_overlay_set_material_impl(int overlay_handle, const char* kind) {
 void aether_ui_overlay_set_on_dismiss_impl(int overlay_handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_overlay_set_transition_impl(int overlay_handle, const char* kind, int ms) { }  // TODO(ios)
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
-void aether_ui_seal_subtree_impl(int handle) { }  // TODO(ios)
-void aether_ui_seal_widget_impl(int handle) { }  // TODO(ios)
-void aether_ui_set_focusable_impl(int handle, int on) { }  // TODO(ios)
 void aether_ui_set_state_style(int handle, int state, double br, double bg_, double bb, double fr, double fg_, double fb) { }  // TODO(ios)
 int aether_ui_sheet_create_impl(const char* title, int width, int height) { return 0; }  // TODO(ios)
 void aether_ui_sheet_dismiss_impl(int handle) { }  // TODO(ios)
@@ -2985,8 +3123,6 @@ void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
-void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) { }  // TODO(ios)
-int aether_ui_widget_window_impl(int widget_handle) { return 0; }  // TODO(ios)
 void aether_ui_window_close_impl(int win_handle) { }  // TODO(ios)
 int aether_ui_window_count_impl(void) { return 0; }  // TODO(ios)
 int aether_ui_window_create_impl(const char* title, int width, int height) { return 0; }  // TODO(ios)
@@ -3000,6 +3136,6 @@ void aether_ui_window_set_title_impl(int win_handle, const char* title) { }  // 
 void aether_ui_window_show_impl(int win_handle) { }  // TODO(ios)
 const char* aether_ui_window_title_impl(int win_handle) { return ""; }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
-int aether_ui_zstack_create(void) { return 0; }  // TODO(ios)
+
 
 
