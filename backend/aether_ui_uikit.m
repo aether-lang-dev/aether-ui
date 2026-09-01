@@ -14,12 +14,14 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: ~118 of the 287 ABI functions are REAL; the rest are honest,
+// STATUS: ~202 of the 287 ABI functions are REAL; the rest are honest,
 // compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
 // and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
 // which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
 // section out of the stub block into a real implementation, as the Win32/AppKit
-// backends grew.
+// backends grew. What's left is mostly the heavier subsystems (overlays/sheets,
+// navstack, splitview, grid/wrap, menus, notifications, file pickers,
+// drag-drop, CSS engine) plus the genuinely iOS-N/A ones (tray/menu-bar).
 //   pass 1 — lifecycle, widget registry, stack layout, core widgets (text,
 //            button, textfield/securefield, toggle, slider).
 //   pass 2 — visibility/enablement, text getters+truncation, accessibility
@@ -40,6 +42,13 @@
 //            AetherUIDriver test server (enable_test_server + a hooks table) so
 //            the backend is driver-capable — it binds and serves the canvas
 //            pixel routes under Mac Catalyst.
+//   pass 6 — styling (colour/corner/opacity/border/gradient/fonts), layout
+//            setters (align/distribution/size/margins/match-parent/weight/RTL),
+//            CSS classes + widget introspection, system (open-URL/dark-mode/
+//            clipboard); the reactive STATE subsystem (typed cells, observers,
+//            bind_text/enabled/hidden + two-way bind_value); events (tap/
+//            double-tap/hover), zstack, focus/sealing; and the single-window
+//            model + alert (UIAlertController) + toast + key/file-drop delivery.
 //   pass 5 — modern scene lifecycle (UIWindowSceneDelegate + a scene config in
 //            the app delegate): a UIWindow created without a UIWindowScene
 //            paints but never composites on iOS 13+/iPad/Catalyst, and this is
