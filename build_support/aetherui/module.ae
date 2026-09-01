@@ -80,6 +80,7 @@ builder ui_backend(root: string) {
         link_flag("-framework CoreGraphics")  // canvas: CGBitmapContext/CGGradient
         link_flag("-framework CoreText")    // text metrics (vg.text_extent)
         link_flag("-framework ImageIO")     // headless canvas_write_png
+        link_flag("-framework UserNotifications")  // local notifications
     }
     // Linux and FreeBSD share the GTK4 backend verbatim — the backend sources
     // carry no Linux-only syscalls/headers, and GTK4 (gtk4.pc) plus GDBus (in

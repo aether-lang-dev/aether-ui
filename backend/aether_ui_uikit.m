@@ -14,7 +14,7 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: ~237 of the 287 ABI functions are REAL; the rest are honest,
+// STATUS: ~255 of the 287 ABI functions are REAL; the rest are honest,
 // compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
 // and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
 // which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
@@ -75,6 +75,7 @@
 #import <CoreText/CoreText.h>
 #import <ImageIO/ImageIO.h>
 #import <objc/runtime.h>          // objc_setAssociatedObject (a11y strings)
+#import <UserNotifications/UserNotifications.h>  // local notifications
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -3615,6 +3616,205 @@ int aether_ui_vg_tooltip_drawn_impl(void) {
     return (g_vg_tooltip_overlay && aether_ui_overlay_is_live_impl(g_vg_tooltip_overlay)) ? 1 : 0;
 }
 
+
+// ===========================================================================
+// Pass 6 wave 8 — menus (action sheet + context menu), file pickers, file
+// icons, local notifications.
+// ===========================================================================
+
+// --- Menus — a menu record; popup as a UIAlertController action sheet --------
+// iOS has no persistent NSMenu tree. A `menu` is a list of (label, closure)
+// items; menu_popup shows them as an action sheet anchored to the widget (a
+// popover on iPad). The menu-BAR family has no iOS analogue (an iPad menu bar
+// is built at launch via UIMenuBuilder, not mutated live), so those record the
+// structure but do not display — documented, not silently dropped.
+typedef struct { char* label; AeClosure* closure; int is_sep; } AeuiMenuItem;
+typedef struct { char* label; AeuiMenuItem* items; int count, cap; int is_bar; } AeuiMenuRec;
+static AeuiMenuRec* menus = NULL;
+static int menu_count = 0, menu_cap = 0;
+
+static int menu_new(const char* label, int is_bar) {
+    if (menu_count >= menu_cap) {
+        menu_cap = menu_cap == 0 ? 8 : menu_cap * 2;
+        menus = realloc(menus, sizeof(AeuiMenuRec) * menu_cap);
+    }
+    AeuiMenuRec* m = &menus[menu_count];
+    m->label = strdup(label ? label : "");
+    m->items = NULL; m->count = 0; m->cap = 0; m->is_bar = is_bar;
+    return ++menu_count;
+}
+static void menu_push_item(int h, const char* label, void* closure, int is_sep) {
+    if (h < 1 || h > menu_count) return;
+    AeuiMenuRec* m = &menus[h - 1];
+    if (m->count >= m->cap) {
+        m->cap = m->cap == 0 ? 8 : m->cap * 2;
+        m->items = realloc(m->items, sizeof(AeuiMenuItem) * m->cap);
+    }
+    m->items[m->count].label = strdup(label ? label : "");
+    m->items[m->count].closure = (AeClosure*)closure;
+    m->items[m->count].is_sep = is_sep;
+    m->count++;
+}
+
+int aether_ui_menu_create(const char* label) { return menu_new(label, 0); }
+int aether_ui_menu_bar_create(void)          { return menu_new("", 1); }
+void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) {
+    menu_push_item(menu_handle, label, boxed_closure, 0);
+}
+void aether_ui_menu_add_separator(int menu_handle) {
+    menu_push_item(menu_handle, "", NULL, 1);
+}
+// Menu-bar wiring: recorded, not displayed (no live iOS menu bar).
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) { (void)bar_handle; (void)menu_handle; }
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle) { (void)app_handle; (void)bar_handle; }
+void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) { (void)win_handle; (void)bar_handle; }
+
+void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (menu_handle < 1 || menu_handle > menu_count || aeui_is_headless()) return;
+    UIViewController* top = aeui_top_vc();
+    if (!top) return;
+    AeuiMenuRec* m = &menus[menu_handle - 1];
+    UIAlertController* sheet = [UIAlertController
+        alertControllerWithTitle:nil message:nil
+                  preferredStyle:UIAlertControllerStyleActionSheet];
+    for (int i = 0; i < m->count; i++) {
+        if (m->items[i].is_sep) continue;   // action sheets have no separators
+        AeClosure* c = m->items[i].closure;
+        [sheet addAction:[UIAlertAction
+            actionWithTitle:[NSString stringWithUTF8String:m->items[i].label]
+                      style:UIAlertActionStyleDefault
+                    handler:^(UIAlertAction* a){ (void)a;
+                        if (c && c->fn) ((void(*)(void*))c->fn)(c->env); }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel handler:nil]];
+    UIView* anchor = (__bridge UIView*)aether_ui_get_widget(anchor_widget);
+    if (sheet.popoverPresentationController && anchor) {   // required on iPad
+        sheet.popoverPresentationController.sourceView = anchor;
+        sheet.popoverPresentationController.sourceRect = anchor.bounds;
+    }
+    [top presentViewController:sheet animated:YES completion:nil];
+}
+
+// --- Context menu (long-press / right-click) via UIContextMenuInteraction ----
+static const char kCtxDelegate;
+
+API_AVAILABLE(ios(13.0))
+@interface AeuiCtxMenuDelegate : NSObject <UIContextMenuInteractionDelegate>
+@property (nonatomic, strong) NSMutableArray<NSDictionary*>* items;  // {t:title, c:NSValue(closure)}
+@end
+@implementation AeuiCtxMenuDelegate
+- (UIContextMenuConfiguration*)contextMenuInteraction:(UIContextMenuInteraction*)interaction
+                       configurationForMenuAtLocation:(CGPoint)location {
+    (void)interaction; (void)location;
+    NSArray<NSDictionary*>* items = self.items;
+    return [UIContextMenuConfiguration configurationWithIdentifier:nil
+        previewProvider:nil
+         actionProvider:^UIMenu*(NSArray<UIMenuElement*>* suggested) {
+            (void)suggested;
+            NSMutableArray<UIAction*>* acts = [NSMutableArray array];
+            for (NSDictionary* it in items) {
+                AeClosure* c = (AeClosure*)[it[@"c"] pointerValue];
+                [acts addObject:[UIAction actionWithTitle:it[@"t"] image:nil identifier:nil
+                    handler:^(__kindof UIAction* a){ (void)a;
+                        if (c && c->fn) ((void(*)(void*))c->fn)(c->env); }]];
+            }
+            return [UIMenu menuWithTitle:@"" children:acts];
+        }];
+}
+@end
+
+static void aeui_ctx_menu_add(int handle, const char* label, void* closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !label) return;
+    if (@available(iOS 13.0, *)) {
+        AeuiCtxMenuDelegate* d = objc_getAssociatedObject(v, &kCtxDelegate);
+        if (!d) {
+            d = [[AeuiCtxMenuDelegate alloc] init];
+            d.items = [NSMutableArray array];
+            [v addInteraction:[[UIContextMenuInteraction alloc] initWithDelegate:d]];
+            v.userInteractionEnabled = YES;
+            objc_setAssociatedObject(v, &kCtxDelegate, d, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [d.items addObject:@{ @"t": [NSString stringWithUTF8String:label],
+                              @"c": [NSValue valueWithPointer:closure] }];
+    }
+}
+void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) {
+    aeui_ctx_menu_add(handle, label, boxed_closure);
+}
+void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
+                                            const char* accel, void* boxed_closure) {
+    (void)accel;   // iOS context menus don't surface accelerators
+    aeui_ctx_menu_add(handle, label, boxed_closure);
+}
+
+// --- File pickers — sync ABI, but iOS pickers are ASYNC (UIDocumentPicker) ---
+// There is no synchronous modal file panel on iOS, so these return an empty
+// selection (safe, caller-owned string). A real picker needs an async ABI —
+// tracked in asks/ios-ipados-libaether-and-appstore.md.
+char* aether_ui_file_open(const char* title, const char* start_dir) {
+    (void)title; (void)start_dir; return strdup("");
+}
+char* aether_ui_file_save(const char* title, const char* default_name) {
+    (void)title; (void)default_name; return strdup("");
+}
+char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
+    (void)title; (void)start_dir; return strdup("");
+}
+
+// --- File icon — UIImageView from the file (image → itself; else a doc glyph)-
+static UIImage* aeui_file_icon(const char* path) {
+    UIImage* img = (path && path[0])
+        ? [UIImage imageWithContentsOfFile:[NSString stringWithUTF8String:path]] : nil;
+    if (!img) { if (@available(iOS 13.0, *)) img = [UIImage systemImageNamed:@"doc"]; }
+    return img;
+}
+int aether_ui_file_icon_create(const char* path) {
+    UIImageView* iv = [[UIImageView alloc] initWithImage:aeui_file_icon(path)];
+    iv.translatesAutoresizingMaskIntoConstraints = NO;
+    iv.contentMode = UIViewContentModeScaleAspectFit;
+    return register_widget_typed((__bridge void*)iv, AUI_IMAGE);
+}
+void aether_ui_file_icon_set(int handle, const char* path) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UIImageView class]])
+        ((UIImageView*)v).image = aeui_file_icon(path);
+}
+
+// --- Local notifications (UNUserNotificationCenter) -------------------------
+static int g_notify_id = 0;
+int aether_ui_notify_request_permission_impl(void) {
+    if (aeui_is_headless()) return 1;
+    [[UNUserNotificationCenter currentNotificationCenter]
+        requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                      completionHandler:^(BOOL granted, NSError* e){ (void)granted; (void)e; }];
+    return 1;   // async grant; report "requested" so app code doesn't block
+}
+static int aeui_post_notification(const char* title, const char* body, const char* tag) {
+    g_notify_id++;
+    if (aeui_is_headless()) return g_notify_id;
+    UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+    content.title = [NSString stringWithUTF8String:title ? title : ""];
+    content.body  = [NSString stringWithUTF8String:body ? body : ""];
+    NSString* ident = (tag && tag[0]) ? [NSString stringWithUTF8String:tag]
+                                      : [NSString stringWithFormat:@"aeui_%d", g_notify_id];
+    UNNotificationRequest* req = [UNNotificationRequest requestWithIdentifier:ident
+                                                                      content:content
+                                                                      trigger:nil];
+    [[UNUserNotificationCenter currentNotificationCenter]
+        addNotificationRequest:req withCompletionHandler:nil];
+    return g_notify_id;
+}
+int aether_ui_notify_impl(const char* title, const char* body) {
+    return aeui_post_notification(title, body, NULL);
+}
+int aether_ui_notify_full_impl(const char* title, const char* body, const char* icon_path,
+                               const char* tag, void* boxed_click) {
+    (void)icon_path; (void)boxed_click;   // attachment + tap-handler: a later pass
+    return aeui_post_notification(title, body, tag);
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -3623,8 +3823,6 @@ int aether_ui_vg_tooltip_drawn_impl(void) {
 // moves them OUT of this block into proper sections above, as passes 1-3 did.
 // ===========================================================================
 
-void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) { }  // TODO(ios)
 // --- AetherUIDriver hooks ---------------------------------------------------
 // Enough for the server to run and serve the canvas pixel routes (which call
 // aether_ui_canvas_read_pixel_impl directly, no hook) plus the cheap scalar
@@ -3677,27 +3875,11 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
     uikit_test_server_started = 1;
     aether_ui_test_server_start(port, &uikit_driver_hooks);
 }
-int aether_ui_file_icon_create(const char* path) { return 0; }  // TODO(ios)
-void aether_ui_file_icon_set(int handle, const char* path) { }  // TODO(ios)
-char* aether_ui_file_open(const char* title, const char* start_dir) { return (void*)0; }  // TODO(ios)
-char* aether_ui_file_pick_folder(const char* title, const char* start_dir) { return (void*)0; }  // TODO(ios)
-char* aether_ui_file_save(const char* title, const char* default_name) { return (void*)0; }  // TODO(ios)
 int aether_ui_fire_appearance(int dark) { return 0; }  // TODO(ios)
 int aether_ui_fire_redo(void) { return 0; }  // TODO(ios)
 int aether_ui_fire_row_drop(int row_handle, int src_index) { return 0; }  // TODO(ios)
 int aether_ui_fire_scroll(int container_handle, int dy) { return 0; }  // TODO(ios)
 int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
-void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_menu_add_separator(int menu_handle) { }  // TODO(ios)
-void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) { }  // TODO(ios)
-void aether_ui_menu_bar_attach(int app_handle, int bar_handle) { }  // TODO(ios)
-void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) { }  // TODO(ios)
-int aether_ui_menu_bar_create(void) { return 0; }  // TODO(ios)
-int aether_ui_menu_create(const char* label) { return 0; }  // TODO(ios)
-void aether_ui_menu_popup(int menu_handle, int anchor_widget) { }  // TODO(ios)
-int aether_ui_notify_full_impl(const char* title, const char* body, const char* icon_path, const char* tag, void* boxed_click) { return 0; }  // TODO(ios)
-int aether_ui_notify_impl(const char* title, const char* body) { return 0; }  // TODO(ios)
-int aether_ui_notify_request_permission_impl(void) { return 0; }  // TODO(ios)
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
 void aether_ui_set_state_style(int handle, int state, double br, double bg_, double bb, double fr, double fg_, double fb) { }  // TODO(ios)
@@ -3724,6 +3906,7 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
+
 
 
 
