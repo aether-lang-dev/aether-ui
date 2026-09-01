@@ -100,26 +100,68 @@ enum {
 
 // ---------------------------------------------------------------------------
 // Widget registry — flat strong array of UIView*, 1-based handles (as AppKit).
+// Parallel arrays hold the type tag and a malloc'd space-separated CSS class
+// list (NULL until a class is added), mirroring the AppKit backend so the
+// driver can report kind/classes and apps can style by class.
 // ---------------------------------------------------------------------------
 static UIView* __strong *widgets = NULL;
+static int* widget_types = NULL;
+static char** widget_classes = NULL;
 static int widget_count = 0;
 static int widget_capacity = 0;
 
 static int register_widget_typed(void* widget, int type) {
-    (void)type;  // pass 1 does not track types (driver type-report is stubbed)
     if (widget_count >= widget_capacity) {
         int new_cap = widget_capacity == 0 ? 64 : widget_capacity * 2;
         UIView* __strong *nw = (__strong UIView**)calloc(new_cap, sizeof(UIView*));
+        int* nt = (int*)calloc(new_cap, sizeof(int));
+        char** nc = (char**)calloc(new_cap, sizeof(char*));
         if (widgets) {
-            for (int i = 0; i < widget_count; i++) nw[i] = widgets[i];
-            free(widgets);
+            for (int i = 0; i < widget_count; i++) {
+                nw[i] = widgets[i];
+                nt[i] = widget_types[i];
+                nc[i] = widget_classes[i];
+            }
+            free(widgets); free(widget_types); free(widget_classes);
         }
-        widgets = nw;
+        widgets = nw; widget_types = nt; widget_classes = nc;
         widget_capacity = new_cap;
     }
     widgets[widget_count] = (__bridge UIView*)widget;
+    widget_types[widget_count] = type;
+    widget_classes[widget_count] = NULL;
     widget_count++;
     return widget_count;
+}
+
+static int get_widget_type(int handle) {
+    if (handle < 1 || handle > widget_count) return AUI_UNKNOWN;
+    return widget_types[handle - 1];
+}
+
+// Kind name mirrors the GTK4/AppKit widget_type_name() vocabulary so the driver
+// reports the same strings on every backend.
+static const char* aeui_kind_name(int type) {
+    switch (type) {
+        case AUI_TEXT:        return "text";
+        case AUI_BUTTON:      return "button";
+        case AUI_TOGGLE:      return "toggle";
+        case AUI_SLIDER:      return "slider";
+        case AUI_PICKER:      return "picker";
+        case AUI_TEXTFIELD:   return "textfield";
+        case AUI_SECUREFIELD: return "securefield";
+        case AUI_TEXTAREA:    return "textarea";
+        case AUI_PROGRESSBAR: return "progressbar";
+        case AUI_DIVIDER:     return "divider";
+        case AUI_SCROLLVIEW:  return "scrollview";
+        case AUI_VSTACK:      return "vstack";
+        case AUI_HSTACK:      return "hstack";
+        case AUI_ZSTACK:      return "zstack";
+        case AUI_SPACER:      return "spacer";
+        case AUI_CANVAS:      return "canvas";
+        case AUI_IMAGE:       return "image";
+        default:              return "unknown";
+    }
 }
 
 int aether_ui_register_widget(void* widget) {
@@ -2256,6 +2298,296 @@ void aether_ui_native_list_scroll_to_impl(int handle, int index) {
 }
 int aether_ui_native_list_first_visible_impl(int handle) { (void)handle; return 0; }
 
+
+// ===========================================================================
+// Pass 6 — styling, layout setters, CSS classes, widget introspection, system.
+// UIView.layer for visual styling; UIStackView for alignment/distribution;
+// per-widget CSS-class + type from the registry; UIPasteboard/UIApplication/
+// UITraitCollection for system bits. Mirrors the AppKit backend section-for-
+// section where a direct UIKit equivalent exists.
+// ===========================================================================
+
+static UIColor* aeui_color(double r, double g, double b, double a) {
+    return [UIColor colorWithRed:r green:g blue:b alpha:a];
+}
+
+// Current font of a text-bearing view (label/button/field/textview), or nil.
+static UIFont* aeui_view_font(UIView* v) {
+    if ([v isKindOfClass:[UILabel class]])     return ((UILabel*)v).font;
+    if ([v isKindOfClass:[UIButton class]])    return ((UIButton*)v).titleLabel.font;
+    if ([v isKindOfClass:[UITextField class]]) return ((UITextField*)v).font;
+    if ([v isKindOfClass:[UITextView class]])  return ((UITextView*)v).font;
+    return nil;
+}
+static void aeui_set_view_font(UIView* v, UIFont* f) {
+    if (!f) return;
+    if ([v isKindOfClass:[UILabel class]])     ((UILabel*)v).font = f;
+    else if ([v isKindOfClass:[UIButton class]])    ((UIButton*)v).titleLabel.font = f;
+    else if ([v isKindOfClass:[UITextField class]]) ((UITextField*)v).font = f;
+    else if ([v isKindOfClass:[UITextView class]])  ((UITextView*)v).font = f;
+}
+
+// --- Visual styling (UIView.layer) ------------------------------------------
+void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) v.backgroundColor = aeui_color(r, g, b, a);
+}
+void aether_ui_set_bg_color_ctx(void* ctx, double r, double g, double b, double a) {
+    aether_ui_set_bg_color((int)(intptr_t)ctx, r, g, b, a);
+}
+void aether_ui_set_corner_radius(int handle, double radius) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    v.layer.cornerRadius = radius;
+    v.clipsToBounds = YES;
+}
+void aether_ui_set_corner_radius_ctx(void* ctx, double radius) {
+    aether_ui_set_corner_radius((int)(intptr_t)ctx, radius);
+}
+void aether_ui_set_opacity(int handle, double opacity) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) v.alpha = opacity;
+}
+void aether_ui_set_opacity_ctx(void* ctx, double opacity) {
+    aether_ui_set_opacity((int)(intptr_t)ctx, opacity);
+}
+void aether_ui_set_border(int handle, double width, double r, double g, double b) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    v.layer.borderWidth = width;
+    if (width > 0.0) v.layer.borderColor = aeui_color(r, g, b, 1.0).CGColor;
+}
+void aether_ui_set_bg_gradient(int handle, double r1, double g1, double b1,
+                               double r2, double g2, double b2, int vertical) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    CAGradientLayer* grad = [CAGradientLayer layer];
+    grad.frame = v.bounds;
+    grad.colors = @[ (id)aeui_color(r1, g1, b1, 1.0).CGColor,
+                     (id)aeui_color(r2, g2, b2, 1.0).CGColor ];
+    if (vertical) { grad.startPoint = CGPointMake(0.5, 0.0); grad.endPoint = CGPointMake(0.5, 1.0); }
+    else          { grad.startPoint = CGPointMake(0.0, 0.5); grad.endPoint = CGPointMake(1.0, 0.5); }
+    // NOTE: CALayer has no autoresizingMask on iOS; the gradient is sized to the
+    // view's current bounds and does not track later resizes (pass-N refinement
+    // would update grad.frame in a layoutSubviews override).
+    [v.layer insertSublayer:grad atIndex:0];
+}
+
+// --- Text colour + fonts ----------------------------------------------------
+void aether_ui_set_text_color(int handle, double r, double g, double b) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    UIColor* c = aeui_color(r, g, b, 1.0);
+    if ([v isKindOfClass:[UILabel class]])          ((UILabel*)v).textColor = c;
+    else if ([v isKindOfClass:[UIButton class]])    [(UIButton*)v setTitleColor:c forState:UIControlStateNormal];
+    else if ([v isKindOfClass:[UITextField class]]) ((UITextField*)v).textColor = c;
+    else if ([v isKindOfClass:[UITextView class]])  ((UITextView*)v).textColor = c;
+}
+void aether_ui_set_text_color_ctx(void* ctx, double r, double g, double b) {
+    aether_ui_set_text_color((int)(intptr_t)ctx, r, g, b);
+}
+void aether_ui_set_font_size(int handle, double size) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    UIFont* f = aeui_view_font(v);
+    if (f) aeui_set_view_font(v, [f fontWithSize:size]);
+}
+void aether_ui_set_font_size_ctx(void* ctx, double size) {
+    aether_ui_set_font_size((int)(intptr_t)ctx, size);
+}
+void aether_ui_set_font_bold(int handle, int bold) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    UIFont* f = aeui_view_font(v);
+    if (!f) return;
+    UIFontDescriptor* d = f.fontDescriptor;
+    UIFontDescriptorSymbolicTraits tr = d.symbolicTraits;
+    if (bold) tr |= UIFontDescriptorTraitBold; else tr &= ~UIFontDescriptorTraitBold;
+    UIFontDescriptor* nd = [d fontDescriptorWithSymbolicTraits:tr];
+    if (nd) aeui_set_view_font(v, [UIFont fontWithDescriptor:nd size:f.pointSize]);
+}
+void aether_ui_set_font_bold_ctx(void* ctx, int bold) {
+    aether_ui_set_font_bold((int)(intptr_t)ctx, bold);
+}
+void aether_ui_set_font_family(int handle, const char* family) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    UIFont* f = aeui_view_font(v);
+    if (!f || !family || !family[0]) return;
+    UIFont* nf = [UIFont fontWithName:[NSString stringWithUTF8String:family] size:f.pointSize];
+    if (nf) aeui_set_view_font(v, nf);
+}
+void aether_ui_text_set_string(int handle, const char* text) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    NSString* s = [NSString stringWithUTF8String:text ? text : ""];
+    if ([v isKindOfClass:[UILabel class]])          ((UILabel*)v).text = s;
+    else if ([v isKindOfClass:[UIButton class]])    [(UIButton*)v setTitle:s forState:UIControlStateNormal];
+    else if ([v isKindOfClass:[UITextField class]]) ((UITextField*)v).text = s;
+    else if ([v isKindOfClass:[UITextView class]])  ((UITextView*)v).text = s;
+}
+
+// --- Stack alignment / distribution -----------------------------------------
+// The DSL passes a small enum; clamp into UIKit's ranges. Exact cross-backend
+// parity of the numeric values is approximate (AppKit's NSStackView enums
+// differ) — refined per-app as specs pin it.
+void aether_ui_set_alignment(int handle, int alignment) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UIStackView class]]) {
+        if (alignment < 0) alignment = 0;
+        if (alignment > (int)UIStackViewAlignmentTrailing) alignment = (int)UIStackViewAlignmentFill;
+        ((UIStackView*)v).alignment = (UIStackViewAlignment)alignment;
+    } else if (v && [v isKindOfClass:[UILabel class]]) {
+        ((UILabel*)v).textAlignment = alignment == 1 ? NSTextAlignmentCenter
+                                    : alignment == 2 ? NSTextAlignmentRight
+                                                     : NSTextAlignmentLeft;
+    }
+}
+void aether_ui_set_distribution(int handle, int distribution) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && [v isKindOfClass:[UIStackView class]]) {
+        if (distribution < 0) distribution = 0;
+        if (distribution > (int)UIStackViewDistributionEqualCentering) distribution = 0;
+        ((UIStackView*)v).distribution = (UIStackViewDistribution)distribution;
+    }
+}
+
+// --- Size / margins / match-parent ------------------------------------------
+void aether_ui_set_width(int handle, int width) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && width > 0) [v.widthAnchor constraintEqualToConstant:width].active = YES;
+}
+void aether_ui_set_height(int handle, int height) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && height > 0) [v.heightAnchor constraintEqualToConstant:height].active = YES;
+}
+static void aeui_apply_margins(UIView* v, int top, int right, int bottom, int left) {
+    if (!v) return;
+    v.layoutMargins = UIEdgeInsetsMake(top, left, bottom, right);
+    if ([v isKindOfClass:[UIStackView class]])
+        ((UIStackView*)v).layoutMarginsRelativeArrangement = YES;
+}
+void aether_ui_set_margin(int handle, int top, int right, int bottom, int left) {
+    aeui_apply_margins((__bridge UIView*)aether_ui_get_widget(handle), top, right, bottom, left);
+}
+void aether_ui_set_margin_ctx(void* ctx, int top, int right, int bottom, int left) {
+    aeui_apply_margins((__bridge UIView*)aether_ui_get_widget((int)(intptr_t)ctx),
+                       top, right, bottom, left);
+}
+void aether_ui_set_edge_insets(int handle, double top, double right, double bottom, double left) {
+    aeui_apply_margins((__bridge UIView*)aether_ui_get_widget(handle),
+                       (int)top, (int)right, (int)bottom, (int)left);
+}
+void aether_ui_match_parent_width(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && v.superview) [v.widthAnchor constraintEqualToAnchor:v.superview.widthAnchor].active = YES;
+}
+void aether_ui_match_parent_height(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v && v.superview) [v.heightAnchor constraintEqualToAnchor:v.superview.heightAnchor].active = YES;
+}
+
+// --- RTL, tooltip (→ a11y hint on iOS) --------------------------------------
+void aether_ui_set_rtl(int handle, int on) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) v.semanticContentAttribute = on ? UISemanticContentAttributeForceRightToLeft
+                                            : UISemanticContentAttributeForceLeftToRight;
+}
+void aether_ui_set_tooltip(int handle, const char* text) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) v.accessibilityHint = text ? [NSString stringWithUTF8String:text] : nil;
+}
+void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
+    aether_ui_set_tooltip((int)(intptr_t)ctx, text);
+}
+
+// --- Flex weight — a weighted child soaks up slack --------------------------
+void aether_ui_widget_weight_impl(int handle, int n) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    UILayoutPriority p = n > 0 ? (UILayoutPriorityDefaultLow - 1) : UILayoutPriorityDefaultHigh;
+    [v setContentHuggingPriority:p forAxis:UILayoutConstraintAxisHorizontal];
+    [v setContentHuggingPriority:p forAxis:UILayoutConstraintAxisVertical];
+}
+
+// --- CSS classes (per-widget, space-separated; drives selectors + the driver)
+void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
+    if (handle < 1 || handle > widget_count || !cls || !cls[0]) return;
+    char* cur = widget_classes[handle - 1];
+    if (!cur) { widget_classes[handle - 1] = strdup(cls); return; }
+    // Already present? (whole-token match)
+    size_t clen = strlen(cls);
+    const char* p = cur;
+    while (*p) {
+        while (*p == ' ') p++;
+        const char* start = p;
+        while (*p && *p != ' ') p++;
+        if ((size_t)(p - start) == clen && strncmp(start, cls, clen) == 0) return;
+    }
+    size_t n = strlen(cur) + 1 + clen + 1;
+    char* joined = (char*)malloc(n);
+    snprintf(joined, n, "%s %s", cur, cls);
+    free(cur);
+    widget_classes[handle - 1] = joined;
+}
+void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
+    if (handle < 1 || handle > widget_count || !cls || !cls[0]) return;
+    char* cur = widget_classes[handle - 1];
+    if (!cur) return;
+    size_t clen = strlen(cls);
+    char* out = (char*)malloc(strlen(cur) + 1);
+    out[0] = '\0';
+    const char* p = cur;
+    while (*p) {
+        while (*p == ' ') p++;
+        const char* start = p;
+        while (*p && *p != ' ') p++;
+        size_t tlen = (size_t)(p - start);
+        if (tlen == 0) continue;
+        if (tlen == clen && strncmp(start, cls, clen) == 0) continue;  // drop it
+        if (out[0]) strcat(out, " ");
+        strncat(out, start, tlen);
+    }
+    free(cur);
+    widget_classes[handle - 1] = out[0] ? out : (free(out), (char*)NULL);
+}
+const char* aether_ui_widget_classes_impl(int handle) {
+    if (handle < 1 || handle > widget_count) return "";
+    char* c = widget_classes[handle - 1];
+    return c ? c : "";
+}
+
+// --- Widget introspection ---------------------------------------------------
+int aether_ui_widget_count_impl(void) { return widget_count; }
+const char* aether_ui_widget_kind_impl(int handle) { return aeui_kind_name(get_widget_type(handle)); }
+int aether_ui_widget_parent_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !v.superview) return 0;
+    return aether_ui_handle_for_widget((__bridge void*)v.superview);
+}
+
+// --- System: URL open, dark mode, clipboard ---------------------------------
+void aether_ui_open_url_impl(const char* url) {
+    if (!url || !url[0]) return;
+    NSURL* u = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+    if (!u) return;
+    if ([UIApplication respondsToSelector:@selector(sharedApplication)]) {
+        UIApplication* app = [UIApplication sharedApplication];
+        if (app) [app openURL:u options:@{} completionHandler:nil];
+    }
+}
+int aether_ui_dark_mode_check(void) {
+    if (@available(iOS 13.0, *)) {
+        return UITraitCollection.currentTraitCollection.userInterfaceStyle
+               == UIUserInterfaceStyleDark ? 1 : 0;
+    }
+    return 0;
+}
+char* aether_ui_clipboard_read_impl(void) {
+    NSString* s = UIPasteboard.generalPasteboard.string;
+    return strdup(s ? s.UTF8String : "");
+}
+void aether_ui_clipboard_write_impl(const char* text) {
+    UIPasteboard.generalPasteboard.string =
+        [NSString stringWithUTF8String:text ? text : ""];
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -2269,12 +2601,9 @@ void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert
 void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) { }  // TODO(ios)
 void aether_ui_bind_text_impl(int state_handle, int widget_handle, int decimals) { }  // TODO(ios)
 void aether_ui_bind_value(int state_handle, int widget_handle) { }  // TODO(ios)
-char* aether_ui_clipboard_read_impl(void) { return (void*)0; }  // TODO(ios)
-void aether_ui_clipboard_write_impl(const char* text) { }  // TODO(ios)
 void aether_ui_close_window_by_handle_impl(int win_handle) { }  // TODO(ios)
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) { }  // TODO(ios)
-int aether_ui_dark_mode_check(void) { return 0; }  // TODO(ios)
 void aether_ui_enable_test_server_ctx(int port, void* ctx) { }  // TODO(ios)
 // --- AetherUIDriver hooks ---------------------------------------------------
 // Enough for the server to run and serve the canvas pixel routes (which call
@@ -2284,7 +2613,7 @@ void aether_ui_enable_test_server_ctx(int port, void* ctx) { }  // TODO(ios)
 // dispatch_action) is a later pass. Every hook here reads only plain state, no
 // off-main UIView mutation.
 static int hook_widget_count(void) { return widget_count; }
-static const char* hook_widget_type(int handle) { (void)handle; return ""; }
+static const char* hook_widget_type(int handle) { return aeui_kind_name(get_widget_type(handle)); }
 static int hook_toggle_active(int handle) { return aether_ui_toggle_get_active(handle); }
 static double hook_slider_value(int handle) { return aether_ui_slider_get_value(handle); }
 static void hook_widget_a11y(int handle, char* role, int rolesz,
@@ -2345,8 +2674,6 @@ int aether_ui_form_create(void) { return 0; }  // TODO(ios)
 int aether_ui_form_section_create(const char* title) { return 0; }  // TODO(ios)
 int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) { return 0; }  // TODO(ios)
 void aether_ui_grid_place(int grid_handle, int child_handle, int row, int col, int row_span, int col_span) { }  // TODO(ios)
-void aether_ui_match_parent_height(int handle) { }  // TODO(ios)
-void aether_ui_match_parent_width(int handle) { }  // TODO(ios)
 void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_menu_add_separator(int menu_handle) { }  // TODO(ios)
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) { }  // TODO(ios)
@@ -2366,7 +2693,6 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_on_hover_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_open_url_impl(const char* url) { }  // TODO(ios)
 void aether_ui_overlay_close_impl(int overlay_handle) { }  // TODO(ios)
 int aether_ui_overlay_count_impl(void) { return 0; }  // TODO(ios)
 int aether_ui_overlay_exit_played_impl(int overlay_handle) { return 0; }  // TODO(ios)
@@ -2381,33 +2707,8 @@ void aether_ui_overlay_set_transition_impl(int overlay_handle, const char* kind,
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
 void aether_ui_seal_subtree_impl(int handle) { }  // TODO(ios)
 void aether_ui_seal_widget_impl(int handle) { }  // TODO(ios)
-void aether_ui_set_alignment(int handle, int alignment) { }  // TODO(ios)
-void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) { }  // TODO(ios)
-void aether_ui_set_bg_color_ctx(void* ctx, double r, double g, double b, double a) { }  // TODO(ios)
-void aether_ui_set_bg_gradient(int handle, double r1, double g1, double b1, double r2, double g2, double b2, int vertical) { }  // TODO(ios)
-void aether_ui_set_border(int handle, double width, double r, double g, double b) { }  // TODO(ios)
-void aether_ui_set_corner_radius(int handle, double radius) { }  // TODO(ios)
-void aether_ui_set_corner_radius_ctx(void* ctx, double radius) { }  // TODO(ios)
-void aether_ui_set_distribution(int handle, int distribution) { }  // TODO(ios)
-void aether_ui_set_edge_insets(int handle, double top, double right, double bottom, double left) { }  // TODO(ios)
 void aether_ui_set_focusable_impl(int handle, int on) { }  // TODO(ios)
-void aether_ui_set_font_bold(int handle, int bold) { }  // TODO(ios)
-void aether_ui_set_font_bold_ctx(void* ctx, int bold) { }  // TODO(ios)
-void aether_ui_set_font_family(int handle, const char* family) { }  // TODO(ios)
-void aether_ui_set_font_size(int handle, double size) { }  // TODO(ios)
-void aether_ui_set_font_size_ctx(void* ctx, double size) { }  // TODO(ios)
-void aether_ui_set_height(int handle, int height) { }  // TODO(ios)
-void aether_ui_set_margin(int handle, int top, int right, int bottom, int left) { }  // TODO(ios)
-void aether_ui_set_margin_ctx(void* ctx, int top, int right, int bottom, int left) { }  // TODO(ios)
-void aether_ui_set_opacity(int handle, double opacity) { }  // TODO(ios)
-void aether_ui_set_opacity_ctx(void* ctx, double opacity) { }  // TODO(ios)
-void aether_ui_set_rtl(int handle, int on) { }  // TODO(ios)
 void aether_ui_set_state_style(int handle, int state, double br, double bg_, double bb, double fr, double fg_, double fb) { }  // TODO(ios)
-void aether_ui_set_text_color(int handle, double r, double g, double b) { }  // TODO(ios)
-void aether_ui_set_text_color_ctx(void* ctx, double r, double g, double b) { }  // TODO(ios)
-void aether_ui_set_tooltip(int handle, const char* text) { }  // TODO(ios)
-void aether_ui_set_tooltip_ctx(void* ctx, const char* text) { }  // TODO(ios)
-void aether_ui_set_width(int handle, int width) { }  // TODO(ios)
 int aether_ui_sheet_create_impl(const char* title, int width, int height) { return 0; }  // TODO(ios)
 void aether_ui_sheet_dismiss_impl(int handle) { }  // TODO(ios)
 void aether_ui_sheet_present_impl(int handle) { }  // TODO(ios)
@@ -2450,7 +2751,6 @@ int aether_ui_tabs_create(void* boxed_closure) { return 0; }  // TODO(ios)
 void aether_ui_tabs_select(int tabs_handle, int index) { }  // TODO(ios)
 int aether_ui_tabs_selected(int tabs_handle) { return 0; }  // TODO(ios)
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_text_set_string(int handle, const char* text) { }  // TODO(ios)
 int aether_ui_toast_impl(int win_handle, const char* text, int ms) { return 0; }  // TODO(ios)
 void aether_ui_toggle_set_group(int handle, int group_with) { }  // TODO(ios)
 int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
@@ -2464,17 +2764,10 @@ void aether_ui_vg_tooltip_hide_impl(void) { }  // TODO(ios)
 int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text, double cx, double cy) { return 0; }  // TODO(ios)
 void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) { }  // TODO(ios)
 void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
-void aether_ui_widget_add_css_class_impl(int handle, const char* cls) { }  // TODO(ios)
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
-const char* aether_ui_widget_classes_impl(int handle) { return ""; }  // TODO(ios)
-int aether_ui_widget_count_impl(void) { return 0; }  // TODO(ios)
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
-const char* aether_ui_widget_kind_impl(int handle) { return ""; }  // TODO(ios)
-int aether_ui_widget_parent_impl(int handle) { return 0; }  // TODO(ios)
-void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) { }  // TODO(ios)
 void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) { }  // TODO(ios)
-void aether_ui_widget_weight_impl(int handle, int n) { }  // TODO(ios)
 int aether_ui_widget_window_impl(int widget_handle) { return 0; }  // TODO(ios)
 void aether_ui_window_close_impl(int win_handle) { }  // TODO(ios)
 int aether_ui_window_count_impl(void) { return 0; }  // TODO(ios)
@@ -2490,3 +2783,4 @@ void aether_ui_window_show_impl(int win_handle) { }  // TODO(ios)
 const char* aether_ui_window_title_impl(int win_handle) { return ""; }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
 int aether_ui_zstack_create(void) { return 0; }  // TODO(ios)
+
