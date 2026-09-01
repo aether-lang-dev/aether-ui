@@ -40,6 +40,16 @@
 //            AetherUIDriver test server (enable_test_server + a hooks table) so
 //            the backend is driver-capable — it binds and serves the canvas
 //            pixel routes under Mac Catalyst.
+//   pass 5 — modern scene lifecycle (UIWindowSceneDelegate + a scene config in
+//            the app delegate): a UIWindow created without a UIWindowScene
+//            paints but never composites on iOS 13+/iPad/Catalyst, and this is
+//            the seam iPad multi-window / Stage Manager plugs into. Activated by
+//            a UIApplicationSceneManifest in Info.plist (packaging emits it);
+//            without it UIKit falls back to the legacy app-delegate window path.
+//
+// Proven on Mac Catalyst (natively, headless): the analog_clock and svg_tetris
+// vg apps render correctly through this backend + a from-source Catalyst build
+// of libaether, captured via AETHER_UI_SNAPSHOT_DIR — same .ae source as desktop.
 //
 // Build (simulator, from ci.sh Phase 1e):
 //   clang -fobjc-arc -target arm64-apple-ios-simulator -isysroot <SimSDK> \
@@ -193,20 +203,11 @@ static int g_root_handle = 0;
 static int g_want_w = 0;
 static int g_want_h = 0;
 
-@interface AetherAppDelegate : UIResponder <UIApplicationDelegate>
-@property (strong, nonatomic) UIWindow* window;
-@end
-@implementation AetherAppDelegate
-- (BOOL)application:(UIApplication*)application
-        didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
-    (void)application; (void)launchOptions;
-    CGRect bounds = CGRectMake(0, 0,
-                               g_want_w > 0 ? g_want_w : 390,
-                               g_want_h > 0 ? g_want_h : 844);
-    self.window = [[UIWindow alloc] initWithFrame:bounds];
+// The root view controller hosting the app body — shared by the scene path
+// (modern, iOS 13+/iPad/Catalyst) and the legacy app-delegate path.
+static UIViewController* aeui_build_root_vc(void) {
     UIViewController* vc = [[UIViewController alloc] init];
     vc.view.backgroundColor = [UIColor systemBackgroundColor];
-
     UIView* root = (__bridge UIView*)aether_ui_get_widget(g_root_handle);
     if (root) {
         root.translatesAutoresizingMaskIntoConstraints = NO;
@@ -219,9 +220,59 @@ static int g_want_h = 0;
             [root.bottomAnchor constraintLessThanOrEqualToAnchor:g.bottomAnchor],
         ]];
     }
-    self.window.rootViewController = vc;
+    return vc;
+}
+
+// Modern scene lifecycle. A UIWindow created without a UIWindowScene paints but
+// never COMPOSITES on iOS 13+/iPad/Catalyst — the window has to belong to the
+// scene UIKit hands us here. This is also the seam iPad multi-window / Stage
+// Manager plugs into. Activated by the UIApplicationSceneManifest in Info.plist
+// (the packaging step emits it); without that manifest UIKit uses the legacy
+// app-delegate path below instead.
+API_AVAILABLE(ios(13.0))
+@interface AetherSceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property (strong, nonatomic) UIWindow* window;
+@end
+@implementation AetherSceneDelegate
+- (void)scene:(UIScene*)scene willConnectToSession:(UISceneSession*)session
+      options:(UISceneConnectionOptions*)connectionOptions {
+    (void)session; (void)connectionOptions;
+    if (![scene isKindOfClass:[UIWindowScene class]]) return;
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
+    self.window.rootViewController = aeui_build_root_vc();
+    [self.window makeKeyAndVisible];
+}
+@end
+
+@interface AetherAppDelegate : UIResponder <UIApplicationDelegate>
+@property (strong, nonatomic) UIWindow* window;
+@end
+@implementation AetherAppDelegate
+- (BOOL)application:(UIApplication*)application
+        didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
+    (void)application; (void)launchOptions;
+    // Legacy fallback: only used when no scene manifest is present (the scene
+    // path handles the window otherwise). A pre-scenes runtime lands here.
+    if (@available(iOS 13.0, *)) return YES;
+    CGRect bounds = CGRectMake(0, 0,
+                               g_want_w > 0 ? g_want_w : 390,
+                               g_want_h > 0 ? g_want_h : 844);
+    self.window = [[UIWindow alloc] initWithFrame:bounds];
+    self.window.rootViewController = aeui_build_root_vc();
     [self.window makeKeyAndVisible];
     return YES;
+}
+// Route new scene sessions to AetherSceneDelegate in code, so no per-app
+// delegate-class wiring is needed in the Info.plist manifest.
+- (UISceneConfiguration*)application:(UIApplication*)application
+    configurationForConnectingSceneSession:(UISceneSession*)connectingSceneSession
+    options:(UISceneConnectionOptions*)options API_AVAILABLE(ios(13.0)) {
+    (void)application; (void)options;
+    UISceneConfiguration* cfg = [UISceneConfiguration
+        configurationWithName:@"Default"
+        sessionRole:connectingSceneSession.role];
+    cfg.delegateClass = [AetherSceneDelegate class];
+    return cfg;
 }
 @end
 
