@@ -104,7 +104,8 @@ enum {
     AUI_TEXTFIELD, AUI_SECUREFIELD, AUI_TEXTAREA,
     AUI_PROGRESSBAR, AUI_DIVIDER, AUI_SCROLLVIEW,
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
-    AUI_CANVAS, AUI_IMAGE
+    AUI_CANVAS, AUI_IMAGE,
+    AUI_TABS, AUI_NAVSTACK, AUI_SPLITVIEW, AUI_WRAP, AUI_GRID, AUI_FORM
 };
 
 // ---------------------------------------------------------------------------
@@ -169,6 +170,12 @@ static const char* aeui_kind_name(int type) {
         case AUI_SPACER:      return "spacer";
         case AUI_CANVAS:      return "canvas";
         case AUI_IMAGE:       return "image";
+        case AUI_TABS:        return "tabs";
+        case AUI_NAVSTACK:    return "navstack";
+        case AUI_SPLITVIEW:   return "splitview";
+        case AUI_WRAP:        return "wrap";
+        case AUI_GRID:        return "grid";
+        case AUI_FORM:        return "form";
         default:              return "unknown";
     }
 }
@@ -3104,6 +3111,205 @@ int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
     return 1;
 }
 
+
+// ===========================================================================
+// Pass 6 wave 5 — container subsystems: tabs, navstack, splitview.
+// ===========================================================================
+
+// --- Tabs — UISegmentedControl strip over a swapped content host -----------
+// The tabs widget is a vertical stack [segmented ; contentHost]. Each page is a
+// vstack; selecting swaps the single child of contentHost. Matches the AppKit
+// NSTabView model (tab_add returns the page vstack to attach children to).
+typedef struct {
+    int tabs_handle;
+    int content_host;          // widget handle of the content UIView
+    UISegmentedControl* seg;   // the strip (unretained; held by the view tree)
+    int* pages;                // page widget handles
+    int page_count, page_cap;
+    int selected;
+    AeClosure* on_change;
+} AeuiTabsState;
+static AeuiTabsState* tabs_states = NULL;
+static int tabs_state_count = 0, tabs_state_cap = 0;
+
+static AeuiTabsState* tabs_state_for(int handle) {
+    for (int i = 0; i < tabs_state_count; i++)
+        if (tabs_states[i].tabs_handle == handle) return &tabs_states[i];
+    return NULL;
+}
+
+@interface AeuiTabsTarget : NSObject
+@property (nonatomic, assign) int tabsHandle;
+@end
+@implementation AeuiTabsTarget
+- (void)changed:(UISegmentedControl*)s {
+    aether_ui_tabs_select(self.tabsHandle, (int)s.selectedSegmentIndex);
+}
+@end
+
+int aether_ui_tabs_create(void* boxed_closure) {
+    UIStackView* root = [[UIStackView alloc] init];
+    root.axis = UILayoutConstraintAxisVertical;
+    root.spacing = 6;
+    root.alignment = UIStackViewAlignmentFill;
+    root.translatesAutoresizingMaskIntoConstraints = NO;
+    int handle = register_widget_typed((__bridge void*)root, AUI_TABS);
+
+    UISegmentedControl* seg = [[UISegmentedControl alloc] init];
+    seg.translatesAutoresizingMaskIntoConstraints = NO;
+    [root addArrangedSubview:seg];
+    UIView* host = [[UIView alloc] init];
+    host.translatesAutoresizingMaskIntoConstraints = NO;
+    int host_h = register_widget_typed((__bridge void*)host, AUI_ZSTACK);  // fill-child host
+    [root addArrangedSubview:host];
+
+    AeuiTabsTarget* t = [[AeuiTabsTarget alloc] init];
+    t.tabsHandle = handle;
+    [seg addTarget:t action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
+    retain_target(t);
+
+    if (tabs_state_count >= tabs_state_cap) {
+        tabs_state_cap = tabs_state_cap == 0 ? 8 : tabs_state_cap * 2;
+        tabs_states = realloc(tabs_states, sizeof(AeuiTabsState) * tabs_state_cap);
+    }
+    AeuiTabsState* ts = &tabs_states[tabs_state_count++];
+    ts->tabs_handle = handle;
+    ts->content_host = host_h;
+    ts->seg = seg;
+    ts->pages = NULL; ts->page_count = 0; ts->page_cap = 0;
+    ts->selected = 0;
+    ts->on_change = (AeClosure*)boxed_closure;
+    return handle;
+}
+
+int aether_ui_tab_add(int tabs_handle, const char* title) {
+    AeuiTabsState* ts = tabs_state_for(tabs_handle);
+    if (!ts) return 0;
+    int page = aether_ui_vstack_create(8);
+    if (ts->page_count >= ts->page_cap) {
+        ts->page_cap = ts->page_cap == 0 ? 4 : ts->page_cap * 2;
+        ts->pages = realloc(ts->pages, sizeof(int) * ts->page_cap);
+    }
+    ts->pages[ts->page_count] = page;
+    [ts->seg insertSegmentWithTitle:[NSString stringWithUTF8String:title ? title : ""]
+                            atIndex:ts->page_count animated:NO];
+    ts->page_count++;
+    if (ts->page_count == 1) {   // first page becomes visible
+        ts->seg.selectedSegmentIndex = 0;
+        aether_ui_tabs_select(tabs_handle, 0);
+    }
+    return page;
+}
+
+void aether_ui_tabs_select(int tabs_handle, int index) {
+    AeuiTabsState* ts = tabs_state_for(tabs_handle);
+    if (!ts || index < 0 || index >= ts->page_count) return;
+    ts->selected = index;
+    ts->seg.selectedSegmentIndex = index;
+    aether_ui_widget_set_child_impl(ts->content_host, ts->pages[index]);
+    if (ts->on_change && ts->on_change->fn)
+        ((void(*)(void*, intptr_t))ts->on_change->fn)(ts->on_change->env, (intptr_t)index);
+}
+int aether_ui_tabs_selected(int tabs_handle) {
+    AeuiTabsState* ts = tabs_state_for(tabs_handle);
+    return ts ? ts->selected : 0;
+}
+int aether_ui_tabs_count(int tabs_handle) {
+    AeuiTabsState* ts = tabs_state_for(tabs_handle);
+    return ts ? ts->page_count : 0;
+}
+void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
+    AeuiTabsState* ts = tabs_state_for(tabs_handle);
+    if (ts) ts->on_change = (AeClosure*)boxed_closure;
+}
+
+// --- Navstack — one visible page; title bar + body; depth tracked -----------
+// Matches the AppKit model: the container holds exactly one page at a time
+// (push replaces it), and depth is what the driver observes. A title becomes a
+// real text widget above the body (no per-platform title chrome).
+static const char kNavDepth;
+
+int aether_ui_navstack_create(void) {
+    UIView* v = [[UIView alloc] init];
+    v.translatesAutoresizingMaskIntoConstraints = NO;
+    return register_widget_typed((__bridge void*)v, AUI_NAVSTACK);
+}
+void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
+    UIView* container = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!container || body_handle < 1) return;
+    int page = body_handle;
+    if (title && title[0]) {
+        int wrap = aether_ui_vstack_create(0);
+        int bar = aether_ui_text_create(title);
+        aether_ui_widget_add_child_ctx((void*)(intptr_t)wrap, bar);
+        aether_ui_widget_add_child_ctx((void*)(intptr_t)wrap, body_handle);
+        page = wrap;
+    }
+    aether_ui_widget_set_child_impl(handle, page);   // one page at a time
+    NSNumber* d = objc_getAssociatedObject(container, &kNavDepth);
+    objc_setAssociatedObject(container, &kNavDepth, @((d ? d.intValue : 0) + 1),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+void aether_ui_navstack_pop(int handle) {
+    UIView* container = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!container) return;
+    NSNumber* d = objc_getAssociatedObject(container, &kNavDepth);
+    int depth = d ? d.intValue : 0;
+    if (depth <= 0) return;   // root: no-op
+    for (UIView* k in [container.subviews copy]) [k removeFromSuperview];
+    objc_setAssociatedObject(container, &kNavDepth, @(depth - 1),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+int aether_ui_navstack_depth(int handle) {
+    UIView* container = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!container) return 0;
+    NSNumber* d = objc_getAssociatedObject(container, &kNavDepth);
+    return d ? d.intValue : 0;
+}
+
+// --- Splitview — two panes, first sized to the divider position -------------
+// UIKit has no draggable NSSplitView; a horizontal/vertical stack with the
+// first pane pinned to a position constraint gives a real two-pane split (drag
+// is a later refinement). vertical follows the GTK/ABI sense: vertical=1 stacks
+// the panes vertically (axis vertical). The position constraint is stored on
+// the view for split_position/set_position.
+static const char kSplitConstraint;
+static const char kSplitVertical;
+
+int aether_ui_splitview_create(int vertical) {
+    UIStackView* sv = [[UIStackView alloc] init];
+    sv.axis = vertical ? UILayoutConstraintAxisVertical : UILayoutConstraintAxisHorizontal;
+    sv.distribution = UIStackViewDistributionFill;
+    sv.alignment = UIStackViewAlignmentFill;
+    sv.spacing = 1;
+    sv.translatesAutoresizingMaskIntoConstraints = NO;
+    int h = register_widget_typed((__bridge void*)sv, AUI_SPLITVIEW);
+    objc_setAssociatedObject(sv, &kSplitVertical, @(vertical),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return h;
+}
+void aether_ui_split_set_position_impl(int handle, int px) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIStackView class]]) return;
+    UIStackView* sv = (UIStackView*)v;
+    if (sv.arrangedSubviews.count < 1) return;
+    UIView* first = sv.arrangedSubviews[0];
+    NSNumber* vert = objc_getAssociatedObject(v, &kSplitVertical);
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, &kSplitConstraint);
+    if (c) c.active = NO;
+    c = (vert && vert.boolValue)
+        ? [first.heightAnchor constraintEqualToConstant:px]
+        : [first.widthAnchor constraintEqualToConstant:px];
+    c.active = YES;
+    objc_setAssociatedObject(v, &kSplitConstraint, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+int aether_ui_split_position_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, &kSplitConstraint);
+    return c ? (int)c.constant : 0;
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -3188,10 +3394,6 @@ void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) { }  // TO
 int aether_ui_menu_bar_create(void) { return 0; }  // TODO(ios)
 int aether_ui_menu_create(const char* label) { return 0; }  // TODO(ios)
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) { }  // TODO(ios)
-int aether_ui_navstack_create(void) { return 0; }  // TODO(ios)
-int aether_ui_navstack_depth(int handle) { return 0; }  // TODO(ios)
-void aether_ui_navstack_pop(int handle) { }  // TODO(ios)
-void aether_ui_navstack_push(int handle, const char* title, int body_handle) { }  // TODO(ios)
 int aether_ui_notify_full_impl(const char* title, const char* body, const char* icon_path, const char* tag, void* boxed_click) { return 0; }  // TODO(ios)
 int aether_ui_notify_impl(const char* title, const char* body) { return 0; }  // TODO(ios)
 int aether_ui_notify_request_permission_impl(void) { return 0; }  // TODO(ios)
@@ -3216,9 +3418,6 @@ void aether_ui_sheet_set_body_impl(int handle, int root_handle) { }  // TODO(ios
 void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_combo, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) { }  // TODO(ios)
-int aether_ui_split_position_impl(int handle) { return 0; }  // TODO(ios)
-void aether_ui_split_set_position_impl(int handle, int px) { }  // TODO(ios)
-int aether_ui_splitview_create(int vertical) { return 0; }  // TODO(ios)
 int aether_ui_state_style_impl(int handle, int state) { return 0; }  // TODO(ios)
 int aether_ui_styled_bg_impl(int handle) { return 0; }  // TODO(ios)
 int aether_ui_styled_border_impl(int handle) { return 0; }  // TODO(ios)
@@ -3226,12 +3425,6 @@ int aether_ui_styled_fg_impl(int handle) { return 0; }  // TODO(ios)
 const char* aether_ui_styled_font_family_impl(int handle) { return ""; }  // TODO(ios)
 int aether_ui_styled_opacity_impl(int handle) { return 0; }  // TODO(ios)
 const char* aether_ui_styled_weight_impl(int handle) { return ""; }  // TODO(ios)
-int aether_ui_tab_add(int tabs_handle, const char* title) { return 0; }  // TODO(ios)
-int aether_ui_tabs_count(int tabs_handle) { return 0; }  // TODO(ios)
-int aether_ui_tabs_create(void* boxed_closure) { return 0; }  // TODO(ios)
-void aether_ui_tabs_select(int tabs_handle, int index) { }  // TODO(ios)
-int aether_ui_tabs_selected(int tabs_handle) { return 0; }  // TODO(ios)
-void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_toggle_set_group(int handle, int group_with) { }  // TODO(ios)
 int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
 void aether_ui_tray_seal_impl(int tray_id) { }  // TODO(ios)
@@ -3248,6 +3441,7 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
+
 
 
 
