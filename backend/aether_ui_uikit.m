@@ -2977,6 +2977,124 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
     ]];
 }
 
+
+// ===========================================================================
+// Pass 6 wave 4 — the single-window model, alert, toast, key/file-drop delivery.
+// iOS has one foreground window (per scene); the multi-window ABI collapses to
+// that. alert/toast present on the active scene's key window (no-op headless).
+// ===========================================================================
+static UIWindow* aeui_key_window(void) {
+    if (@available(iOS 13.0, *)) {
+        for (UIScene* s in UIApplication.sharedApplication.connectedScenes) {
+            if (![s isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow* w in ((UIWindowScene*)s).windows)
+                if (w.isKeyWindow) return w;
+        }
+        for (UIScene* s in UIApplication.sharedApplication.connectedScenes)
+            if ([s isKindOfClass:[UIWindowScene class]])
+                for (UIWindow* w in ((UIWindowScene*)s).windows) return w;
+    }
+    return nil;
+}
+static UIViewController* aeui_top_vc(void) {
+    UIViewController* vc = aeui_key_window().rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
+}
+
+// --- Single-window handle model (primary == 1) ------------------------------
+int aether_ui_window_create_impl(const char* title, int width, int height) {
+    (void)title; (void)width; (void)height;
+    return 1;   // iOS: one window; secondary windows are scenes (a later pass)
+}
+int aether_ui_window_count_impl(void) { return 1; }
+int aether_ui_window_is_open_impl(int win_handle) { return win_handle >= 1 ? 1 : 0; }
+void aether_ui_window_show_impl(int win_handle) { (void)win_handle; }
+void aether_ui_window_close_impl(int win_handle) { (void)win_handle; }
+void aether_ui_close_window_by_handle_impl(int win_handle) { (void)win_handle; }
+void aether_ui_window_set_title_impl(int win_handle, const char* title) {
+    (void)win_handle; (void)title;   // iOS windows carry no title chrome
+}
+const char* aether_ui_window_title_impl(int win_handle) { (void)win_handle; return ""; }
+void aether_ui_window_set_body_impl(int win_handle, int root_handle) {
+    (void)win_handle;
+    // Primary window body → the app root. Takes effect at scene/window build;
+    // if the window is already live, reinstall as the root VC's child.
+    g_root_handle = root_handle;
+    UIViewController* vc = aeui_key_window().rootViewController;
+    if (vc && root_handle >= 1) {
+        int host = aether_ui_handle_for_widget((__bridge void*)vc.view);
+        if (host) aether_ui_widget_set_child_impl(host, root_handle);
+    }
+}
+
+// --- Window key + file-drop: store the closure, driver delivers it ----------
+static AeClosure* g_window_key_closure = NULL;
+static AeClosure* g_window_file_drop_closure = NULL;
+
+void aether_ui_window_on_key_impl(void* boxed_closure) {
+    g_window_key_closure = (AeClosure*)boxed_closure;   // hardware-keyboard pass wires live delivery
+}
+int aether_ui_window_key_deliver(const char* key_name, int mods) {
+    if (!g_window_key_closure || !g_window_key_closure->fn) return 0;
+    ((void(*)(void*, const char*, int))g_window_key_closure->fn)(
+        g_window_key_closure->env, key_name ? key_name : "", mods);
+    return 1;
+}
+void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
+    g_window_file_drop_closure = (AeClosure*)boxed_closure;
+}
+int aether_ui_window_file_drop_deliver(const char* paths) {
+    if (!g_window_file_drop_closure || !g_window_file_drop_closure->fn) return 0;
+    ((void(*)(void*, const char*))g_window_file_drop_closure->fn)(
+        g_window_file_drop_closure->env, paths ? paths : "");
+    return 1;
+}
+
+// --- Alert (UIAlertController) ----------------------------------------------
+void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) return;          // no modal loop without a user
+    UIViewController* top = aeui_top_vc();
+    if (!top) return;
+    UIAlertController* a = [UIAlertController
+        alertControllerWithTitle:[NSString stringWithUTF8String:title ? title : ""]
+                         message:[NSString stringWithUTF8String:message ? message : ""]
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"OK"
+                                          style:UIAlertActionStyleDefault handler:nil]];
+    [top presentViewController:a animated:YES completion:nil];
+}
+
+// --- Toast — transient label overlay on the key window, auto-dismiss --------
+int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
+    (void)win_handle;
+    if (aeui_is_headless()) return 1;
+    UIWindow* w = aeui_key_window();
+    if (!w) return 0;
+    UILabel* toast = [[UILabel alloc] init];
+    toast.text = [NSString stringWithUTF8String:text ? text : ""];
+    toast.textColor = [UIColor whiteColor];
+    toast.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.8];
+    toast.textAlignment = NSTextAlignmentCenter;
+    toast.layer.cornerRadius = 8.0;
+    toast.clipsToBounds = YES;
+    toast.translatesAutoresizingMaskIntoConstraints = NO;
+    [w addSubview:toast];
+    [NSLayoutConstraint activateConstraints:@[
+        [toast.centerXAnchor constraintEqualToAnchor:w.centerXAnchor],
+        [toast.bottomAnchor constraintEqualToAnchor:w.safeAreaLayoutGuide.bottomAnchor constant:-40],
+        [toast.heightAnchor constraintEqualToConstant:40],
+        [toast.leadingAnchor constraintGreaterThanOrEqualToAnchor:w.leadingAnchor constant:20],
+    ]];
+    double secs = (ms > 0 ? ms : 2000) / 1000.0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(secs * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [UIView animateWithDuration:0.3 animations:^{ toast.alpha = 0.0; }
+                         completion:^(BOOL f){ (void)f; [toast removeFromSuperview]; }];
+    });
+    return 1;
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -2985,8 +3103,6 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
 // moves them OUT of this block into proper sections above, as passes 1-3 did.
 // ===========================================================================
 
-void aether_ui_alert_impl(const char* title, const char* message) { }  // TODO(ios)
-void aether_ui_close_window_by_handle_impl(int win_handle) { }  // TODO(ios)
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) { }  // TODO(ios)
 // --- AetherUIDriver hooks ---------------------------------------------------
@@ -3107,7 +3223,6 @@ int aether_ui_tabs_create(void* boxed_closure) { return 0; }  // TODO(ios)
 void aether_ui_tabs_select(int tabs_handle, int index) { }  // TODO(ios)
 int aether_ui_tabs_selected(int tabs_handle) { return 0; }  // TODO(ios)
 void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) { }  // TODO(ios)
-int aether_ui_toast_impl(int win_handle, const char* text, int ms) { return 0; }  // TODO(ios)
 void aether_ui_toggle_set_group(int handle, int group_with) { }  // TODO(ios)
 int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
 void aether_ui_tray_seal_impl(int tray_id) { }  // TODO(ios)
@@ -3123,19 +3238,8 @@ void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
-void aether_ui_window_close_impl(int win_handle) { }  // TODO(ios)
-int aether_ui_window_count_impl(void) { return 0; }  // TODO(ios)
-int aether_ui_window_create_impl(const char* title, int width, int height) { return 0; }  // TODO(ios)
-int aether_ui_window_file_drop_deliver(const char* paths) { return 0; }  // TODO(ios)
-int aether_ui_window_is_open_impl(int win_handle) { return 0; }  // TODO(ios)
-int aether_ui_window_key_deliver(const char* key_name, int mods) { return 0; }  // TODO(ios)
-void aether_ui_window_on_file_drop_impl(void* boxed_closure) { }  // TODO(ios)
-void aether_ui_window_on_key_impl(void* boxed_closure) { }  // TODO(ios)
-void aether_ui_window_set_body_impl(int win_handle, int root_handle) { }  // TODO(ios)
-void aether_ui_window_set_title_impl(int win_handle, const char* title) { }  // TODO(ios)
-void aether_ui_window_show_impl(int win_handle) { }  // TODO(ios)
-const char* aether_ui_window_title_impl(int win_handle) { return ""; }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
+
 
 
 
