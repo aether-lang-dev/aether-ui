@@ -3506,6 +3506,112 @@ void aether_ui_sheet_dismiss_impl(int handle) {
     if (vc) [vc dismissViewControllerAnimated:YES completion:nil];
 }
 
+
+// ===========================================================================
+// Pass 6 wave 7 — grid, form/section, drawn vg tooltips.
+// ===========================================================================
+
+// --- Grid — a vertical stack of horizontal row-stacks ------------------------
+static const char kGridCols;
+static const char kGridColSpacing;
+
+int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
+    UIStackView* g = [[UIStackView alloc] init];
+    g.axis = UILayoutConstraintAxisVertical;
+    g.spacing = row_spacing;
+    g.alignment = UIStackViewAlignmentFill;
+    g.translatesAutoresizingMaskIntoConstraints = NO;
+    int h = register_widget_typed((__bridge void*)g, AUI_GRID);
+    objc_setAssociatedObject(g, &kGridCols, @(cols > 0 ? cols : 1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(g, &kGridColSpacing, @(col_spacing), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return h;
+}
+
+void aether_ui_grid_place(int grid_handle, int child_handle, int row, int col,
+                          int row_span, int col_span) {
+    (void)row_span; (void)col_span;   // spans are a later refinement
+    UIStackView* g = (__bridge UIStackView*)aether_ui_get_widget(grid_handle);
+    UIView* child = (__bridge UIView*)aether_ui_get_widget(child_handle);
+    if (!g || !child || ![g isKindOfClass:[UIStackView class]] || row < 0 || col < 0) return;
+    NSNumber* csn = objc_getAssociatedObject(g, &kGridColSpacing);
+    CGFloat colSpacing = csn ? csn.doubleValue : 0;
+    // Ensure `row` row-stacks exist.
+    while ((int)g.arrangedSubviews.count <= row) {
+        UIStackView* r = [[UIStackView alloc] init];
+        r.axis = UILayoutConstraintAxisHorizontal;
+        r.spacing = colSpacing;
+        r.alignment = UIStackViewAlignmentFill;
+        r.distribution = UIStackViewDistributionFillEqually;
+        r.translatesAutoresizingMaskIntoConstraints = NO;
+        [g addArrangedSubview:r];
+    }
+    UIStackView* rowStack = (UIStackView*)g.arrangedSubviews[row];
+    // Pad the row with empty cells up to `col`, then drop the child in.
+    while ((int)rowStack.arrangedSubviews.count < col) {
+        UIView* pad = [[UIView alloc] init];
+        pad.translatesAutoresizingMaskIntoConstraints = NO;
+        [rowStack addArrangedSubview:pad];
+    }
+    child.translatesAutoresizingMaskIntoConstraints = NO;
+    if (col < (int)rowStack.arrangedSubviews.count) {
+        UIView* existing = rowStack.arrangedSubviews[col];
+        [rowStack insertArrangedSubview:child atIndex:col];
+        [existing removeFromSuperview];   // replace the placeholder/old cell
+    } else {
+        [rowStack addArrangedSubview:child];
+    }
+}
+
+// --- Form / section — grouped vstacks; a section carries a title header ------
+int aether_ui_form_create(void) {
+    UIStackView* f = [[UIStackView alloc] init];
+    f.axis = UILayoutConstraintAxisVertical;
+    f.spacing = 16;
+    f.alignment = UIStackViewAlignmentFill;
+    f.translatesAutoresizingMaskIntoConstraints = NO;
+    return register_widget_typed((__bridge void*)f, AUI_FORM);
+}
+int aether_ui_form_section_create(const char* title) {
+    int section = aether_ui_vstack_create(8);
+    if (title && title[0]) {
+        int header = aether_ui_text_create(title);   // real text widget the driver sees
+        aether_ui_set_font_bold(header, 1);
+        aether_ui_widget_add_child_ctx((void*)(intptr_t)section, header);
+    }
+    // Mark it a form section for the driver's kind reporting.
+    if (section >= 1 && section <= widget_count) widget_types[section - 1] = AUI_FORM;
+    return section;
+}
+
+// --- Drawn vg tooltip — a single reused overlay following the pointer --------
+static int g_vg_tooltip_overlay = 0;   // 0 = none live
+int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text, double cx, double cy) {
+    (void)canvas_id;
+    if (g_vg_tooltip_overlay && aether_ui_overlay_is_live_impl(g_vg_tooltip_overlay))
+        aether_ui_overlay_close_impl(g_vg_tooltip_overlay);
+    UILabel* label = [[UILabel alloc] init];
+    label.text = [NSString stringWithUTF8String:text ? text : ""];
+    label.textColor = [UIColor whiteColor];
+    label.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.85];
+    label.font = [UIFont systemFontOfSize:13];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.layer.cornerRadius = 4.0;
+    label.clipsToBounds = YES;
+    int content = register_widget_typed((__bridge void*)label, AUI_TEXT);
+    // anchor 0 = absolute placement at (cx, cy), non-modal.
+    g_vg_tooltip_overlay = aether_ui_overlay_open_impl(0, content, 0, (int)cx, (int)cy, 0);
+    return g_vg_tooltip_overlay;
+}
+void aether_ui_vg_tooltip_hide_impl(void) {
+    if (g_vg_tooltip_overlay) {
+        aether_ui_overlay_close_impl(g_vg_tooltip_overlay);
+        g_vg_tooltip_overlay = 0;
+    }
+}
+int aether_ui_vg_tooltip_drawn_impl(void) {
+    return (g_vg_tooltip_overlay && aether_ui_overlay_is_live_impl(g_vg_tooltip_overlay)) ? 1 : 0;
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -3578,10 +3684,6 @@ int aether_ui_fire_redo(void) { return 0; }  // TODO(ios)
 int aether_ui_fire_row_drop(int row_handle, int src_index) { return 0; }  // TODO(ios)
 int aether_ui_fire_scroll(int container_handle, int dy) { return 0; }  // TODO(ios)
 int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
-int aether_ui_form_create(void) { return 0; }  // TODO(ios)
-int aether_ui_form_section_create(const char* title) { return 0; }  // TODO(ios)
-int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) { return 0; }  // TODO(ios)
-void aether_ui_grid_place(int grid_handle, int child_handle, int row, int col, int row_span, int col_span) { }  // TODO(ios)
 void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_menu_add_separator(int menu_handle) { }  // TODO(ios)
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) { }  // TODO(ios)
@@ -3613,15 +3715,13 @@ void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle, const
 void aether_ui_tray_set_icon_template_impl(int tray_id, int is_template) { }  // TODO(ios)
 void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) { }  // TODO(ios)
 void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) { }  // TODO(ios)
-int aether_ui_vg_tooltip_drawn_impl(void) { return 0; }  // TODO(ios)
-void aether_ui_vg_tooltip_hide_impl(void) { }  // TODO(ios)
-int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text, double cx, double cy) { return 0; }  // TODO(ios)
 void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) { }  // TODO(ios)
 void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
+
 
 
 
