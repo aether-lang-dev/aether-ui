@@ -14,7 +14,7 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: ~255 of the 287 ABI functions are REAL; the rest are honest,
+// STATUS: ~264 of the 287 ABI functions are REAL; the rest are honest,
 // compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
 // and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
 // which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
@@ -550,6 +550,13 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     if (!parent || !child) return;
     if ([parent isKindOfClass:[UIStackView class]]) {
         [(UIStackView*)parent addArrangedSubview:child];
+    } else if (get_widget_type(parent_handle) == AUI_WRAP) {
+        // Flow layout positions children by frame, so they must NOT be driven
+        // by Auto Layout — flip the child back to autoresizing.
+        child.translatesAutoresizingMaskIntoConstraints = YES;
+        [parent addSubview:child];
+        [parent setNeedsLayout];
+        [parent invalidateIntrinsicContentSize];
     } else if (get_widget_type(parent_handle) == AUI_ZSTACK) {
         // zstack: children overlap, each pinned to fill the parent (z-order =
         // insertion order, last on top).
@@ -2361,7 +2368,11 @@ static void aeui_set_view_font(UIView* v, UIFont* f) {
 // --- Visual styling (UIView.layer) ------------------------------------------
 void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v) v.backgroundColor = aeui_color(r, g, b, a);
+    if (!v) return;
+    v.backgroundColor = aeui_color(r, g, b, a);
+    objc_setAssociatedObject(v, "aeui_styled_bg",   // styled_* readback (packed RGB)
+        @((((int)(r*255)&255)<<16) | (((int)(g*255)&255)<<8) | ((int)(b*255)&255)),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 void aether_ui_set_bg_color_ctx(void* ctx, double r, double g, double b, double a) {
     aether_ui_set_bg_color((int)(intptr_t)ctx, r, g, b, a);
@@ -2377,7 +2388,10 @@ void aether_ui_set_corner_radius_ctx(void* ctx, double radius) {
 }
 void aether_ui_set_opacity(int handle, double opacity) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v) v.alpha = opacity;
+    if (!v) return;
+    v.alpha = opacity;
+    objc_setAssociatedObject(v, "aeui_styled_opacity", @((int)(opacity * 100) + 1),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 void aether_ui_set_opacity_ctx(void* ctx, double opacity) {
     aether_ui_set_opacity((int)(intptr_t)ctx, opacity);
@@ -2387,6 +2401,10 @@ void aether_ui_set_border(int handle, double width, double r, double g, double b
     if (!v) return;
     v.layer.borderWidth = width;
     if (width > 0.0) v.layer.borderColor = aeui_color(r, g, b, 1.0).CGColor;
+    objc_setAssociatedObject(v, "aeui-styled-border",
+        @(((int)width << 24) | 0x40000000
+          | (((int)(r*255)&255)<<16) | (((int)(g*255)&255)<<8) | ((int)(b*255)&255)),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 void aether_ui_set_bg_gradient(int handle, double r1, double g1, double b1,
                                double r2, double g2, double b2, int vertical) {
@@ -2413,6 +2431,9 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
     else if ([v isKindOfClass:[UIButton class]])    [(UIButton*)v setTitleColor:c forState:UIControlStateNormal];
     else if ([v isKindOfClass:[UITextField class]]) ((UITextField*)v).textColor = c;
     else if ([v isKindOfClass:[UITextView class]])  ((UITextView*)v).textColor = c;
+    objc_setAssociatedObject(v, "aeui_styled_fg",
+        @((((int)(r*255)&255)<<16) | (((int)(g*255)&255)<<8) | ((int)(b*255)&255)),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 void aether_ui_set_text_color_ctx(void* ctx, double r, double g, double b) {
     aether_ui_set_text_color((int)(intptr_t)ctx, r, g, b);
@@ -2434,6 +2455,8 @@ void aether_ui_set_font_bold(int handle, int bold) {
     if (bold) tr |= UIFontDescriptorTraitBold; else tr &= ~UIFontDescriptorTraitBold;
     UIFontDescriptor* nd = [d fontDescriptorWithSymbolicTraits:tr];
     if (nd) aeui_set_view_font(v, [UIFont fontWithDescriptor:nd size:f.pointSize]);
+    objc_setAssociatedObject(v, "aeui_styled_weight", @(bold ? 1 : 0),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 void aether_ui_set_font_bold_ctx(void* ctx, int bold) {
     aether_ui_set_font_bold((int)(intptr_t)ctx, bold);
@@ -2444,6 +2467,8 @@ void aether_ui_set_font_family(int handle, const char* family) {
     if (!f || !family || !family[0]) return;
     UIFont* nf = [UIFont fontWithName:[NSString stringWithUTF8String:family] size:f.pointSize];
     if (nf) aeui_set_view_font(v, nf);
+    objc_setAssociatedObject(v, "aeui_styled_family",
+        [NSString stringWithUTF8String:family], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 void aether_ui_text_set_string(int handle, const char* text) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
@@ -3815,6 +3840,113 @@ int aether_ui_notify_full_impl(const char* title, const char* body, const char* 
     return aeui_post_notification(title, body, tag);
 }
 
+
+// ===========================================================================
+// Pass 6 wave 9 — styled_* readback, wrap (flow layout), vlist scroll hook.
+// ===========================================================================
+
+// --- styled_* introspection (reads the values stashed by the set_* setters) --
+// Packing matches the AppKit backend: colours as 0xRRGGBB, -1 when unstyled;
+// opacity as a percent (stored +1 so 0 = unset); border packed
+// (width<<24 | 0x40000000 | rgb); weight as "bold"/"normal"/""; family verbatim.
+int aether_ui_styled_bg_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_bg");
+    return n ? n.intValue : -1;
+}
+int aether_ui_styled_fg_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_fg");
+    return n ? n.intValue : -1;
+}
+int aether_ui_styled_opacity_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_opacity");
+    return (n && n.intValue > 0) ? n.intValue - 1 : -1;
+}
+int aether_ui_styled_border_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, "aeui-styled-border");
+    return n ? n.intValue : -1;
+}
+const char* aether_ui_styled_weight_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return "";
+    NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_weight");
+    if (!n) return "";
+    return n.intValue == 1 ? "bold" : "normal";
+}
+const char* aether_ui_styled_font_family_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return "";
+    NSString* f = objc_getAssociatedObject(v, "aeui_styled_family");
+    return f ? f.UTF8String : "";
+}
+
+// --- Wrap — a flow-layout container (left-to-right, wrapping) ----------------
+// Children are frame-positioned (not Auto Layout), so add_child_ctx flips them
+// to translatesAutoresizingMaskIntoConstraints=YES for a wrap parent.
+@interface AeuiWrapView : UIView
+@property (nonatomic, assign) CGFloat hgap;
+@property (nonatomic, assign) CGFloat vgap;
+@end
+@implementation AeuiWrapView
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat maxw = self.bounds.size.width;
+    CGFloat x = 0, y = 0, rowh = 0;
+    for (UIView* c in self.subviews) {
+        CGSize s = [c sizeThatFits:CGSizeMake(maxw, CGFLOAT_MAX)];
+        if (s.width <= 0 || s.height <= 0) s = c.intrinsicContentSize;
+        if (x > 0 && x + s.width > maxw) { x = 0; y += rowh + self.vgap; rowh = 0; }
+        c.frame = CGRectMake(x, y, s.width, s.height);
+        x += s.width + self.hgap;
+        if (s.height > rowh) rowh = s.height;
+    }
+}
+- (CGSize)intrinsicContentSize {
+    CGFloat maxw = self.bounds.size.width > 0 ? self.bounds.size.width : 320;
+    CGFloat x = 0, y = 0, rowh = 0;
+    for (UIView* c in self.subviews) {
+        CGSize s = [c sizeThatFits:CGSizeMake(maxw, CGFLOAT_MAX)];
+        if (s.width <= 0 || s.height <= 0) s = c.intrinsicContentSize;
+        if (x > 0 && x + s.width > maxw) { x = 0; y += rowh + self.vgap; rowh = 0; }
+        x += s.width + self.hgap;
+        if (s.height > rowh) rowh = s.height;
+    }
+    return CGSizeMake(UIViewNoIntrinsicMetric, y + rowh);
+}
+@end
+
+int aether_ui_wrap_create(void) {
+    AeuiWrapView* v = [[AeuiWrapView alloc] init];
+    v.translatesAutoresizingMaskIntoConstraints = NO;
+    v.hgap = 8; v.vgap = 8;
+    return register_widget_typed((__bridge void*)v, AUI_WRAP);
+}
+
+// --- vlist scroll hook — store the closure; fire_scroll (driver) invokes it --
+void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(container_handle);
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui_vscroll",
+        [NSValue valueWithPointer:on_scroll], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+int aether_ui_fire_scroll(int container_handle, int dy) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(container_handle);
+    if (!v) return 0;
+    NSValue* nv = objc_getAssociatedObject(v, "aeui_vscroll");
+    if (!nv) return 0;
+    AeClosure* c = (AeClosure*)nv.pointerValue;
+    if (!c || !c->fn) return 0;
+    ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)dy);
+    return 1;
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -3878,7 +4010,6 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
 int aether_ui_fire_appearance(int dark) { return 0; }  // TODO(ios)
 int aether_ui_fire_redo(void) { return 0; }  // TODO(ios)
 int aether_ui_fire_row_drop(int row_handle, int src_index) { return 0; }  // TODO(ios)
-int aether_ui_fire_scroll(int container_handle, int dy) { return 0; }  // TODO(ios)
 int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
@@ -3887,12 +4018,6 @@ void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_c
 void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) { }  // TODO(ios)
 int aether_ui_state_style_impl(int handle, int state) { return 0; }  // TODO(ios)
-int aether_ui_styled_bg_impl(int handle) { return 0; }  // TODO(ios)
-int aether_ui_styled_border_impl(int handle) { return 0; }  // TODO(ios)
-int aether_ui_styled_fg_impl(int handle) { return 0; }  // TODO(ios)
-const char* aether_ui_styled_font_family_impl(int handle) { return ""; }  // TODO(ios)
-int aether_ui_styled_opacity_impl(int handle) { return 0; }  // TODO(ios)
-const char* aether_ui_styled_weight_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_toggle_set_group(int handle, int group_with) { }  // TODO(ios)
 int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
 void aether_ui_tray_seal_impl(int tray_id) { }  // TODO(ios)
@@ -3900,12 +4025,11 @@ void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle, const
 void aether_ui_tray_set_icon_template_impl(int tray_id, int is_template) { }  // TODO(ios)
 void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) { }  // TODO(ios)
 void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) { }  // TODO(ios)
-void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) { }  // TODO(ios)
 void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
 const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
-int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
+
 
 
 
