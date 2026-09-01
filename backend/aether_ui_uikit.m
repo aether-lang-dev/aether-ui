@@ -14,7 +14,7 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: ~202 of the 287 ABI functions are REAL; the rest are honest,
+// STATUS: ~237 of the 287 ABI functions are REAL; the rest are honest,
 // compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
 // and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
 // which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
@@ -48,7 +48,10 @@
 //            clipboard); the reactive STATE subsystem (typed cells, observers,
 //            bind_text/enabled/hidden + two-way bind_value); events (tap/
 //            double-tap/hover), zstack, focus/sealing; and the single-window
-//            model + alert (UIAlertController) + toast + key/file-drop delivery.
+//            model + alert (UIAlertController) + toast + key/file-drop delivery;
+//            container subsystems (tabs/navstack/splitview); in-window overlays
+//            (toast/modal/tooltip, real blur scrim, enter/exit tweens) + sheets;
+//            grid, form/section, and drawn vg tooltips.
 //   pass 5 — modern scene lifecycle (UIWindowSceneDelegate + a scene config in
 //            the app delegate): a UIWindow created without a UIWindowScene
 //            paints but never composites on iOS 13+/iPad/Catalyst, and this is
