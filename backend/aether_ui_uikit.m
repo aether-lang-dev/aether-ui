@@ -2588,6 +2588,247 @@ void aether_ui_clipboard_write_impl(const char* text) {
         [NSString stringWithUTF8String:text ? text : ""];
 }
 
+
+// ===========================================================================
+// Pass 6 wave 2 — reactive state (cells, observers, property bindings).
+// Platform-agnostic subsystem lifted from the AppKit backend: it only calls the
+// widget setters (text_set_string / set_enabled / widget_set_hidden /
+// textfield_get/set_text), all of which are real here. Two-way bind_value wires
+// UITextField's EditingChanged back into the string cell (a programmatic
+// .text set does NOT refire EditingChanged on iOS, so no bounce guard needed).
+// ===========================================================================
+enum { AEUI_STATE_FLOAT = 0, AEUI_STATE_INT = 1,
+       AEUI_STATE_BOOL = 2, AEUI_STATE_STRING = 3, AEUI_STATE_LIST = 4 };
+typedef struct {
+    int type;
+    double num;   // float/int/bool payload
+    char* str;    // string payload (owned)
+    void* list;   // LIST payload (opaque std.list ptr, NOT owned)
+    int rev;      // LIST: bumps on each set
+} StateCell;
+
+typedef struct { int state_handle; AeClosure* closure; } StateObserver;
+static StateObserver* state_observers = NULL;
+static int state_observer_count = 0;
+static int state_observer_capacity = 0;
+
+enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
+       AEUI_BIND_VALUE = 3 };
+typedef struct {
+    int kind, state_handle, widget_handle;
+    char* prefix; char* suffix;
+    int decimals; int invert;
+} PropBinding;
+
+static StateCell* state_cells = NULL;
+static int state_count = 0, state_capacity = 0;
+static PropBinding* prop_bindings = NULL;
+static int prop_binding_count = 0, prop_binding_capacity = 0;
+
+static StateCell* state_cell(int handle) {
+    if (handle < 1 || handle > state_count) return NULL;
+    return &state_cells[handle - 1];
+}
+static int state_create_cell(int type, double num, const char* str) {
+    if (state_count >= state_capacity) {
+        state_capacity = state_capacity == 0 ? 32 : state_capacity * 2;
+        state_cells = realloc(state_cells, sizeof(StateCell) * state_capacity);
+    }
+    StateCell* c = &state_cells[state_count];
+    c->type = type; c->num = num;
+    c->str = str ? strdup(str) : NULL; c->list = NULL; c->rev = 0;
+    state_count++;
+    return state_count;
+}
+
+int aether_ui_state_create(double initial)   { return state_create_cell(AEUI_STATE_FLOAT, initial, NULL); }
+int aether_ui_state_create_s(const char* i)  { return state_create_cell(AEUI_STATE_STRING, 0.0, i ? i : ""); }
+int aether_ui_state_create_i(int initial)    { return state_create_cell(AEUI_STATE_INT, (double)initial, NULL); }
+int aether_ui_state_create_b(int initial)    { return state_create_cell(AEUI_STATE_BOOL, initial ? 1.0 : 0.0, NULL); }
+
+double aether_ui_state_get(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_FLOAT) ? c->num : 0.0;
+}
+const char* aether_ui_state_get_s(int handle) {   // malloc'd — extern owns it
+    StateCell* c = state_cell(handle);
+    return strdup((c && c->type == AEUI_STATE_STRING && c->str) ? c->str : "");
+}
+int aether_ui_state_get_i(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_INT) ? (int)c->num : 0;
+}
+int aether_ui_state_get_b(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_BOOL) ? (c->num != 0.0) : 0;
+}
+int aether_ui_state_type(int handle) {
+    StateCell* c = state_cell(handle);
+    return c ? c->type : -1;
+}
+
+static void state_render_value(StateCell* c, int decimals, char* buf, int n) {
+    if (!c) { buf[0] = '\0'; return; }
+    switch (c->type) {
+        case AEUI_STATE_STRING: snprintf(buf, n, "%s", c->str ? c->str : ""); break;
+        case AEUI_STATE_INT:    snprintf(buf, n, "%d", (int)c->num); break;
+        case AEUI_STATE_BOOL:   snprintf(buf, n, "%s", c->num != 0.0 ? "true" : "false"); break;
+        default:
+            if (decimals >= 0)               snprintf(buf, n, "%.*f", decimals, c->num);
+            else if (c->num == (int)c->num)  snprintf(buf, n, "%d", (int)c->num);
+            else                             snprintf(buf, n, "%.2f", c->num);
+    }
+}
+static int state_truthy(StateCell* c) {
+    if (!c) return 0;
+    if (c->type == AEUI_STATE_STRING) return c->str && c->str[0];
+    return c->num != 0.0;
+}
+
+static void apply_prop_binding(PropBinding* b) {
+    StateCell* c = state_cell(b->state_handle);
+    if (!c) return;
+    if (b->kind == AEUI_BIND_VALUE) {
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
+        const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (!cur || strcmp(cur, want) != 0)
+            aether_ui_textfield_set_text(b->widget_handle, want);
+        return;
+    }
+    if (b->kind == AEUI_BIND_TEXT) {
+        char val[256]; state_render_value(c, b->decimals, val, sizeof(val));
+        char buf[512]; snprintf(buf, sizeof(buf), "%s%s%s", b->prefix, val, b->suffix);
+        aether_ui_text_set_string(b->widget_handle, buf);
+    } else {
+        int on = state_truthy(c);
+        if (b->invert) on = !on;
+        if (b->kind == AEUI_BIND_ENABLED) aether_ui_set_enabled(b->widget_handle, on);
+        else                              aether_ui_widget_set_hidden(b->widget_handle, on);
+    }
+}
+static void fire_state_observers(int state_handle) {
+    int n = state_observer_count;
+    for (int i = 0; i < n; i++)
+        if (state_observers[i].state_handle == state_handle) {
+            AeClosure* c = state_observers[i].closure;
+            if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+        }
+}
+static void update_prop_bindings(int state_handle) {
+    for (int i = 0; i < prop_binding_count; i++)
+        if (prop_bindings[i].state_handle == state_handle)
+            apply_prop_binding(&prop_bindings[i]);
+    fire_state_observers(state_handle);
+}
+
+void aether_ui_state_on_change(int state_handle, void* boxed_closure) {
+    if (state_observer_count >= state_observer_capacity) {
+        state_observer_capacity = state_observer_capacity == 0 ? 16 : state_observer_capacity * 2;
+        state_observers = realloc(state_observers, sizeof(StateObserver) * state_observer_capacity);
+    }
+    state_observers[state_observer_count].state_handle = state_handle;
+    state_observers[state_observer_count].closure = (AeClosure*)boxed_closure;
+    state_observer_count++;
+}
+
+int aether_ui_state_create_list(void* list_ptr) {
+    int h = state_create_cell(AEUI_STATE_LIST, 0.0, NULL);
+    StateCell* c = state_cell(h);
+    if (c) { c->list = list_ptr; c->rev = 0; }
+    return h;
+}
+void* aether_ui_state_get_list(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_LIST) ? c->list : NULL;
+}
+void aether_ui_state_set_list(int handle, void* list_ptr) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_LIST) return;
+    c->list = list_ptr; c->rev++;
+    update_prop_bindings(handle);
+}
+int aether_ui_state_list_rev(int handle) {
+    StateCell* c = state_cell(handle);
+    return (c && c->type == AEUI_STATE_LIST) ? c->rev : 0;
+}
+
+void aether_ui_state_set(int handle, double value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_FLOAT) return;
+    c->num = value; update_prop_bindings(handle);
+}
+void aether_ui_state_set_s(int handle, const char* value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_STRING) return;
+    free(c->str); c->str = strdup(value ? value : "");
+    update_prop_bindings(handle);
+}
+void aether_ui_state_set_i(int handle, int value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_INT) return;
+    c->num = (double)value; update_prop_bindings(handle);
+}
+void aether_ui_state_set_b(int handle, int value) {
+    StateCell* c = state_cell(handle);
+    if (!c || c->type != AEUI_STATE_BOOL) return;
+    c->num = value ? 1.0 : 0.0; update_prop_bindings(handle);
+}
+
+static PropBinding* prop_binding_new(int kind, int state_handle, int widget_handle) {
+    if (prop_binding_count >= prop_binding_capacity) {
+        prop_binding_capacity = prop_binding_capacity == 0 ? 32 : prop_binding_capacity * 2;
+        prop_bindings = realloc(prop_bindings, sizeof(PropBinding) * prop_binding_capacity);
+    }
+    PropBinding* b = &prop_bindings[prop_binding_count++];
+    b->kind = kind; b->state_handle = state_handle; b->widget_handle = widget_handle;
+    b->prefix = strdup(""); b->suffix = strdup(""); b->decimals = -1; b->invert = 0;
+    return b;
+}
+
+void aether_ui_state_bind_text(int state_handle, int text_handle,
+                               const char* prefix, const char* suffix) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_TEXT, state_handle, text_handle);
+    free(b->prefix); free(b->suffix);
+    b->prefix = prefix ? strdup(prefix) : strdup("");
+    b->suffix = suffix ? strdup(suffix) : strdup("");
+    apply_prop_binding(b);
+}
+void aether_ui_bind_text_impl(int state_handle, int widget_handle, int decimals) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_TEXT, state_handle, widget_handle);
+    b->decimals = decimals; apply_prop_binding(b);
+}
+void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_ENABLED, state_handle, widget_handle);
+    b->invert = invert; apply_prop_binding(b);
+}
+void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_HIDDEN, state_handle, widget_handle);
+    b->invert = invert; apply_prop_binding(b);
+}
+
+// Two-way: string state ⇄ UITextField. State→field is a VALUE binding; field→
+// state is an EditingChanged target writing back into the cell.
+@interface AeuiValueBindTarget : NSObject
+@property (nonatomic, assign) int stateHandle;
+@end
+@implementation AeuiValueBindTarget
+- (void)changed:(UITextField*)f {
+    aether_ui_state_set_s(self.stateHandle, f.text ? f.text.UTF8String : "");
+}
+@end
+void aether_ui_bind_value(int state_handle, int widget_handle) {
+    PropBinding* b = prop_binding_new(AEUI_BIND_VALUE, state_handle, widget_handle);
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(widget_handle);
+    if (v && [v isKindOfClass:[UITextField class]]) {
+        AeuiValueBindTarget* t = [[AeuiValueBindTarget alloc] init];
+        t.stateHandle = state_handle;
+        [(UITextField*)v addTarget:t action:@selector(changed:)
+            forControlEvents:UIControlEventEditingChanged];
+        retain_target(t);
+    }
+    apply_prop_binding(b);  // seed the field from the state's initial value
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -2597,10 +2838,6 @@ void aether_ui_clipboard_write_impl(const char* text) {
 // ===========================================================================
 
 void aether_ui_alert_impl(const char* title, const char* message) { }  // TODO(ios)
-void aether_ui_bind_enabled_impl(int state_handle, int widget_handle, int invert) { }  // TODO(ios)
-void aether_ui_bind_hidden_impl(int state_handle, int widget_handle, int invert) { }  // TODO(ios)
-void aether_ui_bind_text_impl(int state_handle, int widget_handle, int decimals) { }  // TODO(ios)
-void aether_ui_bind_value(int state_handle, int widget_handle) { }  // TODO(ios)
 void aether_ui_close_window_by_handle_impl(int win_handle) { }  // TODO(ios)
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel, void* boxed_closure) { }  // TODO(ios)
 void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) { }  // TODO(ios)
@@ -2719,26 +2956,7 @@ void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* 
 int aether_ui_split_position_impl(int handle) { return 0; }  // TODO(ios)
 void aether_ui_split_set_position_impl(int handle, int px) { }  // TODO(ios)
 int aether_ui_splitview_create(int vertical) { return 0; }  // TODO(ios)
-void aether_ui_state_bind_text(int state_handle, int text_handle, const char* prefix, const char* suffix) { }  // TODO(ios)
-int aether_ui_state_create(double initial) { return 0; }  // TODO(ios)
-int aether_ui_state_create_b(int initial) { return 0; }  // TODO(ios)
-int aether_ui_state_create_i(int initial) { return 0; }  // TODO(ios)
-int aether_ui_state_create_list(void* list_ptr) { return 0; }  // TODO(ios)
-int aether_ui_state_create_s(const char* initial) { return 0; }  // TODO(ios)
-double aether_ui_state_get(int handle) { return 0.0; }  // TODO(ios)
-int aether_ui_state_get_b(int handle) { return 0; }  // TODO(ios)
-int aether_ui_state_get_i(int handle) { return 0; }  // TODO(ios)
-void* aether_ui_state_get_list(int handle) { return (void*)0; }  // TODO(ios)
-const char* aether_ui_state_get_s(int handle) { return ""; }  // TODO(ios)
-int aether_ui_state_list_rev(int handle) { return 0; }  // TODO(ios)
-void aether_ui_state_on_change(int state_handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_state_set(int handle, double value) { }  // TODO(ios)
-void aether_ui_state_set_b(int handle, int value) { }  // TODO(ios)
-void aether_ui_state_set_i(int handle, int value) { }  // TODO(ios)
-void aether_ui_state_set_list(int handle, void* list_ptr) { }  // TODO(ios)
-void aether_ui_state_set_s(int handle, const char* value) { }  // TODO(ios)
 int aether_ui_state_style_impl(int handle, int state) { return 0; }  // TODO(ios)
-int aether_ui_state_type(int handle) { return 0; }  // TODO(ios)
 int aether_ui_styled_bg_impl(int handle) { return 0; }  // TODO(ios)
 int aether_ui_styled_border_impl(int handle) { return 0; }  // TODO(ios)
 int aether_ui_styled_fg_impl(int handle) { return 0; }  // TODO(ios)
@@ -2783,4 +3001,5 @@ void aether_ui_window_show_impl(int win_handle) { }  // TODO(ios)
 const char* aether_ui_window_title_impl(int win_handle) { return ""; }  // TODO(ios)
 int aether_ui_wrap_create(void) { return 0; }  // TODO(ios)
 int aether_ui_zstack_create(void) { return 0; }  // TODO(ios)
+
 
