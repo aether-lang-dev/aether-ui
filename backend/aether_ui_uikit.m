@@ -14,7 +14,7 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: ~264 of the 287 ABI functions are REAL; the rest are honest,
+// STATUS: ~272 of the 287 ABI functions are REAL; the rest are honest,
 // compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
 // and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
 // which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
@@ -3080,11 +3080,29 @@ static AeClosure* g_window_file_drop_closure = NULL;
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     g_window_key_closure = (AeClosure*)boxed_closure;   // hardware-keyboard pass wires live delivery
 }
+static int aeui_try_fire_shortcut(const char* combo);   // defined in the shortcut section
+
 int aether_ui_window_key_deliver(const char* key_name, int mods) {
-    if (!g_window_key_closure || !g_window_key_closure->fn) return 0;
-    ((void(*)(void*, const char*, int))g_window_key_closure->fn)(
-        g_window_key_closure->env, key_name ? key_name : "", mods);
-    return 1;
+    // Registered shortcuts get first refusal (combo built as [Cmd+][Ctrl+][Alt+]
+    // [Shift+]Key, and the bare key too), then the window's any-key handler.
+    int fired = 0;
+    const char* k = key_name ? key_name : "";
+    if (mods) {
+        char combo[96]; combo[0] = '\0';
+        if (mods & 8) strncat(combo, "Cmd+",  sizeof(combo) - strlen(combo) - 1);
+        if (mods & 2) strncat(combo, "Ctrl+", sizeof(combo) - strlen(combo) - 1);
+        if (mods & 4) strncat(combo, "Alt+",  sizeof(combo) - strlen(combo) - 1);
+        if (mods & 1) strncat(combo, "Shift+",sizeof(combo) - strlen(combo) - 1);
+        strncat(combo, k, sizeof(combo) - strlen(combo) - 1);
+        fired = aeui_try_fire_shortcut(combo);
+    }
+    if (!fired) fired = aeui_try_fire_shortcut(k);
+    if (g_window_key_closure && g_window_key_closure->fn) {
+        ((void(*)(void*, const char*, int))g_window_key_closure->fn)(
+            g_window_key_closure->env, k, mods);
+        fired = 1;
+    }
+    return fired;
 }
 void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
     g_window_file_drop_closure = (AeClosure*)boxed_closure;
@@ -3947,6 +3965,128 @@ int aether_ui_fire_scroll(int container_handle, int dy) {
     return 1;
 }
 
+
+// ===========================================================================
+// Pass 6 wave 10 — row drag-reorder, drag payloads, radio groups, shortcuts.
+// ===========================================================================
+
+// --- Row drag-reorder — store the on_drop closure; driver fires it -----------
+void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) {
+    (void)index;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(row_handle);
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui_rowdrop",
+        [NSValue valueWithPointer:on_drop_closure], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+int aether_ui_fire_row_drop(int row_handle, int src_index) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(row_handle);
+    if (!v) return 0;
+    NSValue* nv = objc_getAssociatedObject(v, "aeui_rowdrop");
+    if (!nv) return 0;
+    AeClosure* c = (AeClosure*)nv.pointerValue;
+    if (!c || !c->fn) return 0;
+    ((void(*)(void*, intptr_t))c->fn)(c->env, (intptr_t)src_index);
+    return 1;
+}
+
+// --- Draggable file / drag payload (stored; a live UIDragInteraction later) --
+void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (v) objc_setAssociatedObject(v, "aeui_drag_file",
+        path ? [NSString stringWithUTF8String:path] : nil,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+const char* aether_ui_widget_drag_payload_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return "";
+    NSString* p = objc_getAssociatedObject(v, "aeui_drag_file");
+    return p ? p.UTF8String : "";
+}
+
+// --- Radio groups — a leader per member; turning one on turns the rest off ---
+@interface AeuiRadioTarget : NSObject
+@property (nonatomic, assign) int handle;
+@end
+@implementation AeuiRadioTarget
+- (void)changed:(UISwitch*)sw {
+    if (!sw.isOn) return;
+    UIView* self_v = (__bridge UIView*)aether_ui_get_widget(self.handle);
+    NSNumber* leader = objc_getAssociatedObject(self_v, "aeui_radio_leader");
+    if (!leader) return;
+    for (int i = 0; i < widget_count; i++) {
+        UIView* w = widgets[i];
+        if (w == self_v || ![w isKindOfClass:[UISwitch class]]) continue;
+        NSNumber* wl = objc_getAssociatedObject(w, "aeui_radio_leader");
+        if (wl && wl.intValue == leader.intValue) [(UISwitch*)w setOn:NO animated:YES];
+    }
+}
+@end
+
+void aether_ui_toggle_set_group(int handle, int group_with) {
+    if (handle < 1 || handle > widget_count) return;
+    if (group_with < 1 || group_with > widget_count) return;
+    UIView* a = (__bridge UIView*)aether_ui_get_widget(handle);
+    UIView* b = (__bridge UIView*)aether_ui_get_widget(group_with);
+    if (![a isKindOfClass:[UISwitch class]]) return;
+    NSNumber* existing = objc_getAssociatedObject(b, "aeui_radio_leader");
+    int leader = existing ? existing.intValue : group_with;
+    objc_setAssociatedObject(b, "aeui_radio_leader", @(leader), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(a, "aeui_radio_leader", @(leader), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Enforce exclusivity on this member (the leader gets its own target when it
+    // is itself passed as `handle`).
+    AeuiRadioTarget* t = [[AeuiRadioTarget alloc] init];
+    t.handle = handle;
+    [(UISwitch*)a addTarget:t action:@selector(changed:)
+          forControlEvents:UIControlEventValueChanged];
+    retain_target(t);
+}
+
+// --- Keyboard shortcuts — a combo→closure registry, driver-drivable ---------
+// Registration is real; window_key_deliver (the driver path) matches a delivered
+// key against it. Live hardware-keyboard delivery via UIKeyCommand on the
+// responder chain is a later pass (iPad).
+typedef struct { char* combo; AeClosure* closure; AeClosure* enabled; } AeuiShortcut;
+static AeuiShortcut* shortcuts = NULL;
+static int shortcut_count = 0, shortcut_cap = 0;
+
+void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) {
+    if (!combo || !boxed_closure) return;
+    if (shortcut_count >= shortcut_cap) {
+        shortcut_cap = shortcut_cap == 0 ? 16 : shortcut_cap * 2;
+        shortcuts = realloc(shortcuts, sizeof(AeuiShortcut) * shortcut_cap);
+    }
+    shortcuts[shortcut_count].combo = strdup(combo);
+    shortcuts[shortcut_count].closure = (AeClosure*)boxed_closure;
+    shortcuts[shortcut_count].enabled = (AeClosure*)enabled_closure;
+    shortcut_count++;
+}
+void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
+    aether_ui_shortcut_when_impl(combo, boxed_closure, NULL);
+}
+void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_combo,
+                                   void* boxed_closure) {
+    // Store the two-key chord as "first second"; the deliver path matches the
+    // whole string. (A real live chord tracker is a later pass.)
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s %s", first_combo ? first_combo : "",
+             second_combo ? second_combo : "");
+    aether_ui_shortcut_when_impl(buf, boxed_closure, NULL);
+}
+
+// Fire a shortcut whose combo matches `combo` exactly, honouring its `enabled`
+// guard. Returns 1 if one fired. Called by window_key_deliver.
+static int aeui_try_fire_shortcut(const char* combo) {
+    if (!combo) return 0;
+    for (int i = 0; i < shortcut_count; i++) {
+        if (strcmp(shortcuts[i].combo, combo) != 0) continue;
+        AeClosure* en = shortcuts[i].enabled;
+        if (en && en->fn && !((int(*)(void*))en->fn)(en->env)) continue;  // disabled
+        AeClosure* c = shortcuts[i].closure;
+        if (c && c->fn) { ((void(*)(void*))c->fn)(c->env); return 1; }
+    }
+    return 0;
+}
+
 // ===========================================================================
 // UNIMPLEMENTED — later-pass stubs.
 //
@@ -4009,16 +4149,10 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
 }
 int aether_ui_fire_appearance(int dark) { return 0; }  // TODO(ios)
 int aether_ui_fire_redo(void) { return 0; }  // TODO(ios)
-int aether_ui_fire_row_drop(int row_handle, int src_index) { return 0; }  // TODO(ios)
 int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) { }  // TODO(ios)
 void aether_ui_set_state_style(int handle, int state, double br, double bg_, double bb, double fr, double fg_, double fb) { }  // TODO(ios)
-void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_combo, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) { }  // TODO(ios)
 int aether_ui_state_style_impl(int handle, int state) { return 0; }  // TODO(ios)
-void aether_ui_toggle_set_group(int handle, int group_with) { }  // TODO(ios)
 int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
 void aether_ui_tray_seal_impl(int tray_id) { }  // TODO(ios)
 void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle, const char* icon_clean, const char* icon_busy, const char* icon_alert) { }  // TODO(ios)
@@ -4027,8 +4161,7 @@ void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) { }  // TODO(ios
 void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) { }  // TODO(ios)
 void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
 void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
-const char* aether_ui_widget_drag_payload_impl(int handle) { return ""; }  // TODO(ios)
-void aether_ui_widget_draggable_file_impl(int handle, const char* path) { }  // TODO(ios)
+
 
 
 
