@@ -76,6 +76,26 @@ per-target switch, default-off for all Apple mobile triples.
   `ITSAppUsesNonExemptEncryption`. A one-line statement of what crypto ships (and
   whether it's HTTPS-exempt) would let apps fill the App Store form correctly.
 
+## 3b. ABI shapes that don't fit iOS (UI-side, but cross-backend)
+
+The UIKit backend implements all 287 UI ABI functions, but three ABI *shapes*
+assume desktop semantics iOS can't provide synchronously:
+
+- **File pickers are synchronous** (`char* aether_ui_file_open/save/pick_folder`).
+  iOS has only the ASYNC `UIDocumentPickerViewController` (delegate callback) —
+  there is no `runModal`. The backend returns an empty selection today. The ABI
+  needs an async/callback variant for iOS (and it's the better shape on every
+  platform).
+- **Hardware-keyboard shortcuts** register into a combo→closure registry and are
+  driver-drivable, but live delivery on iPad needs `UIKeyCommand` on the
+  responder chain — a different wiring than the desktop key hook.
+- **Menu bar** (`menu_bar_*`) has no live iOS analogue (an iPad menu bar is built
+  once at launch via `UIMenuBuilder`), and the **system tray** family is simply
+  N/A on iOS.
+
+These are notes for whoever unifies the ABI, not blockers — the backend degrades
+honestly (documented no-ops / empty returns) in each case.
+
 ## 4. Minor / FYI
 
 - Generated app C declares `int64_t lrint(double);` while the SDK has
