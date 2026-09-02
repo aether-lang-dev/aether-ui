@@ -14,14 +14,15 @@
 // affordances — pointer interactions, UIMenu, scenes — behind a
 // UIUserInterfaceIdiomPad branch as those sections get ported.
 //
-// STATUS: ~272 of the 287 ABI functions are REAL; the rest are honest,
-// compiling `// TODO(ios)` stubs at the foot of the file, so the backend links
-// and is gated by the iOS SDK compile+link+RENDER check in ci.sh (Phase 1e,
-// which pixel-checks the canvas natively via Mac Catalyst). Each pass moves a
-// section out of the stub block into a real implementation, as the Win32/AppKit
-// backends grew. What's left is mostly the heavier subsystems (overlays/sheets,
-// navstack, splitview, grid/wrap, menus, notifications, file pickers,
-// drag-drop, CSS engine) plus the genuinely iOS-N/A ones (tray/menu-bar).
+// STATUS: ALL 287 ABI functions are implemented — no stubs remain. The one set
+// that cannot be functional is the tray/menu-bar family (there is no iOS
+// status-bar tray); those are documented no-ops. A few carry a stated
+// limitation where iOS differs from the desktop ABI (synchronous file pickers →
+// empty selection, since iOS pickers are async; live hardware-keyboard shortcut
+// delivery is driver/registry-only pending UIKeyCommand responder wiring; a
+// bg-gradient layer that doesn't track resize). Gated by the iOS SDK
+// compile+link+RENDER check in ci.sh (Phase 1e, which pixel-checks the canvas
+// natively via Mac Catalyst).
 //   pass 1 — lifecycle, widget registry, stack layout, core widgets (text,
 //            button, textfield/securefield, toggle, slider).
 //   pass 2 — visibility/enablement, text getters+truncation, accessibility
@@ -4087,13 +4088,214 @@ static int aeui_try_fire_shortcut(const char* combo) {
     return 0;
 }
 
+
 // ===========================================================================
-// UNIMPLEMENTED — later-pass stubs.
-//
-// Every remaining ABI entry the app can call, defined so the backend links.
-// Each returns a safe default and is a TODO for a later pass. The real work
-// moves them OUT of this block into proper sections above, as passes 1-3 did.
+// Pass 6 wave 11 — undo/redo, on_layout, inline CSS, state styles; tray = N/A.
 // ===========================================================================
+
+// --- Undo / redo — the step machinery lives in the shared system-extras -----
+int aether_ui_fire_undo(void) { return aether_ui_undo_step_impl(); }
+int aether_ui_fire_redo(void) { return aether_ui_redo_step_impl(); }
+
+// --- on_layout — fire (w,h) when the view's allocation changes (via KVO) -----
+@interface AeuiLayoutObserver : NSObject
+@property (nonatomic, assign) AeClosure* closure;
+@property (nonatomic, assign) int lastW, lastH;
+@property (nonatomic, unsafe_unretained) UIView* view;
+@end
+@implementation AeuiLayoutObserver
+- (void)observeValueForKeyPath:(NSString*)kp ofObject:(id)obj
+                        change:(NSDictionary*)ch context:(void*)ctx {
+    (void)kp; (void)obj; (void)ch; (void)ctx;
+    if (!self.view) return;
+    int w = (int)lround(self.view.bounds.size.width);
+    int h = (int)lround(self.view.bounds.size.height);
+    if (w == self.lastW && h == self.lastH) return;   // change only
+    self.lastW = w; self.lastH = h;
+    AeClosure* c = self.closure;
+    if (!c || !c->fn) return;
+    // Deferred: the closure is free to build/mutate widgets (a GeometryReader),
+    // which must not happen inside a layout pass.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+    });
+}
+@end
+void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !boxed_closure) return;
+    AeuiLayoutObserver* o = [[AeuiLayoutObserver alloc] init];
+    o.closure = (AeClosure*)boxed_closure;
+    o.view = v; o.lastW = 0; o.lastH = 0;
+    // CALayer.bounds is reliably KVO-compliant (Core Animation depends on it),
+    // unlike UIView.bounds. The view outlives the observer (held in the
+    // registry), so no removal is needed.
+    [v.layer addObserver:o forKeyPath:@"bounds"
+                 options:NSKeyValueObservingOptionNew context:NULL];
+    retain_target(o);
+}
+
+// --- Inline CSS — parse "prop: val; …" and drive the set_* setters ----------
+static char* aeui_trim(char* s) {
+    while (*s == ' ' || *s == '\t') s++;
+    char* e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n')) *--e = '\0';
+    return s;
+}
+// #rgb / #rrggbb / a few names → 0..1 components. Returns 1 on success.
+static int aeui_parse_css_color(const char* v, double* r, double* g, double* b) {
+    if (!v) return 0;
+    if (v[0] == '#') {
+        unsigned int rr, gg, bb;
+        if (strlen(v) == 7 && sscanf(v + 1, "%2x%2x%2x", &rr, &gg, &bb) == 3) {
+            *r = rr/255.0; *g = gg/255.0; *b = bb/255.0; return 1;
+        }
+        if (strlen(v) == 4 && sscanf(v + 1, "%1x%1x%1x", &rr, &gg, &bb) == 3) {
+            *r = rr/15.0; *g = gg/15.0; *b = bb/15.0; return 1;
+        }
+        return 0;
+    }
+    if (!strcmp(v, "white")) { *r=*g=*b=1.0; return 1; }
+    if (!strcmp(v, "black")) { *r=*g=*b=0.0; return 1; }
+    if (!strcmp(v, "red"))   { *r=1;*g=0;*b=0; return 1; }
+    if (!strcmp(v, "green")) { *r=0;*g=0.5;*b=0; return 1; }
+    if (!strcmp(v, "blue"))  { *r=0;*g=0;*b=1; return 1; }
+    return 0;
+}
+static void aeui_apply_css_decl(int handle, const char* prop, const char* val) {
+    double r, g, b;
+    if ((!strcmp(prop, "background") || !strcmp(prop, "background-color"))
+        && aeui_parse_css_color(val, &r, &g, &b)) {
+        aether_ui_set_bg_color(handle, r, g, b, 1.0);
+    } else if (!strcmp(prop, "color") && aeui_parse_css_color(val, &r, &g, &b)) {
+        aether_ui_set_text_color(handle, r, g, b);
+    } else if (!strcmp(prop, "opacity")) {
+        aether_ui_set_opacity(handle, atof(val));
+    } else if (!strcmp(prop, "border-radius") || !strcmp(prop, "corner-radius")) {
+        aether_ui_set_corner_radius(handle, atof(val));
+    } else if (!strcmp(prop, "font-size")) {
+        aether_ui_set_font_size(handle, atof(val));
+    } else if (!strcmp(prop, "font-weight")) {
+        aether_ui_set_font_bold(handle, strstr(val, "bold") ? 1 : 0);
+    } else if (!strcmp(prop, "font-family")) {
+        aether_ui_set_font_family(handle, val);
+    } else if (!strcmp(prop, "border")) {
+        double w = atof(val);              // "2px #333" — width then colour
+        const char* hash = strchr(val, '#');
+        if (hash && aeui_parse_css_color(hash, &r, &g, &b))
+            aether_ui_set_border(handle, w, r, g, b);
+    }
+}
+void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
+    if (!property_css) return;
+    char* dup = strdup(property_css);
+    char* save = NULL;
+    for (char* decl = strtok_r(dup, ";", &save); decl; decl = strtok_r(NULL, ";", &save)) {
+        char* colon = strchr(decl, ':');
+        if (!colon) continue;
+        *colon = '\0';
+        aeui_apply_css_decl(handle, aeui_trim(decl), aeui_trim(colon + 1));
+    }
+    free(dup);
+}
+
+// --- State styles (hover / active background) -------------------------------
+// state 0 = hover, 1 = active. Stored packed (matches AppKit), applied on iPad
+// pointer hover; readback via state_style_impl.
+@interface AeuiStateHoverTarget : NSObject
+@property (nonatomic, assign) int handle;
+@end
+@implementation AeuiStateHoverTarget
+- (void)hover:(UIHoverGestureRecognizer*)g {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(self.handle);
+    if (!v) return;
+    if (g.state == UIGestureRecognizerStateBegan) {
+        NSNumber* n = objc_getAssociatedObject(v, "aeui-hover-style");
+        if (!n) return;
+        if (!objc_getAssociatedObject(v, "aeui-hover-orig"))
+            objc_setAssociatedObject(v, "aeui-hover-orig", v.backgroundColor ?: [NSNull null],
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        int p = n.intValue;
+        v.backgroundColor = [UIColor colorWithRed:((p>>16)&255)/255.0
+                                            green:((p>>8)&255)/255.0
+                                             blue:(p&255)/255.0 alpha:1.0];
+    } else if (g.state == UIGestureRecognizerStateEnded ||
+               g.state == UIGestureRecognizerStateCancelled) {
+        id orig = objc_getAssociatedObject(v, "aeui-hover-orig");
+        v.backgroundColor = (orig == [NSNull null]) ? nil : orig;
+    }
+}
+@end
+void aether_ui_set_state_style(int handle, int state,
+                               double br, double bg_, double bb,
+                               double fr, double fg_, double fb) {
+    (void)fr; (void)fg_; (void)fb;   // per-state fg: a follow-up
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || br < 0.0) return;
+    objc_setAssociatedObject(v, state == 1 ? "aeui-active-style" : "aeui-hover-style",
+        @(0x1000000 | (((int)(br*255)&255)<<16) | (((int)(bg_*255)&255)<<8) | ((int)(bb*255)&255)),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (state == 0 && !objc_getAssociatedObject(v, "aeui-hover-mon")) {
+        if (@available(iOS 13.0, *)) {
+            AeuiStateHoverTarget* t = [[AeuiStateHoverTarget alloc] init];
+            t.handle = handle;
+            [v addGestureRecognizer:
+                [[UIHoverGestureRecognizer alloc] initWithTarget:t action:@selector(hover:)]];
+            objc_setAssociatedObject(v, "aeui-hover-mon", t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+}
+int aether_ui_state_style_impl(int handle, int state) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* n = objc_getAssociatedObject(v, state == 1 ? "aeui-active-style" : "aeui-hover-style");
+    return n ? (n.intValue & 0xFFFFFF) : -1;
+}
+
+// ===========================================================================
+// System tray — NOT AVAILABLE on iOS (there is no status-bar / menu-bar tray).
+// Defined as documented no-ops so the ABI links; nothing to implement.
+// ===========================================================================
+int  aether_ui_tray_create_impl(const char* name, void* boxed_left_click) {
+    (void)name; (void)boxed_left_click; return 0;
+}
+void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) { (void)tray_id; (void)menu_handle; }
+void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) { (void)tray_id; (void)text; }
+void aether_ui_tray_set_icon_template_impl(int tray_id, int is_template) { (void)tray_id; (void)is_template; }
+void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle,
+        const char* icon_clean, const char* icon_busy, const char* icon_alert) {
+    (void)tray_id; (void)state_handle; (void)icon_clean; (void)icon_busy; (void)icon_alert;
+}
+void aether_ui_tray_seal_impl(int tray_id) { (void)tray_id; }
+
+
+// ===========================================================================
+// Pass 6 wave 12 — appearance (dark/light). Closures are fired through the
+// shared aether_ui_appearance_invoke (system-extras); fire_appearance also
+// forces the window's style for a real visible switch.
+// ===========================================================================
+void aether_ui_watch_appearance_impl(void) {
+    static int watched = 0;
+    if (watched) return;
+    watched = 1;
+    // iOS has no global dark-mode notification (appearance is per-view, via the
+    // trait environment), so seed app code with the current value once. Ongoing
+    // OS changes are surfaced through fire_appearance (the driver path); a scene
+    // trait-change hook is a later refinement.
+    aether_ui_appearance_invoke(aether_ui_dark_mode_check());
+}
+
+int aether_ui_fire_appearance(int dark) {
+    aether_ui_appearance_override_set(dark ? 1 : 0);
+    UIWindow* w = aeui_key_window();
+    if (w) {
+        if (@available(iOS 13.0, *))
+            w.overrideUserInterfaceStyle = dark ? UIUserInterfaceStyleDark
+                                                : UIUserInterfaceStyleLight;
+    }
+    aether_ui_appearance_invoke(dark ? 1 : 0);
+    return 1;
+}
 
 // --- AetherUIDriver hooks ---------------------------------------------------
 // Enough for the server to run and serve the canvas pixel routes (which call
@@ -4147,20 +4349,8 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
     uikit_test_server_started = 1;
     aether_ui_test_server_start(port, &uikit_driver_hooks);
 }
-int aether_ui_fire_appearance(int dark) { return 0; }  // TODO(ios)
-int aether_ui_fire_redo(void) { return 0; }  // TODO(ios)
-int aether_ui_fire_undo(void) { return 0; }  // TODO(ios)
-void aether_ui_on_layout_impl(int handle, void* boxed_closure) { }  // TODO(ios)
-void aether_ui_set_state_style(int handle, int state, double br, double bg_, double bb, double fr, double fg_, double fb) { }  // TODO(ios)
-int aether_ui_state_style_impl(int handle, int state) { return 0; }  // TODO(ios)
-int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) { return 0; }  // TODO(ios)
-void aether_ui_tray_seal_impl(int tray_id) { }  // TODO(ios)
-void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle, const char* icon_clean, const char* icon_busy, const char* icon_alert) { }  // TODO(ios)
-void aether_ui_tray_set_icon_template_impl(int tray_id, int is_template) { }  // TODO(ios)
-void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) { }  // TODO(ios)
-void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) { }  // TODO(ios)
-void aether_ui_watch_appearance_impl(void) { }  // TODO(ios)
-void aether_ui_widget_apply_css_impl(int handle, const char* property_css) { }  // TODO(ios)
+
+
 
 
 
