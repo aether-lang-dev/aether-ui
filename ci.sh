@@ -1,6 +1,11 @@
 #!/bin/bash
 # ci.sh — full aether_ui test pipeline as a CI job would run it.
 #
+# The AetherUIDriver control server is OUT of app builds by default (a listening
+# socket must not ship in release binaries); the spec/CI pipeline opts in so the
+# HTTP-driven tests work. This MUST be exported before any `aeb` build below.
+export AETHER_UI_WITH_DRIVER=1
+#
 # Phases:
 #   1. Build every example (catches C/Aether compile regressions).
 #   2. Smoke-launch the non-driver examples to catch runtime crashes the
