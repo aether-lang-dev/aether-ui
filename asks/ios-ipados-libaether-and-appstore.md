@@ -67,11 +67,13 @@ per-target switch, default-off for all Apple mobile triples.
   (file-timestamp, disk-space, system-boot-time, `NSUserDefaults`). These need a
   declared reason in `PrivacyInfo.xcprivacy` or the app is rejected. Please
   publish which required-reason APIs libaether touches, per subsystem.
-- **A release switch to compile OUT networking / the driver.** The AetherUIDriver
-  test server (`backend/aether_ui_test_server.c`) is a localhost HTTP control
-  server — it must be absent from App Store builds (security + completeness). The
-  UI side can `#ifdef` it, but a runtime-level "no listening sockets in release"
-  posture helps.
+- ~~**A release switch to compile OUT networking / the driver.**~~ DONE
+  (dd3c0cc1): the AetherUIDriver control surface is now two build-time
+  implementations, defaulting OUT — `backend/aether_ui_no_control.c` (no-op, no
+  socket code ships) vs `backend/aether_ui_test_server.c` (the real server,
+  linked only with `AETHER_UI_WITH_DRIVER=1`). No listening-socket code ships in
+  a default/App-Store app build. A runtime-level "no listening sockets in
+  release" posture in libaether itself would still be a good belt-and-braces.
 - **Export compliance:** libaether bundles AES/crypto — apps must answer
   `ITSAppUsesNonExemptEncryption`. A one-line statement of what crypto ships (and
   whether it's HTTPS-exempt) would let apps fill the App Store form correctly.
