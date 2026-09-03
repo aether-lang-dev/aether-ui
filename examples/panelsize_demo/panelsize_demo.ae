@@ -1,0 +1,61 @@
+// Panel sizing: an outer nested splitview, and a width you can state (#95).
+//
+// split_set_position moved the INNER of two nested splitviews and did nothing
+// to the outer one: asked for 240, got 114, which is the left pane's content
+// width. AppKit re-derives a pane's width from its content on the next layout
+// pass, so setting the divider alone does not survive it. Nothing else could
+// state a width either, so a three-panel editor had no way to lay itself out.
+//
+// This builds exactly that shape and reports what each panel actually got,
+// read back through get_width, so the numbers are the allocation and not the
+// request.
+
+import ui
+import ui (root_vstack, text, vstack, splitview, split_set_position,
+    set_width, get_width, app_quit, timer, timer_cancel, set_text,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    left = 0
+    stage = 0
+    right = 0
+    report = 0
+    split = 0
+    inner = 0
+
+    main_root = root_vstack(4) {
+        report = text("panels: pending")
+        split = splitview("h") {
+            left = vstack(6) {
+                _t1 = text("hierarchy")
+            }
+            inner = splitview("h") {
+                stage = vstack(0) {
+                    _t2 = text("viewport")
+                }
+                right = vstack(6) {
+                    _t3 = text("inspector")
+                }
+            }
+        }
+        // The outer divider is the one that used to be ignored.
+        split_set_position(split, 240)
+        split_set_position(inner, 940)
+    }
+
+    app = ui.app_create("panel sizing", 1480, 700)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+
+    tid = 0
+    tid = timer(120) callback {
+        timer_cancel(tid)
+        lw = get_width(left)
+        set_text(report, "panels: left=${lw}")
+        println("left panel width = ${lw} (asked 240)")
+        app_quit()
+    }
+    ui.app_start(app, main_root)
+}

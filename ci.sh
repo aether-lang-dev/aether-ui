@@ -65,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo resizecb_demo quit_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo resizecb_demo quit_demo panelsize_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -916,6 +916,22 @@ if [ "$SPEC_OK" -eq 1 ]; then
     else
         echo "  FAIL quit_demo: rc=$quit_rc (124 = never quit)"
         printf '%s\n' "$quit_out" | head -5 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+
+    # A nested splitview's OUTER divider, and a width that holds. No driver
+    # needed: the app reads its own allocation back through get_width and
+    # quits, so the assertion is the number it printed. Asked 240; before the
+    # fix the pane took the whole width (1368) because setPosition: alone does
+    # not survive layout re-deriving a pane from its content.
+    echo "-- Phase 5e22: split_set_position holds on a nested splitview --"
+    panel_out=$(AETHER_UI_HEADLESS=1 timeout 30 "$(EX_BIN panelsize_demo)" 2>&1)
+    panel_rc=$?
+    if [ "$panel_rc" -eq 0 ] && printf '%s' "$panel_out" | grep -q "left panel width = 240"; then
+        echo "  OK   panelsize_demo: outer divider honoured (240)"
+    else
+        echo "  FAIL panelsize_demo: rc=$panel_rc"
+        printf '%s\n' "$panel_out" | head -4 | sed 's/^/       /'
         FAIL=$((FAIL + 1))
     fi
 

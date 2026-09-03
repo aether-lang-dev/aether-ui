@@ -1406,6 +1406,39 @@ int aether_ui_split_position_impl(int handle) {
     return gtk_paned_get_position(GTK_PANED(w));
 }
 
+/* #95: give a widget a width, or ask what width it has. Nothing in the
+ * surface could do either, so a panel layout had no way to state how wide a
+ * panel should be. size_request is GTK's floor; paired with the widget not
+ * expanding, it is what actually holds a panel at a width. get_ reads the
+ * ALLOCATION, which is what the widget really got, not what was asked for. */
+void aether_ui_set_width_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_h = -1;
+    gtk_widget_get_size_request(w, NULL, &cur_h);
+    gtk_widget_set_size_request(w, px, cur_h);
+    gtk_widget_set_hexpand(w, FALSE);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_w = -1;
+    gtk_widget_get_size_request(w, &cur_w, NULL);
+    gtk_widget_set_size_request(w, cur_w, px);
+    gtk_widget_set_vexpand(w, FALSE);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    return w ? gtk_widget_get_width(w) : 0;
+}
+
+int aether_ui_get_height_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    return w ? gtk_widget_get_height(w) : 0;
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_PANED(w)) return;

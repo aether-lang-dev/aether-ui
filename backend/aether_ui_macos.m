@@ -1584,11 +1584,76 @@ int aether_ui_split_position_impl(int handle) {
     return (int)lround([sv isVertical] ? first.size.width : first.size.height);
 }
 
+/* #95: a width asked for, and a width read back.
+ *
+ * Nothing in the surface could give a widget a width or ask what width it
+ * had, so a panel layout had no way to say how wide a panel should be. An
+ * explicit constraint is the only thing AppKit honours across a later layout
+ * pass: a frame is advisory inside a stack or a split view, which is why
+ * setPosition: alone snapped back to the pane's content width.
+ *
+ * The constraint is created once and updated afterwards, so repeated calls do
+ * not pile up conflicting constraints on the same view. Priority is just
+ * below required, leaving a user's divider drag able to win. */
+static void aeui_pin_size(NSView* v, const char* key, int px, int vertical) {
+    if (!v) return;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    if (c) {
+        c.constant = (CGFloat)px;
+    } else {
+        [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+        c = vertical
+            ? [[v heightAnchor] constraintEqualToConstant:(CGFloat)px]
+            : [[v widthAnchor]  constraintEqualToConstant:(CGFloat)px];
+        c.priority = NSLayoutPriorityDefaultHigh + 1;   /* 751 */
+        c.active = YES;
+        objc_setAssociatedObject(v, key, c, OBJC_ASSOCIATION_RETAIN);
+    }
+    [v setNeedsLayout:YES];
+    NSView* root = [v superview] ?: v;
+    [root layoutSubtreeIfNeeded];
+}
+
+void aether_ui_set_width_impl(int handle, int px) {
+    aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
+                  "aeui_width_c", px, 0);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
+                  "aeui_height_c", px, 1);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    return (int)lround([v frame].size.width);
+}
+
+int aether_ui_get_height_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    return (int)lround([v frame].size.height);
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || ![v isKindOfClass:[NSSplitView class]]) return;
     NSSplitView* sv = (NSSplitView*)v;
     if ([[sv subviews] count] < 2) return;
+    /* #95: setPosition: alone does not survive the next layout pass when the
+     * pane has its own content: AppKit re-derives the pane's width from that
+     * content and the divider snaps back, which is why an OUTER split view
+     * (whose first pane is a populated stack) ignored the call while an inner
+     * one appeared to work. Pinning the first pane's width is what actually
+     * holds, and it is the same mechanism set_width uses. */
+    NSArray* panes = [sv subviews];
+    if (panes.count > 0) {
+        /* isVertical means the divider is vertical, i.e. panes side by side,
+           so the first pane's WIDTH is what the position sets. */
+        aeui_pin_size(panes[0], [sv isVertical] ? "aeui_width_c" : "aeui_height_c",
+                      px, [sv isVertical] ? 0 : 1);
+    }
     [sv setPosition:(CGFloat)px ofDividerAtIndex:0];
     [sv layoutSubtreeIfNeeded];
 }

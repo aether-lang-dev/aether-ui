@@ -3152,6 +3152,50 @@ int aether_ui_split_position_impl(int handle) {
     if (!w || w->kind != WK_SPLITVIEW) return -1;
     return w->split_eff;
 }
+/* #95: give a widget a width, or ask what width it has. pref_width is what
+   the layout pass reads, so setting it is what holds a panel at a width; the
+   getter answers from the actual window rect, i.e. what the widget really
+   got rather than what was asked for. */
+void aether_ui_set_width_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->pref_width = px;
+    if (w->hwnd) {
+        RECT r; GetWindowRect(w->hwnd, &r);
+        POINT tl = { r.left, r.top };
+        ScreenToClient(GetParent(w->hwnd), &tl);
+        SetWindowPos(w->hwnd, NULL, tl.x, tl.y, px, r.bottom - r.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->pref_height = px;
+    if (w->hwnd) {
+        RECT r; GetWindowRect(w->hwnd, &r);
+        POINT tl = { r.left, r.top };
+        ScreenToClient(GetParent(w->hwnd), &tl);
+        SetWindowPos(w->hwnd, NULL, tl.x, tl.y, r.right - r.left, px,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+int aether_ui_get_width_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    return (int)(r.right - r.left);
+}
+
+int aether_ui_get_height_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    return (int)(r.bottom - r.top);
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_SPLITVIEW || px < 0) return;

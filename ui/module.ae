@@ -70,6 +70,7 @@ exports (
     is_dark_mode,
     timer, timer_cancel, backend_name,
     window_create, window_set_body, window_show, window_close, app_quit,
+    set_width, set_height, get_width, get_height,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
     transition_overlay, overlay_is_exiting,
     overlay_material, overlay_material_effective,
@@ -366,6 +367,10 @@ extern aether_ui_window_set_body_impl(win_handle: int, root_handle: int)
 extern aether_ui_window_show_impl(win_handle: int)
 extern aether_ui_window_close_impl(win_handle: int)
 extern aether_ui_app_quit_impl()
+extern aether_ui_set_width_impl(handle: int, px: int)
+extern aether_ui_set_height_impl(handle: int, px: int)
+extern aether_ui_get_width_impl(handle: int) -> int
+extern aether_ui_get_height_impl(handle: int) -> int
 
 // In-window overlay layer (roadmap item 1). win_handle 0 = the primary
 // (main) window. anchor is a packed int (halign bits 0-1, valign bits 2-3);
@@ -2965,6 +2970,36 @@ window_close(win_handle: int) {
 // frames, writes its evidence and should exit 0 reported failure on success.
 app_quit() {
     aether_ui_app_quit_impl()
+}
+
+// set_width(h, px) / set_height(h, px) — state how wide or tall a widget
+// should be, and have it hold across the next layout pass (#95).
+//
+// Nothing could do this before, so a panel layout had no way to say how wide
+// a panel was: st_insets does not change a button's intrinsic width, and
+// split_set_position was the only lever there was. On AppKit this pins a real
+// constraint, which is the only thing that survives layout re-deriving a
+// pane's width from its content; on GTK4 it is the size request with expand
+// off; on win32 it is the preferred size the layout pass reads.
+set_width(handle: int, px: int) -> int {
+    aether_ui_set_width_impl(handle, px)
+    return handle
+}
+
+set_height(handle: int, px: int) -> int {
+    aether_ui_set_height_impl(handle, px)
+    return handle
+}
+
+// get_width(h) / get_height(h) — what the widget ACTUALLY got, read from its
+// allocation rather than from whatever was requested. 0 before the first
+// layout pass.
+get_width(handle: int) -> int {
+    return aether_ui_get_width_impl(handle)
+}
+
+get_height(handle: int) -> int {
+    return aether_ui_get_height_impl(handle)
 }
 
 // ---------------------------------------------------------------------------
