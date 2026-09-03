@@ -1786,12 +1786,10 @@ void aether_ui_set_rtl(int handle, int on) {
     // free to build or mutate widgets, which is the entire point of a
     // GeometryReader, and doing that inside a layout pass is a re-entrancy bug.
     dispatch_async(dispatch_get_main_queue(), ^{
-        /* #94: doubles, like on_click / on_move / on_release / on_scroll.
-         * This alone passed intptr_t, so a closure written the way the four
-         * siblings are written read the floating-point argument registers
-         * while the caller had filled the integer ones, and got garbage with
-         * no diagnostic from either the compiler or the runtime. */
-        ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
+        /* on_layout hands its closure INTS, and its callers declare
+           |w: int, h: int|. That is a different contract from the canvas
+           POINTER callbacks, which carry coordinates and pass doubles. */
+        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
     });
 }
 @end
@@ -5255,7 +5253,13 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     // Deferred: the closure re-flushes the whole vg scene (mutating the
     // command buffer we may be mid-draw on).
     dispatch_async(dispatch_get_main_queue(), ^{
-        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+        /* #94: doubles, like on_click / on_move / on_release / on_scroll.
+         * This was the only one of the five CANVAS callbacks passing
+         * intptr_t, so a closure written the way the four siblings are
+         * written read the floating-point argument registers while the
+         * caller had filled the integer ones, and got garbage with no
+         * diagnostic from the compiler or the runtime. */
+        ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
     });
 }
 @end

@@ -23,21 +23,22 @@ main() {
     uidriver.wait_server()
 
     spec.describe(fw, "canvas_on_resize over AetherUIDriver") {
-        spec.it("delivers the real allocation to a float closure") callback {
-            uidriver.post_ok("/window/resize?w=420&h=360", "resize the window")
-            // The canvas is inside a vstack, so its allocation is not the
-            // window size; what matters is that the numbers are REAL, which
-            // garbage from the wrong registers never is.
-            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"size: ", 20)
-            spec.assert_true(ok, "the resize callback fired and wrote a size")
+        // TWO different resizes. One value proves little: garbage from the
+        // wrong argument registers can look plausible once. Two resizes must
+        // report two DIFFERENT sizes that both track the window, which
+        // reading the wrong registers does not do.
+        spec.it("tracks the window across two different resizes") callback {
+            uidriver.post_ok("/window/resize?w=420&h=360", "first resize")
+            ok1 = uidriver.wait_body_contains("/widgets", "\"text\":\"size: 4", 20)
+            spec.assert_true(ok1, "first resize reported a width in the 400s")
+
+            uidriver.post_ok("/window/resize?w=700&h=520", "second resize")
+            ok2 = uidriver.wait_body_contains("/widgets", "\"text\":\"size: 7", 20)
+            spec.assert_true(ok2, "second resize reported a width in the 700s")
 
             b = uidriver.get_body("/widgets")
-            // A plausible allocation: positive, and within the new window.
-            // Garbage read from the wrong registers is not.
-            has_zero = string.contains(b, "\"text\":\"size: 0x0\"")
-            spec.assert_eq(has_zero, 0, "the size is not 0x0")
-            still_none = string.contains(b, "\"text\":\"size: none\"")
-            spec.assert_eq(still_none, 0, "the label moved off its initial value")
+            stale = string.contains(b, "\"text\":\"size: none\"")
+            spec.assert_eq(stale, 0, "the label is not still on its initial value")
         }
     }
     return spec.run_summary(fw)
