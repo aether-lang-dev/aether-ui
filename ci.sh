@@ -128,7 +128,17 @@ fi
 run_self_quitting() {
     local bin="$1" name="$2" limit="${3:-30}"
     local log="/tmp/ci_${name}.selfquit.log"
-    AETHER_UI_HEADLESS=1 $LAUNCH_PREFIX "$bin" > "$log" 2>&1 &
+    # Headless ONLY when there is no display to use. GTK4's headless path
+    # realizes without mapping, so nothing is ever allocated and get_width
+    # answers 0 — which is exactly what this reported on Linux. Under xvfb
+    # ($LAUNCH_PREFIX set) the window maps and the allocation is real. On
+    # macOS there is no xvfb, and headless is what keeps a local run from
+    # popping windows; allocation works there either way.
+    if [ -n "${LAUNCH_PREFIX:-}" ]; then
+        $LAUNCH_PREFIX "$bin" > "$log" 2>&1 &
+    else
+        AETHER_UI_HEADLESS=1 "$bin" > "$log" 2>&1 &
+    fi
     local pid=$!
     local ticks=0
     while kill -0 "$pid" 2>/dev/null; do
