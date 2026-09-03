@@ -583,13 +583,31 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
     apps[app_handle - 1].root_handle = root_handle;
 }
 
+/* #93: the running GApplication, so app_quit can stop it from anywhere. */
+static GApplication* aeui_running_app = NULL;
+
+/* Runs on the main context: g_application_quit must not be called from an
+   arbitrary thread. */
+static gboolean aeui_quit_idle(gpointer data) {
+    (void)data;
+    if (aeui_running_app) g_application_quit(aeui_running_app);
+    return G_SOURCE_REMOVE;
+}
+
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (aeui_running_app) g_idle_add(aeui_quit_idle, NULL);
+}
+
 void aether_ui_app_run_raw(int app_handle) {
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
     e->gtk_app = gtk_application_new("dev.aether.ui",
         G_APPLICATION_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
     g_signal_connect(e->gtk_app, "activate", G_CALLBACK(on_activate), e);
+    aeui_running_app = G_APPLICATION(e->gtk_app);
     g_application_run(G_APPLICATION(e->gtk_app), 0, NULL);
+    aeui_running_app = NULL;
     g_object_unref(e->gtk_app);
 }
 
@@ -4886,8 +4904,9 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
         (width != cs->last_w || height != cs->last_h)) {
         cs->last_w = width;
         cs->last_h = height;
-        ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
-            cs->on_resize->env, (intptr_t)width, (intptr_t)height);
+        /* #94: doubles, matching the other canvas callbacks. */
+        ((void(*)(void*, double, double))cs->on_resize->fn)(
+            cs->on_resize->env, (double)width, (double)height);
     }
     if (cs) {
         cairo_surface_t* surf = canvas_ensure_paint_surface(cs, width, height);

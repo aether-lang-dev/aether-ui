@@ -1,0 +1,44 @@
+// spec_resizecb_demo.ae — canvas_on_resize hands its closure FLOATS (#94).
+//
+// It was the only one of the five canvas callbacks passing ints. A closure
+// written the way on_click / on_move / on_release / on_scroll are written
+// read the floating-point argument registers while the caller had filled the
+// integer ones, so it compiled, ran, and delivered garbage with no
+// diagnostic from the compiler or the runtime. In a 3D viewport that sizes
+// its render target from those values the effect was that the viewport
+// silently never resized.
+//
+// The demo's closure takes |w: float, h: float| and writes what it received
+// into a label, so this asserts the VALUES the callback got, not merely that
+// it fired.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/resizecb_demo &
+//   UI_SPEC=resizecb_demo/spec_resizecb_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "canvas_on_resize over AetherUIDriver") {
+        spec.it("delivers the real allocation to a float closure") callback {
+            uidriver.post_ok("/window/resize?w=420&h=360", "resize the window")
+            // The canvas is inside a vstack, so its allocation is not the
+            // window size; what matters is that the numbers are REAL, which
+            // garbage from the wrong registers never is.
+            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"size: ", 20)
+            spec.assert_true(ok, "the resize callback fired and wrote a size")
+
+            b = uidriver.get_body("/widgets")
+            // A plausible allocation: positive, and within the new window.
+            // Garbage read from the wrong registers is not.
+            has_zero = string.contains(b, "\"text\":\"size: 0x0\"")
+            spec.assert_eq(has_zero, 0, "the size is not 0x0")
+            still_none = string.contains(b, "\"text\":\"size: none\"")
+            spec.assert_eq(still_none, 0, "the label moved off its initial value")
+        }
+    }
+    return spec.run_summary(fw)
+}

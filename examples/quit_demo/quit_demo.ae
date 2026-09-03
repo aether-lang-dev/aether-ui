@@ -1,0 +1,41 @@
+// app_quit(): an app ending itself (#93).
+//
+// Without this the only way to stop a run loop was to kill the process, so a
+// bounded run (render N frames, save evidence, exit) could not report success:
+// `timeout 60 ./app` always exits 124, which cannot tell finishing from
+// hanging.
+//
+// This app does a little work, prints what it did, and quits. Exit status 0
+// and the final line are the whole point.
+
+import ui
+import ui (root_vstack, text, canvas_create, canvas_fill_rect, app_quit,
+    timer, timer_cancel, enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    cv = 0
+    main_root = root_vstack(8) {
+        text("quit demo")
+        cv = canvas_create(60, 60)
+    }
+    canvas_fill_rect(cv, 0.0, 0.0, 60.0, 60.0, 0.0, 0.4, 0.9, 1.0)
+
+    app = ui.app_create("quit demo", 200, 160)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    // Do the work, then end the run loop from inside a callback, which is
+    // where a real app would decide it is finished.
+    // A repeating timer that cancels itself on the first tick: the point is
+    // reaching app_quit from inside a callback, which is where a real app
+    // decides it has finished.
+    tid = 0
+    tid = timer(50) callback {
+        timer_cancel(tid)
+        println("work done")
+        app_quit()
+    }
+    ui.app_start(app, main_root)
+    println("run loop returned")
+}

@@ -1728,7 +1728,12 @@ void aether_ui_set_rtl(int handle, int on) {
     // free to build or mutate widgets, which is the entire point of a
     // GeometryReader, and doing that inside a layout pass is a re-entrancy bug.
     dispatch_async(dispatch_get_main_queue(), ^{
-        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+        /* #94: doubles, like on_click / on_move / on_release / on_scroll.
+         * This alone passed intptr_t, so a closure written the way the four
+         * siblings are written read the floating-point argument registers
+         * while the caller had filled the integer ones, and got garbage with
+         * no diagnostic from either the compiler or the runtime. */
+        ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
     });
 }
 @end
@@ -3394,9 +3399,36 @@ static void aeui_close_window_main(NSWindow* w) {
     else dispatch_sync(dispatch_get_main_queue(), b);
 }
 
+static NSWindow* mac_window_for_handle(int win_handle);
+
 void aether_ui_window_close_impl(int win_handle) {
-    if (!extra_windows || win_handle < 1 || win_handle > (int)[extra_windows count]) return;
-    aeui_close_window_main(extra_windows[win_handle - 1]);
+    /* #93: handle 1 is the PRIMARY window here, matching window_count,
+     * window_title and window_is_open. This used to index extra_windows
+     * directly, so handle 1 meant the first extra window and the primary one
+     * had no handle at all — an app could not close its own main window. */
+    NSWindow* w = mac_window_for_handle(win_handle);
+    if (!w) return;
+    aeui_close_window_main(w);
+}
+
+/* #93: stop the run loop. -stop: is only examined when the loop next comes
+ * round, so a synthetic event is posted to guarantee it returns promptly
+ * rather than waiting for the user to move the mouse. */
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp stop:nil];
+        NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                           location:NSZeroPoint
+                                      modifierFlags:0
+                                          timestamp:0
+                                       windowNumber:0
+                                            context:nil
+                                            subtype:0
+                                             data1:0
+                                             data2:0];
+        if (wake) [NSApp postEvent:wake atStart:YES];
+    });
 }
 
 // ── Unified driver window view (1 = primary, 2.. = extras) ──

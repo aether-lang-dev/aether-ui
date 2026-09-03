@@ -65,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo resizecb_demo quit_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -896,6 +896,28 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=canvasclip_demo/spec_canvasclip_demo \
     run_server_test "$(EX_BIN canvasclip_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" canvasclip_demo || FAIL=$((FAIL + 1))
+
+    echo "-- Phase 5e20: canvas_on_resize passes floats like its siblings --"
+    UI_SPEC=resizecb_demo/spec_resizecb_demo \
+    run_server_test "$(EX_BIN resizecb_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" resizecb_demo || FAIL=$((FAIL + 1))
+
+    # An app that ends itself needs no driver: the whole assertion is that the
+    # run loop RETURNS and the process exits 0. Before app_quit the only way
+    # to stop one was to kill it, so `timeout` always reported 124 and could
+    # not tell finishing from hanging.
+    echo "-- Phase 5e21: app_quit stops the run loop --"
+    quit_out=$(AETHER_UI_HEADLESS=1 timeout 30 "$(EX_BIN quit_demo)" 2>&1)
+    quit_rc=$?
+    if [ "$quit_rc" -eq 0 ] \
+       && printf '%s' "$quit_out" | grep -q "work done" \
+       && printf '%s' "$quit_out" | grep -q "run loop returned"; then
+        echo "  OK   quit_demo ended itself (exit 0, loop returned)"
+    else
+        echo "  FAIL quit_demo: rc=$quit_rc (124 = never quit)"
+        printf '%s\n' "$quit_out" | head -5 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
 
     echo "-- Phase 5e19: canvas_reset_clip widens the clip back --"
     UI_SPEC=canvasresetclip_demo/spec_canvasresetclip_demo \

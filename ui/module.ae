@@ -69,7 +69,7 @@ exports (
     pick_folder,
     is_dark_mode,
     timer, timer_cancel, backend_name,
-    window_create, window_set_body, window_show, window_close,
+    window_create, window_set_body, window_show, window_close, app_quit,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
     transition_overlay, overlay_is_exiting,
     overlay_material, overlay_material_effective,
@@ -365,6 +365,7 @@ extern aether_ui_window_create_impl(title: string, width: int, height: int) -> i
 extern aether_ui_window_set_body_impl(win_handle: int, root_handle: int)
 extern aether_ui_window_show_impl(win_handle: int)
 extern aether_ui_window_close_impl(win_handle: int)
+extern aether_ui_app_quit_impl()
 
 // In-window overlay layer (roadmap item 1). win_handle 0 = the primary
 // (main) window. anchor is a packed int (halign bits 0-1, valign bits 2-3);
@@ -613,7 +614,10 @@ register_deferred_flush(cb: fn) {
 
 // canvas_on_resize(cid, cb) — fire cb(w, h) when the canvas allocation changes.
 // AeVG's vg{} scope uses this to rescale its scene on window resize. cb takes
-// the new width and height as ints.
+// the new width and height as FLOATS, like canvas_on_click / on_move /
+// on_release / on_scroll take their coordinates (#94). It used to be the only
+// one of the five passing ints, so a closure written like its siblings read
+// the wrong argument registers and got garbage silently.
 canvas_on_resize(cid: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_canvas_on_resize_impl(cid, boxed)
@@ -2946,8 +2950,21 @@ window_show(win_handle: int) {
     aether_ui_window_show_impl(win_handle)
 }
 
+// window_close(h) — close a window. Handle 1 is the PRIMARY window, matching
+// window_count / window_title / window_is_open; 2.. are the extras (#93).
 window_close(win_handle: int) {
     aether_ui_window_close_impl(win_handle)
+}
+
+// app_quit() — stop the run loop and return from app_run / app_start, so an
+// app can end itself (#93). Safe from any thread and from inside a callback.
+//
+// This is what a bounded run needs. Without it the only way to end an app was
+// to kill it from outside, so `timeout 60 ./app` always exited 124 and could
+// not distinguish finishing the work from hanging: a CI step that renders N
+// frames, writes its evidence and should exit 0 reported failure on success.
+app_quit() {
+    aether_ui_app_quit_impl()
 }
 
 // ---------------------------------------------------------------------------

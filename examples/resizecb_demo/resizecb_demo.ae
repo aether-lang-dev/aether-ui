@@ -1,0 +1,36 @@
+// canvas_on_resize hands its closure FLOATS, like every sibling (#94).
+//
+// It was the only one of the five canvas callbacks passing ints, so a closure
+// written the way on_click / on_move / on_release / on_scroll are written read
+// the floating-point argument registers while the caller had filled the
+// integer ones. It compiled, ran, and delivered garbage with no diagnostic.
+//
+// This app resizes its own window and prints what the callback received. A
+// float closure must see the real allocation, not nonsense.
+
+import ui
+import ui (root_vstack, text, canvas_create, canvas_fill_rect,
+    canvas_on_resize, set_text, enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    cv = 0
+    lbl = 0
+    main_root = root_vstack(6) {
+        lbl = text("size: none")
+        cv = canvas_create(80, 80)
+    }
+    canvas_fill_rect(cv, 0.0, 0.0, 80.0, 80.0, 0.2, 0.6, 0.3, 1.0)
+
+    // Written exactly like the sibling callbacks: two floats. The label is
+    // what the driver reads, so the spec sees whatever the callback got.
+    canvas_on_resize(cv) callback |w: float, h: float| {
+        set_text(lbl, "size: ${w as int}x${h as int}")
+    }
+
+    app = ui.app_create("resize cb", 240, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

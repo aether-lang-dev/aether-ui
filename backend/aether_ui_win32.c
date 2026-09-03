@@ -1868,7 +1868,22 @@ static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
                             char* name, int namesize);
 static int aeui_win32_fire_shortcut(const char* combo);
 
+/* #93: the thread running the message loop. PostQuitMessage only affects the
+   CALLING thread, so a quit requested from anywhere else has to be posted to
+   the loop's own thread. */
+static DWORD aeui_loop_thread = 0;
+
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (aeui_loop_thread) {
+        PostThreadMessageW(aeui_loop_thread, WM_QUIT, 0, 0);
+    } else {
+        PostQuitMessage(0);
+    }
+}
+
 void aether_ui_app_run_raw(int app_handle) {
+    aeui_loop_thread = GetCurrentThreadId();
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
     ensure_win_init();
@@ -8545,8 +8560,9 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                     c->width = nw;
                     c->height = nh;
                     if (c->on_resize && c->on_resize->fn)
-                        ((void(*)(void*, intptr_t, intptr_t))c->on_resize->fn)(
-                            c->on_resize->env, (intptr_t)nw, (intptr_t)nh);
+                        /* #94: doubles, matching the other canvas callbacks. */
+                        ((void(*)(void*, double, double))c->on_resize->fn)(
+                            c->on_resize->env, (double)nw, (double)nh);
                     InvalidateRect(hwnd, NULL, TRUE);
                 }
             }
