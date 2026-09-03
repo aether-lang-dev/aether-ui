@@ -122,3 +122,64 @@ Match the platform prototype (or `#include <math.h>`).
 - End-to-end proof: rubiks_cube's own `.ae` → C → linked with a from-source
   Catalyst libaether + this backend → renders the 3D cube (see
   asks/ios-ipados-libaether-and-appstore.md for the debug trail).
+
+---
+
+## Item 10 follow-up (aether-ui line, 2026-09-03) — it IS ours to emit, but we cannot spell it correctly
+
+You asked to be pointed at the emitting file. It is not one file: **30 modules
+under `vg/` declare `extern lrint(x: float) -> long`** (vg/module.ae:97,
+vg/live.ae:362, vg/font.ae:56, vg/render3d.ae:47, vg/geom/easing.ae:27,
+vg/geom/path_builder.ae:50, …). Confirmed in the generated C, e.g.
+`target/build/apps/vg_demo/vg_demo.c:3759`:
+
+```c
+// Extern C function: lrint
+int64_t lrint(double);
+```
+
+against libm's real `long lrint(double)`. On LP64 (macOS/iOS/Linux) both are
+64-bit so it is a warning, not a miscompile — but it is a warning in every
+generated app, and clang emits it as `-Wincompatible-library-redeclaration`.
+
+**Why we cannot just fix the declaration.** `-> long` emits `int64_t` and
+`-> int` emits `int` (measured); neither is C `long`, and per
+`docs/distinct-types.md` that mapping is fixed. So no spelling of an Aether
+extern produces a prototype matching libm. Nor can we drop the call: `as int`
+TRUNCATES where `lrint` rounds-to-nearest (measured: `3.7 as int` = 3;
+`lrint(3.7)` = 4), and the vg colour paths depend on rounding —
+`lrint(v * 255.0)` per channel. `std.math` exposes `math_round(x: float) ->
+float`, which rounds correctly but returns float, so it still needs a
+truncating cast afterwards; that composition is fine numerically
+(`math.round` then `as int`) and is our likely migration, but it is a
+30-module change we would rather make once, in the direction you prefer.
+
+**What would help, cheapest first:**
+1. `std.math` gains an `lrint`-equivalent returning an integer type
+   (`math_lrint(x: float) -> long`), so the prototype lives in your tree
+   where it can be declared correctly and we drop 30 externs; or
+2. a documented FFI spelling that emits C `long`; or
+3. confirmation that `math.round(...) as int` is the blessed idiom, in which
+   case we migrate and the warning disappears with the extern.
+
+Not urgent — it is warning noise, not breakage — but it is 30 files of ours
+and one function of yours, so it is much cheaper on your side.
+
+### RESOLVED in aether v0.626.0 — `math.lrint(x) -> long` (and one correction)
+
+Option 1 landed. Two things their changelog gets right that this note had
+wrong:
+
+- **It is an ERROR on Apple targets, not warning noise.** The redeclaration is
+  invisible on Linux, where `int64_t` IS `long`, and a hard error on
+  macOS/iOS, where `int64_t` is `long long`. So this was never cosmetic for
+  the iOS/Catalyst work — it would have blocked it. The "not urgent" above was
+  wrong for the platform that matters most here.
+- **`math.round(...) as int` would have been a silent bug.** `math.lrint`
+  rounds half-to-EVEN like libm; `math.round` is half-away-from-zero. An 8-bit
+  channel computed as `lrint(v * 255.0)` is off by one at exact halves if it
+  becomes `round`. Good that option 3 was not taken.
+
+Our side of the migration: drop the 30 `extern lrint(x: float) -> long`
+declarations under `vg/` and call `math.lrint` instead. Gated on bumping the
+pin from v0.613.0 to v0.626.0.

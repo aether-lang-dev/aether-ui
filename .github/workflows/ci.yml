@@ -96,14 +96,39 @@ jobs:
           # skipped on exactly the failing runs where a leaked arena or an
           # orphaned listener does the most damage.
           #
-          # THE FOOTGUN THIS BUMP CARRIES, and why every spec here changed
-          # with it: a BARE `spec.run_summary(fw)` as the last statement now
+          # THE FOOTGUN v0.613.0 CARRIED, and why every spec here changed
+          # with it: a BARE `spec.run_summary(fw)` as the last statement
           # silently turns a failing suite GREEN. main() has no return
           # annotation and its return value is the process exit status, so
           # dropping the verdict exits 0 regardless of results. All 81 call
-          # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`
-          # as of this commit; a new spec MUST return it too.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.613.0' }}
+          # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`;
+          # a new spec MUST return it too.
+          #
+          # v0.627.0 (2026-09-03). SKIPS 0.624.0-0.626.0, which are known-bad
+          # for this repo: #1866 (in 0.624.0) made a setter's store READ the
+          # box's `_heap_<field>` tracker, and a box made with
+          # `malloc(n) as *T` never had that tracker initialised — non-zero
+          # garbage there frees a garbage pointer. That is this repo's idiom
+          # for every escaping app state (font_picker's App, auto_hide's
+          # DemoState, chromed's ToggleFace, turtle's TurtleUiState), chosen
+          # because a closure capturing a plain local captures it BY VALUE at
+          # creation time while field reads through a pointer stay live. The
+          # font preview sets string fields through setters per glyph and
+          # SEGFAULTED on one click: measured 0.613.0 survives / 0.626.0 dies,
+          # same source, same click. Fixed upstream by e932c61c (#1873) — the
+          # parameter case still SETS the tracker, so #1866's leak repair
+          # stands, but no longer READS one it cannot trust.
+          #
+          # v0.626.0 also shipped `math.lrint(x) -> long` at this repo's
+          # request: vg/ carries 30 `extern lrint(x: float) -> long`, and NO
+          # Aether extern can spell libm's prototype (`-> long` emits int64_t,
+          # `-> int` emits int, C `long` is neither) — invisible on Linux
+          # where int64_t IS long, a hard ERROR on macOS/iOS where it is
+          # long long. Migrating those 30 is follow-up work, not done here.
+          # (It was also our first suspect for the segfault above, and
+          # measurement ruled it out: migrating vg/font.ae alone still
+          # crashed.)
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.627.0' }}
           # v0.283 is the first release carrying aeb's `bldr` module.
           # 9c84d786 converted all 109 build nodes to aeb Shape A
           # (`bldr.build() {}`, b-free); v0.282 has no `bldr` at all, so every
