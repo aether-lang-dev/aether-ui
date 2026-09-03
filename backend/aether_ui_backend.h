@@ -269,6 +269,21 @@ void aether_ui_window_set_body_impl(int win_handle, int root_handle);
 void aether_ui_window_show_impl(int win_handle);
 void aether_ui_window_close_impl(int win_handle);
 /* Unified driver window view: 1 = primary, 2.. = extras. */
+/* #93: stop the run loop so an app can quit itself. Safe to call from any
+   thread; each backend wakes its own loop. The shared flag also releases
+   aether_ui_park_until_killed for headless / tray-only runs. */
+/* #95: state a widget's width/height, and read back what it actually got.
+   The setter is what holds a panel at a size across a layout pass; the getter
+   answers from the real allocation, not from the request. */
+void aether_ui_set_width_impl(int handle, int px);
+void aether_ui_set_height_impl(int handle, int px);
+int  aether_ui_get_width_impl(int handle);
+int  aether_ui_get_height_impl(int handle);
+
+void aether_ui_app_quit_impl(void);
+void aether_ui_request_quit(void);
+int  aether_ui_quit_requested(void);
+
 int  aether_ui_window_count_impl(void);
 const char* aether_ui_window_title_impl(int win_handle);
 /* Retitle a live window. Keeps the driver-visible title and the native

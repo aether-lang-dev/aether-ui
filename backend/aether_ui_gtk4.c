@@ -583,13 +583,31 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
     apps[app_handle - 1].root_handle = root_handle;
 }
 
+/* #93: the running GApplication, so app_quit can stop it from anywhere. */
+static GApplication* aeui_running_app = NULL;
+
+/* Runs on the main context: g_application_quit must not be called from an
+   arbitrary thread. */
+static gboolean aeui_quit_idle(gpointer data) {
+    (void)data;
+    if (aeui_running_app) g_application_quit(aeui_running_app);
+    return G_SOURCE_REMOVE;
+}
+
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (aeui_running_app) g_idle_add(aeui_quit_idle, NULL);
+}
+
 void aether_ui_app_run_raw(int app_handle) {
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
     e->gtk_app = gtk_application_new("dev.aether.ui",
         G_APPLICATION_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
     g_signal_connect(e->gtk_app, "activate", G_CALLBACK(on_activate), e);
+    aeui_running_app = G_APPLICATION(e->gtk_app);
     g_application_run(G_APPLICATION(e->gtk_app), 0, NULL);
+    aeui_running_app = NULL;
     g_object_unref(e->gtk_app);
 }
 
@@ -1386,6 +1404,39 @@ int aether_ui_split_position_impl(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_PANED(w)) return -1;
     return gtk_paned_get_position(GTK_PANED(w));
+}
+
+/* #95: give a widget a width, or ask what width it has. Nothing in the
+ * surface could do either, so a panel layout had no way to state how wide a
+ * panel should be. size_request is GTK's floor; paired with the widget not
+ * expanding, it is what actually holds a panel at a width. get_ reads the
+ * ALLOCATION, which is what the widget really got, not what was asked for. */
+void aether_ui_set_width_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_h = -1;
+    gtk_widget_get_size_request(w, NULL, &cur_h);
+    gtk_widget_set_size_request(w, px, cur_h);
+    gtk_widget_set_hexpand(w, FALSE);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_w = -1;
+    gtk_widget_get_size_request(w, &cur_w, NULL);
+    gtk_widget_set_size_request(w, cur_w, px);
+    gtk_widget_set_vexpand(w, FALSE);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    return w ? gtk_widget_get_width(w) : 0;
+}
+
+int aether_ui_get_height_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    return w ? gtk_widget_get_height(w) : 0;
 }
 
 void aether_ui_split_set_position_impl(int handle, int px) {
@@ -4886,8 +4937,9 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
         (width != cs->last_w || height != cs->last_h)) {
         cs->last_w = width;
         cs->last_h = height;
-        ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
-            cs->on_resize->env, (intptr_t)width, (intptr_t)height);
+        /* #94: doubles, matching the other canvas callbacks. */
+        ((void(*)(void*, double, double))cs->on_resize->fn)(
+            cs->on_resize->env, (double)width, (double)height);
     }
     if (cs) {
         cairo_surface_t* surf = canvas_ensure_paint_surface(cs, width, height);

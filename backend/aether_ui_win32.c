@@ -1868,7 +1868,22 @@ static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
                             char* name, int namesize);
 static int aeui_win32_fire_shortcut(const char* combo);
 
+/* #93: the thread running the message loop. PostQuitMessage only affects the
+   CALLING thread, so a quit requested from anywhere else has to be posted to
+   the loop's own thread. */
+static DWORD aeui_loop_thread = 0;
+
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (aeui_loop_thread) {
+        PostThreadMessageW(aeui_loop_thread, WM_QUIT, 0, 0);
+    } else {
+        PostQuitMessage(0);
+    }
+}
+
 void aether_ui_app_run_raw(int app_handle) {
+    aeui_loop_thread = GetCurrentThreadId();
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
     ensure_win_init();
@@ -3137,6 +3152,50 @@ int aether_ui_split_position_impl(int handle) {
     if (!w || w->kind != WK_SPLITVIEW) return -1;
     return w->split_eff;
 }
+/* #95: give a widget a width, or ask what width it has. pref_width is what
+   the layout pass reads, so setting it is what holds a panel at a width; the
+   getter answers from the actual window rect, i.e. what the widget really
+   got rather than what was asked for. */
+void aether_ui_set_width_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->pref_width = px;
+    if (w->hwnd) {
+        RECT r; GetWindowRect(w->hwnd, &r);
+        POINT tl = { r.left, r.top };
+        ScreenToClient(GetParent(w->hwnd), &tl);
+        SetWindowPos(w->hwnd, NULL, tl.x, tl.y, px, r.bottom - r.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->pref_height = px;
+    if (w->hwnd) {
+        RECT r; GetWindowRect(w->hwnd, &r);
+        POINT tl = { r.left, r.top };
+        ScreenToClient(GetParent(w->hwnd), &tl);
+        SetWindowPos(w->hwnd, NULL, tl.x, tl.y, r.right - r.left, px,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+int aether_ui_get_width_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    return (int)(r.right - r.left);
+}
+
+int aether_ui_get_height_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    return (int)(r.bottom - r.top);
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_SPLITVIEW || px < 0) return;
@@ -8545,8 +8604,9 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                     c->width = nw;
                     c->height = nh;
                     if (c->on_resize && c->on_resize->fn)
-                        ((void(*)(void*, intptr_t, intptr_t))c->on_resize->fn)(
-                            c->on_resize->env, (intptr_t)nw, (intptr_t)nh);
+                        /* #94: doubles, matching the other canvas callbacks. */
+                        ((void(*)(void*, double, double))c->on_resize->fn)(
+                            c->on_resize->env, (double)nw, (double)nh);
                     InvalidateRect(hwnd, NULL, TRUE);
                 }
             }

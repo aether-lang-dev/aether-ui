@@ -65,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo resizecb_demo quit_demo panelsize_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -117,6 +117,41 @@ if [ "$PLATFORM" = "linux" ]; then
         fi
     fi
 fi
+
+# Run a binary that is expected to END ITSELF, and report its exit status.
+#
+# Neither `timeout` nor a bare launch works across this matrix: macOS ships no
+# `timeout`, and GTK4 needs a framebuffer even in headless mode, so Linux has
+# to go through $LAUNCH_PREFIX like every other phase. This waits on the
+# process and only kills it if it overruns, so "never quit" is reported as 124
+# the way `timeout` would have.
+run_self_quitting() {
+    local bin="$1" name="$2" limit="${3:-30}"
+    local log="/tmp/ci_${name}.selfquit.log"
+    # Headless ONLY when there is no display to use. GTK4's headless path
+    # realizes without mapping, so nothing is ever allocated and get_width
+    # answers 0 — which is exactly what this reported on Linux. Under xvfb
+    # ($LAUNCH_PREFIX set) the window maps and the allocation is real. On
+    # macOS there is no xvfb, and headless is what keeps a local run from
+    # popping windows; allocation works there either way.
+    if [ -n "${LAUNCH_PREFIX:-}" ]; then
+        $LAUNCH_PREFIX "$bin" > "$log" 2>&1 &
+    else
+        AETHER_UI_HEADLESS=1 "$bin" > "$log" 2>&1 &
+    fi
+    local pid=$!
+    local ticks=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$ticks" -ge "$((limit * 10))" ]; then
+            kill "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            return 124
+        fi
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    wait "$pid"
+}
 
 run_server_test() {
     # Launch a binary with AETHER_UI_TEST_PORT set, wait for the test server,
@@ -896,6 +931,50 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=canvasclip_demo/spec_canvasclip_demo \
     run_server_test "$(EX_BIN canvasclip_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" canvasclip_demo || FAIL=$((FAIL + 1))
+
+    echo "-- Phase 5e20: canvas_on_resize passes floats like its siblings --"
+    UI_SPEC=resizecb_demo/spec_resizecb_demo \
+    run_server_test "$(EX_BIN resizecb_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" resizecb_demo || FAIL=$((FAIL + 1))
+
+    # An app that ends itself needs no driver: the whole assertion is that the
+    # run loop RETURNS and the process exits 0. Before app_quit the only way
+    # to stop one was to kill it, so `timeout` always reported 124 and could
+    # not tell finishing from hanging.
+    echo "-- Phase 5e21: app_quit stops the run loop --"
+    run_self_quitting "$(EX_BIN quit_demo)" quit_demo 30
+    quit_rc=$?
+    quit_out=$(cat /tmp/ci_quit_demo.selfquit.log 2>/dev/null)
+    if [ "$quit_rc" -eq 0 ] \
+       && printf '%s' "$quit_out" | grep -q "work done" \
+       && printf '%s' "$quit_out" | grep -q "run loop returned"; then
+        echo "  OK   quit_demo ended itself (exit 0, loop returned)"
+    else
+        echo "  FAIL quit_demo: rc=$quit_rc (124 = never quit)"
+        printf '%s\n' "$quit_out" | head -5 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+
+    # A panel width that HOLDS inside a nested splitview. No driver needed:
+    # the app reads its own allocation back through get_width and quits, so
+    # the assertion is the number it printed. Asked 240; with nothing but
+    # split_set_position the pane took the whole width (1368), because
+    # -setPosition: does not survive layout re-deriving a pane from its
+    # content. set_width is what holds.
+    echo "-- Phase 5e22: set_width holds a panel inside a nested splitview --"
+    run_self_quitting "$(EX_BIN panelsize_demo)" panelsize_demo 30
+    panel_rc=$?
+    panel_out=$(cat /tmp/ci_panelsize_demo.selfquit.log 2>/dev/null)
+    if [ "$panel_rc" -eq 0 ] && printf '%s' "$panel_out" | grep -q "left panel width = 240"; then
+        echo "  OK   panelsize_demo: left panel held at 240"
+    else
+        echo "  FAIL panelsize_demo: rc=$panel_rc"
+        # The interesting line, not the first four lines of GTK warnings.
+        printf '%s\n' "$panel_out" | grep -a "left panel width" | sed 's/^/       /' \
+            || echo "       (no width line printed at all)"
+        printf '%s\n' "$panel_out" | tail -3 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
 
     echo "-- Phase 5e19: canvas_reset_clip widens the clip back --"
     UI_SPEC=canvasresetclip_demo/spec_canvasresetclip_demo \

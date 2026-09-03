@@ -1,0 +1,45 @@
+// spec_resizecb_demo.ae — canvas_on_resize hands its closure FLOATS (#94).
+//
+// It was the only one of the five canvas callbacks passing ints. A closure
+// written the way on_click / on_move / on_release / on_scroll are written
+// read the floating-point argument registers while the caller had filled the
+// integer ones, so it compiled, ran, and delivered garbage with no
+// diagnostic from the compiler or the runtime. In a 3D viewport that sizes
+// its render target from those values the effect was that the viewport
+// silently never resized.
+//
+// The demo's closure takes |w: float, h: float| and writes what it received
+// into a label, so this asserts the VALUES the callback got, not merely that
+// it fired.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/resizecb_demo &
+//   UI_SPEC=resizecb_demo/spec_resizecb_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "canvas_on_resize over AetherUIDriver") {
+        // TWO different resizes. One value proves little: garbage from the
+        // wrong argument registers can look plausible once. Two resizes must
+        // report two DIFFERENT sizes that both track the window, which
+        // reading the wrong registers does not do.
+        spec.it("tracks the window across two different resizes") callback {
+            uidriver.post_ok("/window/resize?w=420&h=360", "first resize")
+            ok1 = uidriver.wait_body_contains("/widgets", "\"text\":\"size: 4", 20)
+            spec.assert_true(ok1, "first resize reported a width in the 400s")
+
+            uidriver.post_ok("/window/resize?w=700&h=520", "second resize")
+            ok2 = uidriver.wait_body_contains("/widgets", "\"text\":\"size: 7", 20)
+            spec.assert_true(ok2, "second resize reported a width in the 700s")
+
+            b = uidriver.get_body("/widgets")
+            stale = string.contains(b, "\"text\":\"size: none\"")
+            spec.assert_eq(stale, 0, "the label is not still on its initial value")
+        }
+    }
+    return spec.run_summary(fw)
+}

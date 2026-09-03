@@ -1584,11 +1584,69 @@ int aether_ui_split_position_impl(int handle) {
     return (int)lround([sv isVertical] ? first.size.width : first.size.height);
 }
 
+/* #95: a width asked for, and a width read back.
+ *
+ * Nothing in the surface could give a widget a width or ask what width it
+ * had, so a panel layout had no way to say how wide a panel should be. An
+ * explicit constraint is the only thing AppKit honours across a later layout
+ * pass: a frame is advisory inside a stack or a split view, which is why
+ * setPosition: alone snapped back to the pane's content width.
+ *
+ * The constraint is created once and updated afterwards, so repeated calls do
+ * not pile up conflicting constraints on the same view. Priority is just
+ * below required, leaving a user's divider drag able to win. */
+static void aeui_pin_size(NSView* v, const char* key, int px, int vertical) {
+    if (!v) return;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    if (c) {
+        c.constant = (CGFloat)px;
+    } else {
+        [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+        c = vertical
+            ? [[v heightAnchor] constraintEqualToConstant:(CGFloat)px]
+            : [[v widthAnchor]  constraintEqualToConstant:(CGFloat)px];
+        c.priority = NSLayoutPriorityDefaultHigh + 1;   /* 751 */
+        c.active = YES;
+        objc_setAssociatedObject(v, key, c, OBJC_ASSOCIATION_RETAIN);
+    }
+    [v setNeedsLayout:YES];
+    NSView* root = [v superview] ?: v;
+    [root layoutSubtreeIfNeeded];
+}
+
+void aether_ui_set_width_impl(int handle, int px) {
+    aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
+                  "aeui_width_c", px, 0);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
+                  "aeui_height_c", px, 1);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    return (int)lround([v frame].size.width);
+}
+
+int aether_ui_get_height_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    return (int)lround([v frame].size.height);
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || ![v isKindOfClass:[NSSplitView class]]) return;
     NSSplitView* sv = (NSSplitView*)v;
     if ([[sv subviews] count] < 2) return;
+    /* #95: setPosition: alone does not survive the next layout pass when the
+     * pane has its own content: AppKit re-derives the pane's width from that
+     * content and the divider snaps back, which is why an OUTER split view
+     * (whose first pane is a populated stack) ignored the call while an inner
+     * one appeared to work. Pinning the first pane's width is what actually
+     * holds, and it is the same mechanism set_width uses. */
     [sv setPosition:(CGFloat)px ofDividerAtIndex:0];
     [sv layoutSubtreeIfNeeded];
 }
@@ -1728,6 +1786,9 @@ void aether_ui_set_rtl(int handle, int on) {
     // free to build or mutate widgets, which is the entire point of a
     // GeometryReader, and doing that inside a layout pass is a re-entrancy bug.
     dispatch_async(dispatch_get_main_queue(), ^{
+        /* on_layout hands its closure INTS, and its callers declare
+           |w: int, h: int|. That is a different contract from the canvas
+           POINTER callbacks, which carry coordinates and pass doubles. */
         ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
     });
 }
@@ -3395,8 +3456,35 @@ static void aeui_close_window_main(NSWindow* w) {
 }
 
 void aether_ui_window_close_impl(int win_handle) {
+    /* Handle 1 is the first EXTRA window here, because that is what
+     * window_create returns. The driver-facing family (window_count,
+     * window_title, window_is_open) numbers differently, with 1 as the
+     * primary — a real inconsistency, but reconciling it would silently
+     * repoint every existing window_create/window_close pair at the wrong
+     * window, so it is left alone. #93's actual need, ending the run loop,
+     * is app_quit below. */
     if (!extra_windows || win_handle < 1 || win_handle > (int)[extra_windows count]) return;
     aeui_close_window_main(extra_windows[win_handle - 1]);
+}
+
+/* #93: stop the run loop. -stop: is only examined when the loop next comes
+ * round, so a synthetic event is posted to guarantee it returns promptly
+ * rather than waiting for the user to move the mouse. */
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp stop:nil];
+        NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                           location:NSZeroPoint
+                                      modifierFlags:0
+                                          timestamp:0
+                                       windowNumber:0
+                                            context:nil
+                                            subtype:0
+                                             data1:0
+                                             data2:0];
+        if (wake) [NSApp postEvent:wake atStart:YES];
+    });
 }
 
 // ── Unified driver window view (1 = primary, 2.. = extras) ──
@@ -5165,7 +5253,13 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     // Deferred: the closure re-flushes the whole vg scene (mutating the
     // command buffer we may be mid-draw on).
     dispatch_async(dispatch_get_main_queue(), ^{
-        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+        /* #94: doubles, like on_click / on_move / on_release / on_scroll.
+         * This was the only one of the five CANVAS callbacks passing
+         * intptr_t, so a closure written the way the four siblings are
+         * written read the floating-point argument registers while the
+         * caller had filled the integer ones, and got garbage with no
+         * diagnostic from the compiler or the runtime. */
+        ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
     });
 }
 @end

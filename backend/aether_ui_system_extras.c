@@ -360,12 +360,27 @@ int aether_ui_menu_handles(int* out, int max) {
 // when those backends gain native tray support. This sleep loop is the
 // shared no-op the backends fall through to when they can't or don't
 // want to pump a real loop.
+/* #93: an app had no way to stop its own run loop, so any bounded run had to
+ * be killed from outside and `timeout 60 ./app` always exited 124 — which
+ * cannot tell "finished its work" from "hung", and reports failure on success.
+ * aether_ui_app_quit sets this, and every loop that can park checks it. */
+static volatile int aeui_quit_requested = 0;
+
+void aether_ui_request_quit(void) { aeui_quit_requested = 1; }
+int  aether_ui_quit_requested(void) { return aeui_quit_requested; }
+
 void aether_ui_park_until_killed(void) {
+    /* Poll rather than sleep for a minute at a time: this is the path a
+     * headless or tray-only app parks on, and app_quit has to be able to end
+     * it. A tenth of a second is far below anything a human notices at exit
+     * and costs nothing while idle. */
+    while (!aeui_quit_requested) {
 #ifdef _WIN32
-    for (;;) Sleep(60000);
+        Sleep(100);
 #else
-    for (;;) sleep(60);
+        usleep(100000);
 #endif
+    }
 }
 
 // ---------------------------------------------------------------------------
