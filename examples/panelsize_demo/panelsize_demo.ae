@@ -39,9 +39,12 @@ main() {
                 }
             }
         }
-        // The outer divider is the one that used to be ignored.
-        split_set_position(split, 240)
+        // The outer divider is the one that is ignored: AppKit re-derives a
+        // populated pane's width from its content on the next layout pass, so
+        // the divider snaps back. set_width states the width directly, which
+        // is what actually holds.
         split_set_position(inner, 940)
+        set_width(left, 240)
     }
 
     app = ui.app_create("panel sizing", 1480, 700)

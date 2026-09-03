@@ -118,6 +118,31 @@ if [ "$PLATFORM" = "linux" ]; then
     fi
 fi
 
+# Run a binary that is expected to END ITSELF, and report its exit status.
+#
+# Neither `timeout` nor a bare launch works across this matrix: macOS ships no
+# `timeout`, and GTK4 needs a framebuffer even in headless mode, so Linux has
+# to go through $LAUNCH_PREFIX like every other phase. This waits on the
+# process and only kills it if it overruns, so "never quit" is reported as 124
+# the way `timeout` would have.
+run_self_quitting() {
+    local bin="$1" name="$2" limit="${3:-30}"
+    local log="/tmp/ci_${name}.selfquit.log"
+    AETHER_UI_HEADLESS=1 $LAUNCH_PREFIX "$bin" > "$log" 2>&1 &
+    local pid=$!
+    local ticks=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$ticks" -ge "$((limit * 10))" ]; then
+            kill "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            return 124
+        fi
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    wait "$pid"
+}
+
 run_server_test() {
     # Launch a binary with AETHER_UI_TEST_PORT set, wait for the test server,
     # run the given test script against it, kill the binary, propagate status.
@@ -907,8 +932,9 @@ if [ "$SPEC_OK" -eq 1 ]; then
     # to stop one was to kill it, so `timeout` always reported 124 and could
     # not tell finishing from hanging.
     echo "-- Phase 5e21: app_quit stops the run loop --"
-    quit_out=$(AETHER_UI_HEADLESS=1 timeout 30 "$(EX_BIN quit_demo)" 2>&1)
+    run_self_quitting "$(EX_BIN quit_demo)" quit_demo 30
     quit_rc=$?
+    quit_out=$(cat /tmp/ci_quit_demo.selfquit.log 2>/dev/null)
     if [ "$quit_rc" -eq 0 ] \
        && printf '%s' "$quit_out" | grep -q "work done" \
        && printf '%s' "$quit_out" | grep -q "run loop returned"; then
@@ -919,16 +945,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
         FAIL=$((FAIL + 1))
     fi
 
-    # A nested splitview's OUTER divider, and a width that holds. No driver
-    # needed: the app reads its own allocation back through get_width and
-    # quits, so the assertion is the number it printed. Asked 240; before the
-    # fix the pane took the whole width (1368) because setPosition: alone does
-    # not survive layout re-deriving a pane from its content.
-    echo "-- Phase 5e22: split_set_position holds on a nested splitview --"
-    panel_out=$(AETHER_UI_HEADLESS=1 timeout 30 "$(EX_BIN panelsize_demo)" 2>&1)
+    # A panel width that HOLDS inside a nested splitview. No driver needed:
+    # the app reads its own allocation back through get_width and quits, so
+    # the assertion is the number it printed. Asked 240; with nothing but
+    # split_set_position the pane took the whole width (1368), because
+    # -setPosition: does not survive layout re-deriving a pane from its
+    # content. set_width is what holds.
+    echo "-- Phase 5e22: set_width holds a panel inside a nested splitview --"
+    run_self_quitting "$(EX_BIN panelsize_demo)" panelsize_demo 30
     panel_rc=$?
+    panel_out=$(cat /tmp/ci_panelsize_demo.selfquit.log 2>/dev/null)
     if [ "$panel_rc" -eq 0 ] && printf '%s' "$panel_out" | grep -q "left panel width = 240"; then
-        echo "  OK   panelsize_demo: outer divider honoured (240)"
+        echo "  OK   panelsize_demo: left panel held at 240"
     else
         echo "  FAIL panelsize_demo: rc=$panel_rc"
         printf '%s\n' "$panel_out" | head -4 | sed 's/^/       /'

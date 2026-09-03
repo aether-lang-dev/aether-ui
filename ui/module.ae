@@ -763,6 +763,18 @@ split_position(handle: int) -> int {
     return aether_ui_split_position_impl(handle)
 }
 
+// split_set_position(h, px) — move the divider.
+//
+// KNOWN LIMIT (#95): on AppKit this does not survive the next layout pass when
+// the first pane has content. -setPosition: does move the divider, and then
+// AppKit re-derives that pane's size from what is inside it and puts the
+// divider back, so an OUTER split view appears to ignore the call while an
+// inner one (whose pane has nothing to derive from) looks like it works.
+// Forcing it here with a constraint would pin the pane against the WINDOW as
+// well, so the window could no longer be resized past it.
+//
+// set_width / set_height state a panel size directly and DO hold, which is
+// the supported way to lay out fixed panels.
 split_set_position(handle: int, px: int) {
     aether_ui_split_set_position_impl(handle, px)
 }

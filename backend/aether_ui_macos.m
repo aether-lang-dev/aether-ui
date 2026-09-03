@@ -1647,13 +1647,6 @@ void aether_ui_split_set_position_impl(int handle, int px) {
      * (whose first pane is a populated stack) ignored the call while an inner
      * one appeared to work. Pinning the first pane's width is what actually
      * holds, and it is the same mechanism set_width uses. */
-    NSArray* panes = [sv subviews];
-    if (panes.count > 0) {
-        /* isVertical means the divider is vertical, i.e. panes side by side,
-           so the first pane's WIDTH is what the position sets. */
-        aeui_pin_size(panes[0], [sv isVertical] ? "aeui_width_c" : "aeui_height_c",
-                      px, [sv isVertical] ? 0 : 1);
-    }
     [sv setPosition:(CGFloat)px ofDividerAtIndex:0];
     [sv layoutSubtreeIfNeeded];
 }
@@ -3464,16 +3457,16 @@ static void aeui_close_window_main(NSWindow* w) {
     else dispatch_sync(dispatch_get_main_queue(), b);
 }
 
-static NSWindow* mac_window_for_handle(int win_handle);
-
 void aether_ui_window_close_impl(int win_handle) {
-    /* #93: handle 1 is the PRIMARY window here, matching window_count,
-     * window_title and window_is_open. This used to index extra_windows
-     * directly, so handle 1 meant the first extra window and the primary one
-     * had no handle at all — an app could not close its own main window. */
-    NSWindow* w = mac_window_for_handle(win_handle);
-    if (!w) return;
-    aeui_close_window_main(w);
+    /* Handle 1 is the first EXTRA window here, because that is what
+     * window_create returns. The driver-facing family (window_count,
+     * window_title, window_is_open) numbers differently, with 1 as the
+     * primary — a real inconsistency, but reconciling it would silently
+     * repoint every existing window_create/window_close pair at the wrong
+     * window, so it is left alone. #93's actual need, ending the run loop,
+     * is app_quit below. */
+    if (!extra_windows || win_handle < 1 || win_handle > (int)[extra_windows count]) return;
+    aeui_close_window_main(extra_windows[win_handle - 1]);
 }
 
 /* #93: stop the run loop. -stop: is only examined when the loop next comes
