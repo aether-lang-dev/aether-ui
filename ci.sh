@@ -959,7 +959,10 @@ if [ "$SPEC_OK" -eq 1 ]; then
         echo "  OK   panelsize_demo: left panel held at 240"
     else
         echo "  FAIL panelsize_demo: rc=$panel_rc"
-        printf '%s\n' "$panel_out" | head -4 | sed 's/^/       /'
+        # The interesting line, not the first four lines of GTK warnings.
+        printf '%s\n' "$panel_out" | grep -a "left panel width" | sed 's/^/       /' \
+            || echo "       (no width line printed at all)"
+        printf '%s\n' "$panel_out" | tail -3 | sed 's/^/       /'
         FAIL=$((FAIL + 1))
     fi
 

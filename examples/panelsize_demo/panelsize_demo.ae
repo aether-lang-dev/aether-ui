@@ -39,11 +39,13 @@ main() {
                 }
             }
         }
-        // The outer divider is the one that is ignored: AppKit re-derives a
-        // populated pane's width from its content on the next layout pass, so
-        // the divider snaps back. set_width states the width directly, which
-        // is what actually holds.
+        // Both, because the two backends hold a panel by different means:
+        // GtkPaned honours the divider position, while AppKit re-derives a
+        // populated pane's width from its content on the next layout pass and
+        // needs the width stated outright. An app that wants a fixed panel
+        // says both, and gets 240 either way.
         split_set_position(inner, 940)
+        split_set_position(split, 240)
         set_width(left, 240)
     }
 
