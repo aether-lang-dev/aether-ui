@@ -2575,6 +2575,17 @@ int aether_ui_window_file_drop_deliver(const char* paths) {
     return 1;
 }
 
+int aether_ui_modifiers_impl(void) {
+    /* GetKeyState reports the state as of the message being processed, which
+     * inside a click handler is the click itself. */
+    int mods = 0;
+    if (GetKeyState(VK_SHIFT)   & 0x8000) mods |= 1;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
+    if (GetKeyState(VK_MENU)    & 0x8000) mods |= 4;
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) mods |= 8;
+    return mods;
+}
+
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     w32_window_key_closure_add((AeClosure*)boxed_closure);
 }

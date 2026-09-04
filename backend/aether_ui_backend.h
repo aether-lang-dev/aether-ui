@@ -651,6 +651,13 @@ void aether_ui_shortcut_impl(const char* combo, void* boxed_closure);
 // would break typing into whatever has focus. mods is a bitmask:
 // 1 shift, 2 ctrl, 4 alt, 8 super/command.
 void aether_ui_window_on_key_impl(void* boxed_closure);
+
+/* The modifier keys held RIGHT NOW, as the public bitmask every other
+ * modifier-carrying callback uses: 1 shift, 2 ctrl, 4 alt, 8 super/command.
+ * Meant to be read from inside a click callback, where the platform event is
+ * still the current one, so a widget can tell a plain click from a
+ * cmd-click without every click callback growing an argument. */
+int aether_ui_modifiers_impl(void);
 // Files dropped onto the window, the most common drag-and-drop case by far
 // and the one an editor or file manager cannot do without. The closure gets
 // the paths NEWLINE-SEPARATED in one string: the DSL splits that into a list,
