@@ -65,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo resizecb_demo quit_demo panelsize_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -973,6 +973,39 @@ if [ "$SPEC_OK" -eq 1 ]; then
         printf '%s\n' "$panel_out" | grep -a "left panel width" | sed 's/^/       /' \
             || echo "       (no width line printed at all)"
         printf '%s\n' "$panel_out" | tail -3 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+
+    # A container child must get the same content box as a leaf child. Both
+    # read back through get_width, so no driver is needed. The panel is 400
+    # wide with 12px side insets: the row must measure 376. Before the fix it
+    # measured the full 400, hanging 12px outside the padding every leaf
+    # child respected.
+    echo "-- Phase 5e23: a container child sits inside the parent's insets --"
+    run_self_quitting "$(EX_BIN insets_demo)" insets_demo 30
+    ins_rc=$?
+    ins_out=$(cat /tmp/ci_insets_demo.selfquit.log 2>/dev/null)
+    if [ "$ins_rc" -eq 0 ] && printf '%s' "$ins_out" | grep -q "row_w=376"; then
+        echo "  OK   insets_demo: container child inset like a leaf (376)"
+    else
+        echo "  FAIL insets_demo: rc=$ins_rc"
+        printf '%s\n' "$ins_out" | grep -a "row_w" | sed 's/^/       /' \
+            || echo "       (no width line printed)"
+        FAIL=$((FAIL + 1))
+    fi
+
+    # The borrowed blit skips the per-frame copy; it is only worth having if
+    # it draws the SAME pixels. The demo blits one image both ways and reads
+    # back two of them, so this asserts the picture, not the speed.
+    echo "-- Phase 5e24: a borrowed blit draws what the copying blit draws --"
+    run_self_quitting "$(EX_BIN blitborrow_demo)" blitborrow_demo 30
+    blit_rc=$?
+    blit_out=$(cat /tmp/ci_blitborrow_demo.selfquit.log 2>/dev/null)
+    if [ "$blit_rc" -eq 0 ] && printf '%s' "$blit_out" | grep -q "^MATCH$"; then
+        echo "  OK   blitborrow_demo: borrowed and copied blits agree"
+    else
+        echo "  FAIL blitborrow_demo: rc=$blit_rc"
+        printf '%s\n' "$blit_out" | grep -aE "owned|borrow" | sed 's/^/       /'
         FAIL=$((FAIL + 1))
     fi
 

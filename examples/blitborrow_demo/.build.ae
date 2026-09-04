@@ -1,0 +1,18 @@
+// blitborrow_demo — aether-ui toolkit example, built as its own cached aeb node.
+import bldr
+import aether
+import aether (source, output, no_closure_regen)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("blitborrow_demo.ae")
+            output("blitborrow_demo")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

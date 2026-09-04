@@ -103,6 +103,7 @@ exports (
     canvas_set_clip_rects, canvas_reset_clip,
     canvas_clear, canvas_redraw, canvas_write_png,
     canvas_cmd_count, canvas_render_range_rgba, canvas_draw_image_ptr,
+    canvas_draw_image_borrowed_ptr, canvas_draw_image_scaled_borrowed_ptr,
     canvas_draw_image_scaled_ptr,
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
@@ -485,6 +486,10 @@ extern aether_ui_canvas_draw_image_scaled_impl_ptr(canvas_id: int, x: float, y: 
         dw: float, dh: float, iw: int, ih: int, rgba: ptr, byte_len: int)
 extern aether_ui_canvas_draw_image_impl_ptr(canvas_id: int, x: float, y: float,
                                             iw: int, ih: int, rgba: ptr, byte_len: int)
+extern aether_ui_canvas_draw_image_borrowed_impl(canvas_id: int, x: float, y: float,
+    iw: int, ih: int, rgba: ptr, byte_len: int)
+extern aether_ui_canvas_draw_image_scaled_borrowed_impl(canvas_id: int, x: float, y: float,
+    dw: float, dh: float, iw: int, ih: int, rgba: ptr, byte_len: int)
 extern aether_ui_canvas_render_range_rgba_impl(canvas_id: int, start: int, end: int,
                                                ox: float, oy: float,
                                                width: int, height: int,
@@ -4747,6 +4752,33 @@ canvas_draw_image_ptr(cid: int, x: float, y: float, iw: int, ih: int,
 canvas_draw_image_scaled_ptr(cid: int, x: float, y: float, dw: float, dh: float,
                   iw: int, ih: int, rgba: ptr, byte_len: int) {
     aether_ui_canvas_draw_image_scaled_impl_ptr(cid, x, y, dw, dh, iw, ih, rgba, byte_len)
+}
+
+// canvas_draw_image_borrowed_ptr — blit WITHOUT copying (#102).
+//
+// The owning blits above allocate and copy the whole image on every call.
+// For a one-off image that is right and cheap; for a surface redrawn every
+// frame it is a malloc plus a full-framebuffer memcpy sixty times a second.
+// Measured on a 918x659 viewport it was 61% of the frame, more than reading
+// the frame back off the GPU and roughly six times the cost of rendering it.
+//
+// CONTRACT, and it is a sharp one: the pixels stay YOURS. They must remain
+// valid and unchanged until the next canvas_clear on this canvas, because the
+// canvas retains the command and reads the buffer when it paints. That is
+// exactly what a per-frame surface already does — one buffer, overwritten in
+// place, canvas cleared and redrawn each frame. If your buffer can be freed
+// or resized before the next clear, use canvas_draw_image_ptr and take the
+// copy.
+canvas_draw_image_borrowed_ptr(cid: int, x: float, y: float, iw: int, ih: int,
+                               rgba: ptr, byte_len: int) {
+    aether_ui_canvas_draw_image_borrowed_impl(cid, x, y, iw, ih, rgba, byte_len)
+}
+
+// Scaled twin of canvas_draw_image_borrowed_ptr. Same lifetime contract.
+canvas_draw_image_scaled_borrowed_ptr(cid: int, x: float, y: float,
+                                      dw: float, dh: float, iw: int, ih: int,
+                                      rgba: ptr, byte_len: int) {
+    aether_ui_canvas_draw_image_scaled_borrowed_impl(cid, x, y, dw, dh, iw, ih, rgba, byte_len)
 }
 
 canvas_cmd_count(cid: int) -> int {

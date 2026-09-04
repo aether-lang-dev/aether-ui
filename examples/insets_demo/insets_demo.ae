@@ -1,0 +1,57 @@
+// #96 — a container child must sit inside the parent's insets, like a leaf does.
+//
+// A leaf child (text) was laid out inside st_insets; a container child
+// (hstack, divider) was pinned to the stack's raw edges and ignored them. A
+// heading sat 12px in and the row under it did not, which is every inspector
+// panel in the toolkit misaligned by exactly the padding.
+//
+// The app reports the x of a leaf and of a container child, so the assertion
+// is the two numbers agreeing.
+
+import ui
+import ui (root_vstack, vstack, hstack, text, divider, add_css_class,
+    create_styles, st_insets, st_bg, apply_styles, get_width, app_quit,
+    timer, timer_cancel, set_text, enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    panel = 0
+    leaf = 0
+    row = 0
+    report = 0
+
+    main_root = root_vstack(0) {
+        report = text("insets: pending")
+        panel = vstack(0) {
+            leaf = text("leaf child")
+            row = hstack(8) {
+                _t = text("inside a container child")
+            }
+            _d = divider()
+        }
+    }
+
+    sheet = create_styles()
+    st_insets(sheet, "panel", 10.0, 12.0, 10.0, 12.0)
+    st_bg(sheet, "panel", 0x21252B)
+    add_css_class(panel, "panel")
+    // Applied AFTER the tree is built, which is the usual order and the case
+    // that needs the constraint constants updated.
+    apply_styles(0, sheet)
+
+    app = ui.app_create("insets", 400, 300)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    tid = 0
+    tid = timer(150) callback {
+        timer_cancel(tid)
+        lw = get_width(leaf)
+        rw = get_width(row)
+        // The row must get the same content box as the leaf: parent width
+        // minus both insets. Report both widths; equal means aligned.
+        println("leaf_w=${lw} row_w=${rw}")
+        app_quit()
+    }
+    ui.app_start(app, main_root)
+}
