@@ -1,0 +1,59 @@
+// Aether UI: a small canvas inside a panel row (#98).
+//
+// A colour chip next to RGB sliders is standard in every editor, and a canvas
+// is the only way to show an arbitrary dynamic colour. Sizing that chip used
+// to mean converting its canvas id to a widget handle first, and canvas ids
+// and widget handles are separate counters that both start at 1: passing the
+// id straight to width() silently pinned a DIFFERENT widget, which in a
+// three-pane editor was the inspector panel. The panel collapsed to roughly
+// the chip's own width and every child reflowed into it.
+//
+// canvas_size takes the canvas id, so the chip gets its size and the panel
+// keeps its own.
+import ui
+import ui (window, vstack, hstack, text, canvas_create, canvas_widget,
+    canvas_size, fill_width, fill_height, get_width, timer, timer_cancel,
+    app_quit, enable_test_server, a11y_label)
+import std.os (os_getenv)
+
+main() {
+    right = 0
+    chip = 0
+
+    window("panel canvas", 1200, 700) {
+        hstack(0) {
+            _left = vstack(6) {
+                _l1 = text("Hierarchy")
+                _l2 = text("Cube")
+                _l3 = text("Light")
+            }
+            _centre = vstack(0) {
+                vp = canvas_create(600, 400)
+                fill_width(canvas_widget(vp))
+                fill_height(canvas_widget(vp))
+            }
+            right = vstack(6) {
+                _r1 = text("Inspector")
+                _r2 = text("Position X Y Z")
+                _swatch_row = hstack(6) {
+                    _r3 = text("Colour")
+                    chip = canvas_create(46, 14)
+                    canvas_size(chip, 46, 14)
+                }
+                _r4 = text("Material name here")
+            }
+        }
+        // Named so a spec can find the panel and the chip without geometry.
+        _ = a11y_label(right, "inspector")
+        _ = a11y_label(canvas_widget(chip), "colour chip")
+        if os_getenv("AETHER_UI_TEST_PORT") == null {
+            tid = 0
+            tid = timer(250) callback {
+                timer_cancel(tid)
+                println("right=${get_width(right)} chip=${get_width(canvas_widget(chip))}")
+                app_quit()
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
