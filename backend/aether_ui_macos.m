@@ -2859,9 +2859,28 @@ int aether_ui_state_style_impl(int handle, int state) {
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (v && [v isKindOfClass:[NSStackView class]]) {
-        [(NSStackView*)v setEdgeInsets:NSEdgeInsetsMake(top, left, bottom, right)];
+    if (!v || ![v isKindOfClass:[NSStackView class]]) return;
+    NSStackView* sv = (NSStackView*)v;
+    [sv setEdgeInsets:NSEdgeInsetsMake(top, left, bottom, right)];
+
+    /* #96: container children are pinned to this stack's own edges rather
+     * than laid out as ordinary arranged subviews, so NSStackView's insets do
+     * not reach them. Those pins carry the inset as their constant, and this
+     * is where they learn a NEW one: styles are normally applied after the
+     * tree is built, so the constraints already exist when an inset arrives.
+     * Without this, an inset set through a stylesheet would move the leaf
+     * children and leave every nested row behind. */
+    for (NSLayoutConstraint* c in [sv constraints]) {
+        NSString* id_ = [c identifier];
+        if (!id_) continue;
+        if ([id_ isEqualToString:@"aeui-inset-lead"]) {
+            c.constant = left;
+        } else if ([id_ isEqualToString:@"aeui-inset-trail"] ||
+                   [id_ isEqualToString:@"aeui-inset-trail-max"]) {
+            c.constant = -right;
+        }
     }
+    [sv setNeedsLayout:YES];
 }
 
 // Does this view carry its own width-to-constant constraint?
@@ -4505,7 +4524,13 @@ typedef struct {
     double w, h;
     double a0, a1;   // ARC start/end angle
     char* text;     // FILL_TEXT string (owned)
-    unsigned char* pixels;  // DRAW_IMAGE RGBA8888 buffer (owned)
+    unsigned char* pixels;  // DRAW_IMAGE RGBA8888 buffer
+    /* #102: 0 = this command owns `pixels` and frees them with the command;
+       1 = they belong to the caller and are only borrowed until the next
+       canvas_clear. A per-frame viewport hands over the same stable buffer
+       every frame, and copying 2.4 MB sixty times a second cost more than
+       reading the frame off the GPU did. */
+    int            pixels_borrowed;
     int iw, ih;     // DRAW_IMAGE pixel dims
     double gx1, gy1, gx2, gy2, gr, gfx, gfy;  // gradient geometry
     double grad_line_width;  // 0 → fill; >0 → stroke at this width
@@ -5617,6 +5642,43 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
 // backend only). The command carries the dest extent in w/h and the
 // executor hands CGContextDrawImage a dest rect of that size; CG scales
 // natively, same as GTK4's cairo path and win32's StretchBlt.
+/* #102: draw WITHOUT copying. The pixels stay the caller's, and must remain
+ * valid and unchanged until the next canvas_clear on this canvas — the same
+ * lifetime the retained command list already has.
+ *
+ * That is exactly the contract a per-frame surface already satisfies: a 3D
+ * viewport, a video frame or a game framebuffer owns one buffer, overwrites
+ * it in place, and clears and redraws the canvas each frame. The owning
+ * variant above allocated and copied the whole framebuffer on every call,
+ * which for a 918x659 viewport measured 61% of the frame — more than reading
+ * the frame back off the GPU, and six times more than rendering it.
+ *
+ * A caller that cannot promise that lifetime should keep using the owning
+ * variant; this is a sharper tool on purpose. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y, .w = dw, .h = dh,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
@@ -5682,7 +5744,9 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
             free(c->text); c->text = NULL;
         }
         if (c->type == CANVAS_DRAW_IMAGE && c->pixels) {
-            free(c->pixels); c->pixels = NULL;
+            /* #102: a borrowed buffer belongs to the caller. */
+            if (!c->pixels_borrowed) free(c->pixels);
+            c->pixels = NULL;
         }
         if (c->type == CANVAS_FILL_LINEAR || c->type == CANVAS_FILL_RADIAL) {
             free(c->stop_off);  c->stop_off = NULL;
@@ -6351,10 +6415,32 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
                 // narrower than the parent; trailing == at high-but-not-required
                 // priority makes it stretch whenever nothing forbids it (which is
                 // what gives the calculator its full-width button rows).
-                [child.leadingAnchor constraintEqualToAnchor:sv.leadingAnchor].active = YES;
-                [child.trailingAnchor constraintLessThanOrEqualToAnchor:sv.trailingAnchor].active = YES;
+                //
+                // #96: the constants are the parent's edge INSETS. Pinning to
+                // the bare anchors is what made a container child ignore the
+                // padding a leaf child gets for free from NSStackView's own
+                // arranged-subview layout, so a heading sat 12px in and the
+                // row under it did not — every inspector panel misaligned by
+                // exactly the padding. Tagged so set_edge_insets can update
+                // them when styles are applied AFTER the tree is built, which
+                // is the usual order (`apply_styles` at the end of a block).
+                NSEdgeInsets pins = [sv edgeInsets];
+                NSLayoutConstraint* lead =
+                    [child.leadingAnchor constraintEqualToAnchor:sv.leadingAnchor
+                                                        constant:pins.left];
+                [lead setIdentifier:@"aeui-inset-lead"];
+                lead.active = YES;
+
+                NSLayoutConstraint* cap =
+                    [child.trailingAnchor constraintLessThanOrEqualToAnchor:sv.trailingAnchor
+                                                                   constant:-pins.right];
+                [cap setIdentifier:@"aeui-inset-trail-max"];
+                cap.active = YES;
+
                 NSLayoutConstraint* stretch =
-                    [child.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor];
+                    [child.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor
+                                                         constant:-pins.right];
+                [stretch setIdentifier:@"aeui-inset-trail"];
                 stretch.priority = NSLayoutPriorityDefaultHigh;
                 stretch.active = YES;
             }

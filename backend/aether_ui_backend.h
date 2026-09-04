@@ -275,6 +275,17 @@ void aether_ui_window_close_impl(int win_handle);
 /* #95: state a widget's width/height, and read back what it actually got.
    The setter is what holds a panel at a size across a layout pass; the getter
    answers from the real allocation, not from the request. */
+/* #102: blit WITHOUT copying — the pixels stay the caller's and must stay
+   valid until the next canvas_clear. For a surface redrawn every frame the
+   owning variant's malloc+memcpy of the whole framebuffer dominated the
+   frame; a caller that cannot promise the lifetime uses the owning one. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len);
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len);
+
 void aether_ui_set_width_impl(int handle, int px);
 void aether_ui_set_height_impl(int handle, int px);
 int  aether_ui_get_width_impl(int handle);

@@ -4359,7 +4359,10 @@ typedef struct {
                               //   DRAW_IMAGE pixel dims
     double a0, a1;            // ARC start/end angle (radians)
     char* text;              // FILL_TEXT string (owned, freed on clear/destroy)
-    unsigned char* pixels;   // DRAW_IMAGE RGBA8888 buffer (owned), iw*ih*4 bytes
+    unsigned char* pixels;   // DRAW_IMAGE RGBA8888 buffer, iw*ih*4 bytes
+    /* #102: 0 = owned and freed with the command, 1 = borrowed from the
+       caller until the next canvas_clear. */
+    int            pixels_borrowed;
     int iw, ih;              // DRAW_IMAGE pixel width/height
     // Gradient (FILL_LINEAR / FILL_RADIAL): geometry in x,y..(see impls),
     // plus owned stop arrays. FILL_LINEAR uses (gx1,gy1)→(gx2,gy2);
@@ -5621,6 +5624,38 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
 // As draw_image, but scale the iw×ih source to a dw×dh destination rect at
 // (x,y) — for a video/raster frame whose pixel resolution differs from the
 // region's canvas-px extent. dw/dh <= 0 falls back to a 1:1 native blit.
+/* #102: draw WITHOUT copying. The pixels stay the caller's and must remain
+ * valid until the next canvas_clear on this canvas — the lifetime the
+ * retained command list already has. That is what a per-frame surface (a 3D
+ * viewport, a video frame, a game framebuffer) already guarantees: one buffer,
+ * overwritten in place, canvas cleared and redrawn each frame. The owning
+ * variant copies the whole framebuffer per call, which measured 61% of the
+ * frame at 918x659. A caller that cannot promise the lifetime keeps using the
+ * owning variant. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y, .w = dw, .h = dh,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
@@ -5692,7 +5727,9 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
                 free(c->text); c->text = NULL;
             }
             if (c->type == CANVAS_DRAW_IMAGE && c->pixels) {
-                free(c->pixels); c->pixels = NULL;
+                /* #102: a borrowed buffer belongs to the caller. */
+                if (!c->pixels_borrowed) free(c->pixels);
+                c->pixels = NULL;
             }
             if (c->type == CANVAS_FILL_LINEAR || c->type == CANVAS_FILL_RADIAL) {
                 free(c->stop_off);  c->stop_off = NULL;
