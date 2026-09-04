@@ -1305,6 +1305,19 @@ void aether_ui_window_on_key_impl(void* boxed_closure) {
     window_key_closure_add((AeClosure*)boxed_closure);
 }
 
+int aether_ui_modifiers_impl(void) {
+    /* +modifierFlags is the CURRENT keyboard state, not a snapshot from some
+     * event object, so this answers correctly inside a click callback without
+     * the event having to be threaded through. */
+    NSEventModifierFlags f = [NSEvent modifierFlags];
+    int mods = 0;
+    if (f & NSEventModifierFlagShift)   mods |= 1;
+    if (f & NSEventModifierFlagControl) mods |= 2;
+    if (f & NSEventModifierFlagOption)  mods |= 4;
+    if (f & NSEventModifierFlagCommand) mods |= 8;
+    return mods;
+}
+
 int aether_ui_window_key_deliver(const char* key_name, int mods) {
     return window_key_closure_fire(key_name, mods);
 }

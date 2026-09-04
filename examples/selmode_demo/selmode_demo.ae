@@ -1,0 +1,66 @@
+// Aether UI multi-select, driven from the application (#99).
+//
+// listbox_select on a multi listbox TOGGLES, so it cannot put the widget in a
+// known state: calling it twice silently undoes itself, and an app that
+// selects a row after every add ends up with the wrong row selected.
+//
+// listbox_set_selected writes one row's state and listbox_clear_selection
+// clears them all, neither firing on_select, so an app can keep its own
+// selection model in step with the widget without re-entering its own click
+// handler on every sync.
+import ui
+import ui (window, vstack, hstack, text, btn, divider,
+    listbox_multi, listbox_update, listbox_set_selected, listbox_clear_selection,
+    listbox_selection_mode,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern malloc(size: int) -> ptr
+
+struct Item { name: string }
+
+mk_item(n: int) -> ptr {
+    it = malloc(16) as *Item
+    it.name = string.concat("item ", string.from_int(n))
+    return it as ptr
+}
+
+main() {
+    items = list.new()
+    k = 1
+    while k <= 5 {
+        _ = list.add(items, mk_item(k))
+        k = k + 1
+    }
+
+    window("selection api demo", 420, 400) {
+        vstack(8) {
+            rows = listbox_multi(2) callback |item: ptr, i: int, row: int| {
+                it = item as *Item
+                _t = text(row, it.name)
+            }
+            listbox_update(rows, items)
+            listbox_selection_mode(rows, 1)   // standard: replace / toggle / extend
+            divider()
+            hstack(10) {
+                // Drive the widget to a KNOWN state, which is what the old API
+                // could not do. Pressing "set 1 and 3" twice must leave the
+                // same two rows selected, not undo itself.
+                _s = btn("set 1 and 3") callback {
+                    listbox_set_selected(rows, 1, 1)
+                    listbox_set_selected(rows, 3, 1)
+                }
+                _c = btn("clear") callback { listbox_clear_selection(rows) }
+                _o = btn("only 2") callback {
+                    listbox_clear_selection(rows)
+                    listbox_set_selected(rows, 2, 1)
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null {
+            enable_test_server(9222)
+        }
+    }
+}

@@ -3592,6 +3592,24 @@ void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
     drop_attached = 1;
 }
 
+int aether_ui_modifiers_impl(void) {
+    /* The seat's keyboard state is the live one, which is what a click
+     * callback needs; a GdkEvent is not available at that point. */
+    GdkDisplay* dpy = gdk_display_get_default();
+    if (!dpy) return 0;
+    GdkSeat* seat = gdk_display_get_default_seat(dpy);
+    if (!seat) return 0;
+    GdkDevice* kb = gdk_seat_get_keyboard(seat);
+    if (!kb) return 0;
+    GdkModifierType state = gdk_device_get_modifier_state(kb);
+    int mods = 0;
+    if (state & GDK_SHIFT_MASK)   mods |= 1;
+    if (state & GDK_CONTROL_MASK) mods |= 2;
+    if (state & GDK_ALT_MASK)     mods |= 4;
+    if (state & GDK_SUPER_MASK)   mods |= 8;
+    return mods;
+}
+
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     aeui_window_key_closure_add((AeClosure*)boxed_closure);
     if (!primary_window) return;   // attaches when the window appears

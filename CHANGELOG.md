@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A multi-select listbox can be driven to a known state.** `listbox_select`
+  on a multi listbox toggles, which can only ever say "flip this row": calling
+  it twice silently undoes itself, so an app that selects a row after every add
+  ends up with the wrong row selected and there was no way to keep an
+  application's own selection model and the widget's in agreement.
+  `listbox_set_selected(lb, i, on)` writes one row's state and
+  `listbox_clear_selection(lb)` clears them all, neither firing `on_select`,
+  because a state write is not a user action and an app syncing its model would
+  otherwise re-enter its own click handler on every sync.
+  `listbox_selected_count(lb)` saves every caller writing the same loop.
+
+- **`listbox_selection_mode(lb, 1)` gives a multi listbox the selection
+  behaviour every editor, file manager and mail client has**: a plain click
+  replaces the selection, cmd/ctrl-click toggles one row, shift-click extends
+  from the anchor. This could not be built on top of `on_select`, which reports
+  a row index and no modifier state, so the widget does it: it already owns
+  `sel_flags` and the hit testing. Mode 0, today's toggle-every-click, stays
+  the default, because that is what a checklist wants and what `listbox_multi`
+  has always done.
+
+- **`modifiers()`** reports the modifier keys held right now as the same
+  bitmask `window_on_key` uses (1 shift, 2 ctrl, 4 alt, 8 super/command). Real
+  on all three backends. Reading the live state inside a click callback is what
+  lets a widget tell a plain click from a cmd-click without every click
+  callback growing an argument, which would break every existing caller.
+
+
 - A `table` announces itself as a table, and its headers as column headers.
   Before this it announced nothing structural: assistive tech saw an unlabelled
   stack of buttons above a list. The ROWS were already right, because `table`
