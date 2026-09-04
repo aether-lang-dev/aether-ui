@@ -797,6 +797,10 @@ split_set_position(handle: int, px: int) {
 // feeding it into the stack measure pass. spec_weightclamp_demo asserts the
 // min-clamp on macOS and Linux in CI. This comment claimed "GTK4 only" long
 // after the other two landed, the same rot on_layout's comment records.
+//
+// An explicit weight also retracts the equal-width chain a row of buttons gets
+// by default: that chain is a hard constraint and the proportional shares are
+// not, so without this weights of 16 / 62 / 22 came out as an even split.
 weight(handle: int, n: int) {
     aether_ui_widget_weight_impl(handle, n)
 }
@@ -3011,6 +3015,12 @@ set_height(handle: int, px: int) -> int {
 // get_width(h) / get_height(h) — what the widget ACTUALLY got, read from its
 // allocation rather than from whatever was requested. 0 before the first
 // layout pass.
+//
+// The size is the distance between the widget's two rounded edges, so a row of
+// flexible children still tiles its parent: three children of a 302px row with
+// two 6px gaps read back as 97 + 97 + 96, not 97 + 97 + 97. Rounding each size
+// on its own would make the parts add up to more than the whole and put the
+// last child a pixel outside the parent (#101).
 get_width(handle: int) -> int {
     return aether_ui_get_width_impl(handle)
 }

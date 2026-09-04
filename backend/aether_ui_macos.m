@@ -1595,6 +1595,25 @@ int aether_ui_split_position_impl(int handle) {
  * The constraint is created once and updated afterwards, so repeated calls do
  * not pile up conflicting constraints on the same view. Priority is just
  * below required, leaving a user's divider drag able to win. */
+// Drop any equal-width chain this view is part of. A table header sets an
+// explicit per-column width; leaving the button-row equality in place makes
+// the two required constraints unsatisfiable, and Auto Layout resolves that
+// by breaking one — silently, and with the wrong column widths surviving.
+//
+// Every call that gives a child a width of its own has to do this, which is
+// why it is a function and not two copies: an equality left standing outranks
+// both an explicit width and a weight, since it is required and they are not.
+static void aeui_drop_btneq(NSView* v) {
+    NSView* p = v ? [v superview] : nil;
+    if (!p) return;
+    NSMutableArray* drop = [NSMutableArray array];
+    for (NSLayoutConstraint* c in [p constraints]) {
+        if (![[c identifier] isEqualToString:@"aeui-btneq"]) continue;
+        if (c.firstItem == v || c.secondItem == v) [drop addObject:c];
+    }
+    if ([drop count]) [p removeConstraints:drop];
+}
+
 static void aeui_pin_size(NSView* v, const char* key, int px, int vertical) {
     if (!v) return;
     NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
@@ -1624,16 +1643,36 @@ void aether_ui_set_height_impl(int handle, int px) {
                   "aeui_height_c", px, 1);
 }
 
+/* CRITICAL for #101: round the frame's EDGES, never its size. Auto Layout
+ * places views on half-point boundaries so a row of flexible children tiles
+ * its parent exactly (96.5 + 6 + 97 + 6 + 96.5 = 302). Rounding each size on
+ * its own turns that into 97 + 6 + 97 + 6 + 97 = 303, so the reported parts
+ * come to more than the whole and a caller laying out against these numbers
+ * pushes the last child past the parent's edge. Rounding the edges keeps
+ * adjacent children tiling (97, 97, 96) because one child's rounded trailing
+ * edge is the next one's rounded leading edge.
+ *
+ * floor(x + 0.5), not lround: lround rounds half AWAY from zero, so a view at
+ * a negative offset (a scrolled document view) would round its two edges in
+ * opposite directions and gain a point. */
+static int aeui_round_extent(CGFloat lo, CGFloat hi) {
+    long a = (long)floor((double)lo + 0.5);
+    long b = (long)floor((double)hi + 0.5);
+    return (int)(b - a);
+}
+
 int aether_ui_get_width_impl(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return 0;
-    return (int)lround([v frame].size.width);
+    NSRect f = [v frame];
+    return aeui_round_extent(NSMinX(f), NSMaxX(f));
 }
 
 int aether_ui_get_height_impl(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return 0;
-    return (int)lround([v frame].size.height);
+    NSRect f = [v frame];
+    return aeui_round_extent(NSMinY(f), NSMaxY(f));
 }
 
 void aether_ui_split_set_position_impl(int handle, int px) {
@@ -1744,6 +1783,12 @@ void aether_ui_widget_weight_impl(int handle, int n) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     widget_weights[handle - 1] = n;
+    // A weight is an explicit instruction to share space unevenly, so it has to
+    // outrank the equal-width chain buttons get by default. It did not: the
+    // chain is required and the flex multipliers are not, so weight(16/62/22)
+    // on three buttons came out 500/500/500 in a 1500px row, with no
+    // diagnostic. set_width already retracted the chain for the same reason.
+    aeui_drop_btneq(v);
     NSView* parent = [v superview];
     if ([parent isKindOfClass:[NSStackView class]]) {
         aeui_apply_flex((NSStackView*)parent);
@@ -2897,19 +2942,7 @@ void aether_ui_set_width(int handle, int width) {
     if (!v) return;
     [v setTranslatesAutoresizingMaskIntoConstraints:NO];
 
-    // Drop any equal-width chain this view is part of. A table header sets an
-    // explicit per-column width; leaving the button-row equality in place makes
-    // the two required constraints unsatisfiable, and Auto Layout resolves that
-    // by breaking one — silently, and with the wrong column widths surviving.
-    NSView* p = [v superview];
-    if (p) {
-        NSMutableArray* drop = [NSMutableArray array];
-        for (NSLayoutConstraint* c in [p constraints]) {
-            if (![[c identifier] isEqualToString:@"aeui-btneq"]) continue;
-            if (c.firstItem == v || c.secondItem == v) [drop addObject:c];
-        }
-        if ([drop count]) [p removeConstraints:drop];
-    }
+    aeui_drop_btneq(v);
 
     // On a weighted child, width() is a FLOOR (>=), not a fixed size: the flex
     // share fills above it, clamping to this min only when space is tight. A
@@ -6823,10 +6856,16 @@ static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
             r = [v convertRect:[v bounds] toView:content];
         }
         CGFloat ch = [content bounds].size.height;
+        /* #101: sizes come from the ROUNDED EDGES, so a row of flexible
+         * children reported here still tiles its parent. Rounding the size on
+         * its own reported three 96.5/97 frames in a 302px row as 97/97/97,
+         * and "every widget fits inside its parent", the one invariant a
+         * layout audit wants to trust, came out false by a pixel. */
+        CGFloat top = ch - (r.origin.y + r.size.height);
         rx = (int)lround(r.origin.x);
-        ry = (int)lround(ch - (r.origin.y + r.size.height));  // bottom-left → top-left
-        rw = (int)lround(r.size.width);
-        rh = (int)lround(r.size.height);
+        ry = (int)lround(top);                                // bottom-left → top-left
+        rw = aeui_round_extent(r.origin.x, r.origin.x + r.size.width);
+        rh = aeui_round_extent(top, top + r.size.height);
         rc = 0;
     };
     if ([NSThread isMainThread]) compute();
