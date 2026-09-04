@@ -43,13 +43,22 @@ main() {
                 "the last child does not hang past the row's right edge")
         }
 
-        spec.it("the remainder is spread, not dumped on one child") callback {
-            w1 = width_of("One")
-            w3 = width_of("Three")
-            d = w1 - w3
-            if d < 0 { d = 0 - d }
-            spec.assert_true(d <= 1,
-                "widest and narrowest differ by at most a pixel (${w1} vs ${w3})")
+        spec.it("adjacent children are exactly one gap apart") callback {
+            // Edge-rounded geometry tiles: a child's reported trailing edge
+            // and its neighbour's reported leading edge are separated by the
+            // stack's spacing and nothing else. Rounding each width on its
+            // own put the remainder into the gaps instead, so a 6px gap read
+            // back as 5 or 7 depending on where the fractions fell.
+            //
+            // Deliberately NOT asserting the three are equal: an equal-width
+            // row of buttons is AppKit behaviour, GTK4 sizes each button to
+            // its own label, and the invariant under test holds either way.
+            x2 = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text("Two"), "x")
+            x3 = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text("Three"), "x")
+            g1 = x2 - right_of("One")
+            g2 = x3 - right_of("Two")
+            spec.assert_true(g1 == 6, "One and Two are one 6px gap apart (got ${g1})")
+            spec.assert_true(g2 == 6, "Two and Three are one 6px gap apart (got ${g2})")
         }
 
         spec.it("weighted children divide their row proportionally") callback {
