@@ -1,0 +1,83 @@
+// spec_flexround_demo.ae, #101: flexible children fit inside their parent.
+//
+// The invariant a layout audit wants to be able to trust is "every widget
+// fits inside its parent". It was false by a pixel: the geometry a caller
+// reads back rounded each child's WIDTH on its own instead of rounding its
+// edges, so three children of a 302px row reported 97/97/97 and came to 303.
+//
+// Every assertion here is a relationship between the reported numbers, not a
+// per-backend pixel count, so it means the same thing on AppKit and GTK4.
+import std.spec
+import uidriver
+
+width_of(label: string) -> int {
+    return uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(label), "w")
+}
+
+right_of(label: string) -> int {
+    id = uidriver.widget_id_by_text(label)
+    x = uidriver.widget_int_field_by_id(id, "x")
+    w = uidriver.widget_int_field_by_id(id, "w")
+    return x + w
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "flexible children fit their parent (#101)") {
+        spec.it("three buttons plus the gaps do not exceed the 302px row") callback {
+            w1 = width_of("One")
+            w2 = width_of("Two")
+            w3 = width_of("Three")
+            spec.assert_true(w1 > 0, "the buttons were found (One is ${w1} wide)")
+            total = w1 + w2 + w3 + 12
+            spec.assert_true(total <= 302,
+                "children + gaps fit the row (got ${total} from ${w1}/${w2}/${w3})")
+        }
+
+        spec.it("the last button's right edge stays inside the row") callback {
+            id = uidriver.widget_id_by_text("One")
+            left = uidriver.widget_int_field_by_id(id, "x")
+            spec.assert_true(right_of("Three") <= left + 302,
+                "the last child does not hang past the row's right edge")
+        }
+
+        spec.it("adjacent children are exactly one gap apart") callback {
+            // Edge-rounded geometry tiles: a child's reported trailing edge
+            // and its neighbour's reported leading edge are separated by the
+            // stack's spacing and nothing else. Rounding each width on its
+            // own put the remainder into the gaps instead, so a 6px gap read
+            // back as 5 or 7 depending on where the fractions fell.
+            //
+            // Deliberately NOT asserting the three are equal: an equal-width
+            // row of buttons is AppKit behaviour, GTK4 sizes each button to
+            // its own label, and the invariant under test holds either way.
+            x2 = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text("Two"), "x")
+            x3 = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text("Three"), "x")
+            g1 = x2 - right_of("One")
+            g2 = x3 - right_of("Two")
+            spec.assert_true(g1 == 6, "One and Two are one 6px gap apart (got ${g1})")
+            spec.assert_true(g2 == 6, "Two and Three are one 6px gap apart (got ${g2})")
+        }
+
+        spec.it("weighted children divide their row proportionally") callback {
+            q1 = width_of("Left")
+            q2 = width_of("Centre")
+            q3 = width_of("Right")
+            row = q1 + q2 + q3
+            spec.assert_true(row > 0, "the weighted row has a width (got ${row})")
+            // 16 / 62 / 22. Compare shares against the row the panes actually
+            // add up to, so the check does not depend on the window's size.
+            spec.assert_true(q2 > q3, "the 62-weight pane is the widest (${q2} vs ${q3})")
+            spec.assert_true(q3 > q1, "the 22-weight pane beats the 16 (${q3} vs ${q1})")
+            tol = row / 20
+            e2 = (row * 62) / 100
+            d2 = q2 - e2
+            if d2 < 0 { d2 = 0 - d2 }
+            spec.assert_true(d2 <= tol,
+                "the 62-weight pane got ~62% of ${row} (got ${q2}, expected ~${e2})")
+        }
+    }
+    return spec.run_summary(fw)
+}

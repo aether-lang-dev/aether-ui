@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
 
 #ifdef AEUI_HAVE_LIBNOTIFY
 #include <libnotify/notify.h>
@@ -7549,14 +7550,28 @@ static int hook_widget_children(int handle, int* out_handles, int max) {
 }
 
 // Window-local geometry. 0 = success, per the hook contract.
+/* CRITICAL for #101: a reported size is the distance between two ROUNDED
+ * EDGES, never the rounded size. Under fractional scaling a row of flexible
+ * children sits on fractional bounds that tile their parent exactly; rounding
+ * each child's size on its own breaks that, so the reported parts no longer
+ * add up to the whole and "every widget fits inside its parent" stops being a
+ * check a layout audit can trust. Rounding the edges keeps one child's
+ * trailing edge equal to the next one's leading edge. */
+static int aeui_round_edge(float v) {
+    return (int)floor((double)v + 0.5);
+}
+
 static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
     GtkWidget* wd = aether_ui_get_widget(handle);
     if (!wd) return 1;
     graphene_rect_t r;
     GtkWidget* root = GTK_WIDGET(gtk_widget_get_root(wd));
     if (!root || !gtk_widget_compute_bounds(wd, root, &r)) return 1;
-    *x = (int)r.origin.x; *y = (int)r.origin.y;
-    *w = (int)r.size.width; *hgt = (int)r.size.height;
+    int x0 = aeui_round_edge(r.origin.x);
+    int y0 = aeui_round_edge(r.origin.y);
+    *x = x0; *y = y0;
+    *w   = aeui_round_edge(r.origin.x + r.size.width)  - x0;
+    *hgt = aeui_round_edge(r.origin.y + r.size.height) - y0;
     return 0;
 }
 
