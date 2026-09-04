@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`canvas_size(id, w, h)`** gives a canvas an explicit size, taking the
+  CANVAS ID that `canvas_create` hands back rather than the widget handle
+  underneath it. `canvas_create`'s width and height are only a natural size,
+  held at low priority so a canvas can absorb a stack's slack, and a colour
+  chip or a sparkline in a panel row wants an actual size instead.
+
+### Fixed
+
+- **A small canvas in a side panel no longer collapses that panel** (#98).
+  Canvas ids and widget handles are separate counters that both start at 1, so
+  the same small integer means different things to `canvas_*` and to the
+  widget functions, and passing one where the other belongs was silent.
+  `width(canvas_create(...), 46)` therefore pinned WIDGET number `<canvas id>`
+  to 46px, which in a three-pane editor was the inspector panel: it collapsed
+  to roughly the chip's own width, every child reflowed into it, and in a
+  reproduction here the other two panes measured 0 as well. Nothing about it
+  pointed at the real mistake, which is why it read as the canvas acting as a
+  strut on its parent. `canvas_size` takes the id you are holding, and both
+  `canvas_create` and `canvas_widget` now say in the API docs that the two
+  numbering spaces overlap and that `canvas_widget` is the whole of the
+  boundary between them.
+
+
+### Added
+
 - A `table` announces itself as a table, and its headers as column headers.
   Before this it announced nothing structural: assistive tech saw an unlabelled
   stack of buttons above a list. The ROWS were already right, because `table`

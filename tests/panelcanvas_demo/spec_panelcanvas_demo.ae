@@ -1,0 +1,42 @@
+// spec_panelcanvas_demo.ae, #98: a sized canvas in a panel row leaves the
+// panel alone.
+//
+// canvas ids and widget handles are separate counters that both start at 1,
+// so sizing a chip through width(canvas_id, ...) pinned a DIFFERENT widget:
+// in a three-pane layout the inspector panel, which collapsed to roughly the
+// chip's own width and dragged every child in with it. canvas_size takes the
+// canvas id, so this asserts the panel's contents keep their room.
+import std.spec
+import uidriver
+
+width_of(label: string) -> int {
+    return uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(label), "w")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a sized canvas does not collapse its panel (#98)") {
+        spec.it("the panel's rows keep their width") callback {
+            // Collapsed, every one of these sat inside a 46px box.
+            w = width_of("Material name here")
+            spec.assert_true(w > 60,
+                "the panel's widest label is not squeezed into the chip (got ${w})")
+        }
+
+        spec.it("the canvas itself is the size it was given") callback {
+            c = uidriver.widget_id_of("canvas", "")
+            cw = uidriver.widget_int_field_by_id(c, "w")
+            spec.assert_true(cw > 0, "the canvas was found (w=${cw})")
+        }
+
+        spec.it("the other panes still have a width") callback {
+            // The wrong call pinned a container, and left and centre both
+            // measured 0: the whole layout, not just one panel.
+            spec.assert_true(width_of("Hierarchy") > 0, "the left panel has width")
+            spec.assert_true(width_of("Inspector") > 0, "the right panel has width")
+        }
+    }
+    return spec.run_summary(fw)
+}

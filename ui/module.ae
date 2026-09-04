@@ -98,7 +98,7 @@ exports (
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size, image_fill, image_tint, image_untint,
     file_icon, set_file_icon,
-    canvas_widget, canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
+    canvas_widget, canvas_create, canvas_size, canvas_begin_path, canvas_move_to, canvas_line_to,
     canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
     canvas_set_clip_rects, canvas_reset_clip,
     canvas_clear, canvas_redraw, canvas_write_png,
@@ -436,8 +436,27 @@ extern aether_ui_canvas_get_widget(canvas_id: int) -> int
 // canvas_widget(canvas_id) -> widget handle. Canvas IDs and widget handles
 // are SEPARATE namespaces; anything that styles or sizes a canvas (width,
 // style_*, edge_insets) needs the widget handle, not the canvas id.
+// canvas_widget(id) converts a CANVAS ID into the widget handle every widget
+// function takes: fill_width, width, height, style, a11y and the rest. Nothing
+// else translates between the two, and neither space rejects the other's
+// numbers, so this call is the whole of the boundary.
 canvas_widget(canvas_id: int) -> int {
     return aether_ui_canvas_get_widget(canvas_id)
+}
+
+// canvas_size(id, w, h) gives a canvas an explicit size, taking the CANVAS ID
+// that canvas_create hands back rather than the widget handle underneath it.
+//
+// canvas_create's width and height are only a NATURAL size, held at priority
+// 150 so a canvas can absorb a stack's slack; a colour chip or a sparkline in
+// a panel row wants an actual size instead. Doing that meant remembering to
+// convert the id first, and forgetting was silent and destructive (#98), so
+// the toolkit offers the call that takes what you are holding.
+canvas_size(canvas_id: int, w: int, h: int) {
+    wh = aether_ui_canvas_get_widget(canvas_id)
+    if wh == 0 { return }
+    aether_ui_set_width(wh, w)
+    aether_ui_set_height(wh, h)
 }
 extern aether_ui_canvas_begin_path_impl(canvas_id: int)
 extern aether_ui_canvas_move_to_impl(canvas_id: int, x: float, y: float)
@@ -4585,6 +4604,17 @@ set_file_icon(handle: int, path: string) {
 
 // --- Canvas drawing (Group 6) ---
 
+// canvas_create returns a CANVAS ID, which is NOT a widget handle. The two
+// are separate counters that both start at 1, so the same small integer means
+// different things to canvas_* and to the widget functions, and passing one
+// where the other is expected is silent.
+//
+// It bit for real (#98): `width(canvas_create(...), 46)` pins WIDGET number
+// <canvas id> to 46px, which in a three-pane editor was the inspector panel.
+// The panel collapsed to roughly the canvas's width and every child reflowed
+// into it, which reads as "the canvas is acting as a strut on its parent" and
+// sends you looking in entirely the wrong place. Reach for canvas_size below,
+// or convert once with canvas_widget(id) before calling any widget function.
 canvas_create(_ctx: ptr, width: int, height: int) {
     cid = aether_ui_canvas_create_impl(width, height)
     wh = aether_ui_canvas_get_widget(cid)

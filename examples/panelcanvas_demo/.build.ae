@@ -1,0 +1,16 @@
+import bldr
+import aether
+import aether (source, output, no_closure_regen)
+import build_support.aetherui (ui_backend)
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("panelcanvas_demo.ae")
+            output("panelcanvas_demo")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}
