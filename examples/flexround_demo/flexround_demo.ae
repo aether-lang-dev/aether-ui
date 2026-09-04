@@ -1,0 +1,34 @@
+// Aether UI flex rounding: flexible children fit inside their parent.
+//
+// Row 1: a 302px row with two 6px gaps leaves 290 for three buttons, 96.67
+// each. Auto Layout places them exactly (96.5 + 6 + 97 + 6 + 96.5 = 302); the
+// geometry a caller reads back has to agree, and not round each width up on
+// its own into a 303px total that overflows the row.
+//
+// Row 2: weights 16 / 62 / 22 divide the row proportionally, and the shares
+// still add up to exactly the row.
+import ui
+import ui (window, vstack, hstack, btn, weight, width, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("flex rounding", 1500, 300) {
+        vstack(12) {
+            row = hstack(6) {
+                b1 = btn("One") callback { }
+                b2 = btn("Two") callback { }
+                b3 = btn("Three") callback { }
+            }
+            width(row, 302)
+            prow = hstack(0) {
+                p1 = btn("Left") callback { }
+                weight(p1, 16)
+                p2 = btn("Centre") callback { }
+                weight(p2, 62)
+                p3 = btn("Right") callback { }
+                weight(p3, 22)
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

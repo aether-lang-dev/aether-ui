@@ -67,6 +67,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ui.timer` keeps firing while a slider or a scrollbar is being dragged, a
+  menu is open, or a window is being resized live. `scheduledTimer` registers
+  in the default run-loop mode alone, and AppKit runs all of that tracking in
+  `NSEventTrackingRunLoopMode`, where a default-mode timer does not fire: an
+  animation or a clock stopped dead for as long as the mouse was held down and
+  jumped on release. The timer now goes into the common modes.
+
+- The geometry a caller reads back keeps flexible children inside their parent.
+  A stack divides its width exactly (96.5 + 6 + 97 + 6 + 96.5 fills a 302px
+  row), but the readback rounded each child's SIZE on its own, reporting
+  97/97/97 for a total of 303, so the last child looked like it hung a pixel
+  past the row and "every widget fits inside its parent" was false by one
+  pixel, compounding with nesting. Sizes are now the distance between two
+  ROUNDED EDGES, so adjacent children tile: one child's trailing edge is the
+  next one's leading edge, and three children of a 302px row report 97/97/96.
+  This covers `get_width` and `get_height` and the `/widgets` and `/widget/N`
+  geometry the driver reports, on AppKit and on GTK4, where the same
+  independent rounding truncated instead and under-reported. Win32 already
+  derived its sizes from integer edges.
+
+- `weight()` on buttons is no longer overridden by the equal-width chain that
+  a row of buttons gets by default. The chain is a required constraint and the
+  proportional shares are not, so weights of 16 / 62 / 22 came out 500/500/500
+  in a 1500px row with no diagnostic. A weight is an explicit instruction to
+  divide space unevenly, so it now retracts the chain for that child, exactly
+  as an explicit `width()` already did.
+
 - Every spec returns its `run_summary` verdict again. A previous change in this
   series stripped the `return` from 83 of them on the strength of a local
   `~/.aether` stdlib where `run_summary` was void and called `exit(1)` — a
