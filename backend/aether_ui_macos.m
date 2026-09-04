@@ -3266,6 +3266,15 @@ int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
                                              selector:@selector(tick:)
                                              userInfo:nil
                                               repeats:YES];
+    /* #97: also run during modal event tracking. -scheduledTimer... registers
+     * in NSDefaultRunLoopMode alone, and AppKit runs slider and scrollbar
+     * drags, menu tracking and live window resize in NSEventTrackingRunLoopMode,
+     * where a default-mode timer does not fire. An app that paints a surface
+     * from ui.timer therefore froze for the whole duration of any drag — the
+     * viewport stops the moment you grab the control that is meant to move it.
+     * The toolkit's own internal 60Hz timer already does this; the public one
+     * did not. */
+    [[NSRunLoop mainRunLoop] addTimer:t.timer forMode:NSRunLoopCommonModes];
     [active_timers addObject:t];
     return (int)[active_timers count];  // 1-based id
 }
