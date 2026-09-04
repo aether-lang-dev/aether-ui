@@ -82,6 +82,8 @@ exports (
     listbox, listbox_multi, listbox_reorderable, listbox_update, listbox_move,
     listbox_items,
     listbox_select, listbox_selected, listbox_is_selected, listbox_count,
+    listbox_set_selected, listbox_clear_selection, listbox_selection_mode,
+    listbox_selected_count, modifiers,
     on_row_double_click, on_reorder,
     on_select, add_css_class, remove_css_class,
     table_cols, table_col, table_col_delegate, table, table_update,
@@ -205,6 +207,7 @@ extern aether_ui_context_menu_item_accel_impl(handle: int, label: string,
                                               accel: string, closure: ptr)
 extern aether_ui_shortcut_impl(combo: string, closure: ptr)
 extern aether_ui_window_on_key_impl(closure: ptr)
+extern aether_ui_modifiers_impl() -> int
 extern aether_ui_window_on_file_drop_impl(closure: ptr)
 extern aether_ui_widget_draggable_file_impl(handle: int, path: string)
 extern aether_ui_shortcut_when_impl(combo: string, closure: ptr, enabled: ptr)
@@ -1396,6 +1399,17 @@ shortcut_when(combo: string, enabled: fn, cb: fn) {
 //   shortcut_chord("Ctrl+K", "Ctrl+S", || save_all())
 shortcut_chord(first: string, second: string, cb: fn) {
     aether_ui_shortcut_chord_impl(first, second, box_closure(cb))
+}
+
+// modifiers(), the modifier keys held RIGHT NOW: 1 shift, 2 ctrl, 4 alt,
+// 8 super/command, the same bitmask window_on_key reports.
+//
+// Meant to be read from inside a click callback, where the platform event is
+// still the current one, so a widget or an app can tell a plain click from a
+// cmd-click without every click callback growing an argument it would break
+// every existing caller to add. Real on all three backends.
+modifiers() -> int {
+    return aether_ui_modifiers_impl()
 }
 
 // window_on_key(cb): cb(key_name, mods) for ANY key, not a bound combo.
@@ -3334,7 +3348,9 @@ struct ListBox {
     sel_flags: ptr,    // multi: intarr of 0/1 per row, or null
     on_dbl: ptr,       // boxed |i: int| row double-click callback, or null
     items: ptr,        // reorderable: the OWNED std.list, so move() can reorder
-    on_reorder: ptr    // boxed |from, to| move callback, or null
+    on_reorder: ptr,   // boxed |from, to| move callback, or null
+    sel_mode: int,     // multi: 0 = toggle every click, 1 = standard modifiers
+    anchor: int        // multi, standard mode: where a shift-extend measures from
 }
 
 _listbox_invoke_render(cb: fn, item: ptr, i: int, row: int) {
@@ -3345,21 +3361,92 @@ _listbox_invoke_sel(cb: fn, i: int) {
     cb(i)
 }
 
-_listbox_apply_selection(lb: *ListBox, i: int) {
+// Write one row's flag and make its class follow. The single place that
+// touches both, so a selection can never be half-applied: the model saying
+// selected and the row not looking it is exactly the bug an app cannot debug
+// from the outside.
+_listbox_write_flag(lb: *ListBox, i: int, on: int) {
+    if lb.sel_flags == null { return }
     if lb.rows == null { return }
-    if lb.multi == 1 {
-        // Toggle row i's membership; class follows the flag.
-        if lb.sel_flags == null { return }
+    if i < 0 { return }
+    intarr_set_raw(lb.sel_flags, i, on)
+    rowh = intarr_get_raw(lb.rows, i)
+    if rowh > 0 {
+        if on == 1 { aether_ui_widget_add_css_class_impl(rowh, "aui-row-selected") }
+        else { aether_ui_widget_remove_css_class_impl(rowh, "aui-row-selected") }
+    }
+}
+
+_listbox_clear_all(lb: *ListBox) {
+    if lb.sel_flags == null { return }
+    n = listbox_count(lb as ptr)
+    j = 0
+    while j < n {
+        _listbox_write_flag(lb, j, 0)
+        j = j + 1
+    }
+}
+
+// Standard mode: the behaviour every editor, file manager and mail client
+// has. Plain click REPLACES the selection, cmd/ctrl-click toggles one row,
+// shift-click extends from the anchor. The widget already owns sel_flags and
+// the hit testing, so it can do this itself and an app does not have to
+// reimplement it (or be able to: a click callback carrying only a row index
+// cannot tell the three apart).
+_listbox_apply_standard(lb: *ListBox, i: int) {
+    m = modifiers()
+    if (m & 1) == 1 {
+        // Shift-extend from the anchor. The anchor STAYS put, so dragging the
+        // shift-click up and down re-extends from the same origin instead of
+        // walking the selection away one row at a time.
+        a = lb.anchor
+        if a < 0 { a = i }
+        lo = a
+        hi = i
+        if lo > hi {
+            lo = i
+            hi = a
+        }
+        _listbox_clear_all(lb)
+        j = lo
+        while j <= hi {
+            _listbox_write_flag(lb, j, 1)
+            j = j + 1
+        }
+        lb.selected = i
+        return
+    }
+    if (m & 2) == 2 || (m & 8) == 8 {
+        // ctrl or cmd: toggle just this row, leave the rest alone.
         cur = intarr_get_raw(lb.sel_flags, i)
         newv = 1
         if cur == 1 { newv = 0 }
-        intarr_set_raw(lb.sel_flags, i, newv)
-        rowh = intarr_get_raw(lb.rows, i)
-        if rowh > 0 {
-            if newv == 1 { aether_ui_widget_add_css_class_impl(rowh, "aui-row-selected") }
-            else { aether_ui_widget_remove_css_class_impl(rowh, "aui-row-selected") }
+        _listbox_write_flag(lb, i, newv)
+        lb.selected = i
+        lb.anchor = i
+        return
+    }
+    _listbox_clear_all(lb)
+    _listbox_write_flag(lb, i, 1)
+    lb.selected = i
+    lb.anchor = i
+}
+
+_listbox_apply_selection(lb: *ListBox, i: int) {
+    if lb.rows == null { return }
+    if lb.multi == 1 {
+        if lb.sel_flags == null { return }
+        if lb.sel_mode == 1 {
+            _listbox_apply_standard(lb, i)
+            return
         }
+        // Toggle row i's membership; class follows the flag.
+        cur = intarr_get_raw(lb.sel_flags, i)
+        newv = 1
+        if cur == 1 { newv = 0 }
+        _listbox_write_flag(lb, i, newv)
         lb.selected = i   // last-touched, for single-select callers
+        lb.anchor = i
         return
     }
     if lb.selected >= 0 {
@@ -3449,7 +3536,7 @@ listbox_multi(_ctx: ptr, spacing: int, render: fn) -> ptr {
 }
 
 _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
-    lb = malloc(80) as *ListBox
+    lb = malloc(96) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
     lb.on_sel = null
@@ -3459,6 +3546,8 @@ _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
     lb.on_dbl = null
     lb.items = null
     lb.on_reorder = null
+    lb.sel_mode = 0
+    lb.anchor = 0 - 1
     lbp = lb as ptr
     lb.group = each(_ctx, "v", spacing) callback |item: ptr, i: int, parent: int| {
         row = hstack(parent, 8)
@@ -3551,7 +3640,7 @@ _listbox_invoke_reorder(cb: fn, from: int, to: int) {
 // a drop calls listbox_move(source_index, target_index). The drag gesture is
 // backend C (GTK4 GtkDragSource/GtkDropTarget); the model reorder is shared.
 _listbox_make_reorder(_ctx: ptr, spacing: int, render: fn) -> ptr {
-    lb = malloc(80) as *ListBox
+    lb = malloc(96) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
     lb.on_sel = null
@@ -3561,6 +3650,8 @@ _listbox_make_reorder(_ctx: ptr, spacing: int, render: fn) -> ptr {
     lb.on_dbl = null
     lb.items = null
     lb.on_reorder = null
+    lb.sel_mode = 0
+    lb.anchor = 0 - 1
     lbp = lb as ptr
     lb.group = each(_ctx, "v", spacing) callback |item: ptr, i: int, parent: int| {
         row = hstack(parent, 8)
@@ -3625,8 +3716,74 @@ listbox_is_selected(lbp: ptr, i: int) -> int {
 }
 
 // Programmatic selection (same path as a row click, incl. the callback).
+//
+// On a MULTI listbox in toggle mode this toggles, so it cannot establish a
+// known selection: calling it twice silently undoes itself. Use
+// listbox_set_selected / listbox_clear_selection to drive a multi listbox to
+// a state, and this only where a click is what you mean to simulate.
 listbox_select(lbp: ptr, i: int) {
     _listbox_row_clicked(lbp, i)
+}
+
+// listbox_set_selected(lb, i, on) writes ONE row's selection state, without
+// firing on_select. A state write, not a user action: an app keeping its own
+// selection model in step with the widget would otherwise re-enter its own
+// click handler on every sync and have to guard against the echo.
+//
+// Multi-select only; a single-select listbox has listbox_select.
+listbox_set_selected(lbp: ptr, i: int, on: int) {
+    lb = lbp as *ListBox
+    if lb.multi != 1 { return }
+    v = 0
+    if on != 0 { v = 1 }
+    _listbox_write_flag(lb, i, v)
+    if v == 1 {
+        lb.selected = i
+        lb.anchor = i
+    }
+}
+
+// listbox_clear_selection(lb) deselects every row. Also forgets the
+// shift-extend anchor, so the next shift-click measures from where the user
+// clicks rather than from a row that is no longer selected.
+listbox_clear_selection(lbp: ptr) {
+    lb = lbp as *ListBox
+    if lb.multi != 1 { return }
+    _listbox_clear_all(lb)
+    lb.selected = 0 - 1
+    lb.anchor = 0 - 1
+}
+
+// listbox_selection_mode(lb, mode) says how a click changes a MULTI listbox's
+// selection.
+//
+//   0 (default) TOGGLE   every click flips that row, nothing else moves.
+//   1           STANDARD plain click replaces the selection, cmd/ctrl-click
+//                        toggles one row, shift-click extends from the anchor.
+//
+// Toggle stays the default because it is what listbox_multi has always done
+// and a checklist wants exactly that. Standard is what a scene tree, a file
+// list or a mailbox wants, and it cannot be built on top of on_select, which
+// reports a row index and no modifier state.
+listbox_selection_mode(lbp: ptr, mode: int) {
+    lb = lbp as *ListBox
+    lb.sel_mode = mode
+}
+
+// listbox_selected_count(lb) reports how many rows are selected. Saves every caller
+// writing the same loop over listbox_is_selected.
+listbox_selected_count(lbp: ptr) -> int {
+    lb = lbp as *ListBox
+    if lb.multi != 1 { return 0 }
+    if lb.sel_flags == null { return 0 }
+    n = listbox_count(lbp)
+    c = 0
+    j = 0
+    while j < n {
+        if intarr_get_raw(lb.sel_flags, j) == 1 { c = c + 1 }
+        j = j + 1
+    }
+    return c
 }
 
 listbox_selected(lbp: ptr) -> int {
