@@ -104,6 +104,19 @@ jobs:
           # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`;
           # a new spec MUST return it too.
           #
+          # v0.645.0 (2026-09-06). Strict forward move from v0.643.0. It ships
+          # b92d4e43, the compiler lint we asked for in the 0.643.0 write-up:
+          # a warning on `malloc(<integer-literal>) as *T` pointing at
+          # `malloc(sizeof(T))` (the compiler cannot compute sizeof itself, so
+          # it lints the SHAPE, not the arithmetic — no layout change can fool
+          # it). Our 158-site sweep below already satisfies it: the tree builds
+          # SILENT under the lint (verified — reverting any one site to a literal
+          # makes it fire). So this pin ACTIVATES a guard we already pass, and
+          # any future `malloc(<literal>) as *T` here becomes a build-time nudge
+          # instead of a heap-corruption hunt. 0.644.0 in between was crypto
+          # wycheproof tests only. See asks/REPLY2-0643-lint-verified-loop-
+          # closed.md.
+          #
           # v0.643.0 (2026-09-06). The bump to this release forced a fleet-wide
           # source change and root-caused an aether regression along the way;
           # both are recorded here because they are inseparable from the pin.
@@ -141,20 +154,19 @@ jobs:
           #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
           #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
           #   math.lrint remains follow-up, not done here.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.643.0' }}
-          # v0.296 (2026-09-06), bumped alongside the aether v0.643.0 move and
-          # verified building the whole fan-out under it (exit 0, 0 failed nodes,
-          # full matrix green). aeb is NOT implicated in the 0.643.0 regression
-          # above — the failing vg suites compile via `aetherc` + `gcc` directly
-          # with no aeb in the loop, so the fault was purely aether codegen.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.645.0' }}
+          # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
+          # verified building the whole fan-out under it (full matrix green).
+          # Strict forward move from v0.296. aeb is not implicated in any of the
+          # aether-side history below — the fan-out just orchestrates aetherc.
           #
           # History: v0.283 was the first release carrying aeb's `bldr` module
           # (9c84d786 converted all build nodes to Shape A `bldr.build() {}`;
           # v0.282 had no `bldr`, so every node failed with
           # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
           # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
-          # links). v0.296 carries both, so this is a strict move forward.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.296' }}
+          # links). v0.297 carries all of that, so this is a strict move forward.
+          AEB_REF: ${{ vars.AEB_REF || 'v0.297' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
