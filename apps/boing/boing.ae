@@ -55,7 +55,7 @@ struct Ball {
 }
 
 mk_ball() -> *Ball {
-    b = malloc(40) as *Ball
+    b = malloc(sizeof(Ball)) as *Ball
     b.x = RAD * 1.0 + 50.0
     b.y = RAD * 1.0 + 50.0
     b.vx = 4.0

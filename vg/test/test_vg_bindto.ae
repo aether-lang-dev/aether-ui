@@ -37,7 +37,7 @@ mk_ctx() -> ptr {
 // Data item: an id string + a cx (so each renders at a distinct spot).
 struct Item { id: string cx: float }
 mk_item(id: string, cx: float) -> *Item {
-    it = malloc(16) as *Item
+    it = malloc(sizeof(Item)) as *Item
     it.id = string.copy(id)
     it.cx = cx
     return it

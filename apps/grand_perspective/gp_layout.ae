@@ -54,7 +54,7 @@ struct Rect {
 }
 
 mk_rect(x: float, y: float, w: float, h: float, size: long, depth: int, entry: *FileEntry) -> *Rect {
-    r = malloc(64) as *Rect
+    r = malloc(sizeof(Rect)) as *Rect
     r.x = x; r.y = y; r.w = w; r.h = h
     r.size = size; r.depth = depth; r.entry = entry
     r.nested = 0

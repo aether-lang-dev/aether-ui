@@ -35,7 +35,7 @@ mk_ctx() -> ptr {
 // A mutable flag a when() closure reads — flip it, refresh, and the element's
 // visibility follows.
 struct Flag { on: int }
-mk_flag(v: int) -> *Flag { f = malloc(8) as *Flag; f.on = v; return f }
+mk_flag(v: int) -> *Flag { f = malloc(sizeof(Flag)) as *Flag; f.on = v; return f }
 
 main() {
     println("=== test_vg_when ===")

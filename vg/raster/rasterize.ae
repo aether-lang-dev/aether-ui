@@ -59,7 +59,7 @@ struct RGBA {
 }
 
 mk_rgba(r: int, g: int, b: int, a: int) -> *RGBA {
-    p = malloc(32) as *RGBA
+    p = malloc(sizeof(RGBA)) as *RGBA
     p.r = r
     p.g = g
     p.b = b
@@ -294,7 +294,7 @@ fill_circle_in_buffer(buf: ptr, buf_w: int, buf_h: int,
 struct IntCell { v: int }
 
 mk_cell(v: int) -> *IntCell {
-    c = malloc(8) as *IntCell
+    c = malloc(sizeof(IntCell)) as *IntCell
     c.v = v
     return c
 }

@@ -1743,7 +1743,7 @@ struct StyleRule {
 struct StyleSheet { rules: ptr }    // std.list of *StyleRule
 
 create_styles() -> ptr {
-    s = malloc(8) as *StyleSheet
+    s = malloc(sizeof(StyleSheet)) as *StyleSheet
     s.rules = list.new()
     return s as ptr
 }
@@ -1766,7 +1766,7 @@ _style_rule_of(sp: ptr, sel: string) -> ptr {
     found = _style_find(sp, sel)
     if found != null { return found }
     s = sp as *StyleSheet
-    r = malloc(288) as *StyleRule
+    r = malloc(sizeof(StyleRule)) as *StyleRule
     r.sel = sel
     r.has_color = 0
     r.has_bg = 0
@@ -2182,7 +2182,7 @@ struct RoleEntry { name: string, hex: int, has: int }
 struct ColorScheme { roles: ptr }
 
 color_scheme() -> ptr {
-    sc = malloc(8) as *ColorScheme
+    sc = malloc(sizeof(ColorScheme)) as *ColorScheme
     sc.roles = list.new()
     return sc as ptr
 }
@@ -2212,7 +2212,7 @@ role(scp: ptr, name: string, hex: int) {
         return
     }
     sc = scp as *ColorScheme
-    r = malloc(24) as *RoleEntry
+    r = malloc(sizeof(RoleEntry)) as *RoleEntry
     r.name = name
     r.hex = hex
     r.has = 1
@@ -2470,7 +2470,7 @@ struct WStateEntry { name: string, sheet: ptr }
 struct WStates { target: int, entries: ptr, cur: string }
 
 ui_states(target: int) -> ptr {
-    ws = malloc(24) as *WStates
+    ws = malloc(sizeof(WStates)) as *WStates
     ws.target = target
     ws.entries = list.new()
     ws.cur = ""
@@ -2526,7 +2526,7 @@ on_state(_ctx: ptr, name: string) -> ptr {
 
 add_state(wsp: ptr, name: string, sheet: ptr) {
     ws = wsp as *WStates
-    e = malloc(16) as *WStateEntry
+    e = malloc(sizeof(WStateEntry)) as *WStateEntry
     e.name = name
     e.sheet = sheet
     _ = list.add(ws.entries, e as ptr)
@@ -2614,7 +2614,7 @@ command_fire(cp: ptr) {
 
 // command(label, accel, cb) — accel may be "" for no keystroke.
 command(label: string, accel: string, cb: fn) -> ptr {
-    c = malloc(56) as *Command
+    c = malloc(sizeof(Command)) as *Command
     c.label = label
     c.accel = accel
     c.cb = box_closure(cb)
@@ -2707,7 +2707,7 @@ command_attach(cp: ptr, handle: int) {
 struct CommandGroup { cmds: ptr }
 
 _commands_factory() -> ptr {
-    g = malloc(8) as *CommandGroup
+    g = malloc(sizeof(CommandGroup)) as *CommandGroup
     g.cmds = list.new()
     return g as ptr
 }
@@ -3208,7 +3208,7 @@ canvas_on_scroll(canvas_id: int, cb: fn) {
 }
 
 canvas_on_hover(canvas_id: int, cb: fn) {
-    s = malloc(16) as *CanvasHoverState
+    s = malloc(sizeof(CanvasHoverState)) as *CanvasHoverState
     s.inside = 0
     s.watchdog = 0
 
@@ -3300,7 +3300,7 @@ each(_ctx: ptr, orientation: string, spacing: int, render: fn) -> ptr {
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, h)
     }
-    e = malloc(24) as *EachGroup
+    e = malloc(sizeof(EachGroup)) as *EachGroup
     e.container = h
     e.render = box_closure(render)
     e.count = 0
@@ -3555,7 +3555,7 @@ listbox_multi(_ctx: ptr, spacing: int, render: fn) -> ptr {
 }
 
 _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
-    lb = malloc(96) as *ListBox
+    lb = malloc(sizeof(ListBox)) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
     lb.on_sel = null
@@ -3659,7 +3659,7 @@ _listbox_invoke_reorder(cb: fn, from: int, to: int) {
 // a drop calls listbox_move(source_index, target_index). The drag gesture is
 // backend C (GTK4 GtkDragSource/GtkDropTarget); the model reorder is shared.
 _listbox_make_reorder(_ctx: ptr, spacing: int, render: fn) -> ptr {
-    lb = malloc(96) as *ListBox
+    lb = malloc(sizeof(ListBox)) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
     lb.on_sel = null
@@ -3960,7 +3960,7 @@ struct TableDef {
 table_cols() -> ptr { return list.new() }
 
 table_col(cols: ptr, title: string, w: int) {
-    c = malloc(24) as *TableCol
+    c = malloc(sizeof(TableCol)) as *TableCol
     c.title = title
     c.w = w
     c.delegate = null
@@ -4001,7 +4001,7 @@ col_delegate(_ctx: ptr, title: string, w: int, render: fn) {
 }
 
 table_col_delegate(cols: ptr, title: string, w: int, render: fn) {
-    c = malloc(24) as *TableCol
+    c = malloc(sizeof(TableCol)) as *TableCol
     c.title = title
     c.w = w
     c.delegate = box_closure(render)
@@ -4022,7 +4022,7 @@ _table_invoke_sort(cb: fn, c: int) {
 
 // table(cols, cell) -> table-handle. cell = |item, c| -> string.
 table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
-    t = malloc(104) as *TableDef
+    t = malloc(sizeof(TableDef)) as *TableDef
     t.cols = cols
     t.cell = box_closure(cell)
     t.sort_cb = null
@@ -4399,7 +4399,7 @@ struct TreeNode { label: string, children: ptr, expanded: int }
 struct TreeDef  { roots: ptr, lb: ptr, flat: ptr }
 
 tree_node(label: string) -> ptr {
-    n = malloc(24) as *TreeNode
+    n = malloc(sizeof(TreeNode)) as *TreeNode
     n.label = label
     n.children = null
     n.expanded = 0
@@ -4423,7 +4423,7 @@ _tree_flatten_into(flat: ptr, nodes: ptr, depth: int) {
     while i < n {
         np, _e = list.get(nodes, i)
         node = np as *TreeNode
-        tr = malloc(16) as *TreeRow
+        tr = malloc(sizeof(TreeRow)) as *TreeRow
         tr.node = np
         tr.depth = depth
         _ = list.add(flat, tr as ptr)
@@ -4442,7 +4442,7 @@ _tree_reflatten(tp: ptr) {
 }
 
 tree(_ctx: ptr, roots: ptr) -> ptr {
-    t = malloc(24) as *TreeDef
+    t = malloc(sizeof(TreeDef)) as *TreeDef
     t.roots = roots
     t.flat = null
     tp = t as ptr
@@ -4507,7 +4507,7 @@ struct VList {
 }
 
 vlist(_ctx: ptr, orientation: string, window: int, render: fn) -> ptr {
-    v = malloc(48) as *VList
+    v = malloc(sizeof(VList)) as *VList
     v.render = box_closure(render)
     v.items = null
     v.window = window

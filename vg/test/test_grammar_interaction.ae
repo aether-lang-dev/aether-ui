@@ -51,12 +51,12 @@ mk_tracked(ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
 }
 
 struct Recorder { n_calls: int last_hovered: int }
-mk_recorder() -> *Recorder { r = malloc(16) as *Recorder; r.n_calls = 0; r.last_hovered = 0 - 1; return r }
+mk_recorder() -> *Recorder { r = malloc(sizeof(Recorder)) as *Recorder; r.n_calls = 0; r.last_hovered = 0 - 1; return r }
 
 // Captured key strings. A closure stores via string.copy (the struct-string
 // idiom from test_grammar_bind) so the value survives past the handler.
 struct KeyLog { down: string up: string }
-mk_keylog() -> *KeyLog { k = malloc(16) as *KeyLog; k.down = ""; k.up = ""; return k }
+mk_keylog() -> *KeyLog { k = malloc(sizeof(KeyLog)) as *KeyLog; k.down = ""; k.up = ""; return k }
 
 main() {
     println("=== test_grammar_interaction ===")

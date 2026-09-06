@@ -49,7 +49,7 @@ new_turtle(cid: int, canvas_w: float, canvas_h: float) -> *TurtleState {
     // 9 fields (2 int, 7 float); generously over-allocated rather than
     // hand-computed — an undersized malloc here is exactly the silent
     // heap-corruption trap aether-ui/LLM.md warns about on macOS.
-    t = malloc(224) as *TurtleState
+    t = malloc(sizeof(TurtleState)) as *TurtleState
     t.cid = cid
     t.cx = canvas_w / 2.0
     t.cy = canvas_h / 2.0

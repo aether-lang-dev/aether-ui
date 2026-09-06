@@ -103,7 +103,7 @@ struct CubeSpin {
 }
 
 mk_cube(ax: float, ay: float, vx: float, vy: float, tint: int) -> ptr {
-    c = malloc(64) as *CubeSpin
+    c = malloc(sizeof(CubeSpin)) as *CubeSpin
     c.ax = ax
     c.ay = ay
     c.vx = vx
@@ -322,7 +322,7 @@ main() {
     // "malloc(): unaligned tcache chunk detected" at startup rather than as
     // anything pointing at this line. Sized with headroom deliberately --
     // the next field added should not corrupt the heap.
-    app = malloc(256) as *App
+    app = malloc(sizeof(App)) as *App
     app.st_bounds = ui_state_s("bounds: pending")
     app.st_z = ui_state_s("z: pending")
     app.st_hit = ui_state_s("hit: none")

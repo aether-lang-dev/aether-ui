@@ -22,7 +22,7 @@ extern malloc(size: int) -> ptr
 struct Person { name: string, kb: int }
 
 mk_p(name: string, kb: int) -> ptr {
-    p = malloc(24) as *Person
+    p = malloc(sizeof(Person)) as *Person
     p.name = name
     p.kb = kb
     return p as ptr

@@ -84,7 +84,7 @@ struct LiveRegion {
 // in a 30×20 viewBox region). ext_* are floats (viewBox), pixel_* ints.
 live_raster_new(x: float, y: float, ext_w: float, ext_h: float,
                 pixel_w: int, pixel_h: int) -> ptr {
-    r = malloc(112) as *LiveRegion
+    r = malloc(sizeof(LiveRegion)) as *LiveRegion
     r.kind = 0
     r.x = x
     r.y = y
@@ -156,7 +156,7 @@ frame_finish(buf: ptr, w: int, h: int) -> string {
 // draw_fn is a fn(region, t); the fn→ptr coercion at this boundary boxes it
 // into the ptr field (the grammar_events/grammar_bind handler-storage pattern).
 live_draw_new(x: float, y: float, w: float, h: float, draw_fn: fn) -> ptr {
-    r = malloc(112) as *LiveRegion
+    r = malloc(sizeof(LiveRegion)) as *LiveRegion
     r.kind = 1
     r.x = x
     r.y = y

@@ -202,7 +202,7 @@ main() {
         // ui.auto_hide's setup_timer bug: field-writes through an
         // already-valid pointer sidestep the whole issue, since the
         // POINTER itself is assigned once, before any closure exists.
-        app_state = malloc(80) as *TurtleUiState
+        app_state = malloc(sizeof(TurtleUiState)) as *TurtleUiState
         app_state.editor = 0
         app_state.canvas = 0
         app_state.scale = 1.0

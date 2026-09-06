@@ -571,7 +571,7 @@ probe(ed: *Ed) -> int {
 }
 
 main() {
-    ed = malloc(176) as *Ed
+    ed = malloc(sizeof(Ed)) as *Ed
     ed.doc = mdown.md_doc_new()
     ed.lo = null
     ed.cb = 0

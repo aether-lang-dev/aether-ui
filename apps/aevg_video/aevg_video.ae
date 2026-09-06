@@ -32,7 +32,7 @@ extern string_retain(s: string)
 
 mk_clip(path: string, fw: int, fh: int, fps: float) -> *Clip {
     data, len, err = read_binary(path)
-    c = malloc(48) as *Clip
+    c = malloc(sizeof(Clip)) as *Clip
     if string.length(err) > 0 {
         println("clip read failed: ${err}")
         c.data = ""; c.len = 0; c.fw = fw; c.fh = fh; c.frames = 0; c.fps = fps

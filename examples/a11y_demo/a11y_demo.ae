@@ -25,7 +25,7 @@ import std.list
 extern malloc(size: int) -> ptr
 struct Row { label: string }
 mk_row(s: string) -> ptr {
-    r = malloc(16) as *Row
+    r = malloc(sizeof(Row)) as *Row
     r.label = s
     return r as ptr
 }

@@ -24,7 +24,7 @@ struct V3 {
 }
 
 v3_new(x: float, y: float, z: float) -> *V3 {
-    v = malloc(24) as *V3
+    v = malloc(sizeof(V3)) as *V3
     v.x = x
     v.y = y
     v.z = z

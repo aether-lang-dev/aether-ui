@@ -84,7 +84,7 @@ struct MdDoc {
 // ---- construction / destruction -------------------------------------------
 
 md_word_new(txt: string, wf: int) -> ptr {
-    w = malloc(24) as *MdWord
+    w = malloc(sizeof(MdWord)) as *MdWord
     string_retain(txt)
     w.txt = txt
     w.wf = wf
@@ -92,7 +92,7 @@ md_word_new(txt: string, wf: int) -> ptr {
 }
 
 md_block_new(kind: int) -> ptr {
-    b = malloc(24) as *MdBlock
+    b = malloc(sizeof(MdBlock)) as *MdBlock
     b.kind = kind
     b.words = list.list_new()
     return b as ptr
@@ -101,7 +101,7 @@ md_block_new(kind: int) -> ptr {
 // A new document is never empty: it holds one empty paragraph, the block
 // the caret lives in before anything is typed.
 md_doc_new() -> ptr {
-    d = malloc(16) as *MdDoc
+    d = malloc(sizeof(MdDoc)) as *MdDoc
     d.blocks = list.list_new()
     _ = list.list_add_raw(d.blocks, md_block_new(MD_PARA))
     return d as ptr
@@ -397,7 +397,7 @@ scan_token(sc: *MdScan, bp: ptr, tok: string) {
 parse_inline(dp: ptr, kind: int, line: string) {
     d = dp as *MdDoc
     bp = md_block_new(kind)
-    sc = malloc(32) as *MdScan
+    sc = malloc(sizeof(MdScan)) as *MdScan
     sc.bold = 0
     sc.ital = 0
     sc.code = 0
@@ -426,7 +426,7 @@ parse_inline(dp: ptr, kind: int, line: string) {
 }
 
 md_parse(src: string) -> ptr {
-    d = malloc(16) as *MdDoc
+    d = malloc(sizeof(MdDoc)) as *MdDoc
     d.blocks = list.list_new()
     fence = 0
     lines = string.string_split(src, "\n")
@@ -522,7 +522,7 @@ md_word_source(wp: ptr) -> string {
 // scanner via a throwaway block so the two can never drift.
 md_parse_word(tok: string) -> ptr {
     bp = md_block_new(MD_PARA)
-    sc = malloc(32) as *MdScan
+    sc = malloc(sizeof(MdScan)) as *MdScan
     sc.bold = 0
     sc.ital = 0
     sc.code = 0

@@ -59,7 +59,7 @@ struct Pt {
 }
 
 mk_pt(x: float, y: float) -> *Pt {
-    p = malloc(16) as *Pt
+    p = malloc(sizeof(Pt)) as *Pt
     p.x = x
     p.y = y
     return p
@@ -77,7 +77,7 @@ struct Affine {
 }
 
 affine_new(a: float, b: float, c: float, d: float, e: float, f: float) -> *Affine {
-    m = malloc(48) as *Affine
+    m = malloc(sizeof(Affine)) as *Affine
     m.a = a
     m.b = b
     m.c = c
@@ -175,7 +175,7 @@ struct Projective {
 
 proj_new(a: float, b: float, c: float, d: float,
          e: float, f: float, g: float, h: float) -> *Projective {
-    m = malloc(64) as *Projective
+    m = malloc(sizeof(Projective)) as *Projective
     m.a = a
     m.b = b
     m.c = c

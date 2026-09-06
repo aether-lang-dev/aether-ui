@@ -62,7 +62,7 @@ gen_clip() -> *Clip {
     }
     data = region.frame_finish(buf, w, h * n)
     string_retain(data)
-    c = malloc(32) as *Clip
+    c = malloc(sizeof(Clip)) as *Clip
     c.data = data
     c.len = total
     c.frames = n

@@ -36,7 +36,7 @@ struct Song {
 }
 
 mk_song(title: string, artist: string) -> *Song {
-    s = malloc(16) as *Song
+    s = malloc(sizeof(Song)) as *Song
     s.title = title
     s.artist = artist
     return s

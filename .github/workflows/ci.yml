@@ -104,48 +104,57 @@ jobs:
           # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`;
           # a new spec MUST return it too.
           #
-          # v0.627.0 (2026-09-03). SKIPS 0.624.0-0.626.0, which are known-bad
-          # for this repo: #1866 (in 0.624.0) made a setter's store READ the
-          # box's `_heap_<field>` tracker, and a box made with
-          # `malloc(n) as *T` never had that tracker initialised — non-zero
-          # garbage there frees a garbage pointer. That is this repo's idiom
-          # for every escaping app state (font_picker's App, auto_hide's
-          # DemoState, chromed's ToggleFace, turtle's TurtleUiState), chosen
-          # because a closure capturing a plain local captures it BY VALUE at
-          # creation time while field reads through a pointer stay live. The
-          # font preview sets string fields through setters per glyph and
-          # SEGFAULTED on one click: measured 0.613.0 survives / 0.626.0 dies,
-          # same source, same click. Fixed upstream by e932c61c (#1873) — the
-          # parameter case still SETS the tracker, so #1866's leak repair
-          # stands, but no longer READS one it cannot trust.
+          # v0.643.0 (2026-09-06). The bump to this release forced a fleet-wide
+          # source change and root-caused an aether regression along the way;
+          # both are recorded here because they are inseparable from the pin.
           #
-          # v0.626.0 also shipped `math.lrint(x) -> long` at this repo's
-          # request: vg/ carries 30 `extern lrint(x: float) -> long`, and NO
-          # Aether extern can spell libm's prototype (`-> long` emits int64_t,
-          # `-> int` emits int, C `long` is neither) — invisible on Linux
-          # where int64_t IS long, a hard ERROR on macOS/iOS where it is
-          # long long. Migrating those 30 is follow-up work, not done here.
-          # (It was also our first suspect for the segfault above, and
-          # measurement ruled it out: migrating vg/font.ae alone still
-          # crashed.)
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.627.0' }}
-          # v0.283 is the first release carrying aeb's `bldr` module.
-          # 9c84d786 converted all 109 build nodes to aeb Shape A
-          # (`bldr.build() {}`, b-free); v0.282 has no `bldr` at all, so every
-          # node failed type-checking with `Undefined function 'bldr.build'`
-          # and the fan-out scheduled nothing. That took main red for four
-          # consecutive commits.
+          # aether 1307dfa8 (the first commit after v0.642.0, "Place heap
+          # trackers inline...") moved each hidden `int _heap_<field>` tracker
+          # from a TRAILING block to INLINE (right after its string field).
+          # That is correct for the struct-prefix-punning bug it targets, but it
+          # GREW the sizeof of pure-Aether structs carrying a string field not
+          # in last position — a mid-struct int + its padding costs more than
+          # end-packing the trackers. This repo allocated ~158 structs with a
+          # HAND-COMPUTED byte count (`malloc(40) as *SvgNode`), each sized for
+          # the trailing layout. Under inline layout every one under-allocated
+          # and the final tracker store ran off the end of the block: ASan shows
+          # a 4-byte heap-buffer-overflow in SvgNode (needs 48, we malloc'd 40),
+          # surfacing as glibc `malloc assertion failure in sysmalloc` /
+          # `invalid size` / `free(): invalid pointer` across 14 vg suites.
+          # Bisected 0.641 GOOD / 0.642 GOOD / 0.643 BAD, culprit confirmed by
+          # building 1307dfa8 directly. See asks/REGRESSION-0643-inline-heap-
+          # tracker-grows-struct.md.
           #
-          # v0.282 was itself pinned for b1bfa5e (encode_name ae-escapes a
-          # dot-prefixed fan-out root, so `.all.ae` links — v0.281 predated it
-          # and failed on the root's entry symbol). v0.283 carries that too,
-          # so this is a strict move forward.
+          # Fix on OUR side (the durable one, independent of any aether choice):
+          # all 158 sites swept `malloc(N)` -> `malloc(sizeof(T))`, which is
+          # layout-exact and immune to future tracker-placement changes. Raw
+          # `malloc(8)` byte buffers (no struct cast) left alone. Full 4-platform
+          # matrix re-verified all-green on 0.643.0 + aeb v0.296.
           #
-          # Verified against current main before bumping: with this repo's
-          # existing AETHER_REF (v0.553.0, unchanged) and aeb v0.283, the whole
-          # fan-out builds — exit 0, 0 failed nodes. aeb v0.282 with the same
-          # ae fails every node. The ae pin needs no change; `bldr` is aeb's.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.283' }}
+          # Two earlier pins, still relevant history:
+          # - v0.627.0 skipped known-bad 0.624.0-0.626.0: #1866 made a setter's
+          #   store READ an uninitialised `_heap_<field>` tracker (this repo's
+          #   `malloc(n) as *T` boxes never set it) -> free of garbage; fixed by
+          #   e932c61c (#1873). The sizeof sweep above ALSO hardens against that
+          #   class, since the boxes are now correctly sized.
+          # - v0.626.0 shipped `math.lrint(x) -> long`; vg/ still carries 30
+          #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
+          #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
+          #   math.lrint remains follow-up, not done here.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.643.0' }}
+          # v0.296 (2026-09-06), bumped alongside the aether v0.643.0 move and
+          # verified building the whole fan-out under it (exit 0, 0 failed nodes,
+          # full matrix green). aeb is NOT implicated in the 0.643.0 regression
+          # above — the failing vg suites compile via `aetherc` + `gcc` directly
+          # with no aeb in the loop, so the fault was purely aether codegen.
+          #
+          # History: v0.283 was the first release carrying aeb's `bldr` module
+          # (9c84d786 converted all build nodes to Shape A `bldr.build() {}`;
+          # v0.282 had no `bldr`, so every node failed with
+          # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
+          # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
+          # links). v0.296 carries both, so this is a strict move forward.
+          AEB_REF: ${{ vars.AEB_REF || 'v0.296' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh

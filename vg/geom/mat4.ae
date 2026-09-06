@@ -36,7 +36,7 @@ struct M4 {
 }
 
 _m4_zero() -> *M4 {
-    m = malloc(8) as *M4
+    m = malloc(sizeof(M4)) as *M4
     m.e = floatarr_new_raw(16)
     i = 0
     while i < 16 {

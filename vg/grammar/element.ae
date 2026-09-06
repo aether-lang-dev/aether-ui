@@ -238,7 +238,7 @@ element_new(underlying: ptr) -> ptr {
     //   1 last_pos_props ptr = 8
     //   shape_type int + 4 geo floats ≈ 40 with pad
     // Sum ≈ 320 with padding. malloc(384) keeps a safe margin.
-    e = malloc(512) as *AevgElement
+    e = malloc(sizeof(AevgElement)) as *AevgElement
     e.underlying = underlying
     e.hit_poly = null
     e.context = null

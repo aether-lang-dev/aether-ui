@@ -37,7 +37,7 @@ dialog_close_of(dp: ptr) -> int { d = dp as *DlgHdr; return d.close }
 // dialog_header(title) callback { … } — a framed title row. The callback
 // fires when the ✕ is pressed (or driven).
 dialog_header(_ctx: ptr, title: string, on_close: fn) -> ptr {
-    d = malloc(16) as *DlgHdr
+    d = malloc(sizeof(DlgHdr)) as *DlgHdr
     outer = vstack(_ctx, 4)
     row = hstack(outer, 8)
 

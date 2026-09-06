@@ -91,7 +91,7 @@ tail_lines(s: string, keep: int) -> string {
 }
 
 main() {
-    st = malloc(96) as *ProbeState
+    st = malloc(sizeof(ProbeState)) as *ProbeState
     st.canvas = 0
     st.log = 0
     st.counts = 0

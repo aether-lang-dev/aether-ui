@@ -43,7 +43,7 @@ struct Recorder {
 }
 
 mk_recorder() -> *Recorder {
-    r = malloc(48) as *Recorder
+    r = malloc(sizeof(Recorder)) as *Recorder
     r.n_calls = 0
     r.last_x = 0.0
     r.last_y = 0.0

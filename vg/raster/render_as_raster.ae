@@ -359,7 +359,7 @@ render_shadow_path(ctx: ptr, backend: ptr, kind: int,
         if cbb < 0 { }
         b64 = utils.base64_encode_bytes(enc, pc)
 
-        c = malloc(96) as *ShadowCache
+        c = malloc(sizeof(ShadowCache)) as *ShadowCache
         c.b64 = b64
         c.out_w = buf_w
         c.out_h = buf_h

@@ -44,7 +44,7 @@ struct Bounds {
 }
 
 mk_bounds() -> *Bounds {
-    b = malloc(40) as *Bounds
+    b = malloc(sizeof(Bounds)) as *Bounds
     b.has = 0
     b.min_x = 0.0
     b.min_y = 0.0
@@ -54,7 +54,7 @@ mk_bounds() -> *Bounds {
 }
 
 mk_bounds_from(min_x: float, min_y: float, max_x: float, max_y: float) -> *Bounds {
-    b = malloc(40) as *Bounds
+    b = malloc(sizeof(Bounds)) as *Bounds
     b.has = 1
     b.min_x = min_x
     b.min_y = min_y

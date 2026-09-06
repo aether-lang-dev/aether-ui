@@ -63,7 +63,7 @@ struct Entry {
 }
 
 mk_entry(item: ptr, el: ptr) -> ptr {
-    e = malloc(16) as *Entry
+    e = malloc(sizeof(Entry)) as *Entry
     e.item = item
     e.el = el
     return e
@@ -94,7 +94,7 @@ entry_el(p: ptr)   -> ptr { e = p as *Entry; return e.el }
 // trailing-callback syntax only supports one closure per call site.
 
 new_region() -> ptr {
-    r = malloc(40) as *BindingRegion
+    r = malloc(sizeof(BindingRegion)) as *BindingRegion
     r.items_cb = null
     r.render_cb = null
     r.trackby_cb = null
@@ -240,7 +240,7 @@ struct NewSlot {
 }
 
 mk_slot(item: ptr, idx: int) -> ptr {
-    s = malloc(16) as *NewSlot
+    s = malloc(sizeof(NewSlot)) as *NewSlot
     s.item = item
     s.idx = idx
     return s

@@ -108,7 +108,7 @@ struct AppState {
 // caller (main) runs gp_nav.relayout + gp_nav.retarget_watch right after,
 // keeping this module free of upward dependencies.
 mk_state(root: *FileEntry) -> *AppState {
-    s = malloc(384) as *AppState
+    s = malloc(sizeof(AppState)) as *AppState
     s.root = root
     s.current = root
     s.stack = list.new()

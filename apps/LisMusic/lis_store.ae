@@ -24,7 +24,7 @@ struct History {
 }
 
 mk_history() -> *History {
-    h = malloc(16) as *History
+    h = malloc(sizeof(History)) as *History
     db, err = sqlite.open("history.db")
     if err != "" {
         println("[lis_store] open failed: ${err} (history disabled)")

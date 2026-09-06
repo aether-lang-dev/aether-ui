@@ -96,7 +96,7 @@ finish_stroke(app: *App) {
     pp_free(app.cur)
     pp_free(simplified)
     app.cur = null
-    st = malloc(16) as *Stroke
+    st = malloc(sizeof(Stroke)) as *Stroke
     st.line = smoothed
     st.outline = outline
     _ = list.list_add_raw(app.strokes, st as ptr)
@@ -183,7 +183,7 @@ probe(app: *App) {
 }
 
 main() {
-    app = malloc(64) as *App
+    app = malloc(sizeof(App)) as *App
     app.strokes = list.list_new()
     app.cur = null
     app.mode = 0
