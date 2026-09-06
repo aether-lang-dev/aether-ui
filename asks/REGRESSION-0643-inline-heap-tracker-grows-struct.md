@@ -4,6 +4,19 @@
 **From:** aether-ui line
 **Status:** ROOT-CAUSED to a single commit + fixed on our side. This is an FYI + a design question, not a blocker. We are NOT asking you to revert.
 
+**This is the downstream fallout of a fix you already landed and verified.**
+The commit below is the inline-tracker fix documented in
+`aether/asks/regression-0640-heap-tracker-breaks-struct-prefix-punning.md`
+(the datastar line's punning report — "direction A", verified green:
+`make test` 409/0, `make test-ae` 1073/2 pre-existing, datastar 20/20 + 45/45).
+That fix is correct and we don't want it undone. It lands squarely in the
+one blind spot its own "One judgement left to you" section left open: it
+checked that struct-literal initializers are order-independent and that
+nothing reads a tracker by computed offset — but not code that **hand-
+allocates the struct with a literal byte count**. Inline placement grows
+`sizeof`, and `make test-ae` had no `malloc(N) as *T` sites, so it stayed
+green while under-allocating every such struct in this repo (158 of them).
+
 ---
 
 ## TL;DR
@@ -119,6 +132,9 @@ Neither blocks us. `sizeof(T)` is the right answer and we've adopted it fleet-wi
 - Bisect + ASan root-cause (above).
 - Swept 158 sites `malloc(N)` → `malloc(sizeof(T))`; raw-buffer `malloc(8)`
   (no struct cast) left untouched.
-- Held the CI pin at v0.627.0 until the sweep is verified green on 0.643, then
-  moving AETHER_REF → v0.643.0 and AEB_REF → v0.296 together. (aeb is innocent —
-  these tests never touch it.)
+- Moved both CI pins together once the sweep was verified all-green on 0.643:
+  AETHER_REF v0.627.0 → v0.643.0, AEB_REF v0.283 → v0.296. (aeb is innocent —
+  the failing suites compile via `aetherc` + `gcc` with no aeb in the loop.)
+  Landed on aether-ui main; see that repo's `ci.yml` comment for the full
+  rationale. Nothing to do on your side for us to be green — this ask is the
+  heads-up + the two design questions above.
