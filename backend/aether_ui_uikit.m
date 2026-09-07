@@ -80,6 +80,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 #include "aether_ui_backend.h"
 #include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
 
@@ -1164,6 +1165,7 @@ typedef struct {
     double a0, a1;   // ARC start/end angle
     char* text;     // FILL_TEXT string (owned)
     unsigned char* pixels;  // DRAW_IMAGE RGBA8888 buffer (owned)
+    int pixels_borrowed;    // 1 = caller's buffer, NOT ours to free
     int iw, ih;     // DRAW_IMAGE pixel dims
     double gx1, gy1, gx2, gy2, gr, gfx, gfy;  // gradient geometry
     double grad_line_width;  // 0 → fill; >0 → stroke at this width
@@ -2091,6 +2093,117 @@ void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
     });
 }
 
+/* Explicit size, and reading back what a widget ACTUALLY got.
+ *
+ * The constraint is created once and updated afterwards, so repeated calls do
+ * not pile up conflicting constraints on the same view. Priority is just below
+ * required, leaving a user's own constraint able to win. */
+static const char kAeWidthKey;
+static const char kAeHeightKey;
+
+static void aeui_pin_size(UIView* v, const void* key, int px, int vertical) {
+    if (!v) return;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    if (c) {
+        c.constant = (CGFloat)px;
+    } else {
+        [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+        c = vertical
+            ? [[v heightAnchor] constraintEqualToConstant:(CGFloat)px]
+            : [[v widthAnchor]  constraintEqualToConstant:(CGFloat)px];
+        c.priority = UILayoutPriorityDefaultHigh + 1;   /* 751 */
+        c.active = YES;
+        objc_setAssociatedObject(v, key, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [v setNeedsLayout];
+    UIView* root = [v superview] ?: v;
+    [root layoutIfNeeded];
+}
+
+void aether_ui_set_width_impl(int handle, int px) {
+    aeui_pin_size((__bridge UIView*)aether_ui_get_widget(handle),
+                  &kAeWidthKey, px, 0);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    aeui_pin_size((__bridge UIView*)aether_ui_get_widget(handle),
+                  &kAeHeightKey, px, 1);
+}
+
+/* CRITICAL (aether-ui #101): round the frame's EDGES, never its size. Auto
+ * Layout places views on fractional boundaries so a row of flexible children
+ * tiles its parent exactly; rounding each size on its own makes the reported
+ * parts sum to more than the whole, and the last child reads as hanging past
+ * the parent. Rounding the edges keeps adjacent children tiling. */
+static int aeui_round_extent(CGFloat lo, CGFloat hi) {
+    long a = (long)floor((double)lo + 0.5);
+    long b = (long)floor((double)hi + 0.5);
+    return (int)(b - a);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    CGRect f = [v frame];
+    return aeui_round_extent(CGRectGetMinX(f), CGRectGetMaxX(f));
+}
+
+int aether_ui_get_height_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    CGRect f = [v frame];
+    return aeui_round_extent(CGRectGetMinY(f), CGRectGetMaxY(f));
+}
+
+/* The modifier keys held right now, as the shared bitmask (1 shift, 2 ctrl,
+ * 4 alt, 8 super/command).
+ *
+ * Always 0 on iOS, and that is the honest answer rather than a gap: a touch
+ * carries no modifiers, and UIKit has no pollable global modifier state. A
+ * hardware keyboard's modifiers arrive attached to the key event itself
+ * (UIKey.modifierFlags), which is a different question from "what is held
+ * right now". Defined so a cross-platform app that reads modifiers in a click
+ * handler still links and behaves as an unmodified click, rather than failing
+ * to build for iOS. */
+int aether_ui_modifiers_impl(void) {
+    return 0;
+}
+
+/* iOS has no programmatic quit: terminating your own app is grounds for App
+ * Store rejection, and the platform expects the user to leave via the home
+ * gesture. A documented no-op, so a cross-platform app that offers a Quit item
+ * still LINKS here and simply does nothing, rather than failing to build for
+ * iOS or silently getting a different ABI from the other three backends. */
+void aether_ui_app_quit_impl(void) {
+}
+
+/* Borrowed variants: the caller keeps ownership of the pixels and promises
+ * they outlive the frame, so a per-frame blit does not copy the whole
+ * framebuffer every time. Same contract as the other three backends. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y, .w = dw, .h = dh,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
 extern double floatarr_get_unchecked(void* arr, int i);
 
 static void macos_copy_stops(CanvasCmd* c, int n_stops,
@@ -2141,7 +2254,10 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
             free(c->text); c->text = NULL;
         }
         if (c->type == CANVAS_DRAW_IMAGE && c->pixels) {
-            free(c->pixels); c->pixels = NULL;
+            /* CRITICAL: a borrowed buffer belongs to the caller. Freeing it
+             * here frees memory we never allocated. */
+            if (!c->pixels_borrowed) free(c->pixels);
+            c->pixels = NULL;
         }
         if (c->type == CANVAS_FILL_LINEAR || c->type == CANVAS_FILL_RADIAL) {
             free(c->stop_off);  c->stop_off = NULL;

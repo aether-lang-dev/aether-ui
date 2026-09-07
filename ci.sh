@@ -595,6 +595,20 @@ else
 fi
 
 echo
+echo "=== Phase 1c2: backend ABI parity across all four backends ==="
+# Compiling and linking a backend proves it builds; it proves nothing about
+# what it OMITS. A missing entry point is invisible to every other phase,
+# because nothing here calls it: the iOS lane links against a stub, and the
+# Win32 lane only cross-compiles. Seven functions had drifted onto three
+# backends and not the fourth before this existed, so an iOS app calling any
+# of them would have failed at link with no earlier warning.
+if python3 "$SCRIPT_DIR/tests/scripts/check_backend_parity.py"; then
+    echo "  OK   backend ABI parity"
+else
+    echo "  FAIL backend ABI parity"
+    FAIL=$((FAIL + 1))
+fi
+
 echo "=== Phase 1e: iOS/iPadOS (UIKit) backend compile+link check ==="
 # The UIKit backend is, like Win32, one nobody here can RUN: there is no iOS leg
 # in CI and no iOS build of libaether. But the iOS SDK ships with Xcode, so its

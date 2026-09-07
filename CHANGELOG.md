@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **The iOS backend had fallen seven entry points behind the other three.**
+  `app_quit`, `set_width` / `set_height`, `get_width` / `get_height`, the two
+  borrowed-pixel blit variants and `modifiers` were implemented on AppKit,
+  GTK4 and Win32 but not on UIKit, so an iOS app calling any of them would
+  have failed at link. Nothing caught it: the iOS CI phase compiles the
+  backend and links it against a stub, which proves what it REFERENCES
+  resolves and says nothing about what it omits, and the Win32 lane only
+  cross-compiles.
+
+  All seven are implemented. Two are documented no-ops with a stated reason
+  rather than a gap: iOS has no programmatic quit, because terminating your
+  own app is grounds for App Store rejection, and `modifiers` is always 0
+  because a touch carries none and UIKit has no pollable global modifier
+  state (a hardware keyboard's modifiers arrive attached to the key event,
+  which is a different question). `get_width` / `get_height` round the
+  frame's edges rather than its size, so they carry the same tiling
+  guarantee the other backends got in #101.
+
+### Added
+
+- **CI checks backend ABI parity** (`tests/scripts/check_backend_parity.py`,
+  phase 1c2). Every function declared in `aether_ui_backend.h` must be defined
+  in the shared sources or on all four backends. A missing entry point was
+  invisible to every other phase, because nothing in CI calls it. The checker
+  distinguishes a definition from a declaration by scanning from the name to
+  whichever of `;` or `{` comes first, rather than by one regex, since a
+  single pattern lets one match swallow a later one and silently under-report.
+
+
 ### Added
 
 - **A multi-select listbox can be driven to a known state.** `listbox_select`
