@@ -255,6 +255,17 @@ Declare them `f32`:
 extern glClearColor(r: f32, g: f32, b: f32, a: f32)
 ```
 
+**Your renderer links GL, the toolkit does not link it for you.** `gpuview`
+hands an app a context; it does not put a GL dependency on every app that never
+touches one. On macOS the framework is already there for the backend's own use;
+elsewhere the app asks for it in its `.build.ae`:
+
+```aether
+if string.equals(platform(), "darwin") == 0 {
+    link_flag("-lGL")
+}
+```
+
 **Resize gives you PIXELS, not points.** Passing points to `glViewport` renders
 a HiDPI viewport into the bottom-left quarter of itself.
 
