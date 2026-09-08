@@ -151,7 +151,7 @@ case "$OS" in
             "$SCRIPT_DIR/backend/aether_ui_sni.c" \
             -L"$AETHER_LIB_PATH" -laether \
             -o "$OUTPUT" \
-            -pthread -lm $(pkg-config --libs gtk4) $LIBNOTIFY_LIBS $AETHER_LIBS $CONTRIB_LIBS
+            -pthread -lm $(pkg-config --libs gtk4) $(pkg-config --libs epoxy) $LIBNOTIFY_LIBS $AETHER_LIBS $CONTRIB_LIBS
         ;;
     MINGW*|MSYS*|CYGWIN*)
         echo "Platform: Windows (native Win32)"

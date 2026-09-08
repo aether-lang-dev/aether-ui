@@ -349,10 +349,12 @@ if pkg-config --exists gtk4 2>/dev/null; then
         if ! aetherc --lib "$ROOT" "$src" "$cfile" > "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (compile)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
-        if ! gcc $(pkg-config --cflags gtk4) "$cfile" \
+        # epoxy explicitly: gpuview (#92) calls GL from the GTK4 backend, and
+        # gtk4.pc exposes neither epoxy's headers nor its library.
+        if ! gcc $(pkg-config --cflags gtk4) $(pkg-config --cflags epoxy) "$cfile" \
                 backend/aether_ui_gtk4.c backend/aether_ui_system_extras.c backend/aether_ui_sni.c \
                 backend/aether_ui_test_server.c \
-                $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
+                $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) $(pkg-config --libs epoxy) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (link)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
         runner=""
