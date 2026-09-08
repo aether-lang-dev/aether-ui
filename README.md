@@ -216,6 +216,53 @@ a live window has "a life of its own" that ends on an external event, so only
 | ScrollView  | `ui.scrollview() { children }`                 | GtkScrolledWindow  | NSScrollView            | AetherUIStack + WS_VSCROLL |
 | Grid        | `ui.root_grid(cols, rspace, cspace)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
 | Menu bar    | `ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
+| GPU view    | `ui.gpuview_create(w, h)` (#92)                | GtkGLArea          | NSOpenGLView            | not yet (reports 0)        |
+
+
+### GPU viewport
+
+`gpuview` is a widget that owns a real GL context, so a hardware-rendered
+viewport can sit inside ordinary native chrome instead of living in its own
+GLFW window with no panels, menus or dialogs around it.
+
+```aether
+if ui.gpuview_available() == 1 {
+    gpu = ui.gpuview_create(640, 480)
+    ui.gpuview_on_resize(gpu) callback |w: int, h: int| {
+        glViewport(0, 0, w, h)          // PIXELS, not points
+    }
+    ui.gpuview_on_render(gpu) callback |dt: float| {
+        glClearColor(0.0, 1.0, 0.0, 1.0)
+        glClear(GL_COLOR_BUFFER_BIT)    // draw only; the backend presents
+    }
+}
+```
+
+Three things are worth knowing before you write the renderer.
+
+**Ask `gpuview_available()` first.** It answers for this backend and this
+display: AppKit and GTK4 host a context, win32 and UIKit do not yet, and a
+headless machine with no GL device answers 0 even on a backend that can. An app
+that checks falls back to its software path instead of showing a rectangle that
+never draws.
+
+**GL takes 32-bit floats, and Aether's `float` is a C `double`.** An extern
+declared with `float` pushes the wrong width, and `glClearColor` then receives
+values it reads as zero, which looks exactly like a renderer that never ran.
+Declare them `f32`:
+
+```aether
+extern glClearColor(r: f32, g: f32, b: f32, a: f32)
+```
+
+**Resize gives you PIXELS, not points.** Passing points to `glViewport` renders
+a HiDPI viewport into the bottom-left quarter of itself.
+
+`gpuview_read_pixel(gpu, x, y)` returns one rendered pixel as `0xRRGGBBAA`,
+read back off the GPU, and the driver exposes the same thing at
+`GET /gpuview/{id}/pixel?x=&y=`. That is how `spec_gpuview_demo` asserts the
+GPU drew what was asked rather than only that the widget exists, with no window
+on screen.
 
 ## Presentation, keys and drops
 

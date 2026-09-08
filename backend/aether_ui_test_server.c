@@ -695,6 +695,25 @@ static void handle_request_inner(aether_sock_t client_fd,
                 send_http(client_fd, 200, "OK", "application/json", body);
             }
         }
+    } else if (method == 0 && strncmp(path, "/gpuview/", 9) == 0
+               && strstr(path, "/pixel")) {
+        /* GET /gpuview/{id}/pixel?x=&y= gives one pixel the GPU actually rendered,
+         * packed 0xRRGGBBAA (#92).
+         *
+         * This is what makes a GPU viewport testable rather than merely
+         * present. The backend renders a frame into an offscreen target and
+         * reads it back, so a spec asserts on real GL output with no window on
+         * screen; -1 when the backend has no context, which is the same answer
+         * gpuview_available() gives up front. */
+        int id = extract_id_from_path(path, "/gpuview/");
+        const char* xs = extract_query_param(path, "x");
+        const char* ys = extract_query_param(path, "y");
+        int px = xs ? atoi(xs) : 0;
+        int py = ys ? atoi(ys) : 0;
+        int val = aether_ui_gpuview_read_pixel_impl(id, px, py);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"pixel\":%d}", val);
+        send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
                && strstr(path, "/pixel") && !strstr(path, "/pixelgrid")) {
         /* GET /canvas/{id}/pixel?x=&y=&w=&h= — one rendered pixel, packed

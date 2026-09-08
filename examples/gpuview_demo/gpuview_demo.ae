@@ -1,0 +1,72 @@
+// Aether UI GPU surface (#92): a hardware-rendered viewport sitting next to
+// ordinary native chrome.
+//
+// The point of the widget is that the panels, labels and buttons around it are
+// real native controls, which is what an app loses when it runs its renderer in
+// its own GLFW window. Here the viewport clears to a known colour and the
+// program reads a pixel back off the GPU, so "it rendered" is a fact rather
+// than a screenshot someone eyeballed.
+//
+// gpuview_available() is asked FIRST. win32 and UIKit answer 0 today, and so
+// does a display with no GL device, so an app takes its software path there
+// instead of showing an empty rectangle.
+import ui
+import ui (window, vstack, hstack, text, gpuview_create, gpuview_widget,
+    gpuview_available, gpuview_on_realize, gpuview_on_render, gpuview_on_resize,
+    gpuview_read_pixel, gpuview_request_render, fill_width, fill_height,
+    timer, timer_cancel, app_quit, enable_test_server, a11y_label)
+import std.os (os_getenv)
+
+// GL takes 32-bit floats. Aether's `float` is a C double, so these must be
+// f32 or the call pushes the wrong width and the clear colour comes out as
+// zero, which reads exactly like a renderer that never ran.
+extern glClearColor(r: f32, g: f32, b: f32, a: f32)
+extern glClear(mask: int)
+extern glViewport(x: int, y: int, w: int, h: int)
+
+const GL_COLOR_BUFFER_BIT = 16384
+
+main() {
+    window("gpuview demo", 520, 380) {
+        vstack(8) {
+            _title = text("GPU viewport with native chrome around it")
+
+            if gpuview_available() == 1 {
+                gpu = gpuview_create(360, 240)
+                fill_width(gpuview_widget(gpu))
+                fill_height(gpuview_widget(gpu))
+                _ = a11y_label(gpuview_widget(gpu), "viewport")
+
+                gpuview_on_resize(gpu) callback |w: int, h: int| {
+                    // PIXELS, not points: passing points here renders into the
+                    // bottom-left quarter of a HiDPI viewport.
+                    glViewport(0, 0, w, h)
+                }
+                gpuview_on_render(gpu) callback |_dt: float| {
+                    // A flat green field. Trivial on purpose: the assertion is
+                    // that the GPU produced these bytes, not that the scene is
+                    // interesting.
+                    glClearColor(0.0, 1.0, 0.0, 1.0)
+                    glClear(GL_COLOR_BUFFER_BIT)
+                }
+
+                _status = text("renderer: GPU")
+                if os_getenv("AETHER_UI_TEST_PORT") == null {
+                    tid = 0
+                    tid = timer(300) callback {
+                        timer_cancel(tid)
+                        gpuview_request_render(gpu)
+                        px = gpuview_read_pixel(gpu, 20, 20)
+                        println("pixel=0x${px}")
+                        app_quit()
+                    }
+                }
+            } else {
+                // The honest fallback. A backend without a context says so up
+                // front rather than handing back a widget that never draws.
+                _none = text("renderer: CPU (no GPU surface on this backend)")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

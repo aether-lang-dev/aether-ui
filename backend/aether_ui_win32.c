@@ -6019,6 +6019,49 @@ int aether_ui_canvas_create_impl(int width, int height) {
     return canvas_count;
 }
 
+
+/* ---------------------------------------------------------------------------
+ * GPU surface (#92) -- not implemented on Win32 yet.
+ *
+ * A real one here means a child HWND with its own pixel format and a context
+ * from wglCreateContextAttribsARB, which has to be obtained through a throwaway
+ * context first. That is a genuine piece of work, and this lane is
+ * cross-compiled and never run, so writing it blind would be shipping
+ * something nobody has seen execute.
+ *
+ * available() therefore returns 0 and the rest are honest no-ops: an app asks
+ * before it builds a viewport and takes its software path here, which is a
+ * defined answer rather than a widget that exists and never draws. The entry
+ * points exist so the ABI stays the same shape on all four backends.
+ * ------------------------------------------------------------------------- */
+int aether_ui_gpuview_available_impl(void) { return 0; }
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    (void)width; (void)height;
+    return 0;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) { (void)gpu_id; return 0; }
+
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_request_render_impl(int gpu_id) { (void)gpu_id; }
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    (void)gpu_id; (void)px; (void)py;
+    return -1;
+}
+
 int aether_ui_canvas_get_widget(int canvas_id) {
     if (canvas_id < 1 || canvas_id > canvas_count) return 0;
     return handle_for_hwnd(canvases[canvas_id - 1].hwnd);

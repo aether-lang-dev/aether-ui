@@ -138,6 +138,7 @@ builder ui_backend(root: string) {
         link_flag("-framework QuartzCore")
         link_flag("-framework CoreText")   // text metrics (vg.text_extent)
         link_flag("-framework ImageIO")    // headless canvas_write_png
+        link_flag("-framework OpenGL")     // gpuview's GL context (#92)
     }
     if string.equals(os_name, "windows") == 1 {
         extra_source("${root}/backend/aether_ui_win32.c")

@@ -100,7 +100,10 @@ exports (
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size, image_fill, image_tint, image_untint,
     file_icon, set_file_icon,
-    canvas_widget, canvas_create, canvas_size, canvas_begin_path, canvas_move_to, canvas_line_to,
+    canvas_widget, canvas_create, canvas_size,
+    gpuview_create, gpuview_widget, gpuview_size, gpuview_available,
+    gpuview_on_realize, gpuview_on_render, gpuview_on_resize,
+    gpuview_request_render, gpuview_read_pixel, canvas_begin_path, canvas_move_to, canvas_line_to,
     canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
     canvas_set_clip_rects, canvas_reset_clip,
     canvas_clear, canvas_redraw, canvas_write_png,
@@ -435,6 +438,14 @@ extern aether_ui_grid_place(grid_handle: int, child_handle: int,
 // Group 6: Canvas, events, animation
 extern aether_ui_canvas_create_impl(width: int, height: int) -> int
 extern aether_ui_canvas_get_widget(canvas_id: int) -> int
+extern aether_ui_gpuview_create_impl(width: int, height: int) -> int
+extern aether_ui_gpuview_get_widget(gpu_id: int) -> int
+extern aether_ui_gpuview_available_impl() -> int
+extern aether_ui_gpuview_on_realize_impl(gpu_id: int, closure: ptr)
+extern aether_ui_gpuview_on_render_impl(gpu_id: int, closure: ptr)
+extern aether_ui_gpuview_on_resize_impl(gpu_id: int, closure: ptr)
+extern aether_ui_gpuview_request_render_impl(gpu_id: int)
+extern aether_ui_gpuview_read_pixel_impl(gpu_id: int, px: int, py: int) -> int
 
 // canvas_widget(canvas_id) -> widget handle. Canvas IDs and widget handles
 // are SEPARATE namespaces; anything that styles or sizes a canvas (width,
@@ -445,6 +456,88 @@ extern aether_ui_canvas_get_widget(canvas_id: int) -> int
 // numbers, so this call is the whole of the boundary.
 canvas_widget(canvas_id: int) -> int {
     return aether_ui_canvas_get_widget(canvas_id)
+}
+
+
+// gpuview(w, h) -- a widget that owns a real GL context, so an app can put a
+// hardware-rendered viewport next to ordinary native chrome (#92). Before
+// this, a GPU renderer had to run in its own GLFW window and give up panels,
+// inspectors, menus and dialogs, or fall back to the CPU painter in
+// vg/render3d.ae.
+//
+// Returns a GPU ID in its own numbering space, exactly as canvas_create does,
+// so gpuview_widget(id) is what every widget function takes. That boundary
+// bites the same way canvas's did (#98), which is why gpuview_size takes the
+// ID you are holding.
+//
+// ASK gpuview_available() FIRST. AppKit and GTK4 host a context; win32 and
+// UIKit answer 0 today, and a display with no GL device answers 0 even on a
+// backend that can, so an app that checks takes its software path instead of
+// showing an empty rectangle.
+gpuview_available() -> int {
+    return aether_ui_gpuview_available_impl()
+}
+
+gpuview_create(_ctx: ptr, width: int, height: int) -> int {
+    gid = aether_ui_gpuview_create_impl(width, height)
+    if gid == 0 { return 0 }
+    wh = aether_ui_gpuview_get_widget(gid)
+    if _ctx != 0 && wh != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, wh)
+    }
+    return gid
+}
+
+// The widget handle under a GPU ID, for layout, styling and a11y. The two
+// numbering spaces overlap, so this is the whole of the boundary between them.
+gpuview_widget(gpu_id: int) -> int {
+    return aether_ui_gpuview_get_widget(gpu_id)
+}
+
+// An explicit size, taking the GPU ID rather than the widget handle. The
+// create size is a natural size held loosely so the viewport grows with its
+// pane; this pins it.
+gpuview_size(gpu_id: int, w: int, h: int) {
+    wh = aether_ui_gpuview_get_widget(gpu_id)
+    if wh == 0 { return }
+    aether_ui_set_width(wh, w)
+    aether_ui_set_height(wh, h)
+}
+
+// on_realize(gpu) callback { ... } -- fires once with the context CURRENT,
+// before the first render. Load entry points and build programs here; doing it
+// earlier has no context to load into.
+gpuview_on_realize(gpu_id: int, cb: fn) {
+    aether_ui_gpuview_on_realize_impl(gpu_id, box_closure(cb))
+}
+
+// on_render(gpu) callback |dt: float| { ... } -- fires with the context
+// current. Draw only: the backend presents afterwards, so a swap here would
+// present twice. dt is seconds since the previous frame, 0 on the first.
+gpuview_on_render(gpu_id: int, cb: fn) {
+    aether_ui_gpuview_on_render_impl(gpu_id, box_closure(cb))
+}
+
+// on_resize(gpu) callback |w: int, h: int| { ... } -- the framebuffer size in
+// PIXELS, not points. Passing points to glViewport is what renders a HiDPI
+// viewport into the bottom-left quarter of itself.
+gpuview_on_resize(gpu_id: int, cb: fn) {
+    aether_ui_gpuview_on_resize_impl(gpu_id, box_closure(cb))
+}
+
+// Ask for one more frame. A GPU view does not redraw on its own, so an app
+// that animates calls this from its own timer and one that draws a static
+// scene never calls it again.
+gpuview_request_render(gpu_id: int) {
+    aether_ui_gpuview_request_render_impl(gpu_id)
+}
+
+// One rendered pixel as 0xRRGGBBAA, read back from the GL framebuffer, with a
+// top-left origin like every other read-back here. -1 when unavailable. This
+// is how a test asserts the GPU drew what was asked rather than only that the
+// widget exists.
+gpuview_read_pixel(gpu_id: int, px: int, py: int) -> int {
+    return aether_ui_gpuview_read_pixel_impl(gpu_id, px, py)
 }
 
 // canvas_size(id, w, h) gives a canvas an explicit size, taking the CANVAS ID
