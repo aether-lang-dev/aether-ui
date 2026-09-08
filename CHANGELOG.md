@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **`gpuview`, a widget that owns a real GL context** (#92). An app can now put
+  a hardware-rendered viewport inside ordinary native chrome, instead of
+  choosing between running the renderer in its own GLFW window with no panels,
+  menus or dialogs, and falling back to the CPU painter in `vg/render3d.ae`.
+  `on_realize` fires with the context current, `on_render` draws and the
+  backend presents, `on_resize` reports the framebuffer size in PIXELS so a
+  HiDPI viewport does not render into a quarter of itself.
+
+  `gpuview_available()` answers for the backend AND the display before any view
+  exists: AppKit and GTK4 host a context, win32 and UIKit report 0 today, and a
+  machine with no GL device reports 0 anywhere. An app asks first and takes its
+  software path, which is a defined answer rather than a widget that never
+  draws.
+
+  `gpuview_read_pixel` returns one rendered pixel as `0xRRGGBBAA`, and the
+  driver exposes it at `GET /gpuview/{id}/pixel`. It renders a frame into an
+  offscreen target rather than sampling the window, for two reasons that both
+  read as "the renderer did not run": a double-buffered context has already
+  swapped by the time you could read it, and a view with no window has no
+  drawable at all, so the default framebuffer goes nowhere. Rendering offscreen
+  is also what lets `spec_gpuview_demo` assert on real GPU output headlessly.
+
+
 ### Fixed
 
 - **The iOS backend had fallen seven entry points behind the other three.**

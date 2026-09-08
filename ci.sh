@@ -65,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo gpuview_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -349,10 +349,12 @@ if pkg-config --exists gtk4 2>/dev/null; then
         if ! aetherc --lib "$ROOT" "$src" "$cfile" > "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (compile)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
-        if ! gcc $(pkg-config --cflags gtk4) "$cfile" \
+        # epoxy explicitly: gpuview (#92) calls GL from the GTK4 backend, and
+        # gtk4.pc exposes neither epoxy's headers nor its library.
+        if ! gcc $(pkg-config --cflags gtk4) $(pkg-config --cflags epoxy) "$cfile" \
                 backend/aether_ui_gtk4.c backend/aether_ui_system_extras.c backend/aether_ui_sni.c \
                 backend/aether_ui_test_server.c \
-                $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
+                $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) $(pkg-config --libs epoxy) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (link)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
         runner=""
@@ -1022,6 +1024,11 @@ if [ "$SPEC_OK" -eq 1 ]; then
         printf '%s\n' "$blit_out" | grep -aE "owned|borrow" | sed 's/^/       /'
         FAIL=$((FAIL + 1))
     fi
+
+    echo "-- Phase 5e21: the GPU viewport actually renders (#92) --"
+    UI_SPEC=gpuview_demo/spec_gpuview_demo \
+    run_server_test "$(EX_BIN gpuview_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" gpuview_demo || FAIL=$((FAIL + 1))
 
     echo "-- Phase 5e19: canvas_reset_clip widens the clip back --"
     UI_SPEC=canvasresetclip_demo/spec_canvasresetclip_demo \

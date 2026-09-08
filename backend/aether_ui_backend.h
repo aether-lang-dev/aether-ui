@@ -347,6 +347,43 @@ int  aether_ui_native_list_first_visible_impl(int handle);
 
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height);
+
+/* GPU surface (#92). A widget that owns a real GL context, so an app can put a
+ * hardware-rendered viewport next to ordinary native chrome instead of running
+ * its renderer in a separate GLFW window and losing panels, menus and dialogs.
+ *
+ * The contract deliberately mirrors canvas, which apps already know: create
+ * returns an ID in its own space, _get_widget converts it to a widget handle
+ * for layout and styling, and the hooks are boxed closures. What differs is
+ * that on_render runs with the context CURRENT and the backend presents the
+ * result, so the callback only draws.
+ *
+ * A backend that cannot host a GL context reports that through
+ * aether_ui_gpuview_available_impl rather than by failing to link: an app
+ * asks first and falls back to its software path. Two of ours cannot today,
+ * and saying so is more useful than pretending.
+ */
+int  aether_ui_gpuview_create_impl(int width, int height);
+int  aether_ui_gpuview_get_widget(int gpu_id);
+/* 1 when this backend can give the view a real context, 0 when it cannot.
+ * Answers for the BACKEND, before any view exists. */
+int  aether_ui_gpuview_available_impl(void);
+/* Fired once when the context exists and is current, before the first render.
+ * Load entry points here. Closure takes no arguments. */
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure);
+/* Fired with the context current; the backend presents afterwards, so the
+ * closure must not swap. Closure takes (dt_seconds: double). */
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure);
+/* Framebuffer size in PIXELS, not points: a HiDPI viewport needs the backing
+ * size for glViewport. Closure takes (w: int, h: int). */
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure);
+/* Ask for one more frame. A GPU view does not redraw on its own; an app that
+ * animates calls this from its own timer. */
+void aether_ui_gpuview_request_render_impl(int gpu_id);
+/* One rendered pixel, 0xRRGGBBAA, read back from the GL framebuffer. This is
+ * what lets a spec assert the GPU actually drew what was asked rather than
+ * only that the widget exists. -1 when unavailable. */
+int  aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py);
 int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,
                                    double cx, double cy);
 void aether_ui_vg_tooltip_hide_impl(void);

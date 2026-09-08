@@ -1,0 +1,28 @@
+import bldr
+import aether
+import aether (source, output, no_closure_regen, link_flag)
+import std.string
+import std.os (platform)
+import build_support.aetherui (ui_backend)
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("gpuview_demo.ae")
+            output("gpuview_demo")
+            no_closure_regen()
+            ui_backend(root)
+            // This demo calls GL itself (glClearColor / glClear / glViewport),
+            // so it links GL itself. gpuview gives an app a context; it does
+            // not put a GL dependency on every app that never touches one,
+            // which is why the toolkit does not link this for you.
+            //
+            // macOS resolves these through -framework OpenGL, already linked
+            // by ui_backend for the backend's own use. Elsewhere the app asks.
+            if string.equals(platform(), "darwin") == 0 {
+                link_flag("-lGL")
+            }
+        }
+        return 0
+    }
+}

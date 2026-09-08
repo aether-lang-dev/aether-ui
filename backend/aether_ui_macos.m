@@ -14,6 +14,8 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreText/CoreText.h>     // text metrics (CTLine typographic bounds)
 #import <ImageIO/ImageIO.h>       // headless canvas_write_png
+#define GL_SILENCE_DEPRECATION 1   // NSOpenGL is the only GL seam AppKit offers
+#import <OpenGL/gl3.h>            // gpuview (#92)
 #import <objc/runtime.h>          // objc_setAssociatedObject (dbl-click fire)
 #include <time.h>                  // clock_gettime (chord timeout)
 #include "aether_ui_backend.h"  // cross-platform backend ABI
@@ -5391,6 +5393,284 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->widget_handle = register_widget_typed((__bridge void*)v, AUI_CANVAS);
     return canvas_id;
 }
+
+
+/* Apple deprecated every GL entry point in favour of Metal in 10.14 and still
+ * ships no other GL seam, so hosting a GL context here means using the
+ * deprecated one. The suppression is scoped to exactly this block, not the
+ * file and not the build: everything outside it still fails on -Werror, and
+ * the day AppKit offers a supported path this pragma is what points at the
+ * code to replace. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+// ---------------------------------------------------------------------------
+// GPU surface (#92)
+//
+// NSOpenGLView, not a CAOpenGLLayer: the layer path re-enters drawing on the
+// compositor's schedule, which fights an app that wants to drive its own frame
+// loop, and every renderer this is for already owns its loop. NSOpenGL is
+// deprecated in favour of Metal and still the only GL seam AppKit exposes, so
+// the deprecation is silenced at the import rather than pretended away.
+//
+// A 3.2-core profile is requested rather than 4.1 so the widest set of Macs
+// gets a context at all; a renderer that needs 4.1 asks for it through its own
+// pixel format once it has the view. Accelerated first, then a soft retry
+// without that bit, because a VM or a headless runner has no accelerated
+// format and a viewport that renders slowly is still better than one that
+// refuses to exist.
+// ---------------------------------------------------------------------------
+@interface AetherGpuView : NSOpenGLView
+@property (nonatomic) int gpuId;
+@end
+
+typedef struct {
+    int widget_handle;
+    void* on_realize;
+    void* on_render;
+    void* on_resize;
+    int realized;
+    double last_render;
+    int last_w, last_h;
+    unsigned int probe_fbo, probe_tex;   /* offscreen target for read_pixel */
+    int probe_w, probe_h;
+} GpuState;
+
+static GpuState* gpu_states = NULL;
+static int gpu_state_count = 0;
+static int gpu_state_capacity = 0;
+
+static GpuState* get_gpu_state(int gpu_id) {
+    if (gpu_id < 1 || gpu_id > gpu_state_count) return NULL;
+    return &gpu_states[gpu_id - 1];
+}
+
+static void gpu_fire_void(void* boxed) {
+    AeClosure* c = (AeClosure*)boxed;
+    if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+}
+
+static void gpu_fire_dt(void* boxed, double dt) {
+    AeClosure* c = (AeClosure*)boxed;
+    if (c && c->fn) ((void(*)(void*, double))c->fn)(c->env, dt);
+}
+
+static void gpu_fire_wh(void* boxed, int w, int h) {
+    AeClosure* c = (AeClosure*)boxed;
+    if (c && c->fn) ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env,
+                                                               (intptr_t)w, (intptr_t)h);
+}
+
+@implementation AetherGpuView
+
+- (void)prepareOpenGL {
+    [super prepareOpenGL];
+    GLint one = 1;
+    [[self openGLContext] setValues:&one forParameter:NSOpenGLContextParameterSwapInterval];
+}
+
+/* The framebuffer size is in PIXELS. Reporting points here would under-size
+ * glViewport on every Retina display, which is the classic "renders into the
+ * bottom-left quarter" bug. */
+- (NSSize)aeui_backingPixels {
+    NSRect b = [self bounds];
+    return [self convertRectToBacking:b].size;
+}
+
+- (void)reshape {
+    [super reshape];
+    GpuState* st = get_gpu_state(self.gpuId);
+    if (!st) return;
+    NSSize px = [self aeui_backingPixels];
+    int w = (int)lround(px.width), h = (int)lround(px.height);
+    if (w == st->last_w && h == st->last_h) return;
+    st->last_w = w; st->last_h = h;
+    [[self openGLContext] makeCurrentContext];
+    if (st->on_resize) gpu_fire_wh(st->on_resize, w, h);
+}
+
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    GpuState* st = get_gpu_state(self.gpuId);
+    if (!st) return;
+    NSOpenGLContext* ctx = [self openGLContext];
+    [ctx makeCurrentContext];
+
+    if (!st->realized) {
+        st->realized = 1;
+        NSSize px = [self aeui_backingPixels];
+        st->last_w = (int)lround(px.width);
+        st->last_h = (int)lround(px.height);
+        if (st->on_realize) gpu_fire_void(st->on_realize);
+        if (st->on_resize)  gpu_fire_wh(st->on_resize, st->last_w, st->last_h);
+    }
+
+    double now = (double)clock() / (double)CLOCKS_PER_SEC;
+    double dt = st->last_render > 0 ? (now - st->last_render) : 0.0;
+    st->last_render = now;
+
+    if (st->on_render) gpu_fire_dt(st->on_render, dt);
+
+    glFlush();
+    [ctx flushBuffer];
+}
+@end
+
+int aether_ui_gpuview_available_impl(void) {
+    return 1;
+}
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    NSOpenGLPixelFormatAttribute accel[] = {
+        NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
+        NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8,
+        NSOpenGLPFADepthSize, 24,
+        NSOpenGLPFADoubleBuffer, NSOpenGLPFAAccelerated, 0
+    };
+    NSOpenGLPixelFormat* pf =
+        [[NSOpenGLPixelFormat alloc] initWithAttributes:accel];
+    if (!pf) {
+        /* No accelerated format: a VM or a headless runner. A software context
+         * still renders correctly, which is what a test asserts on. */
+        NSOpenGLPixelFormatAttribute soft[] = {
+            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
+            NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8,
+            NSOpenGLPFADepthSize, 24, NSOpenGLPFADoubleBuffer, 0
+        };
+        pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:soft];
+    }
+    if (!pf) return 0;
+
+    if (width  <= 0) width  = 1;
+    if (height <= 0) height = 1;
+    AetherGpuView* v =
+        [[AetherGpuView alloc] initWithFrame:NSMakeRect(0, 0, width, height)
+                                 pixelFormat:pf];
+    if (!v) return 0;
+    [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [v setWantsBestResolutionOpenGLSurface:YES];
+
+    /* Same natural-size contract as canvas: the requested size is a starting
+     * point held loosely, not a cage, so the view grows with its pane. */
+    NSLayoutConstraint* wc = [v.widthAnchor  constraintEqualToConstant:width];
+    NSLayoutConstraint* hc = [v.heightAnchor constraintEqualToConstant:height];
+    wc.priority = 150; hc.priority = 150;
+    wc.active = YES;   hc.active = YES;
+    [v setContentHuggingPriority:1
+                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [v setContentHuggingPriority:1
+                  forOrientation:NSLayoutConstraintOrientationVertical];
+
+    if (gpu_state_count >= gpu_state_capacity) {
+        gpu_state_capacity = gpu_state_capacity == 0 ? 8 : gpu_state_capacity * 2;
+        gpu_states = realloc(gpu_states, sizeof(GpuState) * gpu_state_capacity);
+    }
+    GpuState* st = &gpu_states[gpu_state_count];
+    memset(st, 0, sizeof(*st));
+    gpu_state_count++;
+    int gpu_id = gpu_state_count;
+    v.gpuId = gpu_id;
+    st->widget_handle = register_widget_typed((__bridge void*)v, AUI_CANVAS);
+    return gpu_id;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) {
+    GpuState* st = get_gpu_state(gpu_id);
+    return st ? st->widget_handle : 0;
+}
+
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_realize = boxed_closure;
+}
+
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_render = boxed_closure;
+}
+
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_resize = boxed_closure;
+}
+
+void aether_ui_gpuview_request_render_impl(int gpu_id) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (!st) return;
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(st->widget_handle);
+    if (v) [v setNeedsDisplay:YES];
+}
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (!st) return -1;
+    AetherGpuView* v = (AetherGpuView*)(__bridge NSView*)
+        aether_ui_get_widget(st->widget_handle);
+    if (!v) return -1;
+
+    NSOpenGLContext* ctx = [v openGLContext];
+    if (!ctx) return -1;
+    [ctx makeCurrentContext];
+
+    NSSize sz = [v aeui_backingPixels];
+    int w = (int)lround(sz.width), h = (int)lround(sz.height);
+    if (w <= 0 || h <= 0) { w = 1; h = 1; }
+    if (px < 0 || py < 0 || px >= w || py >= h) return -1;
+
+    /* Render one frame into an OFFSCREEN target and read that, rather than
+     * reading whatever is in the window's buffers.
+     *
+     * Two reasons, and the second is the one that matters. A double-buffered
+     * context swaps on present, so reading after the view's own draw samples
+     * the new back buffer and returns black, which looks exactly like a
+     * renderer that never ran. And a view with no window has no DRAWABLE at
+     * all: the default framebuffer goes nowhere, so glClear writes nothing and
+     * every read is zero. An FBO is attached to the context rather than to a
+     * surface, so it renders correctly with no window on screen, which is what
+     * lets a spec assert on real GPU output headlessly.
+     *
+     * The texture is kept and only reallocated when the size changes, so
+     * polling this in a loop does not churn GPU memory. */
+    if (!st->probe_fbo) {
+        glGenFramebuffers(1, &st->probe_fbo);
+        glGenTextures(1, &st->probe_tex);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, st->probe_fbo);
+    if (st->probe_w != w || st->probe_h != h) {
+        glBindTexture(GL_TEXTURE_2D, st->probe_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, st->probe_tex, 0);
+        st->probe_w = w; st->probe_h = h;
+    }
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return -1;
+    }
+
+    glViewport(0, 0, w, h);
+    if (!st->realized) {
+        st->realized = 1;
+        st->last_w = w; st->last_h = h;
+        if (st->on_realize) gpu_fire_void(st->on_realize);
+    }
+    if (st->on_resize) gpu_fire_wh(st->on_resize, w, h);
+    if (st->on_render) gpu_fire_dt(st->on_render, 0.0);
+    glFinish();
+
+    unsigned char rgba[4] = {0, 0, 0, 0};
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    /* GL's origin is bottom-left and every other read-back in this ABI is
+     * top-left, so flip rather than hand callers two conventions. */
+    glReadPixels(px, h - 1 - py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return (int)((rgba[0] << 24) | (rgba[1] << 16) | (rgba[2] << 8) | rgba[3]);
+}
+
+#pragma clang diagnostic pop
 
 int aether_ui_canvas_get_widget(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);

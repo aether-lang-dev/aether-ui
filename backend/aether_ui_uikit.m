@@ -1867,6 +1867,48 @@ int aether_ui_canvas_create_impl(int width, int height) {
     return canvas_id;
 }
 
+
+/* ---------------------------------------------------------------------------
+ * GPU surface (#92) -- not implemented on UIKit yet.
+ *
+ * iOS has no NSOpenGLView and no GtkGLArea. The equivalent is a CAEAGLLayer or
+ * GLKView, and Apple deprecated GL there in favour of Metal harder than on the
+ * Mac, so the right iOS answer is probably a Metal-backed view rather than a
+ * GL one. That is a design question this issue has not settled, and there is no
+ * iOS build of libaether to run it against yet (aether#1385).
+ *
+ * So available() returns 0 and the rest are honest no-ops: an app asks first
+ * and takes its software path, which is a defined answer rather than a
+ * viewport that exists and never draws.
+ * ------------------------------------------------------------------------- */
+int aether_ui_gpuview_available_impl(void) { return 0; }
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    (void)width; (void)height;
+    return 0;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) { (void)gpu_id; return 0; }
+
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_request_render_impl(int gpu_id) { (void)gpu_id; }
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    (void)gpu_id; (void)px; (void)py;
+    return -1;
+}
+
 int aether_ui_canvas_get_widget(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     return cs ? cs->widget_handle : 0;
