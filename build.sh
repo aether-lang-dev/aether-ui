@@ -107,7 +107,7 @@ case "$OS" in
             -L"$AETHER_LIB_PATH" -laether \
             -o "$OUTPUT" \
             -framework AppKit -framework Foundation -framework QuartzCore \
-            -framework CoreText -framework ImageIO -pthread -lm \
+            -framework CoreText -framework ImageIO -framework OpenGL -pthread -lm \
             $AETHER_LIBS $CONTRIB_LIBS
         ;;
     Linux|FreeBSD)
@@ -142,6 +142,7 @@ case "$OS" in
         AETHER_LIBS="$(ae_libs)"
         "$CC_BIN" -O0 -g -pipe \
             $(pkg-config --cflags gtk4) \
+            $(pkg-config --cflags epoxy) \
             $AETHER_INCLUDES $EXTRA_INCLUDES \
             $LIBNOTIFY_CFLAGS \
             "$C_FILE" "$SCRIPT_DIR/backend/aether_ui_gtk4.c" \

@@ -5329,7 +5329,7 @@ int aether_ui_gpuview_create_impl(int width, int height) {
     g_signal_connect(area, "resize",  G_CALLBACK(gpu_on_resize_cb),  st);
     g_signal_connect(area, "render",  G_CALLBACK(gpu_on_render_cb),  st);
 
-    st->widget_handle = register_widget_typed(area, AUI_CANVAS);
+    st->widget_handle = aether_ui_register_widget(area);
     return gpu_id;
 }
 

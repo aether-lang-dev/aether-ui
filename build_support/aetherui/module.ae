@@ -113,6 +113,9 @@ builder ui_backend(root: string) {
         extra_source("${root}/backend/aether_ui_system_extras.c")
         extra_source("${root}/backend/aether_ui_sni.c")
         link_flag("$(pkg-config --cflags gtk4)")
+        // gpuview (#92) includes <epoxy/gl.h>, and gtk4.pc does not expose
+        // epoxy's include path even though GTK4 hard-depends on it.
+        link_flag("$(pkg-config --cflags epoxy)")
         link_flag("$(pkg-config --libs gtk4)")
     }
     if string.equals(os_name, "freebsd") == 1 {
@@ -124,6 +127,9 @@ builder ui_backend(root: string) {
         extra_source("${root}/backend/aether_ui_system_extras.c")
         extra_source("${root}/backend/aether_ui_sni.c")
         link_flag("$(pkg-config --cflags gtk4)")
+        // gpuview (#92) includes <epoxy/gl.h>, and gtk4.pc does not expose
+        // epoxy's include path even though GTK4 hard-depends on it.
+        link_flag("$(pkg-config --cflags epoxy)")
         link_flag("$(pkg-config --libs gtk4)")
     }
     if string.equals(os_name, "darwin") == 1 {
