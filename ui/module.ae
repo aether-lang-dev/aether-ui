@@ -95,7 +95,8 @@ exports (
     table_filter, table_filter_text, table_filter_clear, table_item_at,
     on_sort,
     tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
-    tree_visible_count,
+    tree_visible_count, tree_on_select, tree_selected, tree_select,
+    tree_select_row,
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
     vlist_native,
     vlist_scrollable, vlist_container,
@@ -4657,7 +4658,10 @@ table_count(tp: ptr) -> int {
 //   roots = list.new(); list.add(roots, root as ptr)
 //   t = tree(roots)
 struct TreeNode { label: string, children: ptr, expanded: int }
-struct TreeDef  { roots: ptr, lb: ptr, flat: ptr }
+// sel_node is the SELECTED NODE, not a row index: a flatten re-mints its row
+// objects, so a row index (or a row pointer) means nothing after an
+// expand/collapse. on_sel is the boxed |node: ptr| callback, or null.
+struct TreeDef  { roots: ptr, lb: ptr, flat: ptr, sel_node: ptr, on_sel: ptr }
 
 tree_node(label: string) -> ptr {
     n = malloc(sizeof(TreeNode)) as *TreeNode
@@ -4717,6 +4721,10 @@ _tree_reflatten(tp: ptr) {
     t.flat = list.new()
     _tree_flatten_into(t.flat, t.roots, 0)
     listbox_update(t.lb, t.flat)
+    // The rows are new objects, so listbox_update's item-identity match cannot
+    // carry the selection here. The NODE is the identity that survives a
+    // flatten, so re-place it explicitly.
+    _tree_place_selection(t)
     // CRITICAL: only after the listbox holds the NEW rows. listbox_update
     // stores the list by reference, so freeing first would leave it reading
     // rows that are already gone.
@@ -4727,6 +4735,8 @@ tree(_ctx: ptr, roots: ptr) -> ptr {
     t = malloc(sizeof(TreeDef)) as *TreeDef
     t.roots = roots
     t.flat = null
+    t.sel_node = null
+    t.on_sel = null
     tp = t as ptr
     t.lb = listbox(_ctx, 2) callback |item: ptr, i: int, row: int| {
         tr = item as *TreeRow
@@ -4754,8 +4764,77 @@ tree(_ctx: ptr, roots: ptr) -> ptr {
         }
         _lbl = text(row, node.label)
     }
+    // A row click is a NODE selection. Without this a tree could render a
+    // hierarchy and never tell the app which node the user picked, which is
+    // the one thing a file browser or a scene tree is for.
+    on_select(t.lb) callback |i: int| {
+        tr = _listbox_item_at(t.flat, i)
+        if tr != null {
+            t.sel_node = (tr as *TreeRow).node
+            if t.on_sel != null {
+                cb = unbox_closure(t.on_sel)
+                _tree_invoke_select(cb, t.sel_node)
+            }
+        }
+    }
     _tree_reflatten(tp)
     return tp
+}
+
+_tree_invoke_select(cb: fn, node: ptr) { cb(node) }
+
+// tree_on_select(t) callback |node: ptr| { … } — fires when a row is picked.
+// The NODE is passed rather than a row index, because the index is only
+// meaningful until the next expand or collapse.
+tree_on_select(tp: ptr, cb: fn) {
+    t = tp as *TreeDef
+    t.on_sel = box_closure(cb)
+}
+
+// tree_selected(t) — the selected node, or null. Survives expand/collapse:
+// the node is what is remembered, so collapsing an unrelated branch does not
+// lose it, and it is dropped only when the node itself stops being visible.
+tree_selected(tp: ptr) -> ptr {
+    t = tp as *TreeDef
+    return t.sel_node
+}
+
+// tree_select_row(t, i) — select VISIBLE row i, as a click on it would,
+// on_select included. The row-index sibling of tree_select, matching
+// table_select; use tree_select when you mean a node rather than a position.
+tree_select_row(tp: ptr, i: int) {
+    t = tp as *TreeDef
+    listbox_select(t.lb, i)
+}
+
+// tree_select(t, node) — select a node without firing on_select, the state
+// write an app uses to restore a selection or to open on a chosen node. A node
+// that is not currently visible (an ancestor is collapsed) selects nothing.
+tree_select(tp: ptr, node: ptr) {
+    t = tp as *TreeDef
+    t.sel_node = node
+    _tree_place_selection(t)
+}
+
+// Point the listbox at whichever row now shows the selected node.
+_tree_place_selection(t: *TreeDef) {
+    if t.sel_node == null {
+        _listbox_set_selected_index(t.lb, 0 - 1)
+        return
+    }
+    n = list.size(t.flat)
+    i = 0
+    while i < n {
+        trp, _e = list.get(t.flat, i)
+        if (trp as *TreeRow).node == t.sel_node {
+            _listbox_set_selected_index(t.lb, i)
+            return
+        }
+        i = i + 1
+    }
+    // Not visible any more: keep remembering the node, but show nothing
+    // selected. Re-expanding its parent brings the highlight back.
+    _listbox_set_selected_index(t.lb, 0 - 1)
 }
 
 // Programmatic expand/collapse + a count of currently-visible rows.
