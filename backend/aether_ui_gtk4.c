@@ -1507,13 +1507,20 @@ void aether_ui_textfield_set_text(int handle, const char* text) {
     }
 }
 
+/* Returns a buffer the CALLER owns, matching its textarea sibling and every
+ * other string-returning entry point here (see the @heap externs in
+ * ui/module.ae). Three backends used to hand back a borrowed pointer while
+ * win32 handed back an allocation, so the same ABI call leaked on one platform
+ * and, on macOS, returned an autoreleased buffer valid only until the pool
+ * drained. */
 const char* aether_ui_textfield_get_text(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_ENTRY(w)) {
         GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));
-        return gtk_entry_buffer_get_text(buf);
+        const char* t = gtk_entry_buffer_get_text(buf);
+        return strdup(t ? t : "");
     }
-    return "";
+    return strdup("");
 }
 
 // Securefield — password entry (masked input).
