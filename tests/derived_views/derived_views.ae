@@ -1,0 +1,106 @@
+// Leak probe for the derived lists the toolkit rebuilds on every update: the
+// tree's flattened rows, the table's filtered view, and the listbox's reorder.
+// Each used to be replaced without reclaiming the previous one, so a user
+// expanding a tree, typing in a search box or dragging rows leaked steadily
+// for as long as the window stayed open.
+//
+// Runs headless and exits 0. Its value is what a leak checker sees:
+//
+//   AETHER_UI_HEADLESS=1 leaks --atExit -- .../bin/derived_views
+//
+// It also asserts the reorder is a real rotation of the app's OWN list, which
+// the rebuild it replaced could not do: the app read back the pre-drag order.
+
+import ui
+import ui (root_vstack, tree, tree_node, tree_refresh,
+    table, table_cols, table_col, table_update, table_filter_text,
+    listbox, listbox_update, listbox_move)
+import std.list
+import std.string
+
+extern exit(code: int)
+
+struct Row { name: string }
+
+row(nm: string) -> ptr {
+    r = malloc(sizeof(Row)) as *Row
+    r.name = nm
+    return r as ptr
+}
+
+extern malloc(size: int) -> ptr
+
+fail(msg: string) {
+    println("  FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+
+    // --- tree: one flatten per refresh, each minting a row per node --------
+    roots = list.new()
+    i = 0
+    while i < 50 {
+        _ = list.add(roots, tree_node("node ${i}"))
+        i = i + 1
+    }
+    t = tree(root, roots)
+    r = 0
+    while r < 200 {
+        tree_refresh(t)
+        r = r + 1
+    }
+
+    // --- table: one filtered view per keystroke ---------------------------
+    items = list.new()
+    k = 0
+    while k < 50 {
+        _ = list.add(items, row("item ${k}"))
+        k = k + 1
+    }
+    cols = table_cols()
+    table_col(cols, "name", 120)
+    tb = table(root, cols) |item: ptr, c: int| {
+        return (item as *Row).name
+    }
+    table_update(tb, items)
+    // Every keystroke of a search box, then clearing it.
+    q = 0
+    while q < 100 {
+        table_filter_text(tb, "item 1")
+        table_filter_text(tb, "item")
+        table_filter_text(tb, "")
+        q = q + 1
+    }
+
+    // --- listbox: reorder rotates the app's own list ----------------------
+    lb = listbox(root, 2) |item: ptr, ix: int, rw: int| {
+    }
+    listbox_update(lb, items)
+    m = 0
+    while m < 200 {
+        listbox_move(lb, 0, 49)
+        listbox_move(lb, 49, 0)
+        m = m + 1
+    }
+    // 200 round trips leave the order as it started, in the SAME list object.
+    first, _f = list.get(items, 0)
+    last, _l = list.get(items, 49)
+    if (first as *Row).name != "item 0" {
+        fail("reorder did not rotate the app's own list (first = ${(first as *Row).name})")
+    }
+    if (last as *Row).name != "item 49" {
+        fail("reorder lost the tail (last = ${(last as *Row).name})")
+    }
+    // And a single move really moves, in that same list.
+    listbox_move(lb, 0, 3)
+    moved, _m = list.get(items, 3)
+    shifted, _s = list.get(items, 0)
+    if (moved as *Row).name != "item 0" { fail("move did not place the item at `to`") }
+    if (shifted as *Row).name != "item 1" { fail("move did not slide the span") }
+
+    println("derived_views: rebuilds reclaim their predecessor, reorder is in place")
+    exit(0)
+}
