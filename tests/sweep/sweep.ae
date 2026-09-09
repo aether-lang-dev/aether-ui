@@ -1,0 +1,54 @@
+import ui
+import ui (root_vstack, text, btn, create_styles, st_bg, use_styles,
+    color_scheme, role, scheme_sheet, command, command_fire,
+    ui_state, ui_set, ui_get, bind_text, ui_state_s, ui_set_s,
+    computed_s, tooltip, a11y_label, set_text)
+import std.string
+extern exit(code: int)
+
+main() {
+    root = root_vstack(4) {
+    }
+    lbl = text(root, "x")
+
+    // --- stylesheets applied repeatedly (a theme flip does this) ---------
+    i = 0
+    while i < 300 {
+        sh = create_styles()
+        st_bg(sh, "text", 0x102030)
+        st_bg(sh, ".chip", 0x405060)
+        use_styles(sh)
+        i = i + 1
+    }
+
+    // --- colour schemes generating sheets --------------------------------
+    j = 0
+    while j < 300 {
+        sc = color_scheme()
+        role(sc, "primary", 0x5C458A)
+        role(sc, "on_primary", 0xFFFFFF)
+        _sh2 = scheme_sheet(sc)
+        j = j + 1
+    }
+
+    // --- commands --------------------------------------------------------
+    k = 0
+    while k < 300 {
+        c = command("Save ${k}", "Ctrl+S", || { })
+        command_fire(c)
+        k = k + 1
+    }
+
+    // --- reactive state + bindings ---------------------------------------
+    st = ui_state(0.0)
+    bind_text(lbl, st)
+    m = 0
+    while m < 300 {
+        _v = ui_set(st, 1.0 * m)
+        _g = ui_get(st)
+        m = m + 1
+    }
+
+    println("sweep: styles, schemes, commands and bindings exercised")
+    exit(0)
+}

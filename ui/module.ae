@@ -53,6 +53,7 @@ exports (
     color_scheme, role, role_of, scheme_sheet, scheme_into,
     scheme_for_mode, use_scheme_pair,
     use_styles, current_styles, use_styles_pair, on_appearance_change,
+    free_styles, free_scheme,
     load_styles,
     ui_states, add_state, set_state, current_state,
     states, on_state,
@@ -2490,6 +2491,67 @@ apply_styles(target: int, sp: ptr) {
 use_styles(sp: ptr) {
     aether_ui_current_sheet_set_impl(sp)
     apply_styles(0, sp)
+}
+
+// free_styles(sheet) — give a sheet back, with every rule in it. Returns 1 on
+// release, 0 if it refused.
+//
+// A sheet built once at startup and applied for the life of the app never
+// needs this. It is for an app that BUILDS sheets: a theme editor regenerating
+// one as the user drags a colour, or a scheme_sheet() rebuilt per change.
+// There was no way to release one at all, so every rebuild leaked the sheet,
+// its rule list and every rule in it.
+//
+// CRITICAL: releasing the sheet that is CURRENTLY applied is refused, and
+// returns 0. The toolkit keeps the applied sheet and re-reads its rules on
+// every re-theme and every widget that asks; freeing it would leave those
+// reads on freed memory. Apply the replacement first, then release the old
+// one, which is the order a theme swap wants anyway.
+//
+// The strings a rule holds (its selector, its font family) came from the
+// caller and are left alone: the toolkit never took ownership of them, and
+// releasing a borrowed string is how a double free starts.
+free_styles(sp: ptr) -> int {
+    if sp == null { return 0 }
+    if aether_ui_current_sheet_get_impl() == sp { return 0 }
+    sh = sp as *StyleSheet
+    if sh.rules != null {
+        n = list.size(sh.rules)
+        i = 0
+        while i < n {
+            rp, _e = list.get(sh.rules, i)
+            if rp != null { free(rp) }
+            i = i + 1
+        }
+        list.free(sh.rules)
+        sh.rules = null
+    }
+    free(sp)
+    return 1
+}
+
+// free_scheme(sc) — give a colour scheme back, with its role entries. Returns
+// 1 on release, 0 if there was nothing to release.
+//
+// A scheme is a GENERATOR: scheme_sheet() reads it once and emits an ordinary
+// sheet, so the scheme is finished the moment that returns and nothing holds a
+// pointer into it. That makes it always safe to release, unlike a sheet.
+free_scheme(scp: ptr) -> int {
+    if scp == null { return 0 }
+    sc = scp as *ColorScheme
+    if sc.roles != null {
+        n = list.size(sc.roles)
+        i = 0
+        while i < n {
+            rp, _e = list.get(sc.roles, i)
+            if rp != null { free(rp) }
+            i = i + 1
+        }
+        list.free(sc.roles)
+        sc.roles = null
+    }
+    free(scp)
+    return 1
 }
 
 current_styles() -> ptr {

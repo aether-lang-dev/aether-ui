@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`free_styles(sheet)` and `free_scheme(sc)`**: a sheet or colour scheme an
+  app builds can now be given back. Neither had a release, so an app that
+  BUILDS sheets, a theme editor regenerating one as a colour slider moves,
+  leaked the sheet, its rule list and every rule in it on each rebuild.
+  Measured over 600 rebuilds of both: 8486 leaks / 649 KB before, 154 after,
+  which is the fixed baseline.
+
+  Releasing the sheet that is CURRENTLY applied is refused and returns 0: the
+  toolkit re-reads its rules on every re-theme, so freeing it would leave those
+  reads on freed memory. Apply the replacement first, then release the old one,
+  which is the order a theme swap wants anyway. A scheme is a generator,
+  finished the moment `scheme_sheet()` returns, so it is always releasable.
+
+  The strings a rule holds (its selector, its font family) came from the caller
+  and are left alone: the toolkit never took ownership, and releasing a
+  borrowed string is how a double free starts.
+
+### Added
+
 - **`undo_group(label) callback { ... }`**: every `undoable()` recorded inside
   collapses into ONE undo step carrying that label (`SWING_ENVY.md` C10). A
   drag that records an edit per pixel is one gesture to the user, and undo now
