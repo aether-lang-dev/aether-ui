@@ -38,6 +38,7 @@ exports (
     bg_color, text_color, font_size, font_bold, corner_radius,
     opacity, enabled, tooltip, onclick,
     style_bg_color, style_text_color, style_font_size, style_font_bold,
+    styled_bg, styled_fg,
     style_bg_gradient, style_corner_radius, style_opacity, style_border,
     style_hover, style_active,
     style_enabled, style_tooltip,
@@ -299,6 +300,8 @@ extern aether_ui_tabs_set_on_change(tabs_handle: int, boxed_closure: ptr)
 
 // Group 4: Styling
 extern aether_ui_set_bg_color(handle: int, r: float, g: float, b: float, a: float)
+extern aether_ui_styled_bg_impl(handle: int) -> int
+extern aether_ui_styled_fg_impl(handle: int) -> int
 extern aether_ui_set_bg_gradient(handle: int,
                                  r1: float, g1: float, b1: float,
                                  r2: float, g2: float, b2: float, vertical: int)
@@ -1718,6 +1721,29 @@ onclick(_ctx: ptr, handler: fn) {
 // handle so calls chain via UFCS: title.style_font_size(20).style_font_bold()
 // (x.f(args) desugars to f(x, args) — Aether #928/#934). Existing flat
 // calls keep working; UFCS is a last-resort fallback. ---
+
+
+// styled_bg(h) reads back the background as packed 0xRRGGBB, or -1 when the
+// widget has no colour of its own (#109).
+//
+// It is not a getter over what was set. Where the two can disagree it answers
+// from what PAINTS: an NSScrollView drawing its own background over the layer
+// reports what the scroll view draws, and a widget with hover or active
+// styling reports the layer, because those swap the colour for the duration of
+// an interaction. A program that sets a background otherwise has no way to ask
+// whether it is on screen, which is what a colour chip beside a set of sliders
+// needs to know: a chip that never painted looks exactly like a chip showing a
+// very dark colour.
+styled_bg(handle: int) -> int {
+    return aether_ui_styled_bg_impl(handle)
+}
+
+// styled_fg(h) is the same readback for the text colour, packed 0xRRGGBB or
+// -1. Bound alongside its twin rather than after someone else reports it
+// missing.
+styled_fg(handle: int) -> int {
+    return aether_ui_styled_fg_impl(handle)
+}
 
 style_bg_color(handle: int, r: float, g: float, b: float, a: float) -> int {
     aether_ui_set_bg_color(handle, r, g, b, a)

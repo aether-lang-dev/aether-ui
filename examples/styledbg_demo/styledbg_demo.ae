@@ -1,0 +1,52 @@
+// #111 repro: styled_bg must not report a colour the screen does not have.
+//
+// A widget is given a runtime colour with style_bg_color while the tree is
+// still being built, and the style sheet is applied afterwards. The sheet
+// clears the layer background, so the widget paints nothing, and the readback
+// kept reporting the colour that was asked for.
+//
+// Prints the readback for three orderings so the difference is visible without
+// a screenshot.
+import ui
+import ui (window, vstack, text, style_bg_color, styled_bg, use_styles,
+    create_styles, st_bg, st_radius, st_border, add_css_class,
+    timer, timer_cancel, app_quit)
+import std.os (os_getenv)
+
+main() {
+    window("styled bg", 300, 200) {
+        vstack(8) {
+            // 1. colour set, no sheet involved at all
+            a = text("plain")
+            _ = style_bg_color(a, 0.24, 0.52, 0.88, 1.0)
+
+            // 2. colour set BEFORE the sheet is applied (the reported case)
+            b = text("before sheet")
+            _ = style_bg_color(b, 0.24, 0.52, 0.88, 1.0)
+
+            // 3. a widget the sheet itself colours
+            c = text("from sheet")
+
+            // 4. the reported shape: a CLASS whose rule sets something other
+            // than a background, applied after a runtime colour.
+            d = text("class, non-bg rule")
+            add_css_class(d, "chip")
+            _ = style_bg_color(d, 0.24, 0.52, 0.88, 1.0)
+
+            sheet = create_styles()
+            // The sheet says nothing about text, so a runtime colour on a
+            // text widget has no rule to be overridden by.
+            st_bg(sheet, "button", 0x203040)
+            st_radius(sheet, "chip", 4.0)
+            st_border(sheet, "chip", 1.0, 0x101010)
+            use_styles(sheet)
+
+            tid = 0
+            tid = timer(120) callback {
+                timer_cancel(tid)
+                println("plain=${styled_bg(a)} before_sheet=${styled_bg(b)} from_sheet=${styled_bg(c)} class_nonbg=${styled_bg(d)}")
+                app_quit()
+            }
+        }
+    }
+}
