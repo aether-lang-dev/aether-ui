@@ -39,6 +39,21 @@ double floatarr_get_unchecked(void* arr, int index) {
     return floatarr_get_raw(arr, index);
 }
 
+// The undo/redo edit store reclaims a dropped edit's boxed closures through
+// the env's own destructor (aether_ui_system_extras.c: undo_edit_release).
+// That is the runtime's aether_closure_env_free; the real thing runs the
+// `_dtor` codegen puts first in every env struct, and this mirrors it so the
+// gate links without a build of libaether.
+typedef struct { void (*dtor)(void*); } AeEnvHeaderStub;
+void aether_closure_env_free(void* env);
+void aether_closure_env_free(void* env) {
+    if (!env) return;
+    AeEnvHeaderStub* h = (AeEnvHeaderStub*)env;
+    if (h->dtor) { h->dtor(env); return; }
+    free(env);
+}
+
+
 static int failures = 0;
 static const char* renderer = "gdiplus";
 
