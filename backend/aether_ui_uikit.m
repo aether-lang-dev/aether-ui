@@ -703,13 +703,20 @@ void aether_ui_textfield_set_text(int handle, const char* text) {
         ((UITextField*)v).text = [NSString stringWithUTF8String:text ? text : ""];
 }
 
+/* Returns a buffer the CALLER owns, matching its textarea sibling and every
+ * other string-returning entry point here (see the @heap externs in
+ * ui/module.ae). Three backends used to hand back a borrowed pointer while
+ * win32 handed back an allocation, so the same ABI call leaked on one platform
+ * and, on macOS, returned an autoreleased buffer valid only until the pool
+ * drained. */
 const char* aether_ui_textfield_get_text(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[UITextField class]]) {
         UITextField* f = (UITextField*)v;
-        return f.text ? f.text.UTF8String : "";
+        const char* u = f.text ? f.text.UTF8String : "";
+        return strdup(u ? u : "");
     }
-    return "";
+    return strdup("");
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Undo leaked two closures per edit, for as long as the app ran.** An
+  undoable edit owns a `do` and an `undo` closure, and dropping an edit freed
+  only its label. Pushing a new edit after an undo truncates the redo tail,
+  which is simply how people work, so every undo-then-edit cycle abandoned
+  both boxes. The overflow path at 128 edits dropped the oldest the same way.
+  Both now reclaim the edit through the env's own destructor, so the
+  references its captures own are released too, not just the struct. Measured
+  with `leaks` on 2000 push/undo cycles: 4000 leaks / 128 KB before, zero
+  after.
+
+### Added
+
+- `tests/undo_stack` pins the stack's rules alongside the reclaim: an edit
+  runs its action on being recorded, undo and redo step and report whether
+  they moved, stepping past either end is a no-op rather than a wrap, and
+  pushing after an undo truncates the redo tail.
+
+### Fixed
+
+- **Reading a string out of the toolkit leaked it, every time.** Every
+  string-returning backend entry point allocates, and none was marked `@heap`,
+  the annotation that tells the compiler the caller owns the buffer. So nothing
+  ever freed them: reading one text field in a poll loop leaked on every read,
+  on every backend, and so did every `ui_get_s`, clipboard read and file-dialog
+  result. Now annotated, and measured on 2000 reads: 2285 leaks / 83 KB before,
+  277 after, which is the fixed Foundation baseline.
+
+- **`textfield_get_text` meant two different things depending on the
+  platform.** Three backends returned a BORROWED pointer while win32 returned
+  an allocation, so the same ABI call leaked on Windows and, on macOS, handed
+  back an autoreleased buffer valid only until the pool drained: a read whose
+  result could change under the caller. All four now return an allocation, like
+  the `textarea` sibling always did.
+
+  The externs that must NOT be annotated are named in `ui/module.ae` with the
+  reason, since `@heap` on a function returning a literal or a pointer into
+  backend state would free memory the caller never owned.
+
+### Fixed
+
 - **A menu item driven from a spec ran its closure on the HTTP thread**
   (#116). Every `/widget/...` route goes through the backend's
   `dispatch_action` hook, which hops to the UI thread and blocks;

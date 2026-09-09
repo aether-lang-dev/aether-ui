@@ -1,0 +1,82 @@
+// The undo stack's rules, and the reclaim that goes with them.
+//
+// An edit owns two boxed closures. Dropping one freed only its label, and
+// undo-then-edit truncates the redo tail every time, which is simply how
+// people work: an editor leaked two closure boxes per edit for as long as it
+// ran. Measured with `leaks` on the loop at the end: 3998 leaks before, 0
+// after.
+//
+//   AETHER_UI_HEADLESS=1 leaks --atExit -- .../bin/undo_stack
+
+import ui
+import ui (root_vstack, undoable, undo, redo, undo_depth, redo_depth, undo_label)
+
+extern exit(code: int)
+
+var n = 0
+var bad = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+check_s(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    _r = root_vstack(4) {
+    }
+
+    // undoable RUNS the action now and records the pair.
+    undoable("add one", || { n = n + 1 }, || { n = n - 1 })
+    check("the action ran", n, 1)
+    check("one edit to undo", undo_depth(), 1)
+    check("nothing to redo", redo_depth(), 0)
+    check_s("label is the top edit's", undo_label(), "add one")
+
+    undoable("add ten", || { n = n + 10 }, || { n = n - 10 })
+    check("both edits applied", n, 11)
+    check("two to undo", undo_depth(), 2)
+
+    check("undo reports it stepped", undo(), 1)
+    check("undo ran the inverse", n, 1)
+    check("one left to undo", undo_depth(), 1)
+    check("one to redo", redo_depth(), 1)
+
+    check("redo reports it stepped", redo(), 1)
+    check("redo re-applied", n, 11)
+    check("nothing to redo again", redo_depth(), 0)
+
+    // Undoing past the bottom is a no-op, not an error and not a wrap.
+    _a = undo()
+    _b = undo()
+    check("both undone", n, 0)
+    check("undo at the bottom reports nothing", undo(), 0)
+    check("depth stays at zero", undo_depth(), 0)
+    check("redo at the top reports nothing after redoing all", redo_depth(), 2)
+
+    // Pushing after an undo truncates the redo tail (the classic rule).
+    _c = redo()
+    _d = redo()
+    check("redone to the top", n, 11)
+    _e = undo()
+    check("one undo back", n, 1)
+    check("one redo waiting", redo_depth(), 1)
+    undoable("add one hundred", || { n = n + 100 }, || { n = n - 100 })
+    check("the new edit applied", n, 101)
+    check("the redo tail is gone", redo_depth(), 0)
+    check("two undoable again", undo_depth(), 2)
+
+    // The loop the leak check runs on: every cycle truncates a redo tail, so
+    // every cycle drops an edit and must reclaim both of its closures.
+    i = 0
+    while i < 2000 {
+        undoable("edit", || { n = n + 1 }, || { n = n - 1 })
+        _u = undo()
+        i = i + 1
+    }
+
+    if bad > 0 { println("undo_stack: ${bad} mismatch(es)")  exit(1) }
+    println("undo_stack: push/undo/redo rules hold and dropped edits are reclaimed")
+    exit(0)
+}
