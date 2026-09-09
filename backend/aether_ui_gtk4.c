@@ -5043,15 +5043,225 @@ void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
 // (same replay as canvas_write_png). Returns packed 0xAARRGGBB, or -1 on
 // error. The honest primitive for pixel assertions (group opacity, shadows)
 // in headless tests and the driver's /canvas/{id}/pixel route.
-/* Native collection backing: not implemented on this backend, so the DSL
-   keeps its composed window path. Answering 0 here is the whole contract;
-   the rest exist so the symbols resolve. */
-int aether_ui_native_list_available_impl(void) { return 0; }
-int aether_ui_native_list_create_impl(int horizontal, int window_rows) { return 0; }
-void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) { }
-void aether_ui_native_list_set_count_impl(int handle, int count) { }
-void aether_ui_native_list_scroll_to_impl(int handle, int index) { }
-int aether_ui_native_list_first_visible_impl(int handle) { return 0; }
+/* ── Native collection backing for vlist ────────────────────────────
+   GtkListView realizes only the rows its viewport needs and recycles the
+   widgets behind them, so virtualization becomes the platform's job instead
+   of window arithmetic in the DSL. Rows are built by calling back into the
+   Aether render closure with (index, container_handle), the same closure the
+   composed path uses, so the driver observes rows identically either way.
+
+   The factory's phases matter here. setup creates a row container ONCE per
+   recycled widget; bind fills it for whatever position it now shows and so
+   must first clear what the previous position left; teardown unregisters it.
+   That last one is not optional: the registry holds a raw GtkWidget*, so a
+   row torn down without unregistering leaves a dangling pointer the driver
+   will happily walk. */
+
+#define AEUI_LIST_ROW_H 24
+
+typedef struct {
+    AeClosure* builder;
+    int        n;
+    int        n_setup;     /* diagnostics: how many row widgets were made */
+    int        n_bind;      /* how many were filled for a position */
+    int        n_unbind;    /* how many were recycled back out */
+} AeuiListState;
+
+static void aeui_list_setup(GtkSignalListItemFactory* factory,
+                            GtkListItem* item, gpointer user_data) {
+    AeuiListState* sst = (AeuiListState*)user_data;
+    if (sst) sst->n_setup++;
+    int handle = aether_ui_vstack_create(0);
+    GtkWidget* box = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!box) return;
+    gtk_widget_set_size_request(box, -1, AEUI_LIST_ROW_H);
+    g_object_set_data(G_OBJECT(item), "aeui-row-handle", GINT_TO_POINTER(handle));
+    gtk_list_item_set_child(item, box);
+}
+
+static void aeui_list_bind(GtkSignalListItemFactory* factory,
+                           GtkListItem* item, gpointer user_data) {
+    AeuiListState* st = (AeuiListState*)user_data;
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
+    if (!st || handle <= 0) return;
+    st->n_bind++;
+    /* The widget is recycled, so whatever the previous position drew has to
+       go before this one draws. */
+    aether_ui_clear_children_impl(handle);
+    if (st->builder && st->builder->fn) {
+        guint pos = gtk_list_item_get_position(item);
+        ((void(*)(void*, intptr_t, intptr_t))st->builder->fn)(
+            st->builder->env, (intptr_t)pos, (intptr_t)handle);
+    }
+}
+
+/* A recycled row must leave NOTHING behind, and in GTK4 that is unbind, not
+   teardown. GtkListView pools its widgets: teardown fires only when the pool
+   itself is destroyed, so hanging the cleanup there left every row that had
+   ever been bound still registered with its last content. The driver then saw
+   205 rows for a window of 10, which is the pool's size and not the list's.
+   AppKit's didRemoveRowView: is this hook, not the destruction one. */
+static void aeui_list_unbind(GtkSignalListItemFactory* factory,
+                             GtkListItem* item, gpointer user_data) {
+    AeuiListState* ust = (AeuiListState*)user_data;
+    if (ust) ust->n_unbind++;
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
+    if (handle > 0) aether_ui_clear_children_impl(handle);
+}
+
+static void aeui_list_teardown(GtkSignalListItemFactory* factory,
+                               GtkListItem* item, gpointer user_data) {
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "aeui-row-handle"));
+    if (handle <= 0) return;
+    GtkWidget* box = (GtkWidget*)aether_ui_get_widget(handle);
+    if (box) unregister_widget_tree(box);
+    g_object_set_data(G_OBJECT(item), "aeui-row-handle", GINT_TO_POINTER(0));
+}
+
+int aether_ui_native_list_available_impl(void) { return 1; }
+
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
+    /* A horizontal list has no GtkListView shape here; the DSL keeps its
+       composed path for those rather than pretending otherwise. */
+    if (horizontal) return 0;
+    ensure_gtk_init();
+
+    int rows = window_rows > 0 ? window_rows : 10;
+
+    AeuiListState* st = g_new0(AeuiListState, 1);
+
+    GtkStringList* model = gtk_string_list_new(NULL);
+    GtkNoSelection* sel = gtk_no_selection_new(G_LIST_MODEL(model));
+    GtkListItemFactory* factory = gtk_signal_list_item_factory_new();
+    g_signal_connect(factory, "setup", G_CALLBACK(aeui_list_setup), st);
+    g_signal_connect(factory, "bind", G_CALLBACK(aeui_list_bind), st);
+    g_signal_connect(factory, "unbind", G_CALLBACK(aeui_list_unbind), st);
+    g_signal_connect(factory, "teardown", G_CALLBACK(aeui_list_teardown), st);
+
+    GtkWidget* list = gtk_list_view_new(GTK_SELECTION_MODEL(sel), factory);
+
+    GtkWidget* scrolled = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), list);
+    /* The viewport is exactly the window the list was asked for. size_request
+       is only a MINIMUM: the parent box stretched the scrolled window and
+       GtkListView filled the space, realizing 205 rows instead of 10. Pinning
+       min and max content height, with vexpand off, makes the viewport the
+       window in both directions. */
+    int viewport_h = rows * AEUI_LIST_ROW_H;
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scrolled),
+                                               viewport_h);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scrolled),
+                                               viewport_h);
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scrolled),
+                                                     FALSE);
+    gtk_widget_set_vexpand(scrolled, FALSE);
+    gtk_widget_set_valign(scrolled, GTK_ALIGN_START);
+
+    g_object_set_data(G_OBJECT(scrolled), "aeui-list-state", st);
+    g_object_set_data(G_OBJECT(scrolled), "aeui-list-model", model);
+    g_object_set_data(G_OBJECT(scrolled), "aeui-list-view", list);
+
+    return aether_ui_register_widget(scrolled);
+}
+
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    if (st) st->builder = (AeClosure*)builder;
+}
+
+void aether_ui_native_list_set_count_impl(int handle, int count) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    GtkStringList* model = g_object_get_data(G_OBJECT(w), "aeui-list-model");
+    if (!st || !model) return;
+    int n = count < 0 ? 0 : count;
+
+    /* The model supplies POSITIONS only; a row's content comes from the
+       Aether side by index, so these strings are never read. */
+    guint have = g_list_model_get_n_items(G_LIST_MODEL(model));
+    /* ONE splice, not n appends. Every append emits items-changed and
+       GtkListView reacts to each, so building a 1000 row model row by row
+       makes it realize and bind against whatever viewport it has at the time,
+       which during window construction is nothing. Splicing once gives it a
+       single change to respond to, after which it realizes lazily against the
+       real viewport. */
+    const char** blanks = g_new0(const char*, (gsize)n + 1);
+    for (int i = 0; i < n; i++) blanks[i] = "";
+    gtk_string_list_splice(model, 0, have, (const char* const*)blanks);
+    g_free(blanks);
+    st->n = n;
+
+    /* Deliberately NO layout pump here. vlist_set runs while the window is
+       still being built, so the viewport is still zero; pumping the main
+       context at that point makes GtkListView realize against a zero page
+       size and bind hundreds of rows that the later, correct allocation never
+       reclaims. Left alone it realizes lazily once it has a real viewport,
+       which is the whole point of handing virtualization to the platform. */
+    GtkWidget* list = g_object_get_data(G_OBJECT(w), "aeui-list-view");
+    if (getenv("AETHER_UI_LIST_DEBUG")) {
+        GtkAdjustment* a =
+            gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(w));
+        fprintf(stderr,
+                "[list] n=%d sw_h=%d list_h=%d page=%.1f upper=%.1f\n",
+                n, gtk_widget_get_height(w),
+                list ? gtk_widget_get_height(list) : -1,
+                a ? gtk_adjustment_get_page_size(a) : -1.0,
+                a ? gtk_adjustment_get_upper(a) : -1.0);
+    }
+}
+
+void aether_ui_native_list_scroll_to_impl(int handle, int index) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    if (!st || st->n <= 0) return;
+    int i = index < 0 ? 0 : (index >= st->n ? st->n - 1 : index);
+    GtkAdjustment* adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(w));
+    if (!adj) return;
+    /* The row height is whatever GTK actually laid out, not what was asked
+       for: a row carries padding, so a 24px request measured 28. Deriving it
+       from the adjustment keeps scroll_to landing on the requested row, which
+       is what vlist_scroll_to means by the window's first row. */
+    double upper_now = gtk_adjustment_get_upper(adj);
+    double row_h = (st->n > 0 && upper_now > 0.0)
+                 ? upper_now / (double)st->n
+                 : (double)AEUI_LIST_ROW_H;
+    double target = (double)i * row_h;
+    double maxv = gtk_adjustment_get_upper(adj) - gtk_adjustment_get_page_size(adj);
+    if (maxv < 0.0) maxv = 0.0;
+    if (target > maxv) target = maxv;
+    gtk_adjustment_set_value(adj, target);
+    if (getenv("AETHER_UI_LIST_DEBUG")) {
+        fprintf(stderr,
+                "[list/scroll] i=%d sw_h=%d page=%.1f upper=%.1f val=%.1f "
+                "setup=%d bind=%d unbind=%d live=%d\n",
+                i, gtk_widget_get_height(w),
+                gtk_adjustment_get_page_size(adj),
+                gtk_adjustment_get_upper(adj),
+                gtk_adjustment_get_value(adj),
+                st->n_setup, st->n_bind, st->n_unbind,
+                st->n_bind - st->n_unbind);
+    }
+}
+
+int aether_ui_native_list_first_visible_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return 0;
+    GtkAdjustment* adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(w));
+    if (!adj) return 0;
+    AeuiListState* st = g_object_get_data(G_OBJECT(w), "aeui-list-state");
+    double upper_now = gtk_adjustment_get_upper(adj);
+    double row_h = (st && st->n > 0 && upper_now > 0.0)
+                 ? upper_now / (double)st->n
+                 : (double)AEUI_LIST_ROW_H;
+    if (row_h <= 0.0) return 0;
+    return (int)(gtk_adjustment_get_value(adj) / row_h);
+}
 
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height) {
