@@ -1,0 +1,93 @@
+// A tree must be able to say which node the user picked, and keep saying it
+// across an expand or collapse.
+//
+// The tree rendered a hierarchy and wired only its disclosure triangles: no
+// selection, no callback, no reader. An app could draw a file browser and had
+// no way to learn what was clicked. And selection cannot ride on the row here
+// even now that listbox_update carries it by item, because a flatten re-mints
+// every row object, so the identity that survives has to be the NODE.
+
+import ui
+import ui (root_vstack, tree, tree_node, tree_add_child, tree_refresh,
+    tree_set_expanded, tree_select, tree_selected, tree_on_select,
+    tree_visible_count, tree_select_row)
+import std.list
+
+extern exit(code: int)
+
+fail(msg: string) {
+    println("  FAIL: ${msg}")
+    exit(1)
+}
+
+check(label: string, got: int, want: int) {
+    if got != want { fail("${label} got=${got} want=${want}") }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+
+    // docs/
+    //   report
+    //   notes
+    // media/
+    //   photo
+    docs = tree_node("docs")
+    report = tree_node("report")
+    notes = tree_node("notes")
+    tree_add_child(docs, report)
+    tree_add_child(docs, notes)
+    media = tree_node("media")
+    photo = tree_node("photo")
+    tree_add_child(media, photo)
+
+    roots = list.new()
+    _ = list.add(roots, docs)
+    _ = list.add(roots, media)
+
+    t = tree(root, roots)
+    check("collapsed tree shows both roots", tree_visible_count(t), 2)
+
+    // Nothing picked yet.
+    if tree_selected(t) != null { fail("a fresh tree reports a selection") }
+
+    // Expand docs: docs, report, notes, media.
+    tree_set_expanded(docs, 1)
+    tree_refresh(t)
+    check("expanded tree shows four rows", tree_visible_count(t), 4)
+
+    // Pick "notes" (row 2) as a click would, and read the NODE back.
+    seen = 0
+    tree_on_select(t) callback |node: ptr| {
+        seen = seen + 1
+    }
+    tree_select_row(t, 2)
+    if tree_selected(t) != notes { fail("clicking row 2 did not select `notes`") }
+    check("on_select fired once", seen, 1)
+
+    // Expanding an UNRELATED branch moves `notes` to a different row. The
+    // selection is a node, so it follows.
+    tree_set_expanded(media, 1)
+    tree_refresh(t)
+    check("both branches expanded", tree_visible_count(t), 5)
+    if tree_selected(t) != notes { fail("expanding another branch lost the selection") }
+
+    // Collapsing the selection's own parent hides it. The tree keeps
+    // remembering the node, and re-expanding brings it back.
+    tree_set_expanded(docs, 0)
+    tree_refresh(t)
+    if tree_selected(t) != notes { fail("collapsing forgot the node") }
+    tree_set_expanded(docs, 1)
+    tree_refresh(t)
+    if tree_selected(t) != notes { fail("re-expanding did not restore the selection") }
+
+    // A programmatic selection is a state write: no callback echo.
+    before = seen
+    tree_select(t, photo)
+    if tree_selected(t) != photo { fail("tree_select did not take") }
+    check("tree_select does not fire on_select", seen, before)
+
+    println("tree_selection: a tree reports its node and keeps it across expand/collapse")
+    exit(0)
+}

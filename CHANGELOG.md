@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **A tree can say which node was picked** (`tree_on_select`, `tree_selected`,
+  `tree_select`, `tree_select_row`). The tree rendered a hierarchy and wired
+  only its disclosure triangles: there was no selection, no callback and no
+  reader, so an app could draw a file browser or a scene tree and had no way
+  to learn what the user clicked, which is the one thing those are for.
+
+  The selection is a NODE, not a row index. A flatten re-mints every row
+  object, so a row index means nothing after an expand or collapse, and even
+  the item-identity carrying that `listbox_update` now does cannot reach it.
+  Expanding an unrelated branch moves the selected row and keeps it selected;
+  collapsing its parent hides it while the tree goes on remembering the node,
+  so re-expanding brings the highlight back. `tree_select` writes the state
+  without firing `on_select`, so an app syncing its own model does not re-enter
+  its own handler; `tree_select_row` is the click-shaped sibling, matching
+  `table_select`.
+
 ### Fixed
 
 - **A refresh threw away the row you had selected.** `listbox_update` rebuilds
