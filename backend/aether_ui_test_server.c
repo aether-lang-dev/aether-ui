@@ -435,6 +435,37 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
 // ---------------------------------------------------------------------------
 // Request dispatch.
 // ---------------------------------------------------------------------------
+
+/* #116: run a menu/tray activation on the UI thread and hand back the invoke's
+ * own return code, so each route can keep its own reply shape (they predate the
+ * uniform envelope dispatch_and_reply sends, and specs read them).
+ *
+ * These fire an APP CLOSURE, which makes them mutations, and the threading
+ * contract is that every mutation reaches the UI thread through
+ * dispatch_action. They used to call the invoke straight from the HTTP thread:
+ * AppKit's main thread checker flags the resulting -[NSTextField
+ * setStringValue:], and a handler touching a GL context, whose context belongs
+ * to the main thread, segfaults instead.
+ *
+ * Returns -1 when the backend supplies no dispatcher. The caller then invokes
+ * directly, which is exactly what every backend did before this: no worse for
+ * a backend without a UI-thread hop, correct for the ones that have one. */
+static int activate_on_ui_thread(const AetherDriverHooks* h,
+                                 AetherDriverActionKind kind,
+                                 int handle, const char* label) {
+    if (!h || !h->dispatch_action) return -1;
+    AetherDriverActionCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.action = kind;
+    ctx.handle = handle;
+    if (label) {
+        strncpy(ctx.sval, label, sizeof(ctx.sval) - 1);
+        ctx.sval[sizeof(ctx.sval) - 1] = '\0';
+    }
+    h->dispatch_action(&ctx);
+    return ctx.retval;
+}
+
 static void dispatch_and_reply(aether_sock_t client_fd,
                                 const AetherDriverHooks* h,
                                 AetherDriverActionCtx* ctx,
@@ -1283,7 +1314,9 @@ static void handle_request_inner(aether_sock_t client_fd,
                && strstr(path, "/activate")) {
         int handle = extract_id_from_path(path, "/menu/");
         const char* label = extract_query_param(path, "label");
-        int r = aether_ui_menu_item_invoke(handle, label ? label : "");
+        int r = activate_on_ui_thread(h, AETHER_DRV_MENU_ACTIVATE,
+                                      handle, label ? label : "");
+        if (r < 0) r = aether_ui_menu_item_invoke(handle, label ? label : "");
         if (r == 0) send_http(client_fd, 200, "OK", "application/json",
                               "{\"ok\":true}");
         else if (r == 4) send_http(client_fd, 200, "OK", "application/json",
@@ -1359,7 +1392,8 @@ static void handle_request_inner(aether_sock_t client_fd,
             char* amp = strchr(label, '&'); if (amp) *amp = '\0';
             url_decode(label);
         }
-        int r = aether_ui_tray_menu_activate(id, label);
+        int r = activate_on_ui_thread(h, AETHER_DRV_TRAY_ACTIVATE, id, label);
+        if (r < 0) r = aether_ui_tray_menu_activate(id, label);
         if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "activated");
         else if (r == 1) send_http(client_fd, 403, "Forbidden", "text/plain",
                                     "tray is sealed");
