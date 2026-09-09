@@ -1,0 +1,76 @@
+// A sheet or scheme an app builds can be given back (free_styles/free_scheme).
+//
+// Neither had a release, so an app that BUILDS sheets, a theme editor
+// regenerating one as a colour slider moves, leaked the sheet, its rule list
+// and every rule, on every rebuild. Measured over 600 rebuilds: 3199 leaks for
+// sheets and 5395 for schemes before, the fixed baseline after.
+//
+//   AETHER_UI_HEADLESS=1 leaks --atExit -- .../bin/style_release
+
+import ui
+import ui (root_vstack, text, create_styles, st_bg, st_color, use_styles,
+    current_styles, free_styles, color_scheme, role, scheme_sheet, free_scheme)
+
+extern exit(code: int)
+
+var bad = 0
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    _l = text(root, "styled")
+
+    // A sheet that is NOT applied is releasable.
+    a = create_styles()
+    st_bg(a, "text", 0x102030)
+    check("an unapplied sheet is released", free_styles(a), 1)
+
+    // The APPLIED sheet is refused: the toolkit re-reads its rules.
+    b = create_styles()
+    st_bg(b, "text", 0x203040)
+    use_styles(b)
+    check("the applied sheet is current", current_styles() == b, 1)
+    check("releasing the applied sheet is refused", free_styles(b), 0)
+    check("and it is still current", current_styles() == b, 1)
+
+    // Apply the replacement first, then the old one goes.
+    c = create_styles()
+    st_color(c, "text", 0xFFFFFF)
+    use_styles(c)
+    check("the old sheet releases once replaced", free_styles(b), 1)
+
+    check("null releases nothing", free_styles(null), 0)
+    check("null scheme releases nothing", free_scheme(null), 0)
+
+    // A scheme is a generator: finished the moment scheme_sheet returns.
+    sc = color_scheme()
+    role(sc, "primary", 0x5C458A)
+    role(sc, "on_primary", 0xFFFFFF)
+    gen = scheme_sheet(sc)
+    check("a scheme is always releasable", free_scheme(sc), 1)
+    check("its generated sheet is an ordinary sheet", free_styles(gen), 1)
+
+    // The loop the leak check measures: rebuild both, releasing each time.
+    i = 0
+    while i < 600 {
+        sh = create_styles()
+        st_bg(sh, "text", 0x102030)
+        st_bg(sh, ".chip", 0x405060)
+        _f1 = free_styles(sh)
+
+        s2 = color_scheme()
+        role(s2, "primary", 0x5C458A)
+        role(s2, "on_primary", 0xFFFFFF)
+        g2 = scheme_sheet(s2)
+        _f2 = free_scheme(s2)
+        _f3 = free_styles(g2)
+        i = i + 1
+    }
+
+    if bad > 0 { println("style_release: ${bad} mismatch(es)")  exit(1) }
+    println("style_release: sheets and schemes can be given back")
+    exit(0)
+}
