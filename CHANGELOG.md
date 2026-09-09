@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **`undo_group(label) callback { ... }`**: every `undoable()` recorded inside
+  collapses into ONE undo step carrying that label (`SWING_ENVY.md` C10). A
+  drag that records an edit per pixel is one gesture to the user, and undo now
+  agrees with them instead of making them press it thirty times.
+
+  Only the outermost group collapses, so a helper that groups internally
+  contributes one step to a caller's larger gesture rather than fragmenting it.
+  A group of one keeps its edit and takes the label. A group of none records
+  nothing, because a gesture that changed nothing should not cost an undo
+  press, and getting that case right matters: measuring a group by stack length
+  would have counted an existing redo tail as its own member and resurrected an
+  edit the user had just undone. `undo_grouping()` reports whether a group is
+  open.
+
 ### Fixed
 
 - **A canvas app stopped answering its driver under `AETHER_UI_HEADLESS`**

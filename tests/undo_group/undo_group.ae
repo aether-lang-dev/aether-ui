@@ -1,0 +1,90 @@
+// Edits recorded inside undo_group collapse into one step (SWING_ENVY C10).
+//
+// A drag that records an edit per pixel is one gesture to the user, and undo
+// should agree rather than making them press it thirty times.
+
+import ui
+import ui (root_vstack, undoable, undo, redo, undo_depth, redo_depth,
+    undo_label, undo_group, undo_grouping)
+
+extern exit(code: int)
+
+var n = 0
+var bad = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+check_s(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+bump(by: int) {
+    undoable("bump", || { n = n + by }, || { n = n - by })
+}
+
+main() {
+    _r = root_vstack(4) {
+    }
+
+    check("no group open initially", undo_grouping(), 0)
+
+    // --- three edits, one step ------------------------------------------
+    undo_group("Move 3 frames") callback {
+        if undo_grouping() != 1 { println("  MISMATCH: group not reported open inside")  bad = bad + 1 }
+        bump(1)
+        bump(10)
+        bump(100)
+    }
+    check("all three applied", n, 111)
+    check("but they are ONE undo step", undo_depth(), 1)
+    check_s("wearing the group's label", undo_label(), "Move 3 frames")
+    check("group closed again", undo_grouping(), 0)
+
+    check("one undo reverts the whole gesture", undo(), 1)
+    check("back to the start", n, 0)
+    check("nothing left to undo", undo_depth(), 0)
+    check("one step to redo", redo_depth(), 1)
+
+    check("one redo re-applies the whole gesture", redo(), 1)
+    check("all three back", n, 111)
+
+    // --- a group of one keeps its edit and takes the label ---------------
+    undo_group("Single") callback {
+        bump(5)
+    }
+    check("applied", n, 116)
+    check("two steps on the stack", undo_depth(), 2)
+    check_s("relabelled", undo_label(), "Single")
+    _u1 = undo()
+    check("undone", n, 111)
+
+    // --- a group of none records nothing ---------------------------------
+    before = undo_depth()
+    undo_group("Nothing happened") callback {
+    }
+    check("an empty gesture costs no undo press", undo_depth(), before)
+
+    // --- nesting: only the outermost collapses ---------------------------
+    _u2 = undo()
+    _u3 = undo()
+    check("stack drained", undo_depth(), 0)
+    n = 0
+    undo_group("Outer") callback {
+        bump(1)
+        undo_group("Inner") callback {
+            bump(2)
+            bump(4)
+        }
+        bump(8)
+    }
+    check("all four applied", n, 15)
+    check("nesting still yields ONE step", undo_depth(), 1)
+    check_s("the OUTER label wins", undo_label(), "Outer")
+    _u4 = undo()
+    check("one undo reverts all four", n, 0)
+
+    if bad > 0 { println("undo_group: ${bad} mismatch(es)")  exit(1) }
+    println("undo_group: a gesture is one undo step")
+    exit(0)
+}
