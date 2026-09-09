@@ -14,6 +14,8 @@
 #import <QuartzCore/QuartzCore.h>
 #import <CoreText/CoreText.h>     // text metrics (CTLine typographic bounds)
 #import <ImageIO/ImageIO.h>       // headless canvas_write_png
+#define GL_SILENCE_DEPRECATION 1   // NSOpenGL is the only GL seam AppKit offers
+#import <OpenGL/gl3.h>            // gpuview (#92)
 #import <objc/runtime.h>          // objc_setAssociatedObject (dbl-click fire)
 #include <time.h>                  // clock_gettime (chord timeout)
 #include "aether_ui_backend.h"  // cross-platform backend ABI
@@ -1305,6 +1307,19 @@ void aether_ui_window_on_key_impl(void* boxed_closure) {
     window_key_closure_add((AeClosure*)boxed_closure);
 }
 
+int aether_ui_modifiers_impl(void) {
+    /* +modifierFlags is the CURRENT keyboard state, not a snapshot from some
+     * event object, so this answers correctly inside a click callback without
+     * the event having to be threaded through. */
+    NSEventModifierFlags f = [NSEvent modifierFlags];
+    int mods = 0;
+    if (f & NSEventModifierFlagShift)   mods |= 1;
+    if (f & NSEventModifierFlagControl) mods |= 2;
+    if (f & NSEventModifierFlagOption)  mods |= 4;
+    if (f & NSEventModifierFlagCommand) mods |= 8;
+    return mods;
+}
+
 int aether_ui_window_key_deliver(const char* key_name, int mods) {
     return window_key_closure_fire(key_name, mods);
 }
@@ -1584,11 +1599,108 @@ int aether_ui_split_position_impl(int handle) {
     return (int)lround([sv isVertical] ? first.size.width : first.size.height);
 }
 
+/* #95: a width asked for, and a width read back.
+ *
+ * Nothing in the surface could give a widget a width or ask what width it
+ * had, so a panel layout had no way to say how wide a panel should be. An
+ * explicit constraint is the only thing AppKit honours across a later layout
+ * pass: a frame is advisory inside a stack or a split view, which is why
+ * setPosition: alone snapped back to the pane's content width.
+ *
+ * The constraint is created once and updated afterwards, so repeated calls do
+ * not pile up conflicting constraints on the same view. Priority is just
+ * below required, leaving a user's divider drag able to win. */
+// Drop any equal-width chain this view is part of. A table header sets an
+// explicit per-column width; leaving the button-row equality in place makes
+// the two required constraints unsatisfiable, and Auto Layout resolves that
+// by breaking one — silently, and with the wrong column widths surviving.
+//
+// Every call that gives a child a width of its own has to do this, which is
+// why it is a function and not two copies: an equality left standing outranks
+// both an explicit width and a weight, since it is required and they are not.
+static void aeui_drop_btneq(NSView* v) {
+    NSView* p = v ? [v superview] : nil;
+    if (!p) return;
+    NSMutableArray* drop = [NSMutableArray array];
+    for (NSLayoutConstraint* c in [p constraints]) {
+        if (![[c identifier] isEqualToString:@"aeui-btneq"]) continue;
+        if (c.firstItem == v || c.secondItem == v) [drop addObject:c];
+    }
+    if ([drop count]) [p removeConstraints:drop];
+}
+
+static void aeui_pin_size(NSView* v, const char* key, int px, int vertical) {
+    if (!v) return;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    if (c) {
+        c.constant = (CGFloat)px;
+    } else {
+        [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+        c = vertical
+            ? [[v heightAnchor] constraintEqualToConstant:(CGFloat)px]
+            : [[v widthAnchor]  constraintEqualToConstant:(CGFloat)px];
+        c.priority = NSLayoutPriorityDefaultHigh + 1;   /* 751 */
+        c.active = YES;
+        objc_setAssociatedObject(v, key, c, OBJC_ASSOCIATION_RETAIN);
+    }
+    [v setNeedsLayout:YES];
+    NSView* root = [v superview] ?: v;
+    [root layoutSubtreeIfNeeded];
+}
+
+void aether_ui_set_width_impl(int handle, int px) {
+    aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
+                  "aeui_width_c", px, 0);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
+                  "aeui_height_c", px, 1);
+}
+
+/* CRITICAL for #101: round the frame's EDGES, never its size. Auto Layout
+ * places views on half-point boundaries so a row of flexible children tiles
+ * its parent exactly (96.5 + 6 + 97 + 6 + 96.5 = 302). Rounding each size on
+ * its own turns that into 97 + 6 + 97 + 6 + 97 = 303, so the reported parts
+ * come to more than the whole and a caller laying out against these numbers
+ * pushes the last child past the parent's edge. Rounding the edges keeps
+ * adjacent children tiling (97, 97, 96) because one child's rounded trailing
+ * edge is the next one's rounded leading edge.
+ *
+ * floor(x + 0.5), not lround: lround rounds half AWAY from zero, so a view at
+ * a negative offset (a scrolled document view) would round its two edges in
+ * opposite directions and gain a point. */
+static int aeui_round_extent(CGFloat lo, CGFloat hi) {
+    long a = (long)floor((double)lo + 0.5);
+    long b = (long)floor((double)hi + 0.5);
+    return (int)(b - a);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    NSRect f = [v frame];
+    return aeui_round_extent(NSMinX(f), NSMaxX(f));
+}
+
+int aether_ui_get_height_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    NSRect f = [v frame];
+    return aeui_round_extent(NSMinY(f), NSMaxY(f));
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || ![v isKindOfClass:[NSSplitView class]]) return;
     NSSplitView* sv = (NSSplitView*)v;
     if ([[sv subviews] count] < 2) return;
+    /* #95: setPosition: alone does not survive the next layout pass when the
+     * pane has its own content: AppKit re-derives the pane's width from that
+     * content and the divider snaps back, which is why an OUTER split view
+     * (whose first pane is a populated stack) ignored the call while an inner
+     * one appeared to work. Pinning the first pane's width is what actually
+     * holds, and it is the same mechanism set_width uses. */
     [sv setPosition:(CGFloat)px ofDividerAtIndex:0];
     [sv layoutSubtreeIfNeeded];
 }
@@ -1686,6 +1798,12 @@ void aether_ui_widget_weight_impl(int handle, int n) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     widget_weights[handle - 1] = n;
+    // A weight is an explicit instruction to share space unevenly, so it has to
+    // outrank the equal-width chain buttons get by default. It did not: the
+    // chain is required and the flex multipliers are not, so weight(16/62/22)
+    // on three buttons came out 500/500/500 in a 1500px row, with no
+    // diagnostic. set_width already retracted the chain for the same reason.
+    aeui_drop_btneq(v);
     NSView* parent = [v superview];
     if ([parent isKindOfClass:[NSStackView class]]) {
         aeui_apply_flex((NSStackView*)parent);
@@ -1728,6 +1846,9 @@ void aether_ui_set_rtl(int handle, int on) {
     // free to build or mutate widgets, which is the entire point of a
     // GeometryReader, and doing that inside a layout pass is a re-entrancy bug.
     dispatch_async(dispatch_get_main_queue(), ^{
+        /* on_layout hands its closure INTS, and its callers declare
+           |w: int, h: int|. That is a different contract from the canvas
+           POINTER callbacks, which carry coordinates and pass doubles. */
         ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
     });
 }
@@ -2798,9 +2919,28 @@ int aether_ui_state_style_impl(int handle, int state) {
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (v && [v isKindOfClass:[NSStackView class]]) {
-        [(NSStackView*)v setEdgeInsets:NSEdgeInsetsMake(top, left, bottom, right)];
+    if (!v || ![v isKindOfClass:[NSStackView class]]) return;
+    NSStackView* sv = (NSStackView*)v;
+    [sv setEdgeInsets:NSEdgeInsetsMake(top, left, bottom, right)];
+
+    /* #96: container children are pinned to this stack's own edges rather
+     * than laid out as ordinary arranged subviews, so NSStackView's insets do
+     * not reach them. Those pins carry the inset as their constant, and this
+     * is where they learn a NEW one: styles are normally applied after the
+     * tree is built, so the constraints already exist when an inset arrives.
+     * Without this, an inset set through a stylesheet would move the leaf
+     * children and leave every nested row behind. */
+    for (NSLayoutConstraint* c in [sv constraints]) {
+        NSString* id_ = [c identifier];
+        if (!id_) continue;
+        if ([id_ isEqualToString:@"aeui-inset-lead"]) {
+            c.constant = left;
+        } else if ([id_ isEqualToString:@"aeui-inset-trail"] ||
+                   [id_ isEqualToString:@"aeui-inset-trail-max"]) {
+            c.constant = -right;
+        }
     }
+    [sv setNeedsLayout:YES];
 }
 
 // Does this view carry its own width-to-constant constraint?
@@ -2817,19 +2957,7 @@ void aether_ui_set_width(int handle, int width) {
     if (!v) return;
     [v setTranslatesAutoresizingMaskIntoConstraints:NO];
 
-    // Drop any equal-width chain this view is part of. A table header sets an
-    // explicit per-column width; leaving the button-row equality in place makes
-    // the two required constraints unsatisfiable, and Auto Layout resolves that
-    // by breaking one — silently, and with the wrong column widths surviving.
-    NSView* p = [v superview];
-    if (p) {
-        NSMutableArray* drop = [NSMutableArray array];
-        for (NSLayoutConstraint* c in [p constraints]) {
-            if (![[c identifier] isEqualToString:@"aeui-btneq"]) continue;
-            if (c.firstItem == v || c.secondItem == v) [drop addObject:c];
-        }
-        if ([drop count]) [p removeConstraints:drop];
-    }
+    aeui_drop_btneq(v);
 
     // On a weighted child, width() is a FLOOR (>=), not a fixed size: the flex
     // share fills above it, clamping to this min only when space is tight. A
@@ -3186,6 +3314,15 @@ int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
                                              selector:@selector(tick:)
                                              userInfo:nil
                                               repeats:YES];
+    /* #97: also run during modal event tracking. -scheduledTimer... registers
+     * in NSDefaultRunLoopMode alone, and AppKit runs slider and scrollbar
+     * drags, menu tracking and live window resize in NSEventTrackingRunLoopMode,
+     * where a default-mode timer does not fire. An app that paints a surface
+     * from ui.timer therefore froze for the whole duration of any drag — the
+     * viewport stops the moment you grab the control that is meant to move it.
+     * The toolkit's own internal 60Hz timer already does this; the public one
+     * did not. */
+    [[NSRunLoop mainRunLoop] addTimer:t.timer forMode:NSRunLoopCommonModes];
     [active_timers addObject:t];
     return (int)[active_timers count];  // 1-based id
 }
@@ -3395,8 +3532,35 @@ static void aeui_close_window_main(NSWindow* w) {
 }
 
 void aether_ui_window_close_impl(int win_handle) {
+    /* Handle 1 is the first EXTRA window here, because that is what
+     * window_create returns. The driver-facing family (window_count,
+     * window_title, window_is_open) numbers differently, with 1 as the
+     * primary — a real inconsistency, but reconciling it would silently
+     * repoint every existing window_create/window_close pair at the wrong
+     * window, so it is left alone. #93's actual need, ending the run loop,
+     * is app_quit below. */
     if (!extra_windows || win_handle < 1 || win_handle > (int)[extra_windows count]) return;
     aeui_close_window_main(extra_windows[win_handle - 1]);
+}
+
+/* #93: stop the run loop. -stop: is only examined when the loop next comes
+ * round, so a synthetic event is posted to guarantee it returns promptly
+ * rather than waiting for the user to move the mouse. */
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp stop:nil];
+        NSEvent* wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                           location:NSZeroPoint
+                                      modifierFlags:0
+                                          timestamp:0
+                                       windowNumber:0
+                                            context:nil
+                                            subtype:0
+                                             data1:0
+                                             data2:0];
+        if (wake) [NSApp postEvent:wake atStart:YES];
+    });
 }
 
 // ── Unified driver window view (1 = primary, 2.. = extras) ──
@@ -4417,7 +4581,13 @@ typedef struct {
     double w, h;
     double a0, a1;   // ARC start/end angle
     char* text;     // FILL_TEXT string (owned)
-    unsigned char* pixels;  // DRAW_IMAGE RGBA8888 buffer (owned)
+    unsigned char* pixels;  // DRAW_IMAGE RGBA8888 buffer
+    /* #102: 0 = this command owns `pixels` and frees them with the command;
+       1 = they belong to the caller and are only borrowed until the next
+       canvas_clear. A per-frame viewport hands over the same stable buffer
+       every frame, and copying 2.4 MB sixty times a second cost more than
+       reading the frame off the GPU did. */
+    int            pixels_borrowed;
     int iw, ih;     // DRAW_IMAGE pixel dims
     double gx1, gy1, gx2, gy2, gr, gfx, gfy;  // gradient geometry
     double grad_line_width;  // 0 → fill; >0 → stroke at this width
@@ -5165,7 +5335,13 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     // Deferred: the closure re-flushes the whole vg scene (mutating the
     // command buffer we may be mid-draw on).
     dispatch_async(dispatch_get_main_queue(), ^{
-        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+        /* #94: doubles, like on_click / on_move / on_release / on_scroll.
+         * This was the only one of the five CANVAS callbacks passing
+         * intptr_t, so a closure written the way the four siblings are
+         * written read the floating-point argument registers while the
+         * caller had filled the integer ones, and got garbage with no
+         * diagnostic from the compiler or the runtime. */
+        ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
     });
 }
 @end
@@ -5217,6 +5393,284 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->widget_handle = register_widget_typed((__bridge void*)v, AUI_CANVAS);
     return canvas_id;
 }
+
+
+/* Apple deprecated every GL entry point in favour of Metal in 10.14 and still
+ * ships no other GL seam, so hosting a GL context here means using the
+ * deprecated one. The suppression is scoped to exactly this block, not the
+ * file and not the build: everything outside it still fails on -Werror, and
+ * the day AppKit offers a supported path this pragma is what points at the
+ * code to replace. */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+// ---------------------------------------------------------------------------
+// GPU surface (#92)
+//
+// NSOpenGLView, not a CAOpenGLLayer: the layer path re-enters drawing on the
+// compositor's schedule, which fights an app that wants to drive its own frame
+// loop, and every renderer this is for already owns its loop. NSOpenGL is
+// deprecated in favour of Metal and still the only GL seam AppKit exposes, so
+// the deprecation is silenced at the import rather than pretended away.
+//
+// A 3.2-core profile is requested rather than 4.1 so the widest set of Macs
+// gets a context at all; a renderer that needs 4.1 asks for it through its own
+// pixel format once it has the view. Accelerated first, then a soft retry
+// without that bit, because a VM or a headless runner has no accelerated
+// format and a viewport that renders slowly is still better than one that
+// refuses to exist.
+// ---------------------------------------------------------------------------
+@interface AetherGpuView : NSOpenGLView
+@property (nonatomic) int gpuId;
+@end
+
+typedef struct {
+    int widget_handle;
+    void* on_realize;
+    void* on_render;
+    void* on_resize;
+    int realized;
+    double last_render;
+    int last_w, last_h;
+    unsigned int probe_fbo, probe_tex;   /* offscreen target for read_pixel */
+    int probe_w, probe_h;
+} GpuState;
+
+static GpuState* gpu_states = NULL;
+static int gpu_state_count = 0;
+static int gpu_state_capacity = 0;
+
+static GpuState* get_gpu_state(int gpu_id) {
+    if (gpu_id < 1 || gpu_id > gpu_state_count) return NULL;
+    return &gpu_states[gpu_id - 1];
+}
+
+static void gpu_fire_void(void* boxed) {
+    AeClosure* c = (AeClosure*)boxed;
+    if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+}
+
+static void gpu_fire_dt(void* boxed, double dt) {
+    AeClosure* c = (AeClosure*)boxed;
+    if (c && c->fn) ((void(*)(void*, double))c->fn)(c->env, dt);
+}
+
+static void gpu_fire_wh(void* boxed, int w, int h) {
+    AeClosure* c = (AeClosure*)boxed;
+    if (c && c->fn) ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env,
+                                                               (intptr_t)w, (intptr_t)h);
+}
+
+@implementation AetherGpuView
+
+- (void)prepareOpenGL {
+    [super prepareOpenGL];
+    GLint one = 1;
+    [[self openGLContext] setValues:&one forParameter:NSOpenGLContextParameterSwapInterval];
+}
+
+/* The framebuffer size is in PIXELS. Reporting points here would under-size
+ * glViewport on every Retina display, which is the classic "renders into the
+ * bottom-left quarter" bug. */
+- (NSSize)aeui_backingPixels {
+    NSRect b = [self bounds];
+    return [self convertRectToBacking:b].size;
+}
+
+- (void)reshape {
+    [super reshape];
+    GpuState* st = get_gpu_state(self.gpuId);
+    if (!st) return;
+    NSSize px = [self aeui_backingPixels];
+    int w = (int)lround(px.width), h = (int)lround(px.height);
+    if (w == st->last_w && h == st->last_h) return;
+    st->last_w = w; st->last_h = h;
+    [[self openGLContext] makeCurrentContext];
+    if (st->on_resize) gpu_fire_wh(st->on_resize, w, h);
+}
+
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    GpuState* st = get_gpu_state(self.gpuId);
+    if (!st) return;
+    NSOpenGLContext* ctx = [self openGLContext];
+    [ctx makeCurrentContext];
+
+    if (!st->realized) {
+        st->realized = 1;
+        NSSize px = [self aeui_backingPixels];
+        st->last_w = (int)lround(px.width);
+        st->last_h = (int)lround(px.height);
+        if (st->on_realize) gpu_fire_void(st->on_realize);
+        if (st->on_resize)  gpu_fire_wh(st->on_resize, st->last_w, st->last_h);
+    }
+
+    double now = (double)clock() / (double)CLOCKS_PER_SEC;
+    double dt = st->last_render > 0 ? (now - st->last_render) : 0.0;
+    st->last_render = now;
+
+    if (st->on_render) gpu_fire_dt(st->on_render, dt);
+
+    glFlush();
+    [ctx flushBuffer];
+}
+@end
+
+int aether_ui_gpuview_available_impl(void) {
+    return 1;
+}
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    NSOpenGLPixelFormatAttribute accel[] = {
+        NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
+        NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8,
+        NSOpenGLPFADepthSize, 24,
+        NSOpenGLPFADoubleBuffer, NSOpenGLPFAAccelerated, 0
+    };
+    NSOpenGLPixelFormat* pf =
+        [[NSOpenGLPixelFormat alloc] initWithAttributes:accel];
+    if (!pf) {
+        /* No accelerated format: a VM or a headless runner. A software context
+         * still renders correctly, which is what a test asserts on. */
+        NSOpenGLPixelFormatAttribute soft[] = {
+            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
+            NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8,
+            NSOpenGLPFADepthSize, 24, NSOpenGLPFADoubleBuffer, 0
+        };
+        pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:soft];
+    }
+    if (!pf) return 0;
+
+    if (width  <= 0) width  = 1;
+    if (height <= 0) height = 1;
+    AetherGpuView* v =
+        [[AetherGpuView alloc] initWithFrame:NSMakeRect(0, 0, width, height)
+                                 pixelFormat:pf];
+    if (!v) return 0;
+    [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [v setWantsBestResolutionOpenGLSurface:YES];
+
+    /* Same natural-size contract as canvas: the requested size is a starting
+     * point held loosely, not a cage, so the view grows with its pane. */
+    NSLayoutConstraint* wc = [v.widthAnchor  constraintEqualToConstant:width];
+    NSLayoutConstraint* hc = [v.heightAnchor constraintEqualToConstant:height];
+    wc.priority = 150; hc.priority = 150;
+    wc.active = YES;   hc.active = YES;
+    [v setContentHuggingPriority:1
+                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [v setContentHuggingPriority:1
+                  forOrientation:NSLayoutConstraintOrientationVertical];
+
+    if (gpu_state_count >= gpu_state_capacity) {
+        gpu_state_capacity = gpu_state_capacity == 0 ? 8 : gpu_state_capacity * 2;
+        gpu_states = realloc(gpu_states, sizeof(GpuState) * gpu_state_capacity);
+    }
+    GpuState* st = &gpu_states[gpu_state_count];
+    memset(st, 0, sizeof(*st));
+    gpu_state_count++;
+    int gpu_id = gpu_state_count;
+    v.gpuId = gpu_id;
+    st->widget_handle = register_widget_typed((__bridge void*)v, AUI_CANVAS);
+    return gpu_id;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) {
+    GpuState* st = get_gpu_state(gpu_id);
+    return st ? st->widget_handle : 0;
+}
+
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_realize = boxed_closure;
+}
+
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_render = boxed_closure;
+}
+
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_resize = boxed_closure;
+}
+
+void aether_ui_gpuview_request_render_impl(int gpu_id) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (!st) return;
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(st->widget_handle);
+    if (v) [v setNeedsDisplay:YES];
+}
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (!st) return -1;
+    AetherGpuView* v = (AetherGpuView*)(__bridge NSView*)
+        aether_ui_get_widget(st->widget_handle);
+    if (!v) return -1;
+
+    NSOpenGLContext* ctx = [v openGLContext];
+    if (!ctx) return -1;
+    [ctx makeCurrentContext];
+
+    NSSize sz = [v aeui_backingPixels];
+    int w = (int)lround(sz.width), h = (int)lround(sz.height);
+    if (w <= 0 || h <= 0) { w = 1; h = 1; }
+    if (px < 0 || py < 0 || px >= w || py >= h) return -1;
+
+    /* Render one frame into an OFFSCREEN target and read that, rather than
+     * reading whatever is in the window's buffers.
+     *
+     * Two reasons, and the second is the one that matters. A double-buffered
+     * context swaps on present, so reading after the view's own draw samples
+     * the new back buffer and returns black, which looks exactly like a
+     * renderer that never ran. And a view with no window has no DRAWABLE at
+     * all: the default framebuffer goes nowhere, so glClear writes nothing and
+     * every read is zero. An FBO is attached to the context rather than to a
+     * surface, so it renders correctly with no window on screen, which is what
+     * lets a spec assert on real GPU output headlessly.
+     *
+     * The texture is kept and only reallocated when the size changes, so
+     * polling this in a loop does not churn GPU memory. */
+    if (!st->probe_fbo) {
+        glGenFramebuffers(1, &st->probe_fbo);
+        glGenTextures(1, &st->probe_tex);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, st->probe_fbo);
+    if (st->probe_w != w || st->probe_h != h) {
+        glBindTexture(GL_TEXTURE_2D, st->probe_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, st->probe_tex, 0);
+        st->probe_w = w; st->probe_h = h;
+    }
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return -1;
+    }
+
+    glViewport(0, 0, w, h);
+    if (!st->realized) {
+        st->realized = 1;
+        st->last_w = w; st->last_h = h;
+        if (st->on_realize) gpu_fire_void(st->on_realize);
+    }
+    if (st->on_resize) gpu_fire_wh(st->on_resize, w, h);
+    if (st->on_render) gpu_fire_dt(st->on_render, 0.0);
+    glFinish();
+
+    unsigned char rgba[4] = {0, 0, 0, 0};
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    /* GL's origin is bottom-left and every other read-back in this ABI is
+     * top-left, so flip rather than hand callers two conventions. */
+    glReadPixels(px, h - 1 - py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return (int)((rgba[0] << 24) | (rgba[1] << 16) | (rgba[2] << 8) | rgba[3]);
+}
+
+#pragma clang diagnostic pop
 
 int aether_ui_canvas_get_widget(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
@@ -5523,6 +5977,43 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
 // backend only). The command carries the dest extent in w/h and the
 // executor hands CGContextDrawImage a dest rect of that size; CG scales
 // natively, same as GTK4's cairo path and win32's StretchBlt.
+/* #102: draw WITHOUT copying. The pixels stay the caller's, and must remain
+ * valid and unchanged until the next canvas_clear on this canvas — the same
+ * lifetime the retained command list already has.
+ *
+ * That is exactly the contract a per-frame surface already satisfies: a 3D
+ * viewport, a video frame or a game framebuffer owns one buffer, overwrites
+ * it in place, and clears and redraws the canvas each frame. The owning
+ * variant above allocated and copied the whole framebuffer on every call,
+ * which for a 918x659 viewport measured 61% of the frame — more than reading
+ * the frame back off the GPU, and six times more than rendering it.
+ *
+ * A caller that cannot promise that lifetime should keep using the owning
+ * variant; this is a sharper tool on purpose. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y, .w = dw, .h = dh,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
@@ -5588,7 +6079,9 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
             free(c->text); c->text = NULL;
         }
         if (c->type == CANVAS_DRAW_IMAGE && c->pixels) {
-            free(c->pixels); c->pixels = NULL;
+            /* #102: a borrowed buffer belongs to the caller. */
+            if (!c->pixels_borrowed) free(c->pixels);
+            c->pixels = NULL;
         }
         if (c->type == CANVAS_FILL_LINEAR || c->type == CANVAS_FILL_RADIAL) {
             free(c->stop_off);  c->stop_off = NULL;
@@ -6257,10 +6750,32 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
                 // narrower than the parent; trailing == at high-but-not-required
                 // priority makes it stretch whenever nothing forbids it (which is
                 // what gives the calculator its full-width button rows).
-                [child.leadingAnchor constraintEqualToAnchor:sv.leadingAnchor].active = YES;
-                [child.trailingAnchor constraintLessThanOrEqualToAnchor:sv.trailingAnchor].active = YES;
+                //
+                // #96: the constants are the parent's edge INSETS. Pinning to
+                // the bare anchors is what made a container child ignore the
+                // padding a leaf child gets for free from NSStackView's own
+                // arranged-subview layout, so a heading sat 12px in and the
+                // row under it did not — every inspector panel misaligned by
+                // exactly the padding. Tagged so set_edge_insets can update
+                // them when styles are applied AFTER the tree is built, which
+                // is the usual order (`apply_styles` at the end of a block).
+                NSEdgeInsets pins = [sv edgeInsets];
+                NSLayoutConstraint* lead =
+                    [child.leadingAnchor constraintEqualToAnchor:sv.leadingAnchor
+                                                        constant:pins.left];
+                [lead setIdentifier:@"aeui-inset-lead"];
+                lead.active = YES;
+
+                NSLayoutConstraint* cap =
+                    [child.trailingAnchor constraintLessThanOrEqualToAnchor:sv.trailingAnchor
+                                                                   constant:-pins.right];
+                [cap setIdentifier:@"aeui-inset-trail-max"];
+                cap.active = YES;
+
                 NSLayoutConstraint* stretch =
-                    [child.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor];
+                    [child.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor
+                                                         constant:-pins.right];
+                [stretch setIdentifier:@"aeui-inset-trail"];
                 stretch.priority = NSLayoutPriorityDefaultHigh;
                 stretch.active = YES;
             }
@@ -6634,10 +7149,16 @@ static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
             r = [v convertRect:[v bounds] toView:content];
         }
         CGFloat ch = [content bounds].size.height;
+        /* #101: sizes come from the ROUNDED EDGES, so a row of flexible
+         * children reported here still tiles its parent. Rounding the size on
+         * its own reported three 96.5/97 frames in a 302px row as 97/97/97,
+         * and "every widget fits inside its parent", the one invariant a
+         * layout audit wants to trust, came out false by a pixel. */
+        CGFloat top = ch - (r.origin.y + r.size.height);
         rx = (int)lround(r.origin.x);
-        ry = (int)lround(ch - (r.origin.y + r.size.height));  // bottom-left → top-left
-        rw = (int)lround(r.size.width);
-        rh = (int)lround(r.size.height);
+        ry = (int)lround(top);                                // bottom-left → top-left
+        rw = aeui_round_extent(r.origin.x, r.origin.x + r.size.width);
+        rh = aeui_round_extent(top, top + r.size.height);
         rc = 0;
     };
     if ([NSThread isMainThread]) compute();

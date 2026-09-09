@@ -111,7 +111,7 @@ _toggle_render(tf: *ToggleFace) {
 }
 
 _mk_toggle(label: string, user_boxed: ptr) -> int {
-    tf = malloc(24) as *ToggleFace
+    tf = malloc(sizeof(ToggleFace)) as *ToggleFace
     tf.handle = 0
     tf.cv = 0
     tf.label = label

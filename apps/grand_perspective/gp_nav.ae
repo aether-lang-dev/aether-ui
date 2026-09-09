@@ -36,7 +36,7 @@ extern aether_ui_text_set_string(handle: int, text: string)
 
 relayout(s: *AppState) {
     s.rects = list.new()
-    ctx = malloc(16) as *LayoutCtx
+    ctx = malloc(sizeof(LayoutCtx)) as *LayoutCtx
     ctx.remaining = RECT_BUDGET
     layout_treemap(ctx, s.rects, gp_model.MAP_X, 0.0, gp_model.CANVAS_W, gp_model.CANVAS_H, s.current.children, 0)
     // List pane rows: the current dir's children, largest first (a fresh

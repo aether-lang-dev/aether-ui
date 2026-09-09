@@ -1868,7 +1868,22 @@ static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
                             char* name, int namesize);
 static int aeui_win32_fire_shortcut(const char* combo);
 
+/* #93: the thread running the message loop. PostQuitMessage only affects the
+   CALLING thread, so a quit requested from anywhere else has to be posted to
+   the loop's own thread. */
+static DWORD aeui_loop_thread = 0;
+
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (aeui_loop_thread) {
+        PostThreadMessageW(aeui_loop_thread, WM_QUIT, 0, 0);
+    } else {
+        PostQuitMessage(0);
+    }
+}
+
 void aether_ui_app_run_raw(int app_handle) {
+    aeui_loop_thread = GetCurrentThreadId();
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
     ensure_win_init();
@@ -2560,6 +2575,17 @@ int aether_ui_window_file_drop_deliver(const char* paths) {
     return 1;
 }
 
+int aether_ui_modifiers_impl(void) {
+    /* GetKeyState reports the state as of the message being processed, which
+     * inside a click handler is the click itself. */
+    int mods = 0;
+    if (GetKeyState(VK_SHIFT)   & 0x8000) mods |= 1;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
+    if (GetKeyState(VK_MENU)    & 0x8000) mods |= 4;
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) mods |= 8;
+    return mods;
+}
+
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     w32_window_key_closure_add((AeClosure*)boxed_closure);
 }
@@ -3137,6 +3163,50 @@ int aether_ui_split_position_impl(int handle) {
     if (!w || w->kind != WK_SPLITVIEW) return -1;
     return w->split_eff;
 }
+/* #95: give a widget a width, or ask what width it has. pref_width is what
+   the layout pass reads, so setting it is what holds a panel at a width; the
+   getter answers from the actual window rect, i.e. what the widget really
+   got rather than what was asked for. */
+void aether_ui_set_width_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->pref_width = px;
+    if (w->hwnd) {
+        RECT r; GetWindowRect(w->hwnd, &r);
+        POINT tl = { r.left, r.top };
+        ScreenToClient(GetParent(w->hwnd), &tl);
+        SetWindowPos(w->hwnd, NULL, tl.x, tl.y, px, r.bottom - r.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->pref_height = px;
+    if (w->hwnd) {
+        RECT r; GetWindowRect(w->hwnd, &r);
+        POINT tl = { r.left, r.top };
+        ScreenToClient(GetParent(w->hwnd), &tl);
+        SetWindowPos(w->hwnd, NULL, tl.x, tl.y, r.right - r.left, px,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+int aether_ui_get_width_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    return (int)(r.right - r.left);
+}
+
+int aether_ui_get_height_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    return (int)(r.bottom - r.top);
+}
+
 void aether_ui_split_set_position_impl(int handle, int px) {
     Widget* w = widget_at(handle);
     if (!w || w->kind != WK_SPLITVIEW || px < 0) return;
@@ -5795,7 +5865,10 @@ typedef struct {
     float cr, cg, cb, calpha;
     int cap, join;         // STROKE and gradient STROKE: 0=butt/miter 1=round 2=square/bevel
     char* text;            // FILL_TEXT string (owned)
-    unsigned char* pixels; // DRAW_IMAGE RGBA8888 buffer (owned)
+    unsigned char* pixels; // DRAW_IMAGE RGBA8888 buffer
+    /* #102: 0 = owned and freed with the command, 1 = borrowed from the
+       caller until the next canvas_clear. */
+    int            pixels_borrowed;
     int iw, ih;            // DRAW_IMAGE pixel dims
     // Gradient: linear (gx1,gy1)→(gx2,gy2); radial center (gx1,gy1) r gr.
     float gx1, gy1, gx2, gy2, gr, gfx, gfy;
@@ -5944,6 +6017,49 @@ int aether_ui_canvas_create_impl(int width, int height) {
         ww->u.canvas.canvas_id = canvas_count;
     }
     return canvas_count;
+}
+
+
+/* ---------------------------------------------------------------------------
+ * GPU surface (#92) -- not implemented on Win32 yet.
+ *
+ * A real one here means a child HWND with its own pixel format and a context
+ * from wglCreateContextAttribsARB, which has to be obtained through a throwaway
+ * context first. That is a genuine piece of work, and this lane is
+ * cross-compiled and never run, so writing it blind would be shipping
+ * something nobody has seen execute.
+ *
+ * available() therefore returns 0 and the rest are honest no-ops: an app asks
+ * before it builds a viewport and takes its software path here, which is a
+ * defined answer rather than a widget that exists and never draws. The entry
+ * points exist so the ABI stays the same shape on all four backends.
+ * ------------------------------------------------------------------------- */
+int aether_ui_gpuview_available_impl(void) { return 0; }
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    (void)width; (void)height;
+    return 0;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) { (void)gpu_id; return 0; }
+
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    (void)gpu_id; (void)boxed_closure;
+}
+
+void aether_ui_gpuview_request_render_impl(int gpu_id) { (void)gpu_id; }
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    (void)gpu_id; (void)px; (void)py;
+    return -1;
 }
 
 int aether_ui_canvas_get_widget(int canvas_id) {
@@ -6244,6 +6360,38 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
 // source-pixel size). Dest extent rides p2/p3 and the executor hands
 // StretchDIBits a dest rect of that size; GDI scales natively, matching
 // GTK4's cairo path.
+/* #102: draw WITHOUT copying. The pixels stay the caller's and must remain
+ * valid until the next canvas_clear on this canvas — the lifetime the
+ * retained command list already has. That is what a per-frame surface (a 3D
+ * viewport, a video frame, a game framebuffer) already guarantees: one buffer,
+ * overwritten in place, canvas cleared and redrawn each frame. The owning
+ * variant copies the whole framebuffer per call, which measured 61% of the
+ * frame at 918x659. A caller that cannot promise the lifetime keeps using the
+ * owning variant. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    CanvasCmd c = {0};
+    c.k = CV_DRAW_IMAGE; c.p0 = x; c.p1 = y;
+    c.pixels = (unsigned char*)rgba; c.pixels_borrowed = 1;
+    c.iw = iw; c.ih = ih;
+    canvas_add_cmd(canvas_id, c);
+}
+
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    CanvasCmd c = {0};
+    c.k = CV_DRAW_IMAGE; c.p0 = x; c.p1 = y; c.p2 = dw; c.p3 = dh;
+    c.pixels = (unsigned char*)rgba; c.pixels_borrowed = 1;
+    c.iw = iw; c.ih = ih;
+    canvas_add_cmd(canvas_id, c);
+}
+
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
@@ -6311,7 +6459,9 @@ static void canvas_free_text(int canvas_id) {
         }
         if (c->font_family) { free(c->font_family); c->font_family = NULL; }
         if (c->k == CV_DRAW_IMAGE && c->pixels) {
-            free(c->pixels); c->pixels = NULL;
+            /* #102: a borrowed buffer belongs to the caller. */
+            if (!c->pixels_borrowed) free(c->pixels);
+            c->pixels = NULL;
         }
         if (c->k == CV_FILL_LINEAR || c->k == CV_FILL_RADIAL) {
             free(c->stop_off);  c->stop_off = NULL;
@@ -8545,8 +8695,9 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                     c->width = nw;
                     c->height = nh;
                     if (c->on_resize && c->on_resize->fn)
-                        ((void(*)(void*, intptr_t, intptr_t))c->on_resize->fn)(
-                            c->on_resize->env, (intptr_t)nw, (intptr_t)nh);
+                        /* #94: doubles, matching the other canvas callbacks. */
+                        ((void(*)(void*, double, double))c->on_resize->fn)(
+                            c->on_resize->env, (double)nw, (double)nh);
                     InvalidateRect(hwnd, NULL, TRUE);
                 }
             }

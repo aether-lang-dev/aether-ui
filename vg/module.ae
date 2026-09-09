@@ -176,7 +176,7 @@ struct VgNode {
 }
 
 mk_node(scene: ptr, payload: ptr) -> ptr {
-    n = malloc(16) as *VgNode
+    n = malloc(sizeof(VgNode)) as *VgNode
     n.scene = scene
     n.payload = payload
     s = scene as *VgScene
@@ -243,7 +243,7 @@ scene_canvas(p: ptr) -> int        { s = p as *VgScene; return s.canvas_id }
 // canvas" (headless / recording). vg_root wraps it as the root VgNode the
 // shape verbs accept as _ctx.
 scene_new(ctx: ptr, backend: ptr) -> ptr {
-    s = malloc(160) as *VgScene
+    s = malloc(sizeof(VgScene)) as *VgScene
     s.ctx = ctx
     s.backend = backend
     s.canvas_id = 0
@@ -640,7 +640,7 @@ group_end(_ctx: ptr, alpha: float) {
 record_group_marker(scene: ptr, kind: int, alpha: float) {
     s = scene as *VgScene
     if s.pending == null { s.pending = list.new() }
-    pend = malloc(80) as *VgPending
+    pend = malloc(sizeof(VgPending)) as *VgPending
     pend.kind = kind
     pend.attrs = null
     pend.element = element.element_new(null)
@@ -949,7 +949,7 @@ tween_opacity(scene: ptr, el: ptr, from: float, to: float, ms: long, ease: int) 
 record_shape(scene: ptr, kind: int, attrs: ptr) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
-    p = malloc(72) as *VgPending
+    p = malloc(sizeof(VgPending)) as *VgPending
     p.kind = kind
     p.attrs = attrs
     p.element = el
@@ -962,7 +962,7 @@ record_shape(scene: ptr, kind: int, attrs: ptr) -> ptr {
 record_text(scene: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
-    p = malloc(80) as *VgPending
+    p = malloc(sizeof(VgPending)) as *VgPending
     p.kind = 4
     p.attrs = null
     p.element = el

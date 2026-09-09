@@ -49,7 +49,7 @@ struct Config {
 }
 
 mk_config() -> *Config {
-    c = malloc(80) as *Config
+    c = malloc(sizeof(Config)) as *Config
     c.player = mk_player()
     c.history = mk_history()
     c.st_title = 0

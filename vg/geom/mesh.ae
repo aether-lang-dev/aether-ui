@@ -50,7 +50,7 @@ const MESH_MIN_I: int = 24
 const MESH_MIN_F: int = 6
 
 mesh_new() -> ptr {
-    m = malloc(80) as *Mesh
+    m = malloc(sizeof(Mesh)) as *Mesh
     m.vx = floatarr_new_raw(MESH_MIN_V * 3)
     m.nverts = 0
     m.vcap = MESH_MIN_V

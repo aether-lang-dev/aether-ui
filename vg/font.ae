@@ -119,7 +119,7 @@ imod16(v: int) -> int {
 
 // ─── Loading ─────────────────────────────────────────────────────────────────
 font_load(path: string) -> ptr {
-    f = malloc(112) as *TtfFont
+    f = malloc(sizeof(TtfFont)) as *TtfFont
     f.data = ""; f.len = 0; f.ok = 0; f.upem = 0; f.loca_fmt = 0
     f.nglyphs = 0; f.nhm = 0; f.cmap4 = 0; f.glyf = 0; f.loca = 0; f.hmtx = 0
     f.kern0 = 0
@@ -415,7 +415,7 @@ struct Outl {
     ok: int
 }
 mk_outl() -> *Outl {
-    o = malloc(80) as *Outl
+    o = malloc(sizeof(Outl)) as *Outl
     o.cap = 65536
     o.ecap = 1024
     pts, _pe = floatarr.new(o.cap)

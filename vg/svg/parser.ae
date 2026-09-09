@@ -49,7 +49,7 @@ struct SvgNode {
 }
 
 mk_node(tag: string) -> *SvgNode {
-    n = malloc(40) as *SvgNode
+    n = malloc(sizeof(SvgNode)) as *SvgNode
     n.tag = tag
     n.attrs = map.new()
     n.children = list.new()
@@ -274,7 +274,7 @@ struct Token {
 }
 
 mk_token(kind: int) -> *Token {
-    t = malloc(40) as *Token
+    t = malloc(sizeof(Token)) as *Token
     t.kind = kind
     t.tag = ""
     t.attrs = null

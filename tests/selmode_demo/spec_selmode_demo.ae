@@ -1,0 +1,64 @@
+// spec_selmode_demo.ae, #99: a multi listbox can be driven to a KNOWN state.
+//
+// listbox_select toggles, so it could only ever say "flip this row". An app
+// that selects a row after every add ends up with the wrong row selected, and
+// pressing the same button twice silently undoes itself. These assertions are
+// about idempotence and about clearing, which is what "set" and "clear" buy
+// over "toggle".
+import std.spec
+import uidriver
+import std.string
+
+// How many rows currently carry the selection class.
+selected_count() -> int {
+    b = uidriver.get_body("/widgets")
+    n = 0
+    rest = b
+    while string.contains(rest, "aui-row-selected") == 1 {
+        n = n + 1
+        idx = string.string_index_of(rest, "aui-row-selected")
+        rest = string.string_substring(rest, idx + 16, string.length(rest))
+    }
+    return n
+}
+
+press(label: string) {
+    uidriver.post_ok("/widget/${uidriver.widget_id_by_text(label)}/click", "press ${label}")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "multi-select can be driven to a state (#99)") {
+        spec.it("nothing is selected to begin with") callback {
+            spec.assert_eq(selected_count(), 0, "no rows selected at start")
+        }
+
+        spec.it("set_selected establishes a known selection") callback {
+            press("set 1 and 3")
+            ok = uidriver.wait_body_contains("/widgets", "aui-row-selected", 20)
+            spec.assert_true(ok, "a row is selected")
+            spec.assert_eq(selected_count(), 2, "rows 1 and 3 are selected")
+        }
+
+        spec.it("setting the same rows again does not undo itself") callback {
+            // The whole point: with toggle-only this left ZERO selected.
+            press("set 1 and 3")
+            spec.assert_eq(selected_count(), 2, "still exactly the same two rows")
+        }
+
+        spec.it("clear_selection deselects every row") callback {
+            press("clear")
+            spec.assert_eq(selected_count(), 0, "nothing selected after clear")
+        }
+
+        spec.it("clear then set is how an app says 'only this one'") callback {
+            press("only 2")
+            spec.assert_eq(selected_count(), 1, "exactly one row selected")
+            press("only 2")
+            spec.assert_eq(selected_count(), 1, "and it is stable under repetition")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -73,7 +73,7 @@ struct EventState {
 }
 
 event_state_new() -> ptr {
-    s = malloc(48) as *EventState
+    s = malloc(sizeof(EventState)) as *EventState
     s.hovered_element = null
     s.dragged_element = null
     s.last_drag_x = 0.0

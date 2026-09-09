@@ -61,7 +61,7 @@ disclosure_toggle(dp: ptr) -> int {
 // disclosure(label, start_open) { … } — a header + collapsible body.
 // Returns the Disc so the caller can drive it programmatically.
 disclosure(_ctx: ptr, label: string, start_open: int, body_fn: fn) -> ptr {
-    d = malloc(48) as *Disc
+    d = malloc(sizeof(Disc)) as *Disc
     d.open = start_open
     string_retain(label)
     d.label = label

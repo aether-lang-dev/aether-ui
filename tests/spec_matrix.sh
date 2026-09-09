@@ -10,7 +10,11 @@
 #   ./tests/spec_matrix.sh split table  # just these
 #   ./tests/spec_matrix.sh --rebuild    # rebuild each app first (see below)
 #
-# Binaries come from `aeb .all.ae` (target/build/...). Run that first.
+# Binaries come from `aeb .all.ae` (target/build/...). Run that first — and the
+# AetherUIDriver is OUT of app builds by default, so build with it opted in:
+#     AETHER_UI_WITH_DRIVER=1 aeb .all.ae
+# (a driverless build launches fine but never opens the test port, so every
+# suite here would read as red). ci.sh exports AETHER_UI_WITH_DRIVER for you.
 #
 # Counting: the number printed is std.spec's own "N passing" — one per it()
 # block. Failures are counted from its "N failing" tail. Those two numbers

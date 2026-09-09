@@ -43,7 +43,7 @@ struct Node {
 }
 
 mk_node(label: string, detail: string) -> *Node {
-    n = malloc(64) as *Node
+    n = malloc(sizeof(Node)) as *Node
     n.label = label
     n.detail = detail
     return n

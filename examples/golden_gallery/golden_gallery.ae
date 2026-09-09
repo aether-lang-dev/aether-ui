@@ -244,7 +244,7 @@ pin(cid: int) {
 }
 
 main() {
-    app = malloc(40) as *App
+    app = malloc(sizeof(App)) as *App
     verdict = ui_state_s("golden: unchecked")
     app.st_verdict = verdict
 

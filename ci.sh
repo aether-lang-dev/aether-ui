@@ -1,6 +1,11 @@
 #!/bin/bash
 # ci.sh — full aether_ui test pipeline as a CI job would run it.
 #
+# The AetherUIDriver control server is OUT of app builds by default (a listening
+# socket must not ship in release binaries); the spec/CI pipeline opts in so the
+# HTTP-driven tests work. This MUST be exported before any `aeb` build below.
+export AETHER_UI_WITH_DRIVER=1
+#
 # Phases:
 #   1. Build every example (catches C/Aether compile regressions).
 #   2. Smoke-launch the non-driver examples to catch runtime crashes the
@@ -60,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo gpuview_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -112,6 +117,41 @@ if [ "$PLATFORM" = "linux" ]; then
         fi
     fi
 fi
+
+# Run a binary that is expected to END ITSELF, and report its exit status.
+#
+# Neither `timeout` nor a bare launch works across this matrix: macOS ships no
+# `timeout`, and GTK4 needs a framebuffer even in headless mode, so Linux has
+# to go through $LAUNCH_PREFIX like every other phase. This waits on the
+# process and only kills it if it overruns, so "never quit" is reported as 124
+# the way `timeout` would have.
+run_self_quitting() {
+    local bin="$1" name="$2" limit="${3:-30}"
+    local log="/tmp/ci_${name}.selfquit.log"
+    # Headless ONLY when there is no display to use. GTK4's headless path
+    # realizes without mapping, so nothing is ever allocated and get_width
+    # answers 0 — which is exactly what this reported on Linux. Under xvfb
+    # ($LAUNCH_PREFIX set) the window maps and the allocation is real. On
+    # macOS there is no xvfb, and headless is what keeps a local run from
+    # popping windows; allocation works there either way.
+    if [ -n "${LAUNCH_PREFIX:-}" ]; then
+        $LAUNCH_PREFIX "$bin" > "$log" 2>&1 &
+    else
+        AETHER_UI_HEADLESS=1 "$bin" > "$log" 2>&1 &
+    fi
+    local pid=$!
+    local ticks=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$ticks" -ge "$((limit * 10))" ]; then
+            kill "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            return 124
+        fi
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+    wait "$pid"
+}
 
 run_server_test() {
     # Launch a binary with AETHER_UI_TEST_PORT set, wait for the test server,
@@ -309,10 +349,12 @@ if pkg-config --exists gtk4 2>/dev/null; then
         if ! aetherc --lib "$ROOT" "$src" "$cfile" > "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (compile)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
-        if ! gcc $(pkg-config --cflags gtk4) "$cfile" \
+        # epoxy explicitly: gpuview (#92) calls GL from the GTK4 backend, and
+        # gtk4.pc exposes neither epoxy's headers nor its library.
+        if ! gcc $(pkg-config --cflags gtk4) $(pkg-config --cflags epoxy) "$cfile" \
                 backend/aether_ui_gtk4.c backend/aether_ui_system_extras.c backend/aether_ui_sni.c \
                 backend/aether_ui_test_server.c \
-                $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
+                $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) $(pkg-config --libs epoxy) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
             echo "  FAIL $t (link)"; tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
         fi
         runner=""
@@ -552,6 +594,107 @@ else
     # Say so rather than passing quietly: a skipped gate that looks like a
     # green one is how the Win32 sources drifted in the first place.
     echo "  SKIP no mingw-w64 cross-compiler (install gcc-mingw-w64-x86-64 to enable)"
+fi
+
+echo
+echo "=== Phase 1c2: backend ABI parity across all four backends ==="
+# Compiling and linking a backend proves it builds; it proves nothing about
+# what it OMITS. A missing entry point is invisible to every other phase,
+# because nothing here calls it: the iOS lane links against a stub, and the
+# Win32 lane only cross-compiles. Seven functions had drifted onto three
+# backends and not the fourth before this existed, so an iOS app calling any
+# of them would have failed at link with no earlier warning.
+if python3 "$SCRIPT_DIR/tests/scripts/check_backend_parity.py"; then
+    echo "  OK   backend ABI parity"
+else
+    echo "  FAIL backend ABI parity"
+    FAIL=$((FAIL + 1))
+fi
+
+echo "=== Phase 1e: iOS/iPadOS (UIKit) backend compile+link check ==="
+# The UIKit backend is, like Win32, one nobody here can RUN: there is no iOS leg
+# in CI and no iOS build of libaether. But the iOS SDK ships with Xcode, so its
+# sources can be COMPILED and LINKED against the real UIKit frameworks in a few
+# seconds — the difference between "mirrors the other backends" and "is known to
+# build". -Wall -Werror, the same ratchet Phase 1d holds the Win32 backend to.
+# The shared driver/system sources are checked here too, since they must compile
+# for iOS (BSD sockets + POSIX; no AppKit) just as they do for Windows.
+IOS_SDK="$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null)"
+if [ -n "$IOS_SDK" ] && [ -d "$IOS_SDK" ]; then
+    IOS_CLANG="$(xcrun --sdk iphonesimulator -f clang 2>/dev/null)"
+    IOS_TGT="arm64-apple-ios17.0-simulator"
+    ios_fail=0
+    for src in backend/aether_ui_uikit.m \
+               backend/aether_ui_test_server.c \
+               backend/aether_ui_system_extras.c; do
+        if "$IOS_CLANG" -fobjc-arc -fsyntax-only -Wall -Werror \
+                -target "$IOS_TGT" -isysroot "$IOS_SDK" -Ibackend "$ROOT/$src" \
+                > "/tmp/ci_ios_$(basename "$src").log" 2>&1; then
+            echo "  OK   $(basename "$src")"
+        else
+            echo "  FAIL $(basename "$src")"
+            grep -E ": (error|warning):" "/tmp/ci_ios_$(basename "$src").log" \
+                | head -10 | sed 's/^/       /'
+            ios_fail=1
+        fi
+    done
+    # Syntax is not the whole story (Phase 1d's lesson): a framework whose symbols
+    # are missing compiles fine and fails at link. tests/ios/link_stub.c supplies
+    # the handful of libaether symbols the backend reads (there is no iOS build of
+    # libaether here) plus a main(), so the link proves every -framework resolves.
+    if [ "$ios_fail" -eq 0 ]; then
+        if "$IOS_CLANG" -fobjc-arc -target "$IOS_TGT" -isysroot "$IOS_SDK" -Ibackend \
+                "$ROOT/backend/aether_ui_uikit.m" \
+                "$ROOT/backend/aether_ui_test_server.c" \
+                "$ROOT/backend/aether_ui_system_extras.c" \
+                "$ROOT/tests/ios/link_stub.c" \
+                -framework UIKit -framework Foundation -framework QuartzCore \
+                -framework CoreGraphics -framework CoreText -framework ImageIO -framework UserNotifications \
+                -o /tmp/ci_ios_link > /tmp/ci_ios_link.log 2>&1; then
+            echo "  OK   links against the UIKit frameworks"
+        else
+            echo "  FAIL link"
+            grep -iE "undefined|error:" /tmp/ci_ios_link.log | head -10 | sed 's/^/       /'
+            ios_fail=1
+        fi
+    fi
+    # Compiling and linking prove it builds; they prove nothing about the
+    # pixels. UIKit runs natively on macOS via Mac Catalyst, so drive the REAL
+    # canvas ABI (aether_ui_uikit.m's Core Graphics executor), read the pixels
+    # back with canvas_read_pixel and assert the colours — no simulator, device
+    # or iOS build of libaether. This is what turns "is known to build" into "is
+    # known to render". See tests/ios/render_probe.m. (macOS-host only.)
+    if [ "$ios_fail" -eq 0 ]; then
+        MAC_SDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+        CAT_FW="$MAC_SDK/System/iOSSupport/System/Library/Frameworks"
+        MAC_CLANG="$(xcrun --sdk macosx -f clang 2>/dev/null)"
+        if [ -n "$MAC_SDK" ] && [ -d "$CAT_FW" ]; then
+            if "$MAC_CLANG" -fobjc-arc -target "$(uname -m)-apple-ios15.0-macabi" \
+                    -isysroot "$MAC_SDK" -iframework "$CAT_FW" -Ibackend \
+                    "$ROOT/tests/ios/render_probe.m" \
+                    "$ROOT/backend/aether_ui_uikit.m" \
+                    "$ROOT/backend/aether_ui_test_server.c" \
+                    "$ROOT/backend/aether_ui_system_extras.c" \
+                    -framework UIKit -framework Foundation -framework QuartzCore \
+                    -framework CoreGraphics -framework CoreText -framework ImageIO -framework UserNotifications \
+                    -o /tmp/ci_ios_render > /tmp/ci_ios_render.log 2>&1 \
+               && AETHER_UI_RENDER_PROBE_PNG=/tmp/ci_ios_render.png \
+                    /tmp/ci_ios_render >> /tmp/ci_ios_render.log 2>&1; then
+                echo "  OK   canvas renders (pixels checked via Mac Catalyst)"
+            else
+                echo "  FAIL render probe"
+                grep -iE "FAIL|error:|undefined" /tmp/ci_ios_render.log \
+                    | head -10 | sed 's/^/       /'
+                ios_fail=1
+            fi
+        else
+            echo "  SKIP render probe (no Mac Catalyst SDK on this host)"
+        fi
+    fi
+    [ "$ios_fail" -eq 0 ] || FAIL=$((FAIL + 1))
+else
+    # Say so rather than passing quietly, exactly as Phase 1d does for mingw.
+    echo "  SKIP no iOS SDK (install Xcode + the iOS platform to enable)"
 fi
 
 echo
@@ -805,10 +948,97 @@ if [ "$SPEC_OK" -eq 1 ]; then
     run_server_test "$(EX_BIN canvasclip_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" canvasclip_demo || FAIL=$((FAIL + 1))
 
+    echo "-- Phase 5e20: canvas_on_resize passes floats like its siblings --"
+    UI_SPEC=resizecb_demo/spec_resizecb_demo \
+    run_server_test "$(EX_BIN resizecb_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" resizecb_demo || FAIL=$((FAIL + 1))
+
+    # An app that ends itself needs no driver: the whole assertion is that the
+    # run loop RETURNS and the process exits 0. Before app_quit the only way
+    # to stop one was to kill it, so `timeout` always reported 124 and could
+    # not tell finishing from hanging.
+    echo "-- Phase 5e21: app_quit stops the run loop --"
+    run_self_quitting "$(EX_BIN quit_demo)" quit_demo 30
+    quit_rc=$?
+    quit_out=$(cat /tmp/ci_quit_demo.selfquit.log 2>/dev/null)
+    if [ "$quit_rc" -eq 0 ] \
+       && printf '%s' "$quit_out" | grep -q "work done" \
+       && printf '%s' "$quit_out" | grep -q "run loop returned"; then
+        echo "  OK   quit_demo ended itself (exit 0, loop returned)"
+    else
+        echo "  FAIL quit_demo: rc=$quit_rc (124 = never quit)"
+        printf '%s\n' "$quit_out" | head -5 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+
+    # A panel width that HOLDS inside a nested splitview. No driver needed:
+    # the app reads its own allocation back through get_width and quits, so
+    # the assertion is the number it printed. Asked 240; with nothing but
+    # split_set_position the pane took the whole width (1368), because
+    # -setPosition: does not survive layout re-deriving a pane from its
+    # content. set_width is what holds.
+    echo "-- Phase 5e22: set_width holds a panel inside a nested splitview --"
+    run_self_quitting "$(EX_BIN panelsize_demo)" panelsize_demo 30
+    panel_rc=$?
+    panel_out=$(cat /tmp/ci_panelsize_demo.selfquit.log 2>/dev/null)
+    if [ "$panel_rc" -eq 0 ] && printf '%s' "$panel_out" | grep -q "left panel width = 240"; then
+        echo "  OK   panelsize_demo: left panel held at 240"
+    else
+        echo "  FAIL panelsize_demo: rc=$panel_rc"
+        # The interesting line, not the first four lines of GTK warnings.
+        printf '%s\n' "$panel_out" | grep -a "left panel width" | sed 's/^/       /' \
+            || echo "       (no width line printed at all)"
+        printf '%s\n' "$panel_out" | tail -3 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+
+    # A container child must get the same content box as a leaf child. Both
+    # read back through get_width, so no driver is needed. The panel is 400
+    # wide with 12px side insets: the row must measure 376. Before the fix it
+    # measured the full 400, hanging 12px outside the padding every leaf
+    # child respected.
+    echo "-- Phase 5e23: a container child sits inside the parent's insets --"
+    run_self_quitting "$(EX_BIN insets_demo)" insets_demo 30
+    ins_rc=$?
+    ins_out=$(cat /tmp/ci_insets_demo.selfquit.log 2>/dev/null)
+    if [ "$ins_rc" -eq 0 ] && printf '%s' "$ins_out" | grep -q "row_w=376"; then
+        echo "  OK   insets_demo: container child inset like a leaf (376)"
+    else
+        echo "  FAIL insets_demo: rc=$ins_rc"
+        printf '%s\n' "$ins_out" | grep -a "row_w" | sed 's/^/       /' \
+            || echo "       (no width line printed)"
+        FAIL=$((FAIL + 1))
+    fi
+
+    # The borrowed blit skips the per-frame copy; it is only worth having if
+    # it draws the SAME pixels. The demo blits one image both ways and reads
+    # back two of them, so this asserts the picture, not the speed.
+    echo "-- Phase 5e24: a borrowed blit draws what the copying blit draws --"
+    run_self_quitting "$(EX_BIN blitborrow_demo)" blitborrow_demo 30
+    blit_rc=$?
+    blit_out=$(cat /tmp/ci_blitborrow_demo.selfquit.log 2>/dev/null)
+    if [ "$blit_rc" -eq 0 ] && printf '%s' "$blit_out" | grep -q "^MATCH$"; then
+        echo "  OK   blitborrow_demo: borrowed and copied blits agree"
+    else
+        echo "  FAIL blitborrow_demo: rc=$blit_rc"
+        printf '%s\n' "$blit_out" | grep -aE "owned|borrow" | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+
+    echo "-- Phase 5e21: the GPU viewport actually renders (#92) --"
+    UI_SPEC=gpuview_demo/spec_gpuview_demo \
+    run_server_test "$(EX_BIN gpuview_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" gpuview_demo || FAIL=$((FAIL + 1))
+
     echo "-- Phase 5e19: canvas_reset_clip widens the clip back --"
     UI_SPEC=canvasresetclip_demo/spec_canvasresetclip_demo \
     run_server_test "$(EX_BIN canvasresetclip_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" canvasresetclip_demo || FAIL=$((FAIL + 1))
+
+    echo "-- Phase 5e20: a sized canvas does not collapse its panel --"
+    UI_SPEC=panelcanvas_demo/spec_panelcanvas_demo \
+    run_server_test "$(EX_BIN panelcanvas_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" panelcanvas_demo || FAIL=$((FAIL + 1))
 fi
 
 echo
@@ -949,6 +1179,9 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=multiselect_demo/spec_multiselect_demo \
     run_server_test "$(EX_BIN multiselect_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" multiselect_demo || FAIL=$((FAIL + 1))
+    UI_SPEC=selmode_demo/spec_selmode_demo \
+    run_server_test "$(EX_BIN selmode_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" selmode_demo || FAIL=$((FAIL + 1))
     UI_SPEC=dblclick_demo/spec_dblclick_demo \
     run_server_test "$(EX_BIN dblclick_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" dblclick_demo || FAIL=$((FAIL + 1))
@@ -969,6 +1202,9 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=weightclamp_demo/spec_weightclamp_demo \
     run_server_test "$(EX_BIN weightclamp_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" weightclamp_demo || FAIL=$((FAIL + 1))
+    UI_SPEC=flexround_demo/spec_flexround_demo \
+    run_server_test "$(EX_BIN flexround_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" flexround_demo || FAIL=$((FAIL + 1))
     UI_SPEC=shortcut_demo/spec_shortcut_demo \
     run_server_test "$(EX_BIN shortcut_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" shortcut_demo || FAIL=$((FAIL + 1))
@@ -1149,8 +1385,16 @@ echo "=== Phase 7: AetherUIDriver LisMusic port spec ==="
 if [ "$SPEC_OK" -eq 1 ] && [ "$LISMUSIC_BUILT" -eq 1 ]; then
     rm -f "$ROOT/history.db"
     export LIS_OFFLINE=1
+    # .build.contrib.ae nodes emit under target/build.contrib/ (the node TYPE
+    # routes the output tree), so the binary never lands under target/build/.
+    # Prefer that tree, fall back to target/build/ for an older aeb — same
+    # resolution spec_matrix.sh uses. Without this the launch read the wrong
+    # tree and reported "test server never responded" for a binary sitting
+    # built in the right one.
+    LISMUSIC_BIN="$ROOT/target/build.contrib/apps/LisMusic/bin/LisMusic"
+    [ -x "$LISMUSIC_BIN" ] || LISMUSIC_BIN="$ROOT/target/build/apps/LisMusic/bin/LisMusic"
     UI_SPEC=LisMusic/spec_lismusic \
-    run_server_test "$ROOT/target/build/apps/LisMusic/bin/LisMusic" \
+    run_server_test "$LISMUSIC_BIN" \
                     "$SCRIPT_DIR/tests/run_spec.sh" lismusic || FAIL=$((FAIL + 1))
     unset LIS_OFFLINE
     rm -f "$ROOT/history.db"

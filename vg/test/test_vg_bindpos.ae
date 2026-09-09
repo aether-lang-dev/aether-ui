@@ -43,7 +43,7 @@ mk_ctx() -> ptr {
 
 // Mutable position the bind_pos closure reads.
 struct Pos { cx: float cy: float }
-mk_pos(x: float, y: float) -> *Pos { p = malloc(16) as *Pos; p.cx = x; p.cy = y; return p }
+mk_pos(x: float, y: float) -> *Pos { p = malloc(sizeof(Pos)) as *Pos; p.cx = x; p.cy = y; return p }
 
 main() {
     println("=== test_vg_bindpos ===")

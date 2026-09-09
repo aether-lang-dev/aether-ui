@@ -26,7 +26,7 @@ struct Region {
 }
 
 rgn_new() -> ptr {
-    r = malloc(64) as *Region
+    r = malloc(sizeof(Region)) as *Region
     r.cap = 8
     r.n = 0
     r.rects = floatarr_new_raw(r.cap * 4)

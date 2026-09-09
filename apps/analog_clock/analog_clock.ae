@@ -44,7 +44,7 @@ const RADIUS: float = 90.0
 // per-frame tick sets from now_local() — so the clock shows the actual time.
 struct Clock { secs: float }   // seconds since local midnight
 extern malloc(size: int) -> ptr
-mk_clock() -> *Clock { c = malloc(8) as *Clock; c.secs = now_secs(); return c }
+mk_clock() -> *Clock { c = malloc(sizeof(Clock)) as *Clock; c.secs = now_secs(); return c }
 
 // Seconds since local midnight (0..86399) from the host's wall clock.
 now_secs() -> float {
@@ -66,7 +66,7 @@ frac(v: float) -> float { return v - math.floor(v) }
 // cross fn boundaries as heap pointers; no float-tuple returns).
 struct Pt4 { x1: float y1: float x2: float y2: float }
 mk_pt4(x1: float, y1: float, x2: float, y2: float) -> *Pt4 {
-    p = malloc(32) as *Pt4
+    p = malloc(sizeof(Pt4)) as *Pt4
     p.x1 = x1; p.y1 = y1; p.x2 = x2; p.y2 = y2
     return p
 }

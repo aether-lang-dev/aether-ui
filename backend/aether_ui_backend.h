@@ -269,6 +269,32 @@ void aether_ui_window_set_body_impl(int win_handle, int root_handle);
 void aether_ui_window_show_impl(int win_handle);
 void aether_ui_window_close_impl(int win_handle);
 /* Unified driver window view: 1 = primary, 2.. = extras. */
+/* #93: stop the run loop so an app can quit itself. Safe to call from any
+   thread; each backend wakes its own loop. The shared flag also releases
+   aether_ui_park_until_killed for headless / tray-only runs. */
+/* #95: state a widget's width/height, and read back what it actually got.
+   The setter is what holds a panel at a size across a layout pass; the getter
+   answers from the real allocation, not from the request. */
+/* #102: blit WITHOUT copying — the pixels stay the caller's and must stay
+   valid until the next canvas_clear. For a surface redrawn every frame the
+   owning variant's malloc+memcpy of the whole framebuffer dominated the
+   frame; a caller that cannot promise the lifetime uses the owning one. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len);
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len);
+
+void aether_ui_set_width_impl(int handle, int px);
+void aether_ui_set_height_impl(int handle, int px);
+int  aether_ui_get_width_impl(int handle);
+int  aether_ui_get_height_impl(int handle);
+
+void aether_ui_app_quit_impl(void);
+void aether_ui_request_quit(void);
+int  aether_ui_quit_requested(void);
+
 int  aether_ui_window_count_impl(void);
 const char* aether_ui_window_title_impl(int win_handle);
 /* Retitle a live window. Keeps the driver-visible title and the native
@@ -321,6 +347,43 @@ int  aether_ui_native_list_first_visible_impl(int handle);
 
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
                                      int width, int height);
+
+/* GPU surface (#92). A widget that owns a real GL context, so an app can put a
+ * hardware-rendered viewport next to ordinary native chrome instead of running
+ * its renderer in a separate GLFW window and losing panels, menus and dialogs.
+ *
+ * The contract deliberately mirrors canvas, which apps already know: create
+ * returns an ID in its own space, _get_widget converts it to a widget handle
+ * for layout and styling, and the hooks are boxed closures. What differs is
+ * that on_render runs with the context CURRENT and the backend presents the
+ * result, so the callback only draws.
+ *
+ * A backend that cannot host a GL context reports that through
+ * aether_ui_gpuview_available_impl rather than by failing to link: an app
+ * asks first and falls back to its software path. Two of ours cannot today,
+ * and saying so is more useful than pretending.
+ */
+int  aether_ui_gpuview_create_impl(int width, int height);
+int  aether_ui_gpuview_get_widget(int gpu_id);
+/* 1 when this backend can give the view a real context, 0 when it cannot.
+ * Answers for the BACKEND, before any view exists. */
+int  aether_ui_gpuview_available_impl(void);
+/* Fired once when the context exists and is current, before the first render.
+ * Load entry points here. Closure takes no arguments. */
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure);
+/* Fired with the context current; the backend presents afterwards, so the
+ * closure must not swap. Closure takes (dt_seconds: double). */
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure);
+/* Framebuffer size in PIXELS, not points: a HiDPI viewport needs the backing
+ * size for glViewport. Closure takes (w: int, h: int). */
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure);
+/* Ask for one more frame. A GPU view does not redraw on its own; an app that
+ * animates calls this from its own timer. */
+void aether_ui_gpuview_request_render_impl(int gpu_id);
+/* One rendered pixel, 0xRRGGBBAA, read back from the GL framebuffer. This is
+ * what lets a spec assert the GPU actually drew what was asked rather than
+ * only that the widget exists. -1 when unavailable. */
+int  aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py);
 int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,
                                    double cx, double cy);
 void aether_ui_vg_tooltip_hide_impl(void);
@@ -625,6 +688,13 @@ void aether_ui_shortcut_impl(const char* combo, void* boxed_closure);
 // would break typing into whatever has focus. mods is a bitmask:
 // 1 shift, 2 ctrl, 4 alt, 8 super/command.
 void aether_ui_window_on_key_impl(void* boxed_closure);
+
+/* The modifier keys held RIGHT NOW, as the public bitmask every other
+ * modifier-carrying callback uses: 1 shift, 2 ctrl, 4 alt, 8 super/command.
+ * Meant to be read from inside a click callback, where the platform event is
+ * still the current one, so a widget can tell a plain click from a
+ * cmd-click without every click callback growing an argument. */
+int aether_ui_modifiers_impl(void);
 // Files dropped onto the window, the most common drag-and-drop case by far
 // and the one an editor or file manager cannot do without. The closure gets
 // the paths NEWLINE-SEPARATED in one string: the DSL splits that into a list,

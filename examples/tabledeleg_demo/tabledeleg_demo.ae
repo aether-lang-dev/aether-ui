@@ -13,7 +13,7 @@ extern malloc(size: int) -> ptr
 struct Row { name: string, pct: int }
 
 mk_row(name: string, pct: int) -> ptr {
-    r = malloc(24) as *Row
+    r = malloc(sizeof(Row)) as *Row
     r.name = name
     r.pct = pct
     return r as ptr

@@ -174,7 +174,7 @@ fam_variant_at(f: ptr, i: int) -> string { fm = f as *Fam; return csv_at(fm.vari
 // Parse the compressed record. `path` is our extension: the font file this
 // family renders from (upstream loads by CSS family name instead).
 fam_parse(raw: string, path: string) -> ptr {
-    fm = malloc(128) as *Fam
+    fm = malloc(sizeof(Fam)) as *Fam
     nm = field_at(raw, 0)
     ca = field_at(raw, 1)
     va = field_at(raw, 2)
@@ -358,7 +358,7 @@ struct PickList {
 }
 
 pl_new() -> ptr {
-    l = malloc(160) as *PickList
+    l = malloc(sizeof(PickList)) as *PickList
     l.fams = list.list_new()
     vis, _ve = floatarr.new(FP_MAX)
     fav, _fe = floatarr.new(FP_MAX)

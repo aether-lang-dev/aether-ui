@@ -30,7 +30,7 @@ extern malloc(size: int) -> ptr
 struct App { filters: ptr metrics: ptr sort: ptr }
 
 main() {
-    app = malloc(32) as *App
+    app = malloc(sizeof(App)) as *App
 
     window("Disclosure — collapsible sections", 480, 420) {
         vstack(6) {

@@ -100,7 +100,7 @@ struct GtkBackend {
 // shape factories dispatch through — the GtkBackend handle is the
 // `be` threaded into the op-switch closure.
 gtk_backend_new(canvas_id: int) -> ptr {
-    b = malloc(16) as *GtkBackend
+    b = malloc(sizeof(GtkBackend)) as *GtkBackend
     b.canvas_id = canvas_id
     b.raster_skipped = 0
     return dispatch.backend_make(b) callback |be: ptr, op: int, opts: ptr| {

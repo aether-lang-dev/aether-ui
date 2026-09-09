@@ -68,7 +68,7 @@ struct PathBuilder {
 }
 
 pb_new(ctx: ptr, backend: ptr) -> ptr {
-    pb = malloc(48) as *PathBuilder
+    pb = malloc(sizeof(PathBuilder)) as *PathBuilder
     pb.ctx = ctx
     pb.backend = backend
     pb.parts = ""

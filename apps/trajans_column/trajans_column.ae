@@ -41,7 +41,7 @@ struct Col {
     status: int
 }
 mk_col() -> *Col {
-    c = malloc(16) as *Col
+    c = malloc(sizeof(Col)) as *Col
     c.active = 0
     c.status = 0
     return c

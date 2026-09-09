@@ -124,7 +124,7 @@ frame(_ctx: ptr, title: string, x: float, y: float, w: float, h: float,
 }
 
 frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
-    hst = malloc(160) as *FrameHost
+    hst = malloc(sizeof(FrameHost)) as *FrameHost
     hst.scene = scene
     hst.frames = list.new()
     hst.next_z = 0
@@ -153,7 +153,7 @@ frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
 
 frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> ptr {
     hst = host as *FrameHost
-    f = malloc(128) as *Frame
+    f = malloc(sizeof(Frame)) as *Frame
     f.host = host
     f.title = title
     string_retain(f.title)

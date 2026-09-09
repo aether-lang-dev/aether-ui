@@ -46,7 +46,7 @@ struct Rec { calls: int last_t: float drew: int }
 // slack and nothing complains; macOS's allocator uses a 16-byte bin and the
 // write corrupts the free list, aborting the process several statements later.
 // A real heap overflow that only one libc was kind enough to hide.
-mk_rec() -> *Rec { r = malloc(24) as *Rec; r.calls = 0; r.last_t = 0.0; r.drew = 0; return r }
+mk_rec() -> *Rec { r = malloc(sizeof(Rec)) as *Rec; r.calls = 0; r.last_t = 0.0; r.drew = 0; return r }
 
 main() {
     println("=== test_live_region ===")

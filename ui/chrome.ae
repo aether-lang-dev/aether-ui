@@ -69,7 +69,7 @@ struct ChromeTokens {
 }
 
 chrome_tokens() -> ptr {
-    t = malloc(96) as *ChromeTokens
+    t = malloc(sizeof(ChromeTokens)) as *ChromeTokens
     t.bg = "#F3F4F6"
     t.bg_hover = "#E5E7EB"
     t.bg_active = "#D1D5DB"

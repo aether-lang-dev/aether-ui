@@ -32,7 +32,7 @@ struct DemoState {
 
 main() {
     ui.window("Edge Zone Demo", 420, 300) {
-        d = malloc(24) as *DemoState
+        d = malloc(sizeof(DemoState)) as *DemoState
         d.status = 0
         d.handle_wrap = 0
         d.sidebar = 0

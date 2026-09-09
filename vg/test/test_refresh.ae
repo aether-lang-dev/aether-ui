@@ -37,7 +37,7 @@ mk_test_ctx() -> ptr {
 struct DataItem { id: string }
 
 mk_item(id: string) -> ptr {
-    d = malloc(8) as *DataItem
+    d = malloc(sizeof(DataItem)) as *DataItem
     d.id = string.copy(id)
     return d
 }

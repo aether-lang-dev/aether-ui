@@ -65,7 +65,7 @@ struct AevgOptions {
 }
 
 opts_new() -> ptr {
-    o = malloc(64) as *AevgOptions
+    o = malloc(sizeof(AevgOptions)) as *AevgOptions
     o.view_box = ""
     o.width = 0.0
     o.height = 0.0
@@ -123,7 +123,7 @@ vb4_width(p: ptr) -> float { v = p as *ViewBox4; return v.width }
 vb4_height(p: ptr) -> float { v = p as *ViewBox4; return v.height }
 
 mk_vb4(mnx: float, mny: float, w: float, h: float) -> *ViewBox4 {
-    v = malloc(32) as *ViewBox4
+    v = malloc(sizeof(ViewBox4)) as *ViewBox4
     v.min_x = mnx
     v.min_y = mny
     v.width = w

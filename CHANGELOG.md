@@ -9,6 +9,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`gpuview`, a widget that owns a real GL context** (#92). An app can now put
+  a hardware-rendered viewport inside ordinary native chrome, instead of
+  choosing between running the renderer in its own GLFW window with no panels,
+  menus or dialogs, and falling back to the CPU painter in `vg/render3d.ae`.
+  `on_realize` fires with the context current, `on_render` draws and the
+  backend presents, `on_resize` reports the framebuffer size in PIXELS so a
+  HiDPI viewport does not render into a quarter of itself.
+
+  `gpuview_available()` answers for the backend AND the display before any view
+  exists: AppKit and GTK4 host a context, win32 and UIKit report 0 today, and a
+  machine with no GL device reports 0 anywhere. An app asks first and takes its
+  software path, which is a defined answer rather than a widget that never
+  draws.
+
+  `gpuview_read_pixel` returns one rendered pixel as `0xRRGGBBAA`, and the
+  driver exposes it at `GET /gpuview/{id}/pixel`. It renders a frame into an
+  offscreen target rather than sampling the window, for two reasons that both
+  read as "the renderer did not run": a double-buffered context has already
+  swapped by the time you could read it, and a view with no window has no
+  drawable at all, so the default framebuffer goes nowhere. Rendering offscreen
+  is also what lets `spec_gpuview_demo` assert on real GPU output headlessly.
+
+
+### Fixed
+
+- **The iOS backend had fallen seven entry points behind the other three.**
+  `app_quit`, `set_width` / `set_height`, `get_width` / `get_height`, the two
+  borrowed-pixel blit variants and `modifiers` were implemented on AppKit,
+  GTK4 and Win32 but not on UIKit, so an iOS app calling any of them would
+  have failed at link. Nothing caught it: the iOS CI phase compiles the
+  backend and links it against a stub, which proves what it REFERENCES
+  resolves and says nothing about what it omits, and the Win32 lane only
+  cross-compiles.
+
+  All seven are implemented. Two are documented no-ops with a stated reason
+  rather than a gap: iOS has no programmatic quit, because terminating your
+  own app is grounds for App Store rejection, and `modifiers` is always 0
+  because a touch carries none and UIKit has no pollable global modifier
+  state (a hardware keyboard's modifiers arrive attached to the key event,
+  which is a different question). `get_width` / `get_height` round the
+  frame's edges rather than its size, so they carry the same tiling
+  guarantee the other backends got in #101.
+
+### Added
+
+- **CI checks backend ABI parity** (`tests/scripts/check_backend_parity.py`,
+  phase 1c2). Every function declared in `aether_ui_backend.h` must be defined
+  in the shared sources or on all four backends. A missing entry point was
+  invisible to every other phase, because nothing in CI calls it. The checker
+  distinguishes a definition from a declaration by scanning from the name to
+  whichever of `;` or `{` comes first, rather than by one regex, since a
+  single pattern lets one match swallow a later one and silently under-report.
+
+
+### Added
+
+- **A multi-select listbox can be driven to a known state.** `listbox_select`
+  on a multi listbox toggles, which can only ever say "flip this row": calling
+  it twice silently undoes itself, so an app that selects a row after every add
+  ends up with the wrong row selected and there was no way to keep an
+  application's own selection model and the widget's in agreement.
+  `listbox_set_selected(lb, i, on)` writes one row's state and
+  `listbox_clear_selection(lb)` clears them all, neither firing `on_select`,
+  because a state write is not a user action and an app syncing its model would
+  otherwise re-enter its own click handler on every sync.
+  `listbox_selected_count(lb)` saves every caller writing the same loop.
+
+- **`listbox_selection_mode(lb, 1)` gives a multi listbox the selection
+  behaviour every editor, file manager and mail client has**: a plain click
+  replaces the selection, cmd/ctrl-click toggles one row, shift-click extends
+  from the anchor. This could not be built on top of `on_select`, which reports
+  a row index and no modifier state, so the widget does it: it already owns
+  `sel_flags` and the hit testing. Mode 0, today's toggle-every-click, stays
+  the default, because that is what a checklist wants and what `listbox_multi`
+  has always done.
+
+- **`modifiers()`** reports the modifier keys held right now as the same
+  bitmask `window_on_key` uses (1 shift, 2 ctrl, 4 alt, 8 super/command). Real
+  on all three backends. Reading the live state inside a click callback is what
+  lets a widget tell a plain click from a cmd-click without every click
+  callback growing an argument, which would break every existing caller.
+
+- **`canvas_size(id, w, h)`** gives a canvas an explicit size, taking the
+  CANVAS ID that `canvas_create` hands back rather than the widget handle
+  underneath it. `canvas_create`'s width and height are only a natural size,
+  held at low priority so a canvas can absorb a stack's slack, and a colour
+  chip or a sparkline in a panel row wants an actual size instead.
+
+### Fixed
+
+- **A small canvas in a side panel no longer collapses that panel** (#98).
+  Canvas ids and widget handles are separate counters that both start at 1, so
+  the same small integer means different things to `canvas_*` and to the
+  widget functions, and passing one where the other belongs was silent.
+  `width(canvas_create(...), 46)` therefore pinned WIDGET number `<canvas id>`
+  to 46px, which in a three-pane editor was the inspector panel: it collapsed
+  to roughly the chip's own width, every child reflowed into it, and in a
+  reproduction here the other two panes measured 0 as well. Nothing about it
+  pointed at the real mistake, which is why it read as the canvas acting as a
+  strut on its parent. `canvas_size` takes the id you are holding, and both
+  `canvas_create` and `canvas_widget` now say in the API docs that the two
+  numbering spaces overlap and that `canvas_widget` is the whole of the
+  boundary between them.
+
+### Added
+
 - A `table` announces itself as a table, and its headers as column headers.
   Before this it announced nothing structural: assistive tech saw an unlabelled
   stack of buttons above a list. The ROWS were already right, because `table`
@@ -39,6 +145,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spec and confirming the guard names that file and line.
 
 ### Fixed
+
+- `ui.timer` keeps firing while a slider or a scrollbar is being dragged, a
+  menu is open, or a window is being resized live. `scheduledTimer` registers
+  in the default run-loop mode alone, and AppKit runs all of that tracking in
+  `NSEventTrackingRunLoopMode`, where a default-mode timer does not fire: an
+  animation or a clock stopped dead for as long as the mouse was held down and
+  jumped on release. The timer now goes into the common modes.
+
+- The geometry a caller reads back keeps flexible children inside their parent.
+  A stack divides its width exactly (96.5 + 6 + 97 + 6 + 96.5 fills a 302px
+  row), but the readback rounded each child's SIZE on its own, reporting
+  97/97/97 for a total of 303, so the last child looked like it hung a pixel
+  past the row and "every widget fits inside its parent" was false by one
+  pixel, compounding with nesting. Sizes are now the distance between two
+  ROUNDED EDGES, so adjacent children tile: one child's trailing edge is the
+  next one's leading edge, and three children of a 302px row report 97/97/96.
+  This covers `get_width` and `get_height` and the `/widgets` and `/widget/N`
+  geometry the driver reports, on AppKit and on GTK4, where the same
+  independent rounding truncated instead and under-reported. Win32 already
+  derived its sizes from integer edges.
+
+- `weight()` on buttons is no longer overridden by the equal-width chain that
+  a row of buttons gets by default. The chain is a required constraint and the
+  proportional shares are not, so weights of 16 / 62 / 22 came out 500/500/500
+  in a 1500px row with no diagnostic. A weight is an explicit instruction to
+  divide space unevenly, so it now retracts the chain for that child, exactly
+  as an explicit `width()` already did.
 
 - Every spec returns its `run_summary` verdict again. A previous change in this
   series stripped the `return` from 83 of them on the strength of a local

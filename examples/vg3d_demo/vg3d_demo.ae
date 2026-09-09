@@ -158,7 +158,7 @@ probe(app: *App) {
 }
 
 main() {
-    app = malloc(72) as *App
+    app = malloc(sizeof(App)) as *App
     app.angle = 0
     st_a = ui_state_s("angle: 0")
     st_v = ui_state_s("v0: ?")

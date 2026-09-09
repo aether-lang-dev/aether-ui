@@ -136,8 +136,8 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
     // viewBox (vb) is fixed SVG space, so only the mapping changes. (No
     // canvas_redraw here: the hook runs INSIDE the draw func, which replays
     // the freshly-flushed buffer.)
-    ui.canvas_on_resize(canvas_id) callback |rw: int, rh: int| {
-        new_ctx = _build_ctx(vb, rw, rh)
+    ui.canvas_on_resize(canvas_id) callback |rw: float, rh: float| {
+        new_ctx = _build_ctx(vb, rw as int, rh as int)
         vg.scene_set_ctx(scene, new_ctx)
         ui.canvas_clear(canvas_id)
         _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))

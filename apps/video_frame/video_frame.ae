@@ -228,7 +228,7 @@ main() {
     // A missing or unreadable clip is not a failure -- the app still opens
     // and draws its frames, just with an empty video rect. The spec asserts
     // only that pixels reach the screen, which the chrome alone satisfies.
-    app = malloc(256) as *App
+    app = malloc(sizeof(App)) as *App
     app.shown = 0
     app.pts = 0
     app.t0 = 0.0 - 1.0

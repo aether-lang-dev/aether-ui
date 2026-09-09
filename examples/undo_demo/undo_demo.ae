@@ -24,7 +24,7 @@ main() {
             total = text("total: 0")
             name = text("name: Ellen")
             divider()
-            cnt = malloc(8) as *Cnt
+            cnt = malloc(sizeof(Cnt)) as *Cnt
             cnt.v = 0
             hstack(8) {
                 _a = btn("Add 5") callback {

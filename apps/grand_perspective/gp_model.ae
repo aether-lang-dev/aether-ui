@@ -92,7 +92,7 @@ struct FileEntry {
 }
 
 mk_entry(name: string, path: string, size: long, is_dir: int, parent: *FileEntry) -> *FileEntry {
-    e = malloc(64) as *FileEntry
+    e = malloc(sizeof(FileEntry)) as *FileEntry
     e.name = name; string_retain(name)      // retain: the field outlives the arg's scope
     e.path = path; string_retain(path)
     e.total_size = size
@@ -150,7 +150,7 @@ struct TypeStat {
 }
 
 mk_tstat(ext: string) -> *TypeStat {
-    t = malloc(48) as *TypeStat
+    t = malloc(sizeof(TypeStat)) as *TypeStat
     t.ext = ext; string_retain(ext)
     t.bytes = 0
     t.files = 0

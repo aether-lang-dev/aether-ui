@@ -64,7 +64,7 @@ struct View {
     status_lbl: int
 }
 mk_view() -> *View {
-    v = malloc(16) as *View
+    v = malloc(sizeof(View)) as *View
     v.score_lbl = 0
     v.status_lbl = 0
     return v

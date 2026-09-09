@@ -137,7 +137,7 @@ board_set(g: *Game, col: int, row: int, v: int) {
 }
 
 mk_game() -> *Game {
-    g = malloc(96) as *Game
+    g = malloc(sizeof(Game)) as *Game
     g.shapes = build_shapes()
     arr, _e = intarr.new_filled(CELLS, -1)
     g.board = arr

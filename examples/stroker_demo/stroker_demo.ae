@@ -112,7 +112,7 @@ compare_pixels(app: *App) {
 }
 
 main() {
-    app = malloc(40) as *App
+    app = malloc(sizeof(App)) as *App
     app.hits = 0
     cmp = ui_state_s("pixels: not compared yet")
     hits = ui_state_s("hits: 0")

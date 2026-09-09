@@ -35,7 +35,7 @@ mk_ctx() -> ptr {
 
 // The clock's current hour (0..12), mutable — the "poll" source.
 struct Clock { hour: float }
-mk_clock(h: float) -> *Clock { c = malloc(8) as *Clock; c.hour = h; return c }
+mk_clock(h: float) -> *Clock { c = malloc(sizeof(Clock)) as *Clock; c.hour = h; return c }
 
 // Hour-hand endpoint for `hour`: center (50,50), length 30, 12-o'clock is up
 // (angle measured clockwise from +Y up). x2 = 50 + 30*sin(θ), y2 = 50 - 30*cos(θ)

@@ -199,7 +199,7 @@ stroke_width(p: ptr) -> float          { v = p as *StrokeMap; return v.width }
 stroke_opacity_factor(p: ptr) -> float { v = p as *StrokeMap; return v.opacity_factor }
 
 mk_stroke_map(w: float, op: float) -> *StrokeMap {
-    s = malloc(16) as *StrokeMap
+    s = malloc(sizeof(StrokeMap)) as *StrokeMap
     s.width = w
     s.opacity_factor = op
     return s

@@ -12,6 +12,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
+#include <epoxy/gl.h>   /* gpuview (#92): GTK4 already links epoxy for its own GL */
 
 #ifdef AEUI_HAVE_LIBNOTIFY
 #include <libnotify/notify.h>
@@ -583,13 +585,31 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
     apps[app_handle - 1].root_handle = root_handle;
 }
 
+/* #93: the running GApplication, so app_quit can stop it from anywhere. */
+static GApplication* aeui_running_app = NULL;
+
+/* Runs on the main context: g_application_quit must not be called from an
+   arbitrary thread. */
+static gboolean aeui_quit_idle(gpointer data) {
+    (void)data;
+    if (aeui_running_app) g_application_quit(aeui_running_app);
+    return G_SOURCE_REMOVE;
+}
+
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (aeui_running_app) g_idle_add(aeui_quit_idle, NULL);
+}
+
 void aether_ui_app_run_raw(int app_handle) {
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
     e->gtk_app = gtk_application_new("dev.aether.ui",
         G_APPLICATION_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
     g_signal_connect(e->gtk_app, "activate", G_CALLBACK(on_activate), e);
+    aeui_running_app = G_APPLICATION(e->gtk_app);
     g_application_run(G_APPLICATION(e->gtk_app), 0, NULL);
+    aeui_running_app = NULL;
     g_object_unref(e->gtk_app);
 }
 
@@ -1386,6 +1406,39 @@ int aether_ui_split_position_impl(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_PANED(w)) return -1;
     return gtk_paned_get_position(GTK_PANED(w));
+}
+
+/* #95: give a widget a width, or ask what width it has. Nothing in the
+ * surface could do either, so a panel layout had no way to state how wide a
+ * panel should be. size_request is GTK's floor; paired with the widget not
+ * expanding, it is what actually holds a panel at a width. get_ reads the
+ * ALLOCATION, which is what the widget really got, not what was asked for. */
+void aether_ui_set_width_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_h = -1;
+    gtk_widget_get_size_request(w, NULL, &cur_h);
+    gtk_widget_set_size_request(w, px, cur_h);
+    gtk_widget_set_hexpand(w, FALSE);
+}
+
+void aether_ui_set_height_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_w = -1;
+    gtk_widget_get_size_request(w, &cur_w, NULL);
+    gtk_widget_set_size_request(w, cur_w, px);
+    gtk_widget_set_vexpand(w, FALSE);
+}
+
+int aether_ui_get_width_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    return w ? gtk_widget_get_width(w) : 0;
+}
+
+int aether_ui_get_height_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    return w ? gtk_widget_get_height(w) : 0;
 }
 
 void aether_ui_split_set_position_impl(int handle, int px) {
@@ -3541,6 +3594,24 @@ void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
     drop_attached = 1;
 }
 
+int aether_ui_modifiers_impl(void) {
+    /* The seat's keyboard state is the live one, which is what a click
+     * callback needs; a GdkEvent is not available at that point. */
+    GdkDisplay* dpy = gdk_display_get_default();
+    if (!dpy) return 0;
+    GdkSeat* seat = gdk_display_get_default_seat(dpy);
+    if (!seat) return 0;
+    GdkDevice* kb = gdk_seat_get_keyboard(seat);
+    if (!kb) return 0;
+    GdkModifierType state = gdk_device_get_modifier_state(kb);
+    int mods = 0;
+    if (state & GDK_SHIFT_MASK)   mods |= 1;
+    if (state & GDK_CONTROL_MASK) mods |= 2;
+    if (state & GDK_ALT_MASK)     mods |= 4;
+    if (state & GDK_SUPER_MASK)   mods |= 8;
+    return mods;
+}
+
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     aeui_window_key_closure_add((AeClosure*)boxed_closure);
     if (!primary_window) return;   // attaches when the window appears
@@ -4308,7 +4379,10 @@ typedef struct {
                               //   DRAW_IMAGE pixel dims
     double a0, a1;            // ARC start/end angle (radians)
     char* text;              // FILL_TEXT string (owned, freed on clear/destroy)
-    unsigned char* pixels;   // DRAW_IMAGE RGBA8888 buffer (owned), iw*ih*4 bytes
+    unsigned char* pixels;   // DRAW_IMAGE RGBA8888 buffer, iw*ih*4 bytes
+    /* #102: 0 = owned and freed with the command, 1 = borrowed from the
+       caller until the next canvas_clear. */
+    int            pixels_borrowed;
     int iw, ih;              // DRAW_IMAGE pixel width/height
     // Gradient (FILL_LINEAR / FILL_RADIAL): geometry in x,y..(see impls),
     // plus owned stop arrays. FILL_LINEAR uses (gx1,gy1)→(gx2,gy2);
@@ -4886,8 +4960,9 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
         (width != cs->last_w || height != cs->last_h)) {
         cs->last_w = width;
         cs->last_h = height;
-        ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
-            cs->on_resize->env, (intptr_t)width, (intptr_t)height);
+        /* #94: doubles, matching the other canvas callbacks. */
+        ((void(*)(void*, double, double))cs->on_resize->fn)(
+            cs->on_resize->env, (double)width, (double)height);
     }
     if (cs) {
         cairo_surface_t* surf = canvas_ensure_paint_surface(cs, width, height);
@@ -5360,6 +5435,158 @@ int aether_ui_canvas_create_impl(int width, int height) {
     return canvas_id;
 }
 
+
+/* ---------------------------------------------------------------------------
+ * GPU surface (#92) -- GtkGLArea.
+ *
+ * GTK4 renders through GL itself, so the area shares the toolkit's context
+ * rather than owning a separate one: render fires with it current and GTK
+ * presents afterwards, which is the same contract AppKit's view offers.
+ *
+ * available() answers for the DISPLAY, not the build. A headless CI runner
+ * with no DRI device links against libepoxy perfectly well and still cannot
+ * realize an area, and an app that asks first can fall back to its software
+ * path instead of showing an empty rectangle.
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    GtkWidget* area;
+    int widget_handle;
+    AeClosure* on_realize;
+    AeClosure* on_render;
+    AeClosure* on_resize;
+    int last_w, last_h;
+    gint64 last_render_us;
+} GpuState;
+
+static GpuState* gpu_states = NULL;
+static int gpu_state_count = 0;
+static int gpu_state_capacity = 0;
+
+static GpuState* get_gpu_state(int gpu_id) {
+    if (gpu_id < 1 || gpu_id > gpu_state_count) return NULL;
+    return &gpu_states[gpu_id - 1];
+}
+
+static void gpu_on_realize_cb(GtkGLArea* area, gpointer user) {
+    GpuState* st = (GpuState*)user;
+    gtk_gl_area_make_current(area);
+    if (gtk_gl_area_get_error(area) != NULL) return;
+    if (st && st->on_realize && st->on_realize->fn)
+        ((void(*)(void*))st->on_realize->fn)(st->on_realize->env);
+}
+
+static void gpu_on_resize_cb(GtkGLArea* area, gint w, gint h, gpointer user) {
+    (void)area;
+    GpuState* st = (GpuState*)user;
+    if (!st) return;
+    if (w == st->last_w && h == st->last_h) return;
+    st->last_w = w; st->last_h = h;
+    if (st->on_resize && st->on_resize->fn)
+        ((void(*)(void*, intptr_t, intptr_t))st->on_resize->fn)(
+            st->on_resize->env, (intptr_t)w, (intptr_t)h);
+}
+
+static gboolean gpu_on_render_cb(GtkGLArea* area, GdkGLContext* ctx, gpointer user) {
+    (void)ctx;
+    GpuState* st = (GpuState*)user;
+    if (!st) return FALSE;
+    if (gtk_gl_area_get_error(area) != NULL) return FALSE;
+    gint64 now = g_get_monotonic_time();
+    double dt = st->last_render_us ? (double)(now - st->last_render_us) / 1e6 : 0.0;
+    st->last_render_us = now;
+    if (st->on_render && st->on_render->fn)
+        ((void(*)(void*, double))st->on_render->fn)(st->on_render->env, dt);
+    return TRUE;
+}
+
+int aether_ui_gpuview_available_impl(void) {
+    /* A display we can actually get a GL context from. gdk_display_prepare_gl
+     * is the question GTK itself asks before using GL, and it answers false on
+     * a headless runner rather than leaving the caller to discover it from an
+     * area that never draws. */
+    GdkDisplay* dpy = gdk_display_get_default();
+    if (!dpy) return 0;
+#if GTK_CHECK_VERSION(4, 4, 0)
+    return gdk_display_prepare_gl(dpy, NULL) ? 1 : 0;
+#else
+    return 1;
+#endif
+}
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    GtkWidget* area = gtk_gl_area_new();
+    if (!area) return 0;
+    if (width  <= 0) width  = 1;
+    if (height <= 0) height = 1;
+    gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 2);
+    gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
+    gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);   /* app drives frames */
+    gtk_widget_set_size_request(area, width, height);
+    gtk_widget_set_hexpand(area, TRUE);
+    gtk_widget_set_vexpand(area, TRUE);
+
+    if (gpu_state_count >= gpu_state_capacity) {
+        gpu_state_capacity = gpu_state_capacity == 0 ? 8 : gpu_state_capacity * 2;
+        gpu_states = realloc(gpu_states, sizeof(GpuState) * gpu_state_capacity);
+    }
+    GpuState* st = &gpu_states[gpu_state_count];
+    memset(st, 0, sizeof(*st));
+    st->area = area;
+    gpu_state_count++;
+    int gpu_id = gpu_state_count;
+
+    g_signal_connect(area, "realize", G_CALLBACK(gpu_on_realize_cb), st);
+    g_signal_connect(area, "resize",  G_CALLBACK(gpu_on_resize_cb),  st);
+    g_signal_connect(area, "render",  G_CALLBACK(gpu_on_render_cb),  st);
+
+    st->widget_handle = aether_ui_register_widget(area);
+    return gpu_id;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) {
+    GpuState* st = get_gpu_state(gpu_id);
+    return st ? st->widget_handle : 0;
+}
+
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_realize = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_render = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st) st->on_resize = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_gpuview_request_render_impl(int gpu_id) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (st && st->area) gtk_gl_area_queue_render(GTK_GL_AREA(st->area));
+}
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    GpuState* st = get_gpu_state(gpu_id);
+    if (!st || !st->area) return -1;
+    GtkGLArea* area = GTK_GL_AREA(st->area);
+    if (gtk_gl_area_get_error(area) != NULL) return -1;
+    gtk_gl_area_make_current(area);
+    if (gtk_gl_area_get_error(area) != NULL) return -1;
+
+    int h = st->last_h > 0 ? st->last_h : gtk_widget_get_height(st->area);
+    int w = st->last_w > 0 ? st->last_w : gtk_widget_get_width(st->area);
+    if (px < 0 || py < 0 || px >= w || py >= h) return -1;
+
+    /* Flipped to the top-left origin every other read-back in this ABI uses. */
+    unsigned char rgba[4] = {0, 0, 0, 0};
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(px, h - 1 - py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    return (int)((rgba[0] << 24) | (rgba[1] << 16) | (rgba[2] << 8) | rgba[3]);
+}
+
 int aether_ui_canvas_get_widget(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     return cs ? cs->widget_handle : 0;
@@ -5779,6 +6006,38 @@ void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y,
 // As draw_image, but scale the iw×ih source to a dw×dh destination rect at
 // (x,y) — for a video/raster frame whose pixel resolution differs from the
 // region's canvas-px extent. dw/dh <= 0 falls back to a 1:1 native blit.
+/* #102: draw WITHOUT copying. The pixels stay the caller's and must remain
+ * valid until the next canvas_clear on this canvas — the lifetime the
+ * retained command list already has. That is what a per-frame surface (a 3D
+ * viewport, a video frame, a game framebuffer) already guarantees: one buffer,
+ * overwritten in place, canvas cleared and redrawn each frame. The owning
+ * variant copies the whole framebuffer per call, which measured 61% of the
+ * frame at 918x659. A caller that cannot promise the lifetime keeps using the
+ * owning variant. */
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y,
+                                               int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y,
+                                                      double dw, double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    if (iw <= 0 || ih <= 0 || !rgba) return;
+    if (byte_len < iw * ih * 4) return;
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_DRAW_IMAGE, .x = x, .y = y, .w = dw, .h = dh,
+        .pixels = (unsigned char*)rgba, .pixels_borrowed = 1,
+        .iw = iw, .ih = ih
+    });
+}
+
 void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
                                        double dw, double dh, int iw, int ih,
                                        const unsigned char* rgba, int byte_len) {
@@ -5850,7 +6109,9 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
                 free(c->text); c->text = NULL;
             }
             if (c->type == CANVAS_DRAW_IMAGE && c->pixels) {
-                free(c->pixels); c->pixels = NULL;
+                /* #102: a borrowed buffer belongs to the caller. */
+                if (!c->pixels_borrowed) free(c->pixels);
+                c->pixels = NULL;
             }
             if (c->type == CANVAS_FILL_LINEAR || c->type == CANVAS_FILL_RADIAL) {
                 free(c->stop_off);  c->stop_off = NULL;
@@ -7670,14 +7931,28 @@ static int hook_widget_children(int handle, int* out_handles, int max) {
 }
 
 // Window-local geometry. 0 = success, per the hook contract.
+/* CRITICAL for #101: a reported size is the distance between two ROUNDED
+ * EDGES, never the rounded size. Under fractional scaling a row of flexible
+ * children sits on fractional bounds that tile their parent exactly; rounding
+ * each child's size on its own breaks that, so the reported parts no longer
+ * add up to the whole and "every widget fits inside its parent" stops being a
+ * check a layout audit can trust. Rounding the edges keeps one child's
+ * trailing edge equal to the next one's leading edge. */
+static int aeui_round_edge(float v) {
+    return (int)floor((double)v + 0.5);
+}
+
 static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
     GtkWidget* wd = aether_ui_get_widget(handle);
     if (!wd) return 1;
     graphene_rect_t r;
     GtkWidget* root = GTK_WIDGET(gtk_widget_get_root(wd));
     if (!root || !gtk_widget_compute_bounds(wd, root, &r)) return 1;
-    *x = (int)r.origin.x; *y = (int)r.origin.y;
-    *w = (int)r.size.width; *hgt = (int)r.size.height;
+    int x0 = aeui_round_edge(r.origin.x);
+    int y0 = aeui_round_edge(r.origin.y);
+    *x = x0; *y = y0;
+    *w   = aeui_round_edge(r.origin.x + r.size.width)  - x0;
+    *hgt = aeui_round_edge(r.origin.y + r.size.height) - y0;
     return 0;
 }
 

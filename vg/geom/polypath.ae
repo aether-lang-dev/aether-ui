@@ -78,7 +78,7 @@ const PP_MIN_CAP: int = 16
 const PP_MIN_CTRS: int = 4
 
 pp_new() -> ptr {
-    p = malloc(64) as *PolyPath
+    p = malloc(sizeof(PolyPath)) as *PolyPath
     p.pts = floatarr_new_raw(PP_MIN_CAP * 2)
     p.npts = 0
     p.cap = PP_MIN_CAP
@@ -622,7 +622,7 @@ struct PPStrokeCtr {
 
 _pp_stroke_prep(pp: ptr, ci: int, is_closed: int) -> *PPStrokeCtr {
     p = pp as *PolyPath
-    st = malloc(64) as *PPStrokeCtr
+    st = malloc(sizeof(PPStrokeCtr)) as *PPStrokeCtr
     start = _pp_ctr_start(p, ci)
     last = intarr_get_raw(p.ends, ci)
     cap = last - start + 2

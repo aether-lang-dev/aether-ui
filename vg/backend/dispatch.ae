@@ -48,7 +48,7 @@ struct Dispatch {
 // Construct a dispatch table. `be` is the concrete backend's handle;
 // `cb` is a single closure that switches on the op selector.
 backend_make(be: ptr, cb: fn) -> ptr {
-    d = malloc(16) as *Dispatch
+    d = malloc(sizeof(Dispatch)) as *Dispatch
     d.be = be
     d.cb = cb
     return d

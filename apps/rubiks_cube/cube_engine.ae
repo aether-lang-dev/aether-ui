@@ -69,7 +69,7 @@ set_cell(c: *Cube, face: int, row: int, col: int, v: int) {
 }
 
 mk_cube() -> *Cube {
-    c = malloc(32) as *Cube
+    c = malloc(sizeof(Cube)) as *Cube
     fa, _e0 = intarr.new(54)
     c.faces = fa
     hs, _e1 = intarr.new(HIST_CAP)

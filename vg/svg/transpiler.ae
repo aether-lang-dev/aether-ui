@@ -273,7 +273,7 @@ emit_children(sb: ptr, node: ptr, indent: int) {
 // gap shared with the surface form). A counter box names the vars.
 
 emit_children_explicit(sb: ptr, root: ptr, indent: int) {
-    ctr = malloc(16) as *VarCounter
+    ctr = malloc(sizeof(VarCounter)) as *VarCounter
     ctr.n = 0
     ctr.root = root        // for <use> href→node resolution
     emit_kids_explicit(sb, root, indent, ctr)

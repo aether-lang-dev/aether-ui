@@ -22,7 +22,7 @@ extern malloc(size: int) -> ptr
 struct Person { name: string, size: string }
 
 mk_person(n: int) -> ptr {
-    p = malloc(24) as *Person
+    p = malloc(sizeof(Person)) as *Person
     p.name = string.concat("person ", string.from_int(n))
     p.size = string.concat(string.from_int(n * 7), " KB")
     return p as ptr

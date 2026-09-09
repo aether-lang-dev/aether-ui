@@ -35,7 +35,24 @@ sdk_prefix() -> string {
     return "/usr/local"
 }
 
+// The AetherUIDriver "control" surface has two implementations, chosen at build
+// time. The control server is a localhost HTTP server used only by specs/CI
+// (spec_matrix.sh, ci.sh) — a listening socket must NOT ship in a release / App
+// Store binary — so control is OUT of the build by DEFAULT:
+//   • aether_ui_no_control.c   — no-op control (the default; no socket ships).
+//   • aether_ui_test_server.c  — the real control server, linked only when a
+//                                build opts in with AETHER_UI_WITH_DRIVER=1
+//                                (ci.sh and the spec runs set it).
+control_source() -> string {
+    v = os_getenv("AETHER_UI_WITH_DRIVER")
+    if v != null {
+        if string.length(v) > 0 { return "aether_ui_test_server.c" }
+    }
+    return "aether_ui_no_control.c"
+}
+
 builder ui_backend(root: string) {
+    control_src = control_source()
     // Aether runtime headers + libaether (+ its transitive deps via ae cflags).
     sdk = sdk_prefix()
     include_dir("${sdk}/include/aether/runtime")
@@ -50,7 +67,38 @@ builder ui_backend(root: string) {
     // (same reason build.sh appended it on Linux + macOS).
     link_flag("$(ae cflags --libs 2>/dev/null)")
 
+    // Effective target. There is no iOS *host*, so platform() can never report
+    // "ios"; an app cross-building for iOS/iPadOS sets AETHER_UI_TARGET=ios and
+    // gets the UIKit backend instead of a host one. NOTE: this arm compiles and
+    // links the backend, but producing a RUNNABLE .app still needs the packaging
+    // layer that does not exist yet — libaether built for arm64-apple-ios, an
+    // Info.plist, code-signing and the bundle. Until then AETHER_UI_TARGET=ios is
+    // dormant (nothing sets it in the normal build); ci.sh Phase 1e is what
+    // actually gates that this backend builds against the iOS SDK. See the header
+    // of backend/aether_ui_uikit.m for the full status.
     os_name = platform()
+    is_ios = 0
+    ui_target = os_getenv("AETHER_UI_TARGET")
+    if ui_target != null {
+        if string.equals(ui_target, "ios") == 1 { is_ios = 1 }
+    }
+    // Force os_name off every host branch when cross-targeting iOS (on macOS,
+    // platform() would otherwise also fire the AppKit arm alongside UIKit).
+    if is_ios == 1 { os_name = "ios" }
+    if is_ios == 1 {
+        extra_source("${root}/backend/aether_ui_uikit.m")
+        // Same SHARED driver + system-extras the AppKit/Win32 backends carry.
+        extra_source("${root}/backend/${control_src}")
+        extra_source("${root}/backend/aether_ui_system_extras.c")
+        link_flag("-fobjc-arc")
+        link_flag("-framework UIKit")       // AppKit's iOS counterpart
+        link_flag("-framework Foundation")
+        link_flag("-framework QuartzCore")
+        link_flag("-framework CoreGraphics")  // canvas: CGBitmapContext/CGGradient
+        link_flag("-framework CoreText")    // text metrics (vg.text_extent)
+        link_flag("-framework ImageIO")     // headless canvas_write_png
+        link_flag("-framework UserNotifications")  // local notifications
+    }
     // Linux and FreeBSD share the GTK4 backend verbatim — the backend sources
     // carry no Linux-only syscalls/headers, and GTK4 (gtk4.pc) plus GDBus (in
     // GIO) are provided on FreeBSD via pkg. FreeBSD needs pkgconf installed and
@@ -61,10 +109,17 @@ builder ui_backend(root: string) {
         // The SHARED AetherUIDriver. GTK4 used to carry its own HTTP server
         // and so never compiled this; it now fills AetherDriverHooks like
         // win32 and macOS (docs/design/one-driver-not-two.md).
-        extra_source("${root}/backend/aether_ui_test_server.c")
+        extra_source("${root}/backend/${control_src}")
         extra_source("${root}/backend/aether_ui_system_extras.c")
         extra_source("${root}/backend/aether_ui_sni.c")
         link_flag("$(pkg-config --cflags gtk4)")
+        // gpuview (#92) calls GL directly, and gtk4.pc exposes neither
+        // epoxy's include path nor its library even though GTK4 hard-depends
+        // on it. Referencing epoxy_gl* from our own object needs both: the
+        // header to compile, and -lepoxy to link, since GTK4 having it inside
+        // libgtk does not satisfy a reference from this translation unit.
+        link_flag("$(pkg-config --cflags epoxy)")
+        link_flag("$(pkg-config --libs epoxy)")
         link_flag("$(pkg-config --libs gtk4)")
     }
     if string.equals(os_name, "freebsd") == 1 {
@@ -72,17 +127,24 @@ builder ui_backend(root: string) {
         // The SHARED AetherUIDriver. GTK4 used to carry its own HTTP server
         // and so never compiled this; it now fills AetherDriverHooks like
         // win32 and macOS (docs/design/one-driver-not-two.md).
-        extra_source("${root}/backend/aether_ui_test_server.c")
+        extra_source("${root}/backend/${control_src}")
         extra_source("${root}/backend/aether_ui_system_extras.c")
         extra_source("${root}/backend/aether_ui_sni.c")
         link_flag("$(pkg-config --cflags gtk4)")
+        // gpuview (#92) calls GL directly, and gtk4.pc exposes neither
+        // epoxy's include path nor its library even though GTK4 hard-depends
+        // on it. Referencing epoxy_gl* from our own object needs both: the
+        // header to compile, and -lepoxy to link, since GTK4 having it inside
+        // libgtk does not satisfy a reference from this translation unit.
+        link_flag("$(pkg-config --cflags epoxy)")
+        link_flag("$(pkg-config --libs epoxy)")
         link_flag("$(pkg-config --libs gtk4)")
     }
     if string.equals(os_name, "darwin") == 1 {
         extra_source("${root}/backend/aether_ui_macos.m")
         // macOS drives the SHARED test server (as win32 does) — it used to
         // carry a private, drifted copy with no geometry/focus/key routes.
-        extra_source("${root}/backend/aether_ui_test_server.c")
+        extra_source("${root}/backend/${control_src}")
         extra_source("${root}/backend/aether_ui_system_extras.c")
         link_flag("-fobjc-arc")
         link_flag("-framework AppKit")
@@ -90,10 +152,11 @@ builder ui_backend(root: string) {
         link_flag("-framework QuartzCore")
         link_flag("-framework CoreText")   // text metrics (vg.text_extent)
         link_flag("-framework ImageIO")    // headless canvas_write_png
+        link_flag("-framework OpenGL")     // gpuview's GL context (#92)
     }
     if string.equals(os_name, "windows") == 1 {
         extra_source("${root}/backend/aether_ui_win32.c")
-        extra_source("${root}/backend/aether_ui_test_server.c")
+        extra_source("${root}/backend/${control_src}")
         extra_source("${root}/backend/aether_ui_system_extras.c")
         link_flag("-luser32")
         link_flag("-lgdi32")

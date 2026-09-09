@@ -39,14 +39,14 @@ struct Tag {
 }
 
 mk_rec() -> ptr {
-    r = malloc(16) as *Rec
+    r = malloc(sizeof(Rec)) as *Rec
     r.ops = list.new()
     r.last_opts = null
     return r
 }
 
 mk_tag(op: int) -> ptr {
-    t = malloc(8) as *Tag
+    t = malloc(sizeof(Tag)) as *Tag
     t.op = op
     return t
 }

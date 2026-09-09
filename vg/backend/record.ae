@@ -72,14 +72,14 @@ struct RecordedCall {
 }
 
 mk_call(kind: string, opts: ptr) -> *RecordedCall {
-    c = malloc(24) as *RecordedCall
+    c = malloc(sizeof(RecordedCall)) as *RecordedCall
     c.kind = kind
     c.opts = opts
     return c
 }
 
 backend_new() -> ptr {
-    b = malloc(16) as *Backend
+    b = malloc(sizeof(Backend)) as *Backend
     b.calls = list.new()
     // Wrap the recording handle in a dispatch table. The single
     // closure switches on the op selector and forwards to this

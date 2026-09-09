@@ -66,7 +66,7 @@ struct AnimationHandle {
 }
 
 mk_handle(id: int) -> *AnimationHandle {
-    h = malloc(16) as *AnimationHandle
+    h = malloc(sizeof(AnimationHandle)) as *AnimationHandle
     h.id = id
     h.stopped = 0
     h.completed = 0
@@ -99,7 +99,7 @@ mk_active(handle: ptr, element: ptr, tick_fn: ptr,
           start_time_ms: long, duration_ms: long,
           loop: int, yoyo: int) -> *ActiveAnimation {
     // 3 ptr + 2 long + 2 int + padding → 56-64 bytes; 80 is safe.
-    a = malloc(80) as *ActiveAnimation
+    a = malloc(sizeof(ActiveAnimation)) as *ActiveAnimation
     a.handle = handle
     a.element = element
     a.tick_fn = tick_fn
@@ -130,7 +130,7 @@ struct AnimationManager {
 }
 
 mk_manager() -> *AnimationManager {
-    m = malloc(16) as *AnimationManager
+    m = malloc(sizeof(AnimationManager)) as *AnimationManager
     m.animations = list.new()
     m.next_id = 1
     return m

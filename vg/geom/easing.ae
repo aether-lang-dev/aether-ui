@@ -128,7 +128,7 @@ parse_hex_color(color: string) -> *RGB {
         hex = string.concat(hex, c2)
     }
 
-    out = malloc(24) as *RGB
+    out = malloc(sizeof(RGB)) as *RGB
     out.r = hex2(hex, 0)
     out.g = hex2(hex, 2)
     out.b = hex2(hex, 4)

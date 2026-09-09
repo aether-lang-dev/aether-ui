@@ -127,7 +127,7 @@ struct Spin {
     lbl_glass: ptr
 }
 mk_spin() -> *Spin {
-    s = malloc(192) as *Spin
+    s = malloc(sizeof(Spin)) as *Spin
     s.ax = 0.0 - 0.42
     s.ay = 0.62
     s.vx = 0.35

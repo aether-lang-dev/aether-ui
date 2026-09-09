@@ -223,7 +223,7 @@ aspect_align_y(p: ptr) -> string { v = p as *AspectRatio; return v.align_y }
 aspect_meet_or_slice(p: ptr) -> string { v = p as *AspectRatio; return v.meet_or_slice }
 
 mk_aspect(ax: string, ay: string, mos: string) -> *AspectRatio {
-    p = malloc(48) as *AspectRatio
+    p = malloc(sizeof(AspectRatio)) as *AspectRatio
     p.align_x = ax
     p.align_y = ay
     p.meet_or_slice = mos
@@ -373,7 +373,7 @@ bounds4_max_x(p: ptr) -> float { v = p as *Bounds4; return v.max_x }
 bounds4_max_y(p: ptr) -> float { v = p as *Bounds4; return v.max_y }
 
 mk_bounds4(mnx: float, mny: float, mxx: float, mxy: float) -> *Bounds4 {
-    p = malloc(32) as *Bounds4
+    p = malloc(sizeof(Bounds4)) as *Bounds4
     p.min_x = mnx; p.min_y = mny; p.max_x = mxx; p.max_y = mxy
     return p
 }

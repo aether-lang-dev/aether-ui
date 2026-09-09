@@ -1,0 +1,74 @@
+// #102 — a borrowed blit must draw exactly what the copying blit draws.
+//
+// canvas_draw_image_ptr allocates and copies the whole image on every call.
+// For a surface redrawn every frame that measured 61% of the frame, more than
+// reading the frame off the GPU. The borrowed variant keeps the caller's
+// buffer instead of copying it.
+//
+// Speed is worthless if the pixels are wrong, so this asserts the PIXELS: the
+// same buffer drawn both ways must read back identically.
+
+import ui
+import ui (root_vstack, text, canvas_create, canvas_clear, canvas_draw_image_ptr,
+    canvas_draw_image_borrowed_ptr, canvas_read_pixel, app_quit, timer,
+    timer_cancel, enable_test_server_root)
+import std.bytes
+import std.os (os_getenv)
+
+// A 4x4 RGBA image: red, with one green pixel at (1,1).
+build_image() -> ptr {
+    b = bytes.new(4 * 4 * 4)
+    bytes.set_length(b, 4 * 4 * 4)
+    i = 0
+    while i < 16 {
+        bytes.set(b, i * 4 + 0, 255)
+        bytes.set(b, i * 4 + 1, 0)
+        bytes.set(b, i * 4 + 2, 0)
+        bytes.set(b, i * 4 + 3, 255)
+        i = i + 1
+    }
+    // (1,1) is index 5: make it green.
+    bytes.set(b, 5 * 4 + 0, 0)
+    bytes.set(b, 5 * 4 + 1, 255)
+    bytes.set(b, 5 * 4 + 2, 0)
+    return b
+}
+
+main() {
+    cv = 0
+    main_root = root_vstack(0) {
+        _t = text("blit")
+        cv = canvas_create(4, 4)
+    }
+    img_b = build_image()
+    // The _ptr blits take a RAW buffer; a bytes object carries a header, so
+    // hand over its data pointer, not the object.
+    img = bytes.data(img_b)
+
+    app = ui.app_create("blit borrow", 120, 120)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+
+    tid = 0
+    tid = timer(120) callback {
+        timer_cancel(tid)
+        // Copying blit first.
+        canvas_clear(cv)
+        canvas_draw_image_ptr(cv, 0.0, 0.0, 4, 4, img, 64)
+        owned_00 = canvas_read_pixel(cv, 0, 0, 4, 4)
+        owned_11 = canvas_read_pixel(cv, 1, 1, 4, 4)
+
+        // Same buffer, borrowed.
+        canvas_clear(cv)
+        canvas_draw_image_borrowed_ptr(cv, 0.0, 0.0, 4, 4, img, 64)
+        borrow_00 = canvas_read_pixel(cv, 0, 0, 4, 4)
+        borrow_11 = canvas_read_pixel(cv, 1, 1, 4, 4)
+
+        println("owned  00=${owned_00} 11=${owned_11}")
+        println("borrow 00=${borrow_00} 11=${borrow_11}")
+        if owned_00 == borrow_00 { if owned_11 == borrow_11 { println("MATCH") } }
+        app_quit()
+    }
+    ui.app_start(app, main_root)
+}

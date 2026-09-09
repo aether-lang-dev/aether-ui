@@ -51,7 +51,7 @@ struct DataItem {
 }
 
 mk_item(id: string, value: int) -> ptr {
-    d = malloc(16) as *DataItem
+    d = malloc(sizeof(DataItem)) as *DataItem
     d.id = string.copy(id)
     d.value = value
     return d

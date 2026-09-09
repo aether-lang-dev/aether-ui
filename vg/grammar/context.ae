@@ -98,7 +98,7 @@ mapping_new(vb_min_x: float, vb_min_y: float,
             canvas_width: float, canvas_height: float,
             scale: float, offset_x: float, offset_y: float,
             transform_handle: ptr) -> ptr {
-    m = malloc(80) as *ViewBoxMapping
+    m = malloc(sizeof(ViewBoxMapping)) as *ViewBoxMapping
     m.vb_min_x = vb_min_x
     m.vb_min_y = vb_min_y
     m.vb_width = vb_width
@@ -142,7 +142,7 @@ struct AevgContext {
 // Construct a context with empty registries and a single identity
 // transform on the transform stack (mirrors the TS constructor).
 new_context(mapping_handle: ptr) -> ptr {
-    c = malloc(96) as *AevgContext
+    c = malloc(sizeof(AevgContext)) as *AevgContext
     c.mapping = mapping_handle
     c.gradients = map.new()
     c.filters = map.new()

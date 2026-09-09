@@ -38,7 +38,7 @@ struct Player {
 }
 
 mk_player() -> *Player {
-    p = malloc(48) as *Player
+    p = malloc(sizeof(Player)) as *Player
     p.title = "Lumière"
     p.author = "Unknown"
     p.voice = 0.5

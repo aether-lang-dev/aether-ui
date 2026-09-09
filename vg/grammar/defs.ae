@@ -73,7 +73,7 @@ struct GradientStop {
 }
 
 mk_stop(offset: float, color: string) -> *GradientStop {
-    s = malloc(24) as *GradientStop
+    s = malloc(sizeof(GradientStop)) as *GradientStop
     s.offset = offset
     s.color = color
     return s
@@ -119,7 +119,7 @@ struct GradientDef {
 mk_gradient_def() -> *GradientDef {
     // 1 int + 1 ptr + 12 float + 2 string ≈ 12 + 8 + 96 + 16 = 132 → 192 safe.
     // (was 9 float / 128 before rx, ry, rot_deg were added)
-    g = malloc(192) as *GradientDef
+    g = malloc(sizeof(GradientDef)) as *GradientDef
     g.type_code = GRADIENT_LINEAR
     g.stops = list.new()
     g.x1 = 0.0
@@ -392,7 +392,7 @@ struct FilterDef {
 
 mk_filter_def() -> *FilterDef {
     // 7 float + 1 int + padding ≈ 64 bytes
-    f = malloc(64) as *FilterDef
+    f = malloc(sizeof(FilterDef)) as *FilterDef
     f.region_x = 0.0 - 0.1
     f.region_y = 0.0 - 0.1
     f.region_w = 1.2
@@ -502,7 +502,7 @@ struct ClipPathShape {
 
 mk_clip_shape() -> *ClipPathShape {
     // 1 int + 7 float ≈ 64 bytes
-    s = malloc(64) as *ClipPathShape
+    s = malloc(sizeof(ClipPathShape)) as *ClipPathShape
     s.kind = 0
     s.x = 0.0; s.y = 0.0; s.w = 0.0; s.h = 0.0
     s.cx = 0.0; s.cy = 0.0; s.r = 0.0
@@ -523,7 +523,7 @@ struct ClipPathDef {
 }
 
 mk_clip_path_def() -> *ClipPathDef {
-    cp = malloc(16) as *ClipPathDef
+    cp = malloc(sizeof(ClipPathDef)) as *ClipPathDef
     cp.shapes = list.new()
     return cp
 }

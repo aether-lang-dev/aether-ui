@@ -1,0 +1,44 @@
+// spec_gpuview_demo.ae, #92: the GPU viewport actually renders.
+//
+// The assertion that matters is not that the widget exists, it is that bytes
+// came off the GPU. The driver's /gpuview/{id}/pixel route renders one frame
+// into an offscreen target and reads it back, so this asserts on real GL
+// output with no window on screen.
+//
+// The demo clears to opaque green, so the pixel must be 0x00FF00FF. A backend
+// with no GL context answers -1, and the app shows its software fallback
+// instead; that is a pass too, because reporting "no GPU here" is the
+// documented behaviour rather than a failure.
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "gpuview renders on the GPU (#92)") {
+        spec.it("the viewport is present, or the app says it cannot be") callback {
+            body = uidriver.get_body("/widgets")
+            has_gpu = string.contains(body, "viewport")
+            has_fallback = string.contains(body, "no GPU surface on this backend")
+            spec.assert_true(has_gpu == 1 || has_fallback == 1,
+                "either a viewport or an explicit fallback is shown")
+        }
+
+        spec.it("a rendered pixel is the colour the callback drew") callback {
+            body = uidriver.get_body("/widgets")
+            if string.contains(body, "viewport") == 0 {
+                // No GL on this backend. The app said so up front, which is
+                // the behaviour under test on win32 and UIKit.
+                spec.assert_true(1 == 1, "backend reports no GPU surface; nothing to render")
+            } else {
+                px = uidriver.get_body("/gpuview/1/pixel?x=20&y=20")
+                // 0x00FF00FF = 16711935: opaque green, what on_render clears to.
+                spec.assert_true(string.contains(px, "16711935") == 1,
+                    "the GPU rendered opaque green (got ${px})")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}
