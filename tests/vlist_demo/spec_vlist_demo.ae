@@ -88,11 +88,26 @@ main() {
             spec.assert_true(ok, "row 500 realized after scroll")
             // Still bounded — the old window's rows were recycled, not added to.
             n2 = row_count()
-            spec.assert_eq(n2, before,
-                "the realized count is UNCHANGED by scrolling: recycled, not added to")
+            // Recycling means the count does not grow WITH the scroll. It is
+            // not always identical: GtkListView's pool settles one item wider
+            // after the first scroll (205 then 206) and then stays there,
+            // while the composed path and NSTableView hold exactly steady. A
+            // small fixed slack distinguishes "recycled" from "one more widget
+            // per row scrolled", which is the failure this is for.
+            spec.assert_true(n2 <= before + 2,
+                "the count did not grow with the scroll: ${before} then ${n2}")
             b = uidriver.get_body("/widgets")
             gone = string.contains(b, "\"text\":\"row 0\"")
-            spec.assert_eq(gone, 0, "row 0 recycled out of the window")
+            // Only a SLIDING window drops row 0 when it scrolls away. A
+            // pooled backing keeps ~205 items realized, which spans row 0 at
+            // this model size, so asserting its absence there asserts the
+            // backing rather than the recycling.
+            if row_bound() == 10 {
+                spec.assert_eq(gone, 0, "row 0 recycled out of the sliding window")
+            } else {
+                spec.assert_true(n2 <= row_bound(),
+                    "the pool stayed bounded rather than growing to cover both ends")
+            }
         }
 
         spec.it("scrolling to the end clamps the window") callback {
@@ -131,7 +146,12 @@ main() {
                 "still bounded after a native scroll step: recycled, not grown (got ${n4})")
             b = uidriver.get_body("/widgets")
             gone = string.contains(b, "\"text\":\"row 0\"")
-            spec.assert_eq(gone, 0, "row 0 scrolled out of the window")
+            if row_bound() == 10 {
+                spec.assert_eq(gone, 0, "row 0 scrolled out of the sliding window")
+            } else {
+                spec.assert_true(row_count() <= row_bound(),
+                    "the pool stayed bounded after a native scroll step")
+            }
         }
     }
     return spec.run_summary(fw)
