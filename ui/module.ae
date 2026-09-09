@@ -61,6 +61,7 @@ exports (
     command, command_fire, command_set_enabled, command_enabled,
     command_label, command_attach, btn_command, menu_item_command,
     undoable, undo, redo, undo_depth, redo_depth, undo_label,
+    undo_group, undo_grouping,
     enable_undo_shortcuts,
     style_font_weight, style_font_family,
     a11y_role, a11y_label, a11y_description,
@@ -344,6 +345,9 @@ extern aether_ui_ctx_to_handle_impl(ctx: ptr) -> int
 extern aether_ui_current_sheet_get_impl() -> ptr
 extern aether_ui_appearance_register_impl(boxed_closure: ptr)
 extern aether_ui_undo_push_impl(label: string, undo_boxed: ptr, redo_boxed: ptr)
+extern aether_ui_undo_group_begin_impl(label: string)
+extern aether_ui_undo_group_end_impl()
+extern aether_ui_undo_group_active_impl() -> int
 extern aether_ui_undo_step_impl() -> int
 extern aether_ui_redo_step_impl() -> int
 extern aether_ui_undo_depth_impl() -> int
@@ -2948,6 +2952,31 @@ undoable(label: string, do_action: fn, undo_action: fn) {
     aether_ui_undo_push_impl(label, box_closure(undo_action),
                              box_closure(do_action))
 }
+
+// undo_group(label) callback { ... } — every undoable() recorded inside the
+// block collapses into ONE undo step carrying `label`.
+//
+//   undo_group("Move 3 frames") callback {
+//       move(a) ; move(b) ; move(c)      // each an undoable()
+//   }
+//
+// A drag that records an edit per pixel is one gesture to the user, and undo
+// should agree with them rather than making them press it thirty times.
+//
+// Only the OUTERMOST group collapses, so a helper that groups internally
+// contributes one step to a caller's larger group instead of fragmenting it.
+// A group containing one edit keeps that edit and takes the label; a group
+// containing none records nothing, because a gesture that changed nothing
+// should not cost an undo press.
+undo_group(label: string, body: fn) {
+    aether_ui_undo_group_begin_impl(label)
+    body()
+    aether_ui_undo_group_end_impl()
+}
+
+// undo_grouping() — is a group open right now? For code that records edits and
+// wants to know whether it is already inside somebody's gesture.
+undo_grouping() -> int { return aether_ui_undo_group_active_impl() }
 
 undo() -> int { return aether_ui_undo_step_impl() }
 redo() -> int { return aether_ui_redo_step_impl() }

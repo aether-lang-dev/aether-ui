@@ -441,9 +441,34 @@ int aether_ui_appearance_invoke(int dark) {
 // truncates the redo tail (the classic rule). Closures are zero-arg.
 // ---------------------------------------------------------------------------
 #define AEUI_UNDO_CAP 128
-typedef struct { char* label; void* undo_boxed; void* redo_boxed; } AeUndoEdit;
+/* A plain edit carries one undo/redo pair. A GROUP carries the pairs of the
+ * edits collapsed into it (see aether_ui_undo_group_end_impl): undoing runs
+ * them in reverse, redoing runs them forward, and the whole thing is one step
+ * with one label. A drag that records thirty edits becomes one gesture to
+ * undo, which is what a user means by "undo that move". */
+typedef struct {
+    char* label;
+    void* undo_boxed;
+    void* redo_boxed;
+    void** g_undo;      /* group members, oldest first; NULL for a plain edit */
+    void** g_redo;
+    int    g_count;
+} AeUndoEdit;
 static AeUndoEdit undo_stack[AEUI_UNDO_CAP];
 static int undo_len = 0, undo_cursor = 0;
+
+/* An open group. Only the OUTERMOST begin/end pair collapses, so a helper that
+ * groups internally still contributes one step to a caller's larger group
+ * rather than fragmenting it. */
+static int undo_group_depth = 0;
+static int undo_group_start = 0;
+static char* undo_group_label = NULL;
+/* Counts pushes, so "the group recorded nothing" is exact. Comparing lengths
+ * is not: after an undo the stack still holds the redo tail, so an EMPTY group
+ * would measure that tail as its own member, relabel it and move the cursor
+ * back over it, resurrecting an edit the user had just undone. */
+static unsigned long undo_push_seq = 0;
+static unsigned long undo_group_seq0 = 0;
 
 /* Reclaim one edit: its label and BOTH closure boxes.
  *
@@ -454,19 +479,26 @@ static int undo_len = 0, undo_cursor = 0;
  * its captures own are released too, not just the struct (the same contract
  * list_free uses for an owned closure element). env is NULL for a
  * non-capturing closure and aether_closure_env_free is a no-op on it. */
+static void undo_box_release(void* boxed) {
+    if (!boxed) return;
+    aether_closure_env_free(((AeClosureLocal*)boxed)->env);
+    free(boxed);
+}
+
 static void undo_edit_release(AeUndoEdit* e) {
     free(e->label);
     e->label = 0;
-    if (e->undo_boxed) {
-        aether_closure_env_free(((AeClosureLocal*)e->undo_boxed)->env);
-        free(e->undo_boxed);
-        e->undo_boxed = 0;
+    undo_box_release(e->undo_boxed); e->undo_boxed = 0;
+    undo_box_release(e->redo_boxed); e->redo_boxed = 0;
+    /* A group owns every member box it absorbed, and the two arrays holding
+     * them. Dropping a group without this leaks the whole gesture. */
+    for (int i = 0; i < e->g_count; i++) {
+        if (e->g_undo) undo_box_release(e->g_undo[i]);
+        if (e->g_redo) undo_box_release(e->g_redo[i]);
     }
-    if (e->redo_boxed) {
-        aether_closure_env_free(((AeClosureLocal*)e->redo_boxed)->env);
-        free(e->redo_boxed);
-        e->redo_boxed = 0;
-    }
+    free(e->g_undo); e->g_undo = 0;
+    free(e->g_redo); e->g_redo = 0;
+    e->g_count = 0;
 }
 
 void aether_ui_undo_push_impl(const char* label, void* undo_boxed, void* redo_boxed) {
@@ -480,7 +512,11 @@ void aether_ui_undo_push_impl(const char* label, void* undo_boxed, void* redo_bo
     undo_stack[undo_len].label = strdup(label ? label : "");
     undo_stack[undo_len].undo_boxed = undo_boxed;
     undo_stack[undo_len].redo_boxed = redo_boxed;
+    undo_stack[undo_len].g_undo = 0;
+    undo_stack[undo_len].g_redo = 0;
+    undo_stack[undo_len].g_count = 0;
     undo_len++; undo_cursor = undo_len;
+    undo_push_seq++;
 }
 
 // Direct steps — call ON THE UI THREAD (app-side undo()/redo(), or the
@@ -488,15 +524,87 @@ void aether_ui_undo_push_impl(const char* label, void* undo_boxed, void* redo_bo
 int aether_ui_undo_step_impl(void) {
     if (undo_cursor <= 0) return 0;
     undo_cursor--;
-    invoke_closure(undo_stack[undo_cursor].undo_boxed);
+    AeUndoEdit* e = &undo_stack[undo_cursor];
+    if (e->g_count > 0) {
+        /* Reverse order: the members were applied oldest first, so undoing
+         * newest first is the only order that restores the starting state. */
+        for (int i = e->g_count - 1; i >= 0; i--) invoke_closure(e->g_undo[i]);
+    } else {
+        invoke_closure(e->undo_boxed);
+    }
     return 1;
 }
 int aether_ui_redo_step_impl(void) {
     if (undo_cursor >= undo_len) return 0;
-    invoke_closure(undo_stack[undo_cursor].redo_boxed);
+    AeUndoEdit* e = &undo_stack[undo_cursor];
+    if (e->g_count > 0) {
+        for (int i = 0; i < e->g_count; i++) invoke_closure(e->g_redo[i]);
+    } else {
+        invoke_closure(e->redo_boxed);
+    }
     undo_cursor++;
     return 1;
 }
+/* Begin collapsing every edit recorded until the matching end into ONE step.
+ *
+ * Only the outermost pair collapses: a helper that groups internally then
+ * contributes a single step to a caller's larger group rather than fragmenting
+ * it, which is the behaviour a caller wants and cannot get by nesting spans. */
+void aether_ui_undo_group_begin_impl(const char* label) {
+    if (undo_group_depth++ > 0) return;
+    undo_group_start = undo_cursor;
+    undo_group_seq0 = undo_push_seq;
+    free(undo_group_label);
+    undo_group_label = strdup(label ? label : "");
+}
+
+/* Collapse the edits recorded since the matching begin.
+ *
+ * The members are MOVED into the group entry, boxes and all, so ownership does
+ * not change hands: undo_edit_release frees them with the group. A group of one
+ * stays a plain edit wearing the group's label, and a group of none records
+ * nothing at all, because a gesture that changed nothing should not cost the
+ * user an undo press. */
+void aether_ui_undo_group_end_impl(void) {
+    if (undo_group_depth == 0) return;
+    if (--undo_group_depth > 0) return;
+
+    /* Nothing recorded: leave the stack exactly as it was, redo tail and all. */
+    if (undo_push_seq == undo_group_seq0) return;
+
+    int start = undo_group_start;
+    if (start < 0) start = 0;
+    int n = undo_len - start;
+    if (n <= 0) return;
+
+    if (n == 1) {
+        free(undo_stack[start].label);
+        undo_stack[start].label = strdup(undo_group_label ? undo_group_label : "");
+        undo_cursor = undo_len;
+        return;
+    }
+
+    void** gu = (void**)malloc(sizeof(void*) * (size_t)n);
+    void** gr = (void**)malloc(sizeof(void*) * (size_t)n);
+    if (!gu || !gr) { free(gu); free(gr); return; }
+    for (int i = 0; i < n; i++) {
+        gu[i] = undo_stack[start + i].undo_boxed;
+        gr[i] = undo_stack[start + i].redo_boxed;
+        free(undo_stack[start + i].label);
+        undo_stack[start + i].label = 0;
+        undo_stack[start + i].undo_boxed = 0;
+        undo_stack[start + i].redo_boxed = 0;
+    }
+    undo_stack[start].label = strdup(undo_group_label ? undo_group_label : "");
+    undo_stack[start].g_undo = gu;
+    undo_stack[start].g_redo = gr;
+    undo_stack[start].g_count = n;
+    undo_len = start + 1;
+    undo_cursor = undo_len;
+}
+
+int aether_ui_undo_group_active_impl(void) { return undo_group_depth > 0; }
+
 int aether_ui_undo_depth_impl(void) { return undo_cursor; }
 int aether_ui_redo_depth_impl(void) { return undo_len - undo_cursor; }
 const char* aether_ui_undo_label_impl(void) {

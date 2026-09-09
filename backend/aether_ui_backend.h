@@ -202,6 +202,13 @@ int aether_ui_fire_appearance(int dark);      // driver: override + invoke
 // _step is the DIRECT call (UI thread — app-side undo()/redo());
 // fire_undo/redo are the driver's marshalled twins (HTTP thread safe).
 void aether_ui_undo_push_impl(const char* label, void* undo_boxed, void* redo_boxed);
+/* Collapse every edit recorded between begin and end into one undo step with
+ * one label, so a drag is one gesture rather than one step per pixel. Only the
+ * outermost pair collapses; a group of one keeps its edit and takes the label;
+ * a group of none records nothing. */
+void aether_ui_undo_group_begin_impl(const char* label);
+void aether_ui_undo_group_end_impl(void);
+int  aether_ui_undo_group_active_impl(void);
 int aether_ui_undo_step_impl(void);
 int aether_ui_redo_step_impl(void);
 int aether_ui_undo_depth_impl(void);

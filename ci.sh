@@ -541,7 +541,7 @@ echo "=== Phase 1c3: headless UI-logic tests (tests/<name>/) ==="
 #
 # Built by the .all.ae fan-out (it scans tests/**/.build.ae), so a compile
 # failure has already been reported by Phase 1. This phase RUNS them.
-UI_TESTS=(derived_views selection_survives tree_selection list_invariants platform_claims sort_keeps_model headless_canvas string_ownership undo_stack)
+UI_TESTS=(derived_views selection_survives tree_selection list_invariants platform_claims sort_keeps_model headless_canvas string_ownership undo_stack undo_group)
 UT_BIN() { echo "$ROOT/target/build/tests/$1/bin/$1"; }
 for ut in "${UI_TESTS[@]}"; do
     bin="$(UT_BIN "$ut")"
