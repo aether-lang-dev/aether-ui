@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- `tests/no_echo` pins that a programmatic setter is not the user acting: an
+  app writing into its own field must not have that write come back through its
+  own `on_change`. That is what #129 fixed on Win32, where an edit control
+  answered `SetWindowText` with `EN_CHANGE` exactly as it answers a keystroke,
+  and it is the kind of parity gap only ever noticed on the backend that gets
+  it wrong. `set_text`, `set_toggle` and `set_slider` are all covered, on
+  whichever backend is running, along with the writes having actually taken
+  effect so "no echo" cannot pass by doing nothing.
+
+  `tab_select` is pinned as the deliberate exception: all four backends fire
+  `on_tab_change` for a programmatic select and each says so in its own
+  comment. The asymmetry with `set_toggle` is surprising enough that a test
+  keeps a backend from drifting either way.
+
+### Fixed
+
+- **On GTK4 every programmatic setter came back as user input.** `set_text` on
+  a field and on an area, `set_toggle` and `set_slider` all ran the app's own
+  `on_change`, so an app writing into its own widgets fought itself. This is
+  the property #129 fixed for Win32, and that PR's own text said this backend
+  already had it; it did not, on all four setters. GTK emits the same signal
+  whether the change came from the user or from the app, so the app's handler
+  is now blocked for the duration of the write, matched by function and on the
+  object the handler was connected to (the widget for the entry, toggle and
+  scale; the buffer for the text view).
+
+  `tests/no_echo` is what caught it, by asserting the property on whichever
+  backend is running rather than on the one that happened to be reported.
+
 ### Fixed
 
 - **A row's context menu leaked every time the list rebuilt.**

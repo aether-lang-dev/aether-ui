@@ -1,0 +1,94 @@
+// A programmatic setter is not the user acting.
+//
+// An app that writes into its own field must not have that write come back as
+// input. Win32's edit control answered SetWindowText with EN_CHANGE exactly as
+// it answers a keystroke, and synchronously, so every string an app wrote into
+// one of its own fields reached its own on_change (three times over, since
+// set_text goes through all three text setters). An app whose fields write a
+// property when they change then fights itself.
+//
+// GTK4 and AppKit do not do that, and AppKit documents that a programmatic
+// setStringValue fires neither the delegate nor the action. So this is a
+// PARITY property, and the kind that is only ever noticed on the backend that
+// gets it wrong. Asserted here on whichever backend is running.
+//
+// tab_select is the deliberate EXCEPTION and is pinned as one. All four
+// backends fire on_tab_change for a programmatic select, and each says so:
+// AppKit drives the delegate "exactly as a strip click does", win32 passes
+// fire=1, UIKit calls the closure outright, and GTK4 gets there through the
+// notify::visible-child it connects. That asymmetry with set_toggle and
+// set_slider is surprising enough to be worth a test of its own, so a backend
+// cannot quietly drift either way.
+
+import ui
+import ui (root_vstack, text, textfield, textarea, toggle, slider, tabs, tab,
+    set_text, set_toggle, set_slider, tab_select, tab_selected,
+    on_tab_change, get_toggle, backend_name)
+
+extern exit(code: int)
+
+var text_echoes = 0
+var area_echoes = 0
+var toggle_echoes = 0
+var slider_echoes = 0
+var tab_echoes = 0
+var bad = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+
+    tf = textfield(root, "type here", |v: string| { text_echoes = text_echoes + 1 })
+    ta = textarea(root, "notes", |v: string| { area_echoes = area_echoes + 1 })
+    tg = toggle(root, "on", |on: int| { toggle_echoes = toggle_echoes + 1 })
+    sl = slider(root, 0.0, 100.0, 10.0, |v: float| { slider_echoes = slider_echoes + 1 })
+
+    tv = tabs(root) {
+        tab("one") {
+            _a = text("page one")
+        }
+        tab("two") {
+            _b = text("page two")
+        }
+    }
+    on_tab_change(tv) callback |i: int| { tab_echoes = tab_echoes + 1 }
+
+    // Every one of these is the APP writing, not the user acting.
+    _t1 = set_text(tf, "written by the app")
+    _t2 = set_text(ta, "also written by the app")
+    _g1 = set_toggle(tg, 1)
+    _s1 = set_slider(sl, 42.0)
+    tab_select(tv, 1)
+
+    check("set_text on a field did not echo", text_echoes, 0)
+    check("set_text on an area did not echo", area_echoes, 0)
+    check("set_toggle did not echo", toggle_echoes, 0)
+    check("set_slider did not echo", slider_echoes, 0)
+    // NOT zero: tab_select notifies by design, on every backend.
+    check("tab_select notifies, by design", tab_echoes, 1)
+
+    // And the writes actually took, so "no echo" is not "no effect".
+    check("the toggle is on", get_toggle(tg), 1)
+    check("the tab moved", tab_selected(tv), 1)
+
+    // Writing the SAME value again is still not input.
+    _g2 = set_toggle(tg, 1)
+    _s2 = set_slider(sl, 42.0)
+    tab_select(tv, 1)
+    check("a redundant set_toggle did not echo", toggle_echoes, 0)
+    check("a redundant set_slider did not echo", slider_echoes, 0)
+    // ... but selecting the tab that is already selected changes nothing, so
+    // it does not notify again.
+    check("a redundant tab_select does not notify twice", tab_echoes, 1)
+
+    if bad > 0 {
+        println("no_echo: ${bad} mismatch(es) on backend ${backend_name()}")
+        exit(1)
+    }
+    println("no_echo: text/toggle/slider writes do not come back as input, tab_select notifies, on ${backend_name()}")
+    exit(0)
+}
