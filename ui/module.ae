@@ -1669,7 +1669,21 @@ context_menu_item(handle: int, label: string, cb: fn) -> int {
     return handle
 }
 
+// get_text(handle) — read back what set_text wrote.
+//
+// set_text is universal: it puts the string through the label, the textfield
+// AND the textarea setter, so it works on any of the three. The getter has to
+// match, or a caller who used the universal setter gets "" back with no hint
+// why. A textarea keeps its text in a text view inside a scroll view, which is
+// not the field the textfield getter looks for, so it needs its own read.
+//
+// A LABEL still reads back "": no backend exposes a getter for one, so there
+// is nothing honest to return. Writing a label works; reading it does not, and
+// that is worth knowing rather than guessing at.
 get_text(handle: int) {
+    if aether_ui_widget_kind_impl(handle) == "textarea" {
+        return aether_ui_textarea_get_text(handle)
+    }
     return aether_ui_textfield_get_text(handle)
 }
 

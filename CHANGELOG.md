@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **`get_text` returned "" for a textarea**, though `set_text` writes one
+  happily. `set_text` is universal, it puts the string through the label, the
+  textfield and the textarea setter, while the getter only ever looked at the
+  textfield, so a caller who used the universal setter got nothing back and no
+  hint why. It now dispatches on the widget's kind. A label still reads back
+  "", because no backend exposes a getter for one, and the comment says so
+  rather than leaving it to be rediscovered.
+
+### Added
+
+- `tests/roundtrip` asserts that what you set is what you get, on whichever
+  backend is running: text (ordinary, empty and non-ASCII), a toggle driven
+  both ways, a slider at its minimum, maximum and a middle value, and every tab
+  index. Text is read twice, which catches a getter handing back a buffer it
+  then reuses. Four implementations of one ABI drift exactly here, and the
+  drift stays invisible until someone runs the odd one out.
+
 ### Added
 
 - `tests/no_echo` pins that a programmatic setter is not the user acting: an

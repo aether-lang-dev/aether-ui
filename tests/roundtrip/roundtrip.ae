@@ -1,0 +1,95 @@
+// What you set is what you get, on whichever backend is running.
+//
+// Four independent implementations of one ABI drift in exactly this way, and
+// the drift is invisible until someone runs the odd one out. The setter-echo
+// bug (#132) was a whole backend disagreeing with three others while a merged
+// PR stated it agreed; nobody was careless, the property simply was not
+// asserted anywhere.
+//
+// So: write a value through the public API, read it back through the public
+// API, and require the two to match. Values are chosen to catch the failures
+// that actually happen rather than to look thorough: empty and non-ASCII text,
+// a slider at both ends of its range and off its default, a toggle driven both
+// ways, and reads taken twice to catch a getter that consumes what it returns.
+
+import ui
+import ui (root_vstack, textfield, textarea, toggle, slider, tabs, tab, text,
+    set_text, get_text, set_toggle, get_toggle, set_slider, get_slider,
+    tab_select, tab_selected, backend_name)
+import std.string
+
+extern exit(code: int)
+
+var bad = 0
+check_s(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got='${got}' want='${want}'")  bad = bad + 1 }
+}
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    tf = textfield(root, "placeholder", |v: string| { })
+    ta = textarea(root, "notes", |v: string| { })
+    tg = toggle(root, "on", |on: int| { })
+    sl = slider(root, 0.0, 100.0, 10.0, |v: float| { })
+    tv = tabs(root) {
+        tab("one") {
+            _a = text("one")
+        }
+        tab("two") {
+            _b = text("two")
+        }
+        tab("three") {
+            _c = text("three")
+        }
+    }
+
+    // --- text: ordinary, empty, and non-ASCII ---------------------------
+    _s1 = set_text(tf, "hello")
+    check_s("field round-trips text", get_text(tf), "hello")
+    // Twice: a getter that hands back a buffer it then reuses reads right once.
+    check_s("field reads the same twice", get_text(tf), "hello")
+
+    _s2 = set_text(tf, "")
+    check_s("field round-trips empty", get_text(tf), "")
+
+    _s3 = set_text(tf, "héllo wörld")
+    check_s("field round-trips non-ASCII", get_text(tf), "héllo wörld")
+
+    _s4 = set_text(ta, "line one")
+    check_s("area round-trips text", get_text(ta), "line one")
+
+    // --- toggle: both directions, and the redundant write ---------------
+    _g1 = set_toggle(tg, 1)
+    check("toggle on", get_toggle(tg), 1)
+    _g2 = set_toggle(tg, 0)
+    check("toggle off", get_toggle(tg), 0)
+    _g3 = set_toggle(tg, 0)
+    check("toggle stays off when set off again", get_toggle(tg), 0)
+
+    // --- slider: middle and both ends ------------------------------------
+    _v1 = set_slider(sl, 42.0)
+    check("slider round-trips a middle value", get_slider(sl) as int, 42)
+    _v2 = set_slider(sl, 0.0)
+    check("slider round-trips its minimum", get_slider(sl) as int, 0)
+    _v3 = set_slider(sl, 100.0)
+    check("slider round-trips its maximum", get_slider(sl) as int, 100)
+
+    // --- tabs: every index, including back to the first -------------------
+    tab_select(tv, 2)
+    check("tab 2 selected", tab_selected(tv), 2)
+    tab_select(tv, 0)
+    check("tab 0 selected", tab_selected(tv), 0)
+    tab_select(tv, 1)
+    check("tab 1 selected", tab_selected(tv), 1)
+
+    if bad > 0 {
+        println("roundtrip: ${bad} mismatch(es) on backend ${backend_name()}")
+        exit(1)
+    }
+    println("roundtrip: every setter reads back what it wrote on ${backend_name()}")
+    exit(0)
+}
