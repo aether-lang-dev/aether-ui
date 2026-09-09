@@ -1,0 +1,76 @@
+// What ui/module.ae CLAIMS about the non-GTK backends, checked on whichever
+// backend is running.
+//
+// Four comments there said tabs, radio groups and split views were GTK-only,
+// and three of the four were long out of date: AppKit has had a real NSTabView
+// and NSSplitView, win32 has had a tab strip and radio exclusivity, and every
+// one of those comments still told the reader not to use them. A comment that
+// understates the toolkit costs more than a missing feature, because the
+// reader designs around it and never finds out.
+//
+// So the claims are pinned here rather than restated. If a backend regresses
+// to the stub these comments described, this goes red.
+
+import ui
+import ui (root_vstack, tabs, tab, tab_select, tab_selected, text,
+    toggle, toggle_group, set_toggle, get_toggle, backend_name)
+import std.string
+
+extern exit(code: int)
+
+var bad = 0
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    bk = backend_name()
+
+    // --- tabs: a real strip with a real selected index -------------------
+    tv = tabs(root) {
+        tab("one") {
+            _a = text("page one")
+        }
+        tab("two") {
+            _b = text("page two")
+        }
+        tab("three") {
+            _c = text("page three")
+        }
+    }
+    // "tab_selected answers -1 there so a spec can tell" was the claim for
+    // AppKit and win32. It answers a real index on all three.
+    check("a fresh tabs selects page 0", tab_selected(tv), 0)
+    tab_select(tv, 2)
+    check("tab_select moves the selection", tab_selected(tv), 2)
+    tab_select(tv, 1)
+    check("tab_select moves back", tab_selected(tv), 1)
+    // Out of range is ignored rather than corrupting the selection.
+    tab_select(tv, 99)
+    check("an out-of-range tab_select is ignored", tab_selected(tv), 1)
+
+    // --- radio groups: grouping is mutually exclusive ---------------------
+    a = toggle(root, "a", |on: int| { })
+    b = toggle(root, "b", |on: int| { })
+    c = toggle(root, "c", |on: int| { })
+    toggle_group(b, a)
+    toggle_group(c, a)      // chained through the same leader
+
+    _s1 = set_toggle(a, 1)
+    check("a is on", get_toggle(a), 1)
+    _s2 = set_toggle(b, 1)
+    check("b is on", get_toggle(b), 1)
+    check("selecting b turned a off", get_toggle(a), 0)
+    _s3 = set_toggle(c, 1)
+    check("selecting c turned b off", get_toggle(b), 0)
+    check("c is on", get_toggle(c), 1)
+
+    if bad > 0 {
+        println("platform_claims: ${bad} mismatch(es) on backend ${bk}")
+        exit(1)
+    }
+    println("platform_claims: tabs and radio groups behave on backend ${bk}")
+    exit(0)
+}

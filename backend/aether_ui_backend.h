@@ -129,7 +129,7 @@ int aether_ui_splitview_create(int vertical);
 int aether_ui_split_position_impl(int handle);
 void aether_ui_split_set_position_impl(int handle, int px);
 // tabs: native tab strip over a page stack (GtkStackSwitcher+GtkStack /
-// NSTabView / win32 stub). tabs_create takes the boxed on_change closure
+// NSTabView / a win32 button strip over a zstack of pages). tabs_create takes the boxed on_change closure
 // (fired with the new index); tab_add returns the page's inner container
 // handle so its DSL block's children attach inside. selected/count are
 // -1/0 when the handle isn't a tabs composite.

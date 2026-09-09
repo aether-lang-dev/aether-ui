@@ -872,7 +872,9 @@ scrollview(_ctx: ptr) {
 // attach is silently dropped. Splitter position: split_position /
 // split_set_position (px from the left/top edge), and the driver route
 // POST /widget/{id}/split_position?px= so specs can drag it.
-// win32/macOS: renders as a plain stack for now (no draggable divider).
+// macOS uses a real NSSplitView with a thin divider. win32 is the one
+// backend that still renders a plain stack, so its divider cannot be
+// dragged and split_position answers the layout's split, not a drag.
 splitview(_ctx: ptr, orient: string) {
     vertical = 0
     if orient == "v" { vertical = 1 }
@@ -1049,8 +1051,10 @@ nav_depth(nav_handle: int) -> int {
 // on_tab_change(tv) callback |i|, mirroring on_layout. Read/drive:
 // tab_selected(tv) / tab_select(tv, i) and the driver route
 // POST /widget/{id}/tab_select?i=N; widget JSON carries "tabSelected" and
-// "tabCount". win32/macOS: pages render stacked (no strip) for now —
-// tab_selected answers -1 there so a spec can tell.
+// "tabCount". All three backends carry a real strip and a real index:
+// GtkStackSwitcher over a GtkStack, an NSTabView, and on win32 a button
+// strip over a zstack of pages. tab_selected answers -1 only when the
+// handle is not a tabs composite.
 tabs(_ctx: ptr) {
     handle = aether_ui_tabs_create(0)
     if _ctx != 0 {
@@ -1245,7 +1249,10 @@ toggle(_ctx: ptr, label: string, on_change: fn) {
 // members as RADIO buttons (round indicator). Chain each member to the
 // group's first toggle. Radio groups beat a picker for few-option choices
 // on ChromeOS: GtkDropDown's list is a popover, which sommelier never
-// displays. (Win32/macOS: stubbed — plain checkboxes, no exclusivity yet.)
+// displays. Exclusivity holds on all three backends: GTK4 groups the
+// check buttons, AppKit switches them to NSButtonTypeRadio behind a
+// leader handle, win32 keys them to a radio-group id. Chaining several
+// members to one leader (b→a, c→a, d→c) resolves to a single group.
 toggle_group(handle: int, group_with: int) {
     aether_ui_toggle_set_group(handle, group_with)
 }
@@ -2261,9 +2268,14 @@ outline(_ctx: ptr, hex: int)     { role(_ctx, "outline", hex) }
 custom(_ctx: ptr, name: string, hex: int) { role(_ctx, name, hex) }
 
 // styles_for_mode(light, dark) — the dark/light pair helper: returns the
-// sheet matching the OS appearance right now. Re-call + re-apply on a mode
-// flip (there is no appearance-change event yet — poll or re-apply on user
-// action).
+// sheet matching the OS appearance right now, for a caller that wants to
+// choose a sheet itself.
+//
+// Most callers want use_styles_pair(light, dark) instead: it applies the
+// right sheet AND re-applies on every OS appearance flip, through the
+// on_appearance_change event. This comment used to say no such event
+// existed and to poll for it, which sent readers to write a timer for
+// something the toolkit already does.
 styles_for_mode(light: ptr, dark: ptr) -> ptr {
     if is_dark_mode() == 1 { return dark }
     return light

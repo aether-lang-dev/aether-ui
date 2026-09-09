@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **Four comments told readers the toolkit was less capable than it is**, and
+  three of them were long out of date. `tabs` said AppKit and win32 "render
+  stacked (no strip)" and that `tab_selected` "answers -1 there": both carry a
+  real strip (an `NSTabView`, and a button strip over a zstack of pages) and a
+  real index. `toggle_group` said the two were "stubbed, plain checkboxes, no
+  exclusivity yet": both enforce it, AppKit behind a leader handle and win32
+  behind a radio-group id. `styles_for_mode` said "there is no
+  appearance-change event yet, poll", when `use_styles_pair` has been
+  re-theming on the OS event all along. `splitview` claimed both backends were
+  plain stacks; macOS uses a real `NSSplitView`, win32 is the one that is not.
+  A comment that understates the toolkit costs more than a missing feature,
+  because the reader designs around it and never finds out.
+
+### Added
+
+- `tests/platform_claims` pins what those comments now say, so a backend
+  regressing to the stub they described turns CI red instead of quietly making
+  the old text true again.
+
+- `tests/list_invariants` covers the list widgets headlessly for the first
+  time: the sorter's numeric ordering (95 before 100, not after), sort
+  direction toggling, a filter surviving a sort, multi-select semantics
+  including its survival across a refresh, and `listbox_move`'s clamping. All
+  of it was reachable only through a window before, so a regression in any of
+  it would have shipped.
+
 ### Added
 
 - **A tree can say which node was picked** (`tree_on_select`, `tree_selected`,
