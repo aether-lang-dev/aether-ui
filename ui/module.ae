@@ -159,6 +159,7 @@ import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 import std.fs      // load_styles (AeCS theme files)
 
 extern malloc(size: int) -> ptr   // EachGroup allocation (house pattern, vg/module.ae:84)
+extern free(p: ptr)               // derived-view rows the toolkit mints per rebuild
 
 // ---------------------------------------------------------------------------
 // C externs — raw widget creation and manipulation
@@ -3808,8 +3809,13 @@ _listbox_make_reorder(_ctx: ptr, spacing: int, render: fn) -> ptr {
 }
 
 // Move item `from` to index `to` in the listbox's list, re-render, notify.
-// std.list has no insert-at-index, so rebuild the list with the item
-// repositioned (the app's list is replaced by the reordered one).
+//
+// A move is a rotation of the span between the two indices, which `set` alone
+// expresses, so no insert-at-index is needed and no second list is built. The
+// earlier rebuild allocated a replacement list on every move and pointed the
+// listbox at it, which leaked the previous one and left the app's own list
+// still holding the order before the drag: the widget and the data the app
+// reads back disagreed from the first move on.
 listbox_move(lbp: ptr, from: int, to: int) {
     lb = lbp as *ListBox
     if lb.items == null { return }
@@ -3820,25 +3826,25 @@ listbox_move(lbp: ptr, from: int, to: int) {
     if to >= n { to = n - 1 }
     if from == to { return }
     moved, _me = list.get(lb.items, from)
-    out = list.new()
-    // Walk the original order, skipping `from`, and splice `moved` in at `to`.
-    dst = 0
-    i = 0
-    while i < n {
-        if i == from {
+    if from < to {
+        // Everything in (from, to] slides down one slot.
+        i = from
+        while i < to {
+            nxt, _n = list.get(lb.items, i + 1)
+            list.set(lb.items, i, nxt)
             i = i + 1
-            continue
         }
-        if dst == to { _ = list.add(out, moved) }
-        it, _e = list.get(lb.items, i)
-        _ = list.add(out, it)
-        dst = dst + 1
-        i = i + 1
+    } else {
+        // Everything in [to, from) slides up one slot.
+        i = from
+        while i > to {
+            prv, _p = list.get(lb.items, i - 1)
+            list.set(lb.items, i, prv)
+            i = i - 1
+        }
     }
-    // If `to` is at/after the end, append.
-    if to >= dst { _ = list.add(out, moved) }
-    lb.items = out
-    listbox_update(lb as ptr, out)
+    list.set(lb.items, to, moved)
+    listbox_update(lb as ptr, lb.items)
     if lb.on_reorder != null {
         cb = unbox_closure(lb.on_reorder)
         _listbox_invoke_reorder(cb, from, to)
@@ -4442,6 +4448,16 @@ table_filter_text(tp: ptr, s: string) {
         table_filter_clear(tp)
         return
     }
+    // The lowered needle is a fresh heap string stored on the table, so it
+    // escapes and nothing reclaims it automatically: without this release a
+    // search box leaked one string per keystroke. Releasing a literal (the
+    // initial "") is a no-op, so the first call needs no special case.
+    //
+    // CRITICAL: release the FIELD, not a local copy of it. codegen lowers
+    // string.release(<identifier>) into a free guarded by that local's
+    // heap-tracking flag, and a local read out of a struct field is not
+    // tracked, so the guard is false and the release silently does nothing.
+    string.string_release(t.ftext)
     t.ftext = string.to_lower(s)
     t.fmode = 2
     if t.items != null { table_update(tp, t.items) }
@@ -4452,6 +4468,8 @@ table_filter_clear(tp: ptr) {
     t = tp as *TableDef
     t.fmode = 0
     t.filter = null
+    string.string_release(t.ftext)
+    t.ftext = ""
     if t.items != null { table_update(tp, t.items) }
 }
 
@@ -4472,22 +4490,35 @@ table_item_at(tp: ptr, i: int) -> ptr {
 // reference and renders the VIEW through the filter (see above).
 table_update(tp: ptr, items: ptr) {
     t = tp as *TableDef
+    // A filtered view is a list the TABLE minted, holding borrowed item
+    // pointers. It is ours to free exactly when it is not the model list
+    // itself, which is what an unfiltered table aliases it to.
+    prev_view = t.view
+    prev_items = t.items
     t.items = items
     if t.fmode == 0 {
         t.view = items
         listbox_update(t.lb, items)
-        return
+    } else {
+        v = list.new()
+        n = list.size(items)
+        i = 0
+        while i < n {
+            ip, _e = list.get(items, i)
+            if _table_filter_pass(t, ip) == 1 { _ = list.add(v, ip) }
+            i = i + 1
+        }
+        t.view = v
+        listbox_update(t.lb, v)
     }
-    v = list.new()
-    n = list.size(items)
-    i = 0
-    while i < n {
-        ip, _e = list.get(items, i)
-        if _table_filter_pass(t, ip) == 1 { _ = list.add(v, ip) }
-        i = i + 1
+    // After the listbox has switched, and never the model list. list.free
+    // releases only elements the list owns, and these are borrowed, so the
+    // app's items are untouched.
+    if prev_view != null {
+        if prev_view != prev_items {
+            if prev_view != t.view { list.free(prev_view) }
+        }
     }
-    t.view = v
-    listbox_update(t.lb, v)
 }
 
 table_select(tp: ptr, i: int) {
@@ -4554,11 +4585,32 @@ _tree_flatten_into(flat: ptr, nodes: ptr, depth: int) {
     }
 }
 
+// A flatten mints one TreeRow per visible row (the row carries its depth,
+// which changes as ancestors expand), so the previous flatten is garbage the
+// moment a new one replaces it. Nothing else can reclaim it: the app never
+// sees these rows and the tree outlives every one of them.
+_tree_free_flat(flat: ptr) {
+    if flat == null { return }
+    n = list.size(flat)
+    i = 0
+    while i < n {
+        tr, _e = list.get(flat, i)
+        if tr != null { free(tr) }
+        i = i + 1
+    }
+    list.free(flat)
+}
+
 _tree_reflatten(tp: ptr) {
     t = tp as *TreeDef
+    prev = t.flat
     t.flat = list.new()
     _tree_flatten_into(t.flat, t.roots, 0)
     listbox_update(t.lb, t.flat)
+    // CRITICAL: only after the listbox holds the NEW rows. listbox_update
+    // stores the list by reference, so freeing first would leave it reading
+    // rows that are already gone.
+    _tree_free_flat(prev)
 }
 
 tree(_ctx: ptr, roots: ptr) -> ptr {

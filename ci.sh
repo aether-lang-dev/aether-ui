@@ -16,6 +16,11 @@ export AETHER_UI_WITH_DRIVER=1
 #      run test_calculator.sh (11 assertions).
 #   4. Launch example_testable and run test_automation.sh (17 assertions).
 #
+#   Alongside those, Phase 1c3 runs the headless UI-logic tests under
+#   tests/<name>/: .ae programs that assert against ui/module.ae and exit
+#   non-zero, with no window and no driver. Everything else here needs a real
+#   window, so they are the only invariants a display-less box can check.
+#
 # Platform handling:
 #   macOS    — runs directly (AppKit).
 #   Linux    — runs directly if $DISPLAY or $WAYLAND_DISPLAY is set; otherwise
@@ -525,6 +530,36 @@ else
     tail -20 /tmp/ci_test_widgets_build.log | sed 's/^/       /'
     FAIL=$((FAIL + 1))
 fi
+
+echo
+echo "=== Phase 1c3: headless UI-logic tests (tests/<name>/) ==="
+# An .ae program that asserts against ui/module.ae and exits non-zero, with no
+# window and no driver. Every other runtime phase needs a window: the driver
+# specs serve their HTTP endpoint from a real one, so none of them can run on a
+# display-less box, and none can run at all on a developer machine without
+# opening one. A toolkit invariant that holds in pure Aether belongs here.
+#
+# Built by the .all.ae fan-out (it scans tests/**/.build.ae), so a compile
+# failure has already been reported by Phase 1. This phase RUNS them.
+UI_TESTS=(derived_views)
+UT_BIN() { echo "$ROOT/target/build/tests/$1/bin/$1"; }
+for ut in "${UI_TESTS[@]}"; do
+    bin="$(UT_BIN "$ut")"
+    if [ ! -x "$bin" ]; then
+        echo "  FAIL $ut (not built)"
+        FAIL=$((FAIL + 1))
+        continue
+    fi
+    # Headless explicitly, like Phase 1c: no window is wanted, but GTK still
+    # needs a display to initialise, so $LAUNCH_PREFIX stays.
+    if AETHER_UI_HEADLESS=1 $LAUNCH_PREFIX "$bin" > "/tmp/ci_uitest_${ut}.log" 2>&1; then
+        echo "  OK   $ut ($(tail -1 "/tmp/ci_uitest_${ut}.log"))"
+    else
+        echo "  FAIL $ut"
+        tail -20 "/tmp/ci_uitest_${ut}.log" | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+done
 
 echo
 echo "=== Phase 1d: Win32 backend cross-compile check ==="

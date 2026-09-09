@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **Every widget that shows a derived view of your data leaked it on each
+  rebuild.** A tree flattening its rows, a table applying its filter, a
+  listbox reordering: each built a fresh list, pointed the widget at it, and
+  abandoned the previous one. The tree was the worst, its flatten mints a row
+  object per visible node, so every click on a disclosure triangle leaked a
+  list plus one object per row, for as long as the window stayed open. Each
+  rebuild now reclaims its predecessor, after the listbox has switched to the
+  new one, and never the app's own list. Measured with `leaks` on the new
+  headless test: 12,286 leaks / 854 KB before, 288 / 18 KB after, and the 288
+  is a fixed Foundation/NSXPC baseline that does not move when the workload
+  grows 40x.
+
+- **A search box leaked one string per keystroke.** `table_filter_text` lowers
+  the needle into a fresh heap string and stores it on the table, where nothing
+  reclaims it automatically. It now releases the previous one. The release
+  targets the struct field directly: codegen lowers `string.release(<local>)`
+  into a free guarded by that local's heap-tracking flag, and a local read out
+  of a struct field is not tracked, so releasing through a local silently did
+  nothing.
+
+- **Reordering a listbox left the app's own list holding the pre-drag order.**
+  `listbox_move` rebuilt the list and pointed the widget at the copy, so after
+  the first drag the widget and the data the app reads back disagreed, and the
+  old list leaked. A move is a rotation of the span between the two indices,
+  which `set` alone expresses, so it is now done in place: no allocation, no
+  leak, and the app's list is the one that moved.
+
 ### Added
+
+- **Headless UI-logic tests** (`tests/<name>/`, run by CI phase 1c3): an `.ae`
+  program that asserts against `ui/module.ae` and exits non-zero, with no
+  window and no driver. Every other runtime phase needs a real window, which
+  means none of them can run on a display-less box, and none can run on a
+  developer machine without opening one. `tests/derived_views` is the first,
+  pinning the rebuild and reorder behaviour above. `.all.ae` now scans
+  `tests/**/.build.ae` so these build with everything else.
 
 - **`styled_bg(h)` and `styled_fg(h)` are callable from Aether** (#109). Both
   are implemented on all four backends and neither had a binding, so a program

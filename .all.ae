@@ -33,8 +33,14 @@ main() {
         // lines feed the extractor the same globs the runtime expands:
         //   scan(b, "examples/**/.build.ae")
         //   scan(b, "apps/**/.build.ae")
+        //   scan(b, "tests/**/.build.ae")
         scan("examples/**/.build.ae")
         scan("apps/**/.build.ae")
+        // Headless UI-logic tests: an .ae program asserting against
+        // ui/module.ae that exits non-zero, with no window and no driver.
+        // The only place a toolkit invariant can be pinned on a runner with
+        // no display, and the only phase that can carry a leak check.
+        scan("tests/**/.build.ae")
         return 0
     }
 }
