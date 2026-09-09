@@ -262,6 +262,15 @@ typedef struct {
     // Tooltip text (owned)
     wchar_t* tooltip;
 
+    // The widget's text, as UTF-8, owned. GetWindowText on a window belonging
+    // to another thread sends WM_GETTEXT and waits for that thread to pump, so
+    // reading a tree of three hundred widgets from the driver's thread cost
+    // three hundred frame periods -- a minute, on a viewport drawing at five
+    // frames a second, for a request that answers in milliseconds when the app
+    // is idle. Everything that writes the text runs on the UI thread already
+    // and knows what it wrote.
+    char* text_cache;
+
     // Sealed flag (test server)
     int sealed;
 
@@ -410,6 +419,22 @@ static Widget* widget_at(int handle) {
     return widgets[handle - 1];
 }
 
+// Text is cached on the thread that owns the window, which is the only thread
+// that ever changes it.
+static void w32_cache_text(Widget* w, const char* text) {
+    if (!w) return;
+    free(w->text_cache);
+    w->text_cache = text ? strdup(text) : NULL;
+}
+
+static void w32_cache_text_from_window(Widget* w) {
+    if (!w || !w->hwnd) return;
+    wchar_t wbuf[1024];
+    int n = GetWindowTextW(w->hwnd, wbuf, 1023);
+    wbuf[n < 0 ? 0 : n] = L'\0';
+    w32_cache_text(w, wide_to_utf8(wbuf));
+}
+
 int aether_ui_register_widget(void* hwnd) {
     if (widget_count >= widget_capacity) {
         widget_capacity = widget_capacity == 0 ? 64 : widget_capacity * 2;
@@ -426,7 +451,12 @@ int aether_ui_register_widget(void* hwnd) {
 
 static int register_widget_typed(HWND hwnd, WidgetKind kind) {
     int h = aether_ui_register_widget(hwnd);
-    if (h > 0) widgets[h - 1]->kind = kind;
+    if (h > 0) {
+        widgets[h - 1]->kind = kind;
+        // Whatever the control was created with, read once here, where reading
+        // costs nothing: this runs on the thread that owns the window.
+        w32_cache_text_from_window(widgets[h - 1]);
+    }
     return h;
 }
 
@@ -1315,6 +1345,7 @@ static void w32_set_text(Widget* w, const char* text) {
     w32_text_set_depth++;
     SetWindowTextW(w->hwnd, utf8_to_wide(text));
     w32_text_set_depth--;
+    w32_cache_text(w, text);
 }
 
 static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1467,6 +1498,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                             || cw->kind == WK_TEXTAREA) && code == EN_CHANGE) {
                     // Nothing the app wrote itself, only what was typed.
                     if (w32_text_set_depth > 0) return 0;
+                    w32_cache_text_from_window(cw);
                     if (!cw->sealed)
                         invoke_closure_str(cw->on_change,
                                            aether_ui_textfield_get_text(ch));
@@ -2205,7 +2237,7 @@ void aether_ui_text_set_string(int handle, const char* text) {
 
 void aether_ui_button_set_label(int handle, const char* label) {
     Widget* w = widget_at(handle);
-    if (w && w->hwnd) SetWindowTextW(w->hwnd, utf8_to_wide(label));
+    if (w && w->hwnd) w32_set_text(w, label);
 }
 
 // Right-click context menus (REAL, 2026-07-20): items accumulate on the widget;
@@ -3975,6 +4007,7 @@ void aether_ui_set_tooltip(int handle, const char* text) {
             NULL, NULL, GetModuleHandleW(NULL), NULL);
     }
     if (w->tooltip) free(w->tooltip);
+    if (w->text_cache) { free(w->text_cache); w->text_cache = NULL; }
     w->tooltip = _wcsdup(utf8_to_wide(text));
     TOOLINFOW ti;
     memset(&ti, 0, sizeof(ti));
@@ -4102,16 +4135,11 @@ void aether_ui_a11y_get_impl(int handle,
     if (name && namesz) {
         if (w->a11y_name) {
             strncpy(name, w->a11y_name, namesz - 1); name[namesz - 1] = '\0';
-        } else {
-            // The control's own text is its auto accessible name.
-            int len = GetWindowTextLengthW(w->hwnd);
-            if (len > 0) {
-                wchar_t* wbuf = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
-                GetWindowTextW(w->hwnd, wbuf, len + 1);
-                const char* u = wide_to_utf8(wbuf);
-                strncpy(name, u ? u : "", namesz - 1); name[namesz - 1] = '\0';
-                free(wbuf);
-            }
+        } else if (w->text_cache) {
+            // The control's own text is its auto accessible name. From the
+            // cache, not from the window: WM_GETTEXT crosses to the thread that
+            // owns it and waits for that thread to pump.
+            strncpy(name, w->text_cache, namesz - 1); name[namesz - 1] = '\0';
         }
     }
     if (desc && descsz && w->a11y_desc) {
@@ -9047,9 +9075,9 @@ static const char* hook_widget_type(int handle) {
 static void hook_widget_text_into(int handle, char* buf, int bufsize) {
     Widget* w = widget_at(handle);
     if (!w || !w->hwnd) { buf[0] = '\0'; return; }
-    wchar_t wbuf[1024];
-    GetWindowTextW(w->hwnd, wbuf, 1024);
-    WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, bufsize, NULL, NULL);
+    const char* text = w->text_cache ? w->text_cache : "";
+    strncpy(buf, text, (size_t)bufsize - 1);
+    buf[bufsize - 1] = '\0';
 }
 
 static int hook_widget_visible(int handle) {
