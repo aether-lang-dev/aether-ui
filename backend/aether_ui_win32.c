@@ -9392,6 +9392,23 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             ctx->done = 1;
             return 0;
         }
+        /* #116: menu/tray activation fires app code, so it runs HERE, on the
+           UI thread, rather than where the HTTP request landed. Handled before
+           the widget lookup below because a menu handle is not a widget
+           handle: that lookup would answer 404 for a menu that exists. */
+        if (ctx->action == AETHER_DRV_MENU_ACTIVATE) {
+            ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            ctx->done = 1;
+            return 0;
+        }
+        if (ctx->action == AETHER_DRV_TRAY_ACTIVATE) {
+            ctx->retval = aether_ui_tray_menu_activate(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            ctx->done = 1;
+            return 0;
+        }
+
         Widget* w = widget_at(ctx->handle);
         /* A dead widget is a MISSING widget to the driver. The registry
            never shrinks (HWND values recycle), so widget_at still returns

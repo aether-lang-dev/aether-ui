@@ -8026,6 +8026,23 @@ static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
 // run_on_ui_thread), so this calls test_action_idle's body directly rather
 // than marshalling a second time.
 static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
+    /* #116: menu/tray activation fires app code, so it must not run on the
+       HTTP thread. This backend is already on the GTK thread here (the shared
+       server hopped over with run_on_ui_thread), so the invoke happens
+       directly rather than through test_action_idle's numeric table. */
+    if (ctx->action == AETHER_DRV_MENU_ACTIVATE) {
+        ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+        ctx->result = 0;
+        ctx->done = 1;
+        return;
+    }
+    if (ctx->action == AETHER_DRV_TRAY_ACTIVATE) {
+        ctx->retval = aether_ui_tray_menu_activate(ctx->handle, ctx->sval);
+        ctx->result = 0;
+        ctx->done = 1;
+        return;
+    }
+
     TestAction ta;
     memset(&ta, 0, sizeof(ta));
     ta.handle = ctx->handle;

@@ -6897,6 +6897,14 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
 // Threading: introspection hooks are called on the HTTP thread (read-only
 // queries AppKit tolerates). Every MUTATION goes through dispatch_action,
 // which bounces to the main queue with dispatch_sync and blocks.
+//
+// "Every" was not true of menu-bar and tray activation until #116: those two
+// routes called the item's closure where the HTTP request landed, so an app's
+// menu handler ran on a background thread. The main thread checker flagged the
+// -[NSTextField setStringValue:] that followed, and a handler touching a GL
+// context, whose context belongs to the main thread, segfaulted. They now go
+// through dispatch_action like everything else, as
+// AETHER_DRV_MENU_ACTIVATE / AETHER_DRV_TRAY_ACTIVATE.
 // ---------------------------------------------------------------------------
 
 #include "aether_ui_test_server.h"
@@ -7389,6 +7397,20 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         }
         case AETHER_DRV_CTX_ACTIVATE: {
             ctx->retval = aeui_ctx_menu_activate(ctx->handle, ctx->ival);
+            ctx->result = 0;
+            return;
+        }
+        /* #116: a menu/tray item's closure is app code and a mutation, so it
+           runs here, on the UI thread, rather than where the HTTP request
+           landed. The invoke's own return code goes back in retval so the
+           route can keep its reply shape. */
+        case AETHER_DRV_MENU_ACTIVATE: {
+            ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_TRAY_ACTIVATE: {
+            ctx->retval = aether_ui_tray_menu_activate(ctx->handle, ctx->sval);
             ctx->result = 0;
             return;
         }

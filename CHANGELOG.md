@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A menu item driven from a spec ran its closure on the HTTP thread**
+  (#116). Every `/widget/...` route goes through the backend's
+  `dispatch_action` hook, which hops to the UI thread and blocks;
+  `POST /menu/{handle}/activate` and `POST /tray/{id}/menu/activate` did not,
+  and called the item's closure where the request landed. So a menu handler
+  that touched a widget ran off the main thread, which the macOS main thread
+  checker flags, and one that touched a GL context, whose context belongs to
+  the main thread, segfaulted. A menu bar could not be driven from a spec if
+  any of its items did the thing the menu is for, and the crash looked like a
+  bug in the application rather than in the route. Both now dispatch as
+  `AETHER_DRV_MENU_ACTIVATE` / `AETHER_DRV_TRAY_ACTIVATE`, keeping each
+  route's existing reply shape. GTK4 was never affected: it services whole
+  requests on the UI thread already.
+
+### Fixed
+
 - **Four comments told readers the toolkit was less capable than it is**, and
   three of them were long out of date. `tabs` said AppKit and win32 "render
   stacked (no strip)" and that `tab_selected` "answers -1 there": both carry a

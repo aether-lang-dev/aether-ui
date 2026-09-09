@@ -60,6 +60,14 @@ typedef enum {
     // Canvas wheel / two-finger scroll. dval=dx, dval2=dy, in the DSL's
     // convention (dy<0 is away from the user, the zoom-IN direction).
     AETHER_DRV_CANVAS_SCROLL = 22, // handle=canvas, dval=dx, dval2=dy
+    // Menu-bar and tray activation (#116). These fire an app closure, so they
+    // are MUTATIONS and have to reach the UI thread like every other one. They
+    // used to call aether_ui_menu_item_invoke straight from the HTTP thread,
+    // which put an app's menu handler on a background thread: AppKit's main
+    // thread checker flags it, and a handler touching a GL context, whose
+    // context belongs to the main thread, segfaults.
+    AETHER_DRV_MENU_ACTIVATE = 23, // handle=menu, sval=item label → retval=1 if fired
+    AETHER_DRV_TRAY_ACTIVATE = 24, // handle=tray id, sval=item label → retval=1 if fired
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a
