@@ -1,0 +1,18 @@
+// selection_survives — headless UI-logic test, built as its own cached aeb node.
+import bldr
+import aether
+import aether (source, output, no_closure_regen)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("selection_survives.ae")
+            output("selection_survives")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

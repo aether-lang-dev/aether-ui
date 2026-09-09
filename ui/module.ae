@@ -3733,8 +3733,70 @@ on_row_double_click(lbp: ptr, cb: fn) {
 
 // listbox_update(lb, items) — re-render the rows; selection resets. The list
 // is RETAINED (so a reorderable listbox's move() can reorder it in place).
+// Write the current row index without firing on_select, for callers that are
+// re-establishing a selection they already had rather than making a new one.
+// -1 clears. listbox_set_selected is the multi-only public sibling.
+_listbox_set_selected_index(lbp: ptr, i: int) {
+    lb = lbp as *ListBox
+    if lb.multi == 1 {
+        if lb.sel_flags != null {
+            n = listbox_count(lbp)
+            k = 0
+            while k < n {
+                intarr_set_raw(lb.sel_flags, k, 0)
+                k = k + 1
+            }
+            if i >= 0 { intarr_set_raw(lb.sel_flags, i, 1) }
+        }
+    }
+    lb.selected = i
+    lb.anchor = i
+}
+
+// The item at `i`, or null when the index is not in the list.
+_listbox_item_at(items: ptr, i: int) -> ptr {
+    if items == null { return null }
+    if i < 0 { return null }
+    if i >= list.size(items) { return null }
+    it, _e = list.get(items, i)
+    return it
+}
+
+// Where `target` sits in `items`, by identity, or -1.
+_listbox_index_of(items: ptr, target: ptr) -> int {
+    if items == null { return 0 - 1 }
+    if target == null { return 0 - 1 }
+    n = list.size(items)
+    i = 0
+    while i < n {
+        it, _e = list.get(items, i)
+        if it == target { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// An update rebuilds every row, so the selection has to be re-established
+// against the new list. It is carried by ITEM, not by row index: an update may
+// filter, reorder or replace the rows, and the row the user picked is the one
+// they still mean. An item that is gone from the new list drops out of the
+// selection, the only honest answer for it.
+//
+// Clearing the selection outright, which is what this did, meant a table that
+// refreshes on a timer could never hold a selection at all, and typing one
+// more character into a search box dropped the row you were looking at.
+//
+// One case cannot be carried this way: a caller that SORTS the same list
+// object in place before calling here has already destroyed the mapping, so
+// the item found at the old index is whatever the sort moved there. Such a
+// caller captures the selection itself before it mutates (see _table_do_sort).
 listbox_update(lbp: ptr, items: ptr) {
     lb = lbp as *ListBox
+    prev_items = lb.items
+    prev_flags = lb.sel_flags
+    sel_item = _listbox_item_at(prev_items, lb.selected)
+    anchor_item = _listbox_item_at(prev_items, lb.anchor)
+
     if lb.rows != null { intarr_free(lb.rows) }
     n = list.size(items)
     sz = n
@@ -3742,10 +3804,38 @@ listbox_update(lbp: ptr, items: ptr) {
     lb.rows = intarr_new_raw(sz)
     lb.selected = 0 - 1
     if lb.multi == 1 {
-        if lb.sel_flags != null { intarr_free(lb.sel_flags) }
         lb.sel_flags = intarr_new_raw(sz)   // all 0 = nothing selected
     }
     lb.items = items
+
+    if lb.multi == 1 {
+        // Walk the OLD list once and re-place only the rows that were
+        // selected, so the cost is the selection's size, not the list's.
+        if prev_items != null {
+            if prev_flags != null {
+                pn = list.size(prev_items)
+                k = 0
+                while k < pn {
+                    if intarr_get_raw(prev_flags, k) == 1 {
+                        it, _e = list.get(prev_items, k)
+                        nj = _listbox_index_of(items, it)
+                        if nj >= 0 {
+                            intarr_set_raw(lb.sel_flags, nj, 1)
+                            lb.selected = nj
+                        }
+                    }
+                    k = k + 1
+                }
+            }
+        }
+        if prev_flags != null { intarr_free(prev_flags) }
+    } else {
+        lb.selected = _listbox_index_of(items, sel_item)
+    }
+    // The shift-extend anchor is an index too, so it moves with its item or
+    // is forgotten with it. Left alone it would point into the old order.
+    lb.anchor = _listbox_index_of(items, anchor_item)
+
     each_update(lb.group, items)
 }
 
@@ -3941,9 +4031,10 @@ listbox_count(lbp: ptr) -> int {
     return each_count(lb.group)
 }
 
-// listbox_items(lb) — the listbox's CURRENT backing list. After a reorder the
-// listbox owns a rebuilt list (listbox_move replaces it), so read it here
-// rather than the app's original list handle, which goes stale.
+// listbox_items(lb) — the listbox's CURRENT backing list. This is the same
+// list the app handed to listbox_update, including after a reorder:
+// listbox_move rotates it in place rather than replacing it, so the app's own
+// handle stays correct and this is only a convenience.
 listbox_items(lbp: ptr) -> ptr {
     lb = lbp as *ListBox
     return lb.items
@@ -4294,6 +4385,13 @@ _table_do_sort(tp: ptr) {
     t = tp as *TableDef
     if t.items == null { return }
     if t.sort_dir == 0 { return }
+    // CRITICAL: capture the selected item BEFORE the reorder. The sort
+    // rewrites the model list in place, so once it has run, the index the
+    // listbox is holding points at whatever moved into that slot, and
+    // listbox_update can no longer tell which item the user had picked.
+    // Sorting is the case where keeping the row you selected matters most:
+    // the whole point of the click is to move it somewhere else on screen.
+    sel_item = table_item_at(tp, listbox_selected(t.lb))
     c = t.sort_col
     n = list.size(t.items)
     i = 1
@@ -4314,6 +4412,18 @@ _table_do_sort(tp: ptr) {
         i = i + 1
     }
     table_update(tp, t.items)
+    // Re-place it in the sorted view. Gone from the view (a filter that no
+    // longer passes it) means it is genuinely not selectable, so -1 stands.
+    if sel_item != null {
+        _table_reselect(t, sel_item)
+    }
+}
+
+// Point the table's listbox at whichever row now shows `item`.
+_table_reselect(t: *TableDef, item: ptr) {
+    v = t.view
+    if v == null { v = t.items }
+    _listbox_set_selected_index(t.lb, _listbox_index_of(v, item))
 }
 
 // Header click under the sorter: first click on a column sorts ascending,
