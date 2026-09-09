@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- `tests/no_echo` pins that a programmatic setter is not the user acting: an
+  app writing into its own field must not have that write come back through its
+  own `on_change`. That is what #129 fixed on Win32, where an edit control
+  answered `SetWindowText` with `EN_CHANGE` exactly as it answers a keystroke,
+  and it is the kind of parity gap only ever noticed on the backend that gets
+  it wrong. `set_text`, `set_toggle` and `set_slider` are all covered, on
+  whichever backend is running, along with the writes having actually taken
+  effect so "no echo" cannot pass by doing nothing.
+
+  `tab_select` is pinned as the deliberate exception: all four backends fire
+  `on_tab_change` for a programmatic select and each says so in its own
+  comment. The asymmetry with `set_toggle` is surprising enough that a test
+  keeps a backend from drifting either way.
+
 ### Fixed
 
 - **On GTK4 every programmatic setter came back as user input.** `set_text` on
