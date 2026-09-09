@@ -24,6 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Undo leaked two closures per edit, for as long as the app ran.** An
+  undoable edit owns a `do` and an `undo` closure, and dropping an edit freed
+  only its label. Pushing a new edit after an undo truncates the redo tail,
+  which is simply how people work, so every undo-then-edit cycle abandoned
+  both boxes. The overflow path at 128 edits dropped the oldest the same way.
+  Both now reclaim the edit through the env's own destructor, so the
+  references its captures own are released too, not just the struct. Measured
+  with `leaks` on 2000 push/undo cycles: 4000 leaks / 128 KB before, zero
+  after.
+
+### Added
+
+- `tests/undo_stack` pins the stack's rules alongside the reclaim: an edit
+  runs its action on being recorded, undo and redo step and report whether
+  they moved, stepping past either end is a no-op rather than a wrap, and
+  pushing after an undo truncates the redo tail.
+
+### Fixed
+
 - **A menu item driven from a spec ran its closure on the HTTP thread**
   (#116). Every `/widget/...` route goes through the backend's
   `dispatch_action` hook, which hops to the UI thread and blocks;
