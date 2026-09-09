@@ -231,7 +231,18 @@ extern aether_ui_state_bind_text(state_handle: int, text_handle: int,
 extern aether_ui_state_create_s(initial: string) -> int
 extern aether_ui_state_create_i(initial: int) -> int
 extern aether_ui_state_create_b(initial: int) -> int
-extern aether_ui_state_get_s(handle: int) -> string
+// `@heap` on a `-> string` extern says the CALLER owns the buffer, so the
+// compiler frees it. Without it every call leaks: the backend allocates and
+// nobody releases. Reading one text field in a poll loop was a steady leak on
+// all four backends.
+//
+// CRITICAL: only annotate when EVERY backend returns an allocation. @heap on a
+// function that returns a literal or a pointer into backend state is a free()
+// of memory the caller does not own. These do NOT have it and must not:
+// widget_kind_impl and widget_classes_impl (backend-owned strings),
+// undo_label_impl (points into the edit stack), overlay_material_effective_impl
+// (a stored string or the literal "dim"), backend_name_impl (a literal).
+extern aether_ui_state_get_s(handle: int) -> string @heap
 extern aether_ui_state_get_i(handle: int) -> int
 extern aether_ui_state_get_b(handle: int) -> int
 extern aether_ui_state_set_s(handle: int, value: string)
@@ -250,7 +261,7 @@ extern aether_ui_state_on_change(state_handle: int, boxed_closure: ptr)
 // Group 2: Input widgets
 extern aether_ui_textfield_create(placeholder: string, boxed_closure: ptr) -> int
 extern aether_ui_textfield_set_text(handle: int, text: string)
-extern aether_ui_textfield_get_text(handle: int) -> string
+extern aether_ui_textfield_get_text(handle: int) -> string @heap
 
 extern aether_ui_securefield_create(placeholder: string, boxed_closure: ptr) -> int
 
@@ -271,7 +282,7 @@ extern aether_ui_picker_get_selected(handle: int) -> int
 
 extern aether_ui_textarea_create(placeholder: string, boxed_closure: ptr) -> int
 extern aether_ui_textarea_set_text(handle: int, text: string)
-extern aether_ui_textarea_get_text(handle: int) -> string
+extern aether_ui_textarea_get_text(handle: int) -> string @heap
 
 extern aether_ui_scrollview_create() -> int
 extern aether_ui_progressbar_create(fraction: float) -> int
@@ -365,10 +376,10 @@ const DIST_FILL_EQUALLY = 1
 // Group 5: System integration
 extern aether_ui_alert_impl(title: string, msg: string)
 extern aether_ui_clipboard_write_impl(text: string)
-extern aether_ui_clipboard_read_impl() -> string
-extern aether_ui_file_open(title: string, start_dir: string) -> string
-extern aether_ui_file_save(title: string, default_name: string) -> string
-extern aether_ui_file_pick_folder(title: string, start_dir: string) -> string
+extern aether_ui_clipboard_read_impl() -> string @heap
+extern aether_ui_file_open(title: string, start_dir: string) -> string @heap
+extern aether_ui_file_save(title: string, default_name: string) -> string @heap
+extern aether_ui_file_pick_folder(title: string, start_dir: string) -> string @heap
 extern aether_ui_open_url_impl(url: string)
 extern aether_ui_dark_mode_check() -> int
 extern aether_ui_backend_name_impl() -> string

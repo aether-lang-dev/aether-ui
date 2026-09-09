@@ -1,0 +1,59 @@
+// Reading a string out of the toolkit must not leak.
+//
+// Every string-returning backend entry point allocates, and none was marked
+// `@heap`, so the compiler never freed what the caller was handed. Reading one
+// text field in a poll loop leaked on every backend, on every read.
+//
+// textfield_get_text was worse than a leak: three backends returned a BORROWED
+// pointer while win32 returned an allocation, so the same ABI call meant two
+// different things, and macOS's was an autoreleased buffer valid only until
+// the pool drained. All four now return an allocation, like the textarea
+// sibling always did.
+//
+//   AETHER_UI_HEADLESS=1 leaks --atExit -- .../bin/string_ownership
+
+import ui
+import ui (root_vstack, textfield, textarea, set_text, get_text,
+    ui_state_s, ui_get_s, ui_set_s, backend_name)
+import std.string
+
+extern exit(code: int)
+
+var bad = 0
+check_s(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    tf = textfield(root, "placeholder", |v: string| { })
+    _ta = textarea(root, "notes", |v: string| { })
+    _st0 = set_text(tf, "typed")
+    st = ui_state_s("stored")
+
+    // The values must survive the ownership change, not just the leak.
+    check_s("textfield reads back", get_text(tf), "typed")
+    check_s("state string reads back", ui_get_s(st), "stored")
+    _u = ui_set_s(st, "replaced")
+    check_s("state string reads back after a write", ui_get_s(st), "replaced")
+
+    // A borrowed return must still be borrowed: freeing it would be a free()
+    // of memory the caller never owned.
+    if string.length(backend_name()) == 0 { println("  MISMATCH: backend_name is empty")  bad = bad + 1 }
+
+
+    // The loop the leak check measures: every read allocated and nothing
+    // released it.
+    i = 0
+    while i < 2000 {
+        _a = get_text(tf)
+        _b = ui_get_s(st)
+        _c = backend_name()
+        i = i + 1
+    }
+
+    if bad > 0 { println("string_ownership: ${bad} mismatch(es)")  exit(1) }
+    println("string_ownership: reads return their value and are reclaimed")
+    exit(0)
+}
