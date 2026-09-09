@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **A canvas app stopped answering its driver under `AETHER_UI_HEADLESS`**
+  (#123). The flag promises the window "still exists and receives events (so
+  the test server keeps working), but is never ordered onto the visible
+  desktop". It did not hold: every canvas redraw still marked the layer dirty,
+  and AppKit then ran a full `CALayer` display, `CABackingStoreUpdate` and a
+  `CGDisplayList` replay through vImage colour conversion **on the main
+  thread**, for a backing store nobody could ever see. An app redrawing an
+  image on a timer spent its run loop in there, so requests timed out against a
+  process that was still alive.
+
+  Sampled on the issue's repro: 955 of 1607 main-thread samples inside
+  `CA::Layer::display_if_needed`. Measured as throughput, a 16ms timer that
+  redraws a 480x320 image manages 15 ticks in 2 seconds before the fix and 114
+  after.
+
+  Every path that dirties a canvas or gpuview now goes through one gated
+  helper. Gating `canvas_redraw` alone was not enough, which the measurement
+  caught: `canvas_clear` dirties the view too and runs every frame, so the app
+  still spent the run loop in CA commit.
+
+  Nothing is lost by skipping the display. Pixel assertions never went through
+  the layer: `canvas_read_pixel` and `canvas_write_png` replay the command
+  buffer into their own bitmap, which is why the Catalyst render probe works
+  with no window at all.
+
 ### Changed
 
 - **Sorting a table no longer reorders the app's own list.** Clicking a column
