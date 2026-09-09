@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`styled_bg(h)` and `styled_fg(h)` are callable from Aether** (#109). Both
+  are implemented on all four backends and neither had a binding, so a program
+  could set a background and had no way to ask whether it was on screen. That
+  is what a colour chip beside a set of sliders needs to know: a chip that
+  never painted looks exactly like a chip showing a very dark colour. The `fg`
+  twin is bound at the same time rather than waiting for someone to report the
+  same gap again.
+
+### Fixed
+
+- **`styled_bg` answers from the layer for any widget that asked for a
+  background** (#111). It already did that for an `NSScrollView` drawing over
+  the layer and for a widget with hover or active styling, because those are
+  cases where what paints and what was requested can differ. Everything else
+  fell back to the stashed request, which cannot notice anything applied
+  afterwards clearing the layer: the readback keeps reporting a colour while
+  nothing on screen agrees.
+
+  The old restriction existed so this would not report a colour for views that
+  never asked for one. A view carrying a stash has asked by definition, so the
+  rule now covers exactly those and no more.
+
+
+### Added
+
 - **`gpuview`, a widget that owns a real GL context** (#92). An app can now put
   a hardware-rendered viewport inside ordinary native chrome, instead of
   choosing between running the renderer in its own GLFW window with no panels,

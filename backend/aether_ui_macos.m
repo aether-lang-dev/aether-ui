@@ -7067,9 +7067,18 @@ int aether_ui_styled_bg_impl(int handle) {
        banner picked one up while this was broader). A widget with a hover or
        active style is exactly the case where the two can legitimately differ,
        so it is the only case that needs the live answer. */
+    /* #111: ALSO for any widget that asked for a background of its own. The
+     * hover/active restriction below was there so this would not start
+     * reporting a colour for views that never asked, and a view carrying a
+     * stash has asked by definition, so widening it that far keeps the field's
+     * meaning while closing the gap the stash alone leaves: if something
+     * applied after the request cleared the layer, the stash still says the
+     * colour is there and nothing on screen agrees. Answering from the layer
+     * makes the disagreement visible instead of hiding it. */
+    int asked_for_bg = lv && objc_getAssociatedObject(lv, "aeui_styled_bg") != nil;
     int styled_state = lv && (objc_getAssociatedObject(lv, "aeui-hover-style")
                            || objc_getAssociatedObject(lv, "aeui-active-style"));
-    if (styled_state && [lv layer] && [lv layer].backgroundColor) {
+    if ((styled_state || asked_for_bg) && [lv layer] && [lv layer].backgroundColor) {
         NSColor* lc = [[NSColor colorWithCGColor:[lv layer].backgroundColor]
             colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
         if (lc && [lc alphaComponent] > 0.0) {
