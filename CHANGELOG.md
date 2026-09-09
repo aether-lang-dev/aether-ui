@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On GTK4 every programmatic setter came back as user input.** `set_text` on
+  a field and on an area, `set_toggle` and `set_slider` all ran the app's own
+  `on_change`, so an app writing into its own widgets fought itself. This is
+  the property #129 fixed for Win32, and that PR's own text said this backend
+  already had it; it did not, on all four setters. GTK emits the same signal
+  whether the change came from the user or from the app, so the app's handler
+  is now blocked for the duration of the write, matched by function and on the
+  object the handler was connected to (the widget for the entry, toggle and
+  scale; the buffer for the text view).
+
+  `tests/no_echo` is what caught it, by asserting the property on whichever
+  backend is running rather than on the one that happened to be reported.
+
+### Fixed
+
 - **A row's context menu leaked every time the list rebuilt.**
   `context_menu_item` boxes the app's callback and hands the pointer to the
   platform menu. AppKit releases the `NSMenu` with the view, but the box is

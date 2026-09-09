@@ -1499,11 +1499,26 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     return aether_ui_register_widget(entry);
 }
 
+/* A programmatic write is not the user acting: an app that sets its own
+ * field must not have that write come back through its own on_change. GTK
+ * emits the same signal either way, so the app's handler is blocked for the
+ * duration of the write, matched by FUNCTION so the boxed closure the
+ * connection carries as user-data does not have to be threaded down here.
+ *
+ * Blocked on the object the handler was CONNECTED to, which is the widget for
+ * the entry, toggle and scale, and the BUFFER for the text view.
+ *
+ * The same property was fixed for Win32 in #129, whose text said this backend
+ * already had it. It did not: tests/no_echo fails on all four setters here. */
 void aether_ui_textfield_set_text(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_ENTRY(w)) {
         GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));
+        g_signal_handlers_block_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                        (gpointer)on_entry_changed, NULL);
         gtk_entry_buffer_set_text(buf, text ? text : "", -1);
+        g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                          (gpointer)on_entry_changed, NULL);
     }
 }
 
@@ -1567,7 +1582,11 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
 void aether_ui_toggle_set_active(int handle, int active) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_CHECK_BUTTON(w)) {
+        g_signal_handlers_block_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                        (gpointer)on_toggle_changed, NULL);
         gtk_check_button_set_active(GTK_CHECK_BUTTON(w), active != 0);
+        g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                          (gpointer)on_toggle_changed, NULL);
     }
 }
 
@@ -1619,7 +1638,11 @@ int aether_ui_slider_create(double min_val, double max_val,
 void aether_ui_slider_set_value(int handle, double value) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_SCALE(w)) {
+        g_signal_handlers_block_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                        (gpointer)on_slider_changed, NULL);
         gtk_range_set_value(GTK_RANGE(w), value);
+        g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                          (gpointer)on_slider_changed, NULL);
     }
 }
 
@@ -1899,7 +1922,12 @@ void aether_ui_textarea_set_text(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle + 1);
     if (w && GTK_IS_TEXT_VIEW(w)) {
         GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(w));
+        // Connected to the BUFFER, not the view, so block it there.
+        g_signal_handlers_block_matched(buf, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                        (gpointer)on_textbuffer_changed, NULL);
         gtk_text_buffer_set_text(buf, text ? text : "", -1);
+        g_signal_handlers_unblock_matched(buf, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                          (gpointer)on_textbuffer_changed, NULL);
     }
 }
 
