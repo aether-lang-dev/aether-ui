@@ -1,0 +1,76 @@
+// A canvas app must keep servicing its run loop under AETHER_UI_HEADLESS (#123).
+//
+// The flag's contract is that the window "still exists and receives events (so
+// the test server keeps working), but it is never ordered onto the visible
+// desktop". It did not hold: every canvas_redraw marked the layer dirty, and
+// AppKit then ran a full CALayer display, CABackingStoreUpdate and a
+// CGDisplayList replay through vImage colour conversion ON THE MAIN THREAD,
+// for a backing store nobody could ever see. A canvas redrawing on a timer
+// spent the run loop in there, so a driven app stopped answering while the
+// process stayed alive.
+//
+// Sampled on the issue's repro: 955 of 1607 main-thread samples inside
+// CA::Layer::display_if_needed before, 2 after.
+//
+// Asserted here as throughput, because that is what starving the run loop
+// costs and it needs no driver: a 16ms timer that also redraws a 480x320
+// canvas has to keep firing. The floor is deliberately far below the ~60/s a
+// healthy run reaches, so a loaded CI box cannot fail it; the broken build
+// does not approach it.
+
+import ui
+import ui (root_vstack, text, canvas_create, canvas_clear, canvas_redraw,
+    canvas_draw_image_borrowed_ptr, timer, app_create, app_start)
+import std.mem
+import std.time (now_ms)
+
+extern exit(code: int)
+extern calloc(count: int, size: int) -> ptr
+
+const W = 480
+const H = 320
+const RUN_MS = 2000
+const FLOOR = 20        // ticks in RUN_MS; a healthy run reaches ~120
+
+var g_canvas = 0
+var g_ticks = 0
+var g_start: long = 0
+var g_pixels: ptr = null
+
+main() {
+    // A real RGBA image, which is what makes the layer display expensive:
+    // the backing-store update converts it through vImage every frame.
+    g_pixels = calloc(W * H * 4, 1)
+    p = 0
+    while p < W * H * 4 {
+        mem.set_byte(g_pixels, p, 90)
+        p = p + 1
+    }
+
+    root = root_vstack(0) {
+        _l = text("canvas")
+        g_canvas = canvas_create(W, H)
+    }
+
+    g_start = now_ms()
+    _t = timer(16) callback {
+        // The work the issue's repro does every frame.
+        canvas_clear(g_canvas)
+        canvas_draw_image_borrowed_ptr(g_canvas, 0.0, 0.0, W, H,
+                                       g_pixels, W * H * 4)
+        canvas_redraw(g_canvas)
+        g_ticks = g_ticks + 1
+
+        if now_ms() - g_start >= RUN_MS {
+            if g_ticks < FLOOR {
+                println("  FAIL: only ${g_ticks} timer ticks in ${RUN_MS}ms, the run loop is starved")
+                exit(1)
+            }
+            println("headless_canvas: ${g_ticks} ticks in ${RUN_MS}ms, the run loop keeps up")
+            exit(0)
+        }
+    }
+
+    app = app_create("headless canvas", W, H + 40)
+    app_start(app, root)
+}

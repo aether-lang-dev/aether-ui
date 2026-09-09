@@ -53,6 +53,32 @@ static int aeui_is_headless(void) {
     return v && v[0] && v[0] != '0';
 }
 
+/* #123: mark a drawing surface for redisplay, unless we are headless.
+ *
+ * Headless means the window is never ordered onto a screen, so a layer display
+ * paints into a backing store nobody can ever see, and it is not cheap: CALayer
+ * display -> CABackingStoreUpdate -> a CGDisplayList replay through vImage
+ * colour conversion, all on the MAIN thread. A canvas redrawing an image on a
+ * timer spends the run loop in there and stops servicing anything else, so the
+ * driver's requests time out against a process that is still alive. Sampled on
+ * the issue's repro: 955 of 1607 main-thread samples inside
+ * CA::Layer::display_if_needed.
+ *
+ * Nothing is lost by skipping it. Pixel assertions do not go through the layer:
+ * canvas_read_pixel and canvas_write_png replay the command buffer into their
+ * own CGBitmapContext, which is why the Catalyst render probe works with no
+ * window at all.
+ *
+ * CRITICAL: every path that dirties a canvas or gpuview goes through here.
+ * canvas_redraw was gated on its own first and the app still spent the run loop
+ * in CA commit, because canvas_clear dirties it too and runs every frame. */
+static void aeui_mark_needs_display(int widget_handle) {
+    if (aeui_is_headless()) return;
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(widget_handle);
+    if (v) [v setNeedsDisplay:YES];
+}
+
+
 // ---------------------------------------------------------------------------
 // Widget type tags — mirror of widget_type_name() in the GTK4 backend.
 // Kept in a parallel array so the test server can report types without
@@ -5597,8 +5623,7 @@ void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
 void aether_ui_gpuview_request_render_impl(int gpu_id) {
     GpuState* st = get_gpu_state(gpu_id);
     if (!st) return;
-    NSView* v = (__bridge NSView*)aether_ui_get_widget(st->widget_handle);
-    if (v) [v setNeedsDisplay:YES];
+    aeui_mark_needs_display(st->widget_handle);
 }
 
 int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
@@ -6089,15 +6114,13 @@ void aether_ui_canvas_clear_impl(int canvas_id) {
         }
     }
     cs->count = 0;
-    NSView* v = (__bridge NSView*)aether_ui_get_widget(cs->widget_handle);
-    if (v) [v setNeedsDisplay:YES];
+    aeui_mark_needs_display(cs->widget_handle);
 }
 
 void aether_ui_canvas_redraw_impl(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs) return;
-    NSView* v = (__bridge NSView*)aether_ui_get_widget(cs->widget_handle);
-    if (v) [v setNeedsDisplay:YES];
+    aeui_mark_needs_display(cs->widget_handle);
 }
 
 // canvas_write_png — off-screen PNG render of the command buffer.
