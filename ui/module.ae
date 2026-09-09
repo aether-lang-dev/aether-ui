@@ -93,6 +93,7 @@ exports (
     tree, tree_node, tree_add_child, tree_set_expanded, tree_refresh,
     tree_visible_count,
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
+    vlist_native,
     vlist_scrollable, vlist_container,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
     image, image_from_bytes, image_size, image_fill, image_tint, image_untint,
@@ -4380,6 +4381,22 @@ vlist_scrollable(vp: ptr) -> ptr {
 vlist_container(vp: ptr) -> int {
     v = vp as *VList
     return v.container
+}
+
+// vlist_native(v) reports which backing this list actually got: 1 when the
+// backend's own collection view took it, 0 when it fell back to the composed
+// window.
+//
+// It matters to a test, because the two virtualize to different NUMBERS. The
+// composed path and NSTableView realize the window the app asked for, roughly
+// ten rows. GtkListView keeps a fixed pool of its own choosing, measured at
+// 205 items for a model of 1,000 and the same 205 for 20,000, unchanged by
+// viewport height. Both are real virtualization; only one of them equals the
+// requested window, so a test asserting a single number is asserting the
+// backing rather than the behaviour.
+vlist_native(vp: ptr) -> int {
+    v = vp as *VList
+    return v.native
 }
 
 // table_on_select(t) callback |i: int| — row selection (delegates to listbox).

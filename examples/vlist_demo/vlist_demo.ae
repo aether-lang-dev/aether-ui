@@ -4,7 +4,8 @@
 import ui
 import ui (window, vstack, text, btn,
     vlist, vlist_set, vlist_scroll_to, vlist_count, vlist_window_first,
-    vlist_scrollable, vlist_container, enable_test_server)
+    vlist_scrollable, vlist_container, vlist_native, a11y_label,
+    enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -39,6 +40,16 @@ main() {
             // Native scroll: wheel/drag on the container slides the window (and
             // the driver can drive a step via /widget/{container}/scroll?dy=N).
             _sc = vlist_scrollable(v)
+            // Report which backing took the list WITHOUT adding a widget:
+            // an extra sibling shifts the initial window by a row here, and a
+            // demo that changes what it is demonstrating in order to describe
+            // itself is not much of a demo. An a11y name is a property on a
+            // widget that already exists, so the layout is untouched.
+            if vlist_native(v) == 1 {
+                _bk = a11y_label(vlist_container(v), "backing-native")
+            } else {
+                _bk = a11y_label(vlist_container(v), "backing-composed")
+            }
             // Buttons scroll the window so a spec can drive it too.
             _top = btn("top") callback {
                 vlist_scroll_to(v, 0)
