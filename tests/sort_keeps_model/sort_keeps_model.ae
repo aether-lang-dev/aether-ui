@@ -1,0 +1,114 @@
+// Sorting a table must not reorder the app's own list.
+//
+// Clicking a column heading is a DISPLAY decision. The built-in sorter used to
+// rewrite the model list in place, so an app holding indices into its own
+// list, or reading the list back expecting the order it put things in, got a
+// different one because someone clicked a heading. Nothing warned it.
+//
+// This is SWING_ENVY.md's acceptance for C2, minus the model/view index split:
+// sort a table, assert the underlying list is untouched while the first
+// visible row changed, and that the selected item survives.
+
+import ui
+import ui (root_vstack, table, table_cols, table_col, table_update,
+    table_sorter, table_sort_by, table_item_at, table_count, table_select,
+    table_selected, table_filter_text)
+import std.list
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+struct Row { name: string }
+row(nm: string) -> ptr { r = malloc(sizeof(Row)) as *Row  r.name = nm  return r as ptr }
+name_of(p: ptr) -> string {
+    if p == null { return "<null>" }
+    return (p as *Row).name
+}
+
+var bad = 0
+expect(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+// The app's list, read back in its own order.
+model_order(items: ptr) -> string {
+    out = ""
+    n = list.size(items)
+    i = 0
+    while i < n {
+        it, _e = list.get(items, i)
+        out = "${out}${name_of(it)},"
+        i = i + 1
+    }
+    return out
+}
+
+// What the table SHOWS, top to bottom.
+view_order(tb: ptr) -> string {
+    out = ""
+    n = table_count(tb)
+    i = 0
+    while i < n {
+        out = "${out}${name_of(table_item_at(tb, i))},"
+        i = i + 1
+    }
+    return out
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    items = list.new()
+    _ = list.add(items, row("30"))
+    _ = list.add(items, row("100"))
+    _ = list.add(items, row("95"))
+    _ = list.add(items, row("7"))
+    insertion = "30,100,95,7,"
+
+    cols = table_cols()
+    table_col(cols, "n", 80)
+    tb = table(root, cols) |item: ptr, c: int| { return name_of(item) }
+    table_update(tb, items)
+    table_sorter(tb, items)
+
+    expect("unsorted view is the model order", view_order(tb), insertion)
+    expect("model starts as inserted", model_order(items), insertion)
+
+    // Select the row that will move furthest.
+    table_select(tb, 1)                      // "100"
+    picked = table_item_at(tb, table_selected(tb))
+    expect("selected 100", name_of(picked), "100")
+
+    // --- ascending ------------------------------------------------------
+    table_sort_by(tb, 0, 1)
+    expect("view sorts numerically ascending", view_order(tb), "7,30,95,100,")
+    expect("model is UNTOUCHED by the sort", model_order(items), insertion)
+    if table_item_at(tb, table_selected(tb)) != picked {
+        println("  MISMATCH: sorting moved the selection off its item")
+        bad = bad + 1
+    }
+
+    // --- descending -----------------------------------------------------
+    table_sort_by(tb, 0, 0 - 1)
+    expect("view sorts descending", view_order(tb), "100,95,30,7,")
+    expect("model still untouched", model_order(items), insertion)
+
+    // --- filter composes with the sort, still without touching the model -
+    table_filter_text(tb, "0")               // 30, 100
+    expect("filtered + sorted view", view_order(tb), "100,30,")
+    expect("model untouched under a filter", model_order(items), insertion)
+
+    table_filter_text(tb, "")
+    expect("clearing the filter keeps the sort", view_order(tb), "100,95,30,7,")
+    expect("model untouched after clearing", model_order(items), insertion)
+
+    // --- an app that appends still sees its own order --------------------
+    _ = list.add(items, row("5"))
+    table_update(tb, items)
+    expect("model keeps the app's append order", model_order(items), "30,100,95,7,5,")
+    expect("view re-sorts the new row in", view_order(tb), "100,95,30,7,5,")
+
+    if bad > 0 { println("sort_keeps_model: ${bad} mismatch(es)")  exit(1) }
+    println("sort_keeps_model: sorting orders the view and leaves the model alone")
+    exit(0)
+}

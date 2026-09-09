@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **Sorting a table no longer reorders the app's own list.** Clicking a column
+  heading is a display decision, and the built-in sorter rewrote the model list
+  in place: an app holding indices into its own list, or reading it back
+  expecting the order it put things in, silently got a different one because
+  someone clicked a heading, with nothing to warn it. The sorter now orders the
+  VIEW, the list of borrowed item pointers the table already built for
+  filtering, so filter and sort compose (filter first, then order what
+  survived) and the model is exactly what the app handed over. `table_item_at`
+  still bridges a visible row back to its model item, and the view holds
+  pointers rather than copies, so there is still no second copy of the data to
+  drift. `SWING_ENVY.md` calls this the "cheap now, expensive later" item and
+  asks for it before more apps bind tables directly.
+
+### Fixed
+
+- **Undo leaked two closures per edit, for as long as the app ran.** An
+  undoable edit owns a `do` and an `undo` closure, and dropping an edit freed
+  only its label. Pushing a new edit after an undo truncates the redo tail,
+  which is simply how people work, so every undo-then-edit cycle abandoned
+  both boxes. The overflow path at 128 edits dropped the oldest the same way.
+  Both now reclaim the edit through the env's own destructor, so the
+  references its captures own are released too, not just the struct. Measured
+  with `leaks` on 2000 push/undo cycles: 4000 leaks / 128 KB before, zero
+  after.
+
+### Added
+
+- `tests/undo_stack` pins the stack's rules alongside the reclaim: an edit
+  runs its action on being recorded, undo and redo step and report whether
+  they moved, stepping past either end is a no-op rather than a wrap, and
+  pushing after an undo truncates the redo tail.
+
 ### Fixed
 
 - **Reading a string out of the toolkit leaked it, every time.** Every

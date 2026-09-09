@@ -22,6 +22,21 @@
 double floatarr_get_raw(void* a, int i) { (void)a; (void)i; return 0.0; }
 double floatarr_get_unchecked(void* a, int i) { (void)a; (void)i; return 0.0; }
 
+// The undo/redo edit store reclaims a dropped edit's boxed closures through the
+// env's own destructor (aether_ui_system_extras.c: undo_edit_release). That is
+// the runtime's aether_closure_env_free, which runs the `_dtor` codegen puts
+// first in every env struct; mirrored here because this probe links no build of
+// libaether either. A new undefined symbol here means the backend started
+// calling into the runtime somewhere new, same as the two link stubs.
+typedef struct { void (*dtor)(void*); } AeEnvHeaderProbe;
+void aether_closure_env_free(void* env);
+void aether_closure_env_free(void* env) {
+    if (!env) return;
+    AeEnvHeaderProbe* h = (AeEnvHeaderProbe*)env;
+    if (h->dtor) { h->dtor(env); return; }
+    free(env);
+}
+
 static int failures = 0;
 
 // read_pixel packs the sample as (A<<24)|(R<<16)|(G<<8)|B. An opaque pixel has

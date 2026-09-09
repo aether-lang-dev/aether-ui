@@ -4366,9 +4366,16 @@ on_sort(tp: ptr, cb: fn) {
 // collation) passes its own comparator to table_sorter_cmp and the built-in
 // comparison steps aside entirely.
 //
-// The sorter re-orders the list IN PLACE and calls table_update, so it stays
-// compatible with table_bind and with an app that keeps its own reference --
-// there is no second copy of the data to drift.
+// The sorter orders the VIEW, never the app's list. Clicking a header is a
+// display decision, and it used to rewrite the model in place: an app that
+// held indices into its own list, or read the list back expecting the order it
+// put things in, silently got a different one because someone clicked a
+// heading. table_bind and an app keeping its own reference are unaffected,
+// since the model is exactly what the app handed over.
+//
+// The view holds BORROWED item pointers, not copies, so there is still no
+// second copy of the data to drift; table_item_at bridges a visible row back
+// to its model item.
 
 // Compare two cell strings. Numeric when BOTH parse as numbers (so a column
 // of sizes sorts 30 < 95 < 100), lexicographic otherwise.
@@ -4405,29 +4412,22 @@ _table_cmp_items(t: *TableDef, ap: ptr, bp: ptr, c: int) -> int {
 // rows to care about O(n^2) wants vlist and a different design anyway).
 // Stability is the property that matters -- sorting by one column then
 // another leaves the first as a secondary key, which is what Swing does.
-_table_do_sort(tp: ptr) {
-    t = tp as *TableDef
-    if t.items == null { return }
+// Order `v` under the current sort. `v` holds BORROWED item pointers, so this
+// arranges what the table shows and never touches the app's own list.
+_table_sort_list(t: *TableDef, v: ptr) {
     if t.sort_dir == 0 { return }
-    // CRITICAL: capture the selected item BEFORE the reorder. The sort
-    // rewrites the model list in place, so once it has run, the index the
-    // listbox is holding points at whatever moved into that slot, and
-    // listbox_update can no longer tell which item the user had picked.
-    // Sorting is the case where keeping the row you selected matters most:
-    // the whole point of the click is to move it somewhere else on screen.
-    sel_item = table_item_at(tp, listbox_selected(t.lb))
     c = t.sort_col
-    n = list.size(t.items)
+    n = list.size(v)
     i = 1
     while i < n {
         j = i
         while j > 0 {
-            ap, _a = list.get(t.items, j - 1)
-            bp, _b = list.get(t.items, j)
+            ap, _a = list.get(v, j - 1)
+            bp, _b = list.get(v, j)
             r = _table_cmp_items(t, ap, bp, c) * t.sort_dir
             if r > 0 {
-                list.set(t.items, j - 1, bp)
-                list.set(t.items, j, ap)
+                list.set(v, j - 1, bp)
+                list.set(v, j, ap)
                 j = j - 1
             } else {
                 j = 0
@@ -4435,9 +4435,19 @@ _table_do_sort(tp: ptr) {
         }
         i = i + 1
     }
+}
+
+_table_do_sort(tp: ptr) {
+    t = tp as *TableDef
+    if t.items == null { return }
+    if t.sort_dir == 0 { return }
+    // Keep the row the user picked. table_update carries a selection by item,
+    // but only when it can still tell which item that was; re-place it here
+    // explicitly so the rule holds whatever the view rebuild does.
+    sel_item = table_item_at(tp, listbox_selected(t.lb))
     table_update(tp, t.items)
-    // Re-place it in the sorted view. Gone from the view (a filter that no
-    // longer passes it) means it is genuinely not selectable, so -1 stands.
+    // Gone from the view (a filter that no longer passes it) means it is
+    // genuinely not selectable, so -1 stands.
     if sel_item != null {
         _table_reselect(t, sel_item)
     }
@@ -4624,13 +4634,15 @@ table_item_at(tp: ptr, i: int) -> ptr {
 // reference and renders the VIEW through the filter (see above).
 table_update(tp: ptr, items: ptr) {
     t = tp as *TableDef
-    // A filtered view is a list the TABLE minted, holding borrowed item
-    // pointers. It is ours to free exactly when it is not the model list
-    // itself, which is what an unfiltered table aliases it to.
+    // The view is a list the TABLE minted, holding borrowed item pointers: it
+    // is what the table SHOWS, in the order it shows it. Filtering and sorting
+    // both build it, so neither one touches the app's list. It is ours to free
+    // exactly when it is not the model list itself, which is what a table with
+    // no filter and no sort aliases it to.
     prev_view = t.view
     prev_items = t.items
     t.items = items
-    if t.fmode == 0 {
+    if t.fmode == 0 && t.sort_dir == 0 {
         t.view = items
         listbox_update(t.lb, items)
     } else {
@@ -4639,9 +4651,15 @@ table_update(tp: ptr, items: ptr) {
         i = 0
         while i < n {
             ip, _e = list.get(items, i)
-            if _table_filter_pass(t, ip) == 1 { _ = list.add(v, ip) }
+            if t.fmode == 0 {
+                _ = list.add(v, ip)
+            } else {
+                if _table_filter_pass(t, ip) == 1 { _ = list.add(v, ip) }
+            }
             i = i + 1
         }
+        // Filter first, then order what survived.
+        _table_sort_list(t, v)
         t.view = v
         listbox_update(t.lb, v)
     }
