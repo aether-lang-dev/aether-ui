@@ -62,6 +62,16 @@ main() {
     _s4 = set_text(ta, "line one")
     check_s("area round-trips text", get_text(ta), "line one")
 
+    // The field is declared JUST BEFORE the area, so its handle + 1 is the
+    // area's. An implementation that decides "is this a textarea?" by looking
+    // at the next handle reads the area's text for the field and returns "".
+    // That is not hypothetical: it is what a first cut of the textarea
+    // dispatch did, and only this ordering catches it.
+    _s5 = set_text(tf, "still the field")
+    check_s("a field next to an area still reads its own text",
+            get_text(tf), "still the field")
+    check_s("and the area still reads its own", get_text(ta), "line one")
+
     // --- toggle: both directions, and the redundant write ---------------
     _g1 = set_toggle(tg, 1)
     check("toggle on", get_toggle(tg), 1)

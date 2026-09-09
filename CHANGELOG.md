@@ -13,9 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   happily. `set_text` is universal, it puts the string through the label, the
   textfield and the textarea setter, while the getter only ever looked at the
   textfield, so a caller who used the universal setter got nothing back and no
-  hint why. It now dispatches on the widget's kind. A label still reads back
-  "", because no backend exposes a getter for one, and the comment says so
-  rather than leaving it to be rediscovered.
+  hint why. It now recognises a textarea and reads it.
+
+  Recognising one is less obvious than it looks: the backends disagree about
+  which half IS the textarea. AppKit registers the scroll view as `"textarea"`
+  and its inner view as `"textarea_inner"`; GTK4 reports the scrolled window as
+  `"scrollview"` and the TEXT VIEW as `"textarea"`. So keying on this handle's
+  kind works on AppKit and misses on GTK4, while keying on `handle + 1`
+  misfires on any widget registered just before a textarea. What both agree on
+  is the ABI, that the reader takes the outer handle, so the dispatch knows
+  each backend's own spelling and confirms the ambiguous one.
+
+  A label still reads back "", because no backend exposes a getter for one, and
+  the comment says so rather than leaving it to be rediscovered.
 
 ### Added
 
