@@ -1,0 +1,18 @@
+// sort_keeps_model — headless UI-logic test, built as its own cached aeb node.
+import bldr
+import aether
+import aether (source, output, no_closure_regen)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("sort_keeps_model.ae")
+            output("sort_keeps_model")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

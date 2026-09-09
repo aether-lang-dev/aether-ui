@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **Sorting a table no longer reorders the app's own list.** Clicking a column
+  heading is a display decision, and the built-in sorter rewrote the model list
+  in place: an app holding indices into its own list, or reading it back
+  expecting the order it put things in, silently got a different one because
+  someone clicked a heading, with nothing to warn it. The sorter now orders the
+  VIEW, the list of borrowed item pointers the table already built for
+  filtering, so filter and sort compose (filter first, then order what
+  survived) and the model is exactly what the app handed over. `table_item_at`
+  still bridges a visible row back to its model item, and the view holds
+  pointers rather than copies, so there is still no second copy of the data to
+  drift. `SWING_ENVY.md` calls this the "cheap now, expensive later" item and
+  asks for it before more apps bind tables directly.
+
 ### Fixed
 
 - **A menu item driven from a spec ran its closure on the HTTP thread**
