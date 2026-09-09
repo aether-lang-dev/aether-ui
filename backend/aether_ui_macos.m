@@ -39,6 +39,19 @@ typedef struct {
     void* env;
 } AeClosure;
 
+/* Runtime: reclaim a closure env through its own destructor
+ * (aether_runtime.h). Declared rather than included, as the other runtime
+ * symbols this file reaches for are. */
+extern void aether_closure_env_free(void* env);
+
+/* Release a boxed closure this backend owns: the captures first, through the
+ * env's own destructor, then the box. NULL-safe on both. */
+static void aeui_release_boxed(void* boxed) {
+    if (!boxed) return;
+    aether_closure_env_free(((AeClosure*)boxed)->env);
+    free(boxed);
+}
+
 // ---------------------------------------------------------------------------
 // AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
 // caller that wants to exercise the backend without a user sitting at
@@ -6617,6 +6630,22 @@ static void unregister_view_tree(NSView* v) {
     // clearing a list would then realloc once per row for rows that never had
     // a payload at all.
     if (h <= aeui_drag_paths_len) aeui_drag_path_set(h, NULL);
+    /* A context menu's items each hold a boxed closure, as a raw pointer in
+     * representedObject. AppKit releases the NSMenu with the view; the boxes
+     * are ours and nothing was giving them back. This is the unbounded case
+     * the comment above names: a row that carries a context menu is retired
+     * and re-created on every list rebuild, so the boxes accumulated for as
+     * long as the app ran. Measured at one box per context_menu_item call. */
+    NSMenu* vm = [v menu];
+    if (vm) {
+        for (NSMenuItem* mi in [vm itemArray]) {
+            id ro = [mi representedObject];
+            if (![ro isKindOfClass:[NSNumber class]]) continue;
+            aeui_release_boxed((void*)(intptr_t)[(NSNumber*)ro longLongValue]);
+            [mi setRepresentedObject:nil];
+        }
+        [v setMenu:nil];
+    }
     // An opacity tween in flight outlives its widget: the timer retains the
     // AetherTween, and the dictionary retains it again under this handle. The
     // weak view means it stops animating, but nothing ever drops the entry.

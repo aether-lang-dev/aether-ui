@@ -1,0 +1,45 @@
+import ui
+import ui (root_vstack, text, vstack, btn, overlay, dismiss_overlay,
+    toast, transition, context_menu_item, shortcut, app_create, tooltip)
+extern exit(code: int)
+
+main() {
+    root = root_vstack(4) {
+    }
+    lbl = text(root, "x")
+    app = app_create("sweep2", 200, 150)
+
+    // --- overlays opened and dismissed (a menu, every time it opens) -----
+    i = 0
+    while i < 300 {
+        body = vstack(root, 2) {
+        }
+        ov = overlay(app, body, "center", 0, 0)
+        dismiss_overlay(ov)
+        i = i + 1
+    }
+
+    // --- transitions armed repeatedly ------------------------------------
+    j = 0
+    while j < 300 {
+        _t = transition(lbl, "opacity", 120, "ease")
+        j = j + 1
+    }
+
+    // --- context-menu items attached repeatedly --------------------------
+    k = 0
+    while k < 300 {
+        _c = context_menu_item(lbl, "Copy ${k}", || { })
+        k = k + 1
+    }
+
+    // --- window shortcuts -------------------------------------------------
+    m = 0
+    while m < 300 {
+        shortcut("Ctrl+R", || { })
+        m = m + 1
+    }
+
+    println("sweep2: overlays, transitions, context items and shortcuts exercised")
+    exit(0)
+}

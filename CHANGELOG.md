@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **A row's context menu leaked every time the list rebuilt.**
+  `context_menu_item` boxes the app's callback and hands the pointer to the
+  platform menu. AppKit releases the `NSMenu` with the view, but the box is
+  ours and nothing gave it back, so a table with a per-row context menu leaked
+  a box per row on every refresh, for as long as the app ran. The boxes are now
+  released in `unregister_view_tree`, alongside every other per-handle payload,
+  which is exactly the unbounded case that function's own comment names: "every
+  list rebuild retires a row and takes its handle out of use forever". Measured
+  over 200 rebuilds of 5 rows with 2 items each: 1999 leaks / 64 KB before,
+  zero after.
+
 ### Added
 
 - **`free_styles(sheet)` and `free_scheme(sc)`**: a sheet or colour scheme an

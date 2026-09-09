@@ -1,0 +1,43 @@
+// Rows that carry a context menu must not leak it when the list rebuilds.
+//
+// context_menu_item boxes the app's callback and hands the pointer to the
+// platform menu. AppKit releases the NSMenu with the view, but the box is
+// ours, and nothing gave it back. That is the unbounded case
+// unregister_view_tree's own comment names: every list rebuild
+// (each_update, listbox_update, vlist) retires a row and creates a fresh one,
+// so a table with a per-row context menu leaked a box per row per refresh,
+// for as long as the app ran.
+//
+//   AETHER_UI_HEADLESS=1 leaks --atExit -- .../bin/ctxmenu_rebuild
+
+import ui
+import ui (root_vstack, vstack, text, btn, context_menu_item, clear_children)
+
+extern exit(code: int)
+
+main() {
+    root = root_vstack(4) {
+    }
+    host = vstack(root, 2) {
+    }
+
+    // The shape a listbox render closure has: build rows, give each one a
+    // context menu, throw them away, do it again.
+    r = 0
+    while r < 200 {
+        i = 0
+        while i < 5 {
+            row = vstack(host, 1) {
+            }
+            _l = text(row, "row ${i}")
+            _c1 = context_menu_item(row, "Copy", || { })
+            _c2 = context_menu_item(row, "Delete", || { })
+            i = i + 1
+        }
+        clear_children(host)
+        r = r + 1
+    }
+
+    println("ctxmenu_rebuild: 200 rebuilds of 5 rows with 2 menu items each")
+    exit(0)
+}
