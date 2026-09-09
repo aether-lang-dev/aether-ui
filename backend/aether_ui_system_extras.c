@@ -19,6 +19,11 @@
 // already defines this — see aether_ui_state_get in the per-backend file.
 extern double aether_ui_state_get(int handle);
 
+// Runtime: reclaim a closure env through its own destructor (aether_runtime.h).
+// Declared here rather than included so this file stays free of the runtime
+// headers, exactly as aether_ui_state_get above is.
+extern void aether_closure_env_free(void* env);
+
 // Closure layout: the box_closure() return contract is `{fn, env}`. We
 // only need to invoke it, so a thin local mirror works for both 32- and
 // 64-bit pointers.
@@ -440,11 +445,35 @@ typedef struct { char* label; void* undo_boxed; void* redo_boxed; } AeUndoEdit;
 static AeUndoEdit undo_stack[AEUI_UNDO_CAP];
 static int undo_len = 0, undo_cursor = 0;
 
+/* Reclaim one edit: its label and BOTH closure boxes.
+ *
+ * An edit owns two boxed closures, and dropping one used to free only the
+ * label. Undo-then-edit is the ordinary way to work, and it truncates the redo
+ * tail every time, so an editor leaked two boxes per edit for as long as it
+ * ran. Each box is freed through the env's own destructor, so the references
+ * its captures own are released too, not just the struct (the same contract
+ * list_free uses for an owned closure element). env is NULL for a
+ * non-capturing closure and aether_closure_env_free is a no-op on it. */
+static void undo_edit_release(AeUndoEdit* e) {
+    free(e->label);
+    e->label = 0;
+    if (e->undo_boxed) {
+        aether_closure_env_free(((AeClosureLocal*)e->undo_boxed)->env);
+        free(e->undo_boxed);
+        e->undo_boxed = 0;
+    }
+    if (e->redo_boxed) {
+        aether_closure_env_free(((AeClosureLocal*)e->redo_boxed)->env);
+        free(e->redo_boxed);
+        e->redo_boxed = 0;
+    }
+}
+
 void aether_ui_undo_push_impl(const char* label, void* undo_boxed, void* redo_boxed) {
-    for (int i = undo_cursor; i < undo_len; i++) free(undo_stack[i].label);
+    for (int i = undo_cursor; i < undo_len; i++) undo_edit_release(&undo_stack[i]);
     undo_len = undo_cursor;
     if (undo_len >= AEUI_UNDO_CAP) {          // drop the oldest edit
-        free(undo_stack[0].label);
+        undo_edit_release(&undo_stack[0]);
         memmove(undo_stack, undo_stack + 1, sizeof(AeUndoEdit) * (AEUI_UNDO_CAP - 1));
         undo_len--; undo_cursor--;
     }
