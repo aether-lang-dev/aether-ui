@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refresh threw away the row you had selected.** `listbox_update` rebuilds
+  every row, and it cleared the selection outright: a table refreshing on a
+  timer could never hold a selection at all, typing one more character into a
+  search box dropped the row you were reading, and expanding a tree node
+  deselected whatever was selected. The selection is now carried by ITEM
+  rather than by row index, so it follows its row when an update filters or
+  reorders the list, and is dropped only when the item itself is gone. The
+  shift-extend anchor moves with it, instead of being left pointing into the
+  previous order.
+
+- **Sorting a table moved the selection to a different row's item.** The
+  sorter rewrites the model list in place, which destroys the index-to-item
+  mapping before `listbox_update` can read it, so this one cannot be carried
+  from the outside: the sorter now captures the selected item before it
+  reorders and re-places it afterwards. Selecting a row and sorting by any
+  column leaves the same item selected, wherever it lands.
+
+- `listbox_items`' documentation still said the app's own list handle goes
+  stale after a reorder. It does not, since `listbox_move` rotates in place.
+
 - **Every widget that shows a derived view of your data leaked it on each
   rebuild.** A tree flattening its rows, a table applying its filter, a
   listbox reordering: each built a fresh list, pointed the widget at it, and

@@ -1,0 +1,104 @@
+// The row a user selected must still be selected after the list is refreshed,
+// sorted or filtered. Selection is carried by ITEM, not by row index: an
+// update may move the row, and the item the user picked is the one they mean.
+//
+// Before this, listbox_update cleared the selection outright, so a table that
+// refreshes on a timer could never hold one at all, and typing one more
+// character into a search box dropped the row you were reading.
+import ui
+import ui (root_vstack, listbox, listbox_update, listbox_select,
+    listbox_selected, table, table_cols, table_col, table_update,
+    table_filter_text, table_sorter, table_sort_by, table_item_at,
+    table_selected, table_select)
+import std.list
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+struct Row { name: string }
+
+row(nm: string) -> ptr {
+    r = malloc(sizeof(Row)) as *Row
+    r.name = nm
+    return r as ptr
+}
+
+check(label: string, got: int, want: int) {
+    if got != want {
+        println("  FAIL: ${label} got=${got} want=${want}")
+        exit(1)
+    }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    items = list.new()
+    i = 0
+    while i < 6 {
+        _ = list.add(items, row("item ${i}"))
+        i = i + 1
+    }
+
+    lb = listbox(root, 2) |item: ptr, ix: int, rw: int| {
+    }
+    listbox_update(lb, items)
+    listbox_select(lb, 3)
+    check("selection took", listbox_selected(lb), 3)
+
+    // A refresh with the SAME items: nothing the user did changed, so the
+    // selection has no reason to move.
+    listbox_update(lb, items)
+    check("selection survives a refresh", listbox_selected(lb), 3)
+
+    // A reordered list: the selected item moved, so the selection moves with
+    // it rather than staying on row 3.
+    moved = list.new()
+    k = 5
+    while k >= 0 {
+        it, _e = list.get(items, k)
+        _ = list.add(moved, it)
+        k = k - 1
+    }
+    listbox_update(lb, moved)
+    check("selection follows its item when rows move", listbox_selected(lb), 2)
+
+    // An item that is gone drops out, rather than selecting whatever took
+    // its row.
+    short = list.new()
+    it0, _e0 = list.get(items, 0)
+    _ = list.add(short, it0)
+    listbox_update(lb, short)
+    check("a vanished item leaves nothing selected", listbox_selected(lb), 0 - 1)
+
+    // --- a table: sort and filter both keep the row ----------------------
+    cols = table_cols()
+    table_col(cols, "name", 120)
+    tb = table(root, cols) |item: ptr, c: int| {
+        return (item as *Row).name
+    }
+    table_update(tb, items)
+    table_sorter(tb, items)
+    // Select "item 1", which sorts to the front descending.
+    table_select(tb, 1)
+    picked = table_item_at(tb, table_selected(tb))
+    if picked == null { println("  FAIL: nothing selected before the sort"); exit(1) }
+
+    table_sort_by(tb, 0, 0 - 1)
+    after = table_item_at(tb, table_selected(tb))
+    if after != picked {
+        println("  FAIL: sorting moved the selection to a different item")
+        exit(1)
+    }
+
+    // Filtering to a set that still contains it keeps it.
+    table_filter_text(tb, "item")
+    still = table_item_at(tb, table_selected(tb))
+    if still != picked {
+        println("  FAIL: filtering moved the selection to a different item")
+        exit(1)
+    }
+
+    println("selection_survives: refresh, reorder, sort and filter all keep the row")
+    exit(0)
+}
