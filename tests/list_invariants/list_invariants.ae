@@ -1,0 +1,115 @@
+// Invariants the list widgets are expected to hold, pinned headlessly: the
+// sorter's numeric ordering, sort direction toggling, a filter surviving a
+// sort, multi-select semantics including its survival across a refresh, and
+// listbox_move's clamping.
+//
+// None of these had headless coverage. Every one is reachable only through a
+// window otherwise, so a regression in any of them would have shipped and been
+// found by a user.
+
+import ui
+import ui (root_vstack, listbox, listbox_multi, listbox_update, listbox_select,
+    listbox_selected, listbox_set_selected, listbox_is_selected,
+    listbox_selected_count, listbox_clear_selection, listbox_move,
+    listbox_count, table, table_cols, table_col, table_update,
+    table_filter_text, table_sorter, table_sort_by, table_sort_col,
+    table_sort_dir, table_item_at, table_selected, table_select, table_count)
+import std.list
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+struct Row { name: string }
+row(nm: string) -> ptr { r = malloc(sizeof(Row)) as *Row  r.name = nm  return r as ptr }
+
+var bad = 0
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+    items = list.new()
+    _ = list.add(items, row("30"))
+    _ = list.add(items, row("100"))
+    _ = list.add(items, row("95"))
+    _ = list.add(items, row("7"))
+
+    cols = table_cols()
+    table_col(cols, "n", 80)
+    tb = table(root, cols) |item: ptr, c: int| { return (item as *Row).name }
+    table_update(tb, items)
+    table_sorter(tb, items)
+
+    // --- numeric column sorts numerically, not lexicographically ---------
+    table_sort_by(tb, 0, 1)
+    check("asc row0 is 7", string_is(table_item_at(tb, 0), "7"), 1)
+    check("asc row3 is 100", string_is(table_item_at(tb, 3), "100"), 1)
+    check("sort_col", table_sort_col(tb), 0)
+    check("sort_dir asc", table_sort_dir(tb), 1)
+
+    table_sort_by(tb, 0, 0 - 1)
+    check("desc row0 is 100", string_is(table_item_at(tb, 0), "100"), 1)
+    check("sort_dir desc", table_sort_dir(tb), 0 - 1)
+
+    // --- a filter narrows the view; count reflects the VIEW --------------
+    table_filter_text(tb, "0")           // 30, 100 contain "0"
+    check("filtered count", table_count(tb), 2)
+    // sorting while filtered keeps the filter
+    table_sort_by(tb, 0, 1)
+    check("filter survives a sort", table_count(tb), 2)
+    check("filtered asc row0 is 30", string_is(table_item_at(tb, 0), "30"), 1)
+
+    table_filter_text(tb, "")
+    check("cleared filter shows all", table_count(tb), 4)
+
+    // --- multi-select ----------------------------------------------------
+    ml = listbox_multi(root, 2) |item: ptr, i: int, rw: int| {
+    }
+    listbox_update(ml, items)
+    listbox_set_selected(ml, 0, 1)
+    listbox_set_selected(ml, 2, 1)
+    check("two selected", listbox_selected_count(ml), 2)
+    check("row0 selected", listbox_is_selected(ml, 0), 1)
+    check("row1 not selected", listbox_is_selected(ml, 1), 0)
+    listbox_set_selected(ml, 0, 0)
+    check("one left", listbox_selected_count(ml), 1)
+    listbox_clear_selection(ml)
+    check("cleared", listbox_selected_count(ml), 0)
+    check("cleared reader", listbox_selected(ml), 0 - 1)
+
+    // multi-select survives a refresh, by item
+    listbox_set_selected(ml, 1, 1)
+    listbox_set_selected(ml, 3, 1)
+    listbox_update(ml, items)
+    check("multi survives refresh", listbox_selected_count(ml), 2)
+    check("multi kept row1", listbox_is_selected(ml, 1), 1)
+    check("multi kept row3", listbox_is_selected(ml, 3), 1)
+
+    // --- listbox_move edges ---------------------------------------------
+    lb2 = listbox(root, 2) |item: ptr, i: int, rw: int| {
+    }
+    mitems = list.new()
+    _ = list.add(mitems, row("a"))
+    _ = list.add(mitems, row("b"))
+    _ = list.add(mitems, row("c"))
+    listbox_update(lb2, mitems)
+    listbox_move(lb2, 0, 99)             // clamped to the end
+    check("clamped move puts a last", string_is(nth(mitems, 2), "a"), 1)
+    listbox_move(lb2, 2, 0 - 5)          // clamped to the front
+    check("clamped move puts a first", string_is(nth(mitems, 0), "a"), 1)
+    listbox_move(lb2, 1, 1)              // no-op
+    check("self move is a no-op", string_is(nth(mitems, 1), "b"), 1)
+    check("count unchanged after moves", listbox_count(lb2), 3)
+
+    if bad > 0 { println("list_invariants: ${bad} mismatch(es)")  exit(1) }
+    println("list_invariants: sorting, filtering, multi-select and reorder all hold")
+    exit(0)
+}
+
+nth(l: ptr, i: int) -> ptr { it, _e = list.get(l, i)  return it }
+string_is(item: ptr, want: string) -> int {
+    if item == null { return 0 - 1 }
+    if (item as *Row).name == want { return 1 }
+    return 0
+}
