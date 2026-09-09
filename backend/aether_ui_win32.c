@@ -1294,6 +1294,29 @@ static Widget* w32_ctx_owner(HWND hwnd);                 // fwd (ctx menus)
 static int w32_ctx_popup(Widget* w, int sx, int sy);     // fwd
 static void w32_radio_enforce(int active_handle);        // fwd (toggle groups)
 
+// EN_CHANGE is sent for a SetWindowText as well as for a keystroke, and it
+// arrives synchronously from inside the call. Every other backend leaves the
+// app's on_change to real input -- GTK4 pushes the buffer without running the
+// app's handler, and macOS documents that a programmatic setStringValue fires
+// neither the delegate nor the action -- so forwarding it here made every
+// programmatic refresh look like the user typing.
+//
+// In an app whose fields write a property when they change, that is a loop with
+// consequences: refreshing the inspector after an edit re-applied every row it
+// showed, and each re-application recorded another undo step on top of the one
+// the user actually made.
+static int w32_text_set_depth = 0;
+
+// ui.set_text puts the same string through all three text setters, and an edit
+// control answers each with its own EN_CHANGE, so one refresh of a field
+// reached the app three times.
+static void w32_set_text(Widget* w, const char* text) {
+    if (!w || !w->hwnd) return;
+    w32_text_set_depth++;
+    SetWindowTextW(w->hwnd, utf8_to_wide(text));
+    w32_text_set_depth--;
+}
+
 static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_SIZE:
@@ -1442,6 +1465,8 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     }
                 } else if ((cw->kind == WK_TEXTFIELD || cw->kind == WK_SECUREFIELD
                             || cw->kind == WK_TEXTAREA) && code == EN_CHANGE) {
+                    // Nothing the app wrote itself, only what was typed.
+                    if (w32_text_set_depth > 0) return 0;
                     if (!cw->sealed)
                         invoke_closure_str(cw->on_change,
                                            aether_ui_textfield_get_text(ch));
@@ -2175,7 +2200,7 @@ int aether_ui_text_get_anchor(int handle) {
 
 void aether_ui_text_set_string(int handle, const char* text) {
     Widget* w = widget_at(handle);
-    if (w && w->hwnd) SetWindowTextW(w->hwnd, utf8_to_wide(text));
+    if (w && w->hwnd) w32_set_text(w, text);
 }
 
 void aether_ui_button_set_label(int handle, const char* label) {
@@ -2940,7 +2965,7 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
 
 void aether_ui_textfield_set_text(int handle, const char* text) {
     Widget* w = widget_at(handle);
-    if (w) SetWindowTextW(w->hwnd, utf8_to_wide(text));
+    if (w) w32_set_text(w, text);
 }
 
 const char* aether_ui_textfield_get_text(int handle) {
@@ -3115,7 +3140,7 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
 
 void aether_ui_textarea_set_text(int handle, const char* text) {
     Widget* w = widget_at(handle);
-    if (w) SetWindowTextW(w->hwnd, utf8_to_wide(text));
+    if (w) w32_set_text(w, text);
 }
 
 char* aether_ui_textarea_get_text(int handle) {
@@ -9467,11 +9492,34 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 }
                 break;
             case AETHER_DRV_CLICK:
+                // A click on a toggle is what flips it. GTK4 emits "clicked"
+                // and macOS sends performClick:, both of which change the
+                // control's state and run the app's handler; invoking an
+                // on_click a toggle does not carry left the driver's clicks
+                // landing on nothing here, and every spec that turns a switch
+                // on by clicking it failed on this platform alone.
+                if (w->kind == WK_TOGGLE) {
+                    // Windows flips the box itself before BN_CLICKED arrives,
+                    // so the handler below reads the state a click has already
+                    // changed. Same order here, and the same seal.
+                    aether_ui_toggle_set_active(
+                        ctx->handle, !aether_ui_toggle_get_active(ctx->handle));
+                    if (!w->sealed) {
+                        if (aether_ui_toggle_get_active(ctx->handle))
+                            w32_radio_enforce(ctx->handle);
+                        invoke_closure(w->on_change);
+                    }
+                    ctx->retval = 1;
+                    break;
+                }
                 // Buttons and ANY widget with an on_click handler (listbox
                 // rows are plain containers) — mirrors the GTK4 server's
                 // gesture-closure fallback: invoke the handler a real click
                 // would run.
-                if (w->kind == WK_BUTTON || w->on_click) invoke_closure(w->on_click);
+                if (w->kind == WK_BUTTON || w->on_click) {
+                    invoke_closure(w->on_click);
+                    ctx->retval = 1;
+                }
                 break;
             case AETHER_DRV_SET_TEXT:
                 if (w->kind == WK_TEXT || w->kind == WK_TEXTFIELD
@@ -9520,8 +9568,16 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 }
                 break;
             case AETHER_DRV_SET_VALUE:
-                if (w->kind == WK_SLIDER)
+                if (w->kind == WK_SLIDER) {
+                    // TBM_SETPOS from code sends no WM_HSCROLL, so the app's
+                    // handler never runs and a driver-moved slider reaches
+                    // nothing -- the same asymmetry SetWindowTextW has, and
+                    // fixed the same way. GTK4's gtk_range_set_value emits
+                    // value-changed natively.
                     aether_ui_slider_set_value(ctx->handle, ctx->dval);
+                    if (!w->sealed) invoke_closure(w->on_change);
+                    ctx->retval = 1;
+                }
                 else if (w->kind == WK_PROGRESSBAR)
                     aether_ui_progressbar_set_fraction(ctx->handle, ctx->dval);
                 else if (w->kind == WK_PICKER) {
