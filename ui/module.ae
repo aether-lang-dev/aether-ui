@@ -1669,7 +1669,43 @@ context_menu_item(handle: int, label: string, cb: fn) -> int {
     return handle
 }
 
+// get_text(handle) — read back what set_text wrote.
+//
+// set_text is universal: it puts the string through the label, the textfield
+// AND the textarea setter, so it works on any of the three. The getter has to
+// match, or a caller who used the universal setter gets "" back with no hint
+// why. A textarea keeps its text in a text view inside a scroll view, which is
+// not the field the textfield getter looks for, so it needs its own read.
+//
+// A LABEL still reads back "": no backend exposes a getter for one, so there
+// is nothing honest to return. Writing a label works; reading it does not, and
+// that is worth knowing rather than guessing at.
 get_text(handle: int) {
+    // CRITICAL: the backends disagree about which half of a textarea IS the
+    // textarea. AppKit registers the scroll view as "textarea" and its inner
+    // view as "textarea_inner"; GTK4 reports the scrolled window as
+    // "scrollview" and the TEXT VIEW as "textarea". So neither this handle's
+    // kind alone nor the inner one's is right on both:
+    //
+    //   - keying on this handle    reads a textarea on AppKit, misses on GTK4
+    //   - keying on handle + 1     misfires on ANY widget that happens to be
+    //                              registered just before a textarea, because
+    //                              handle + 1 only means "the inner view"
+    //                              when this handle really is a textarea
+    //
+    // What both DO agree on is the ABI: the app holds the outer handle and
+    // textarea_get_text reads handle + 1. So recognise each backend's own
+    // spelling of the outer half, and for the ambiguous one confirm the inner
+    // half really is a text view before treating it as a textarea.
+    kind = aether_ui_widget_kind_impl(handle)
+    if kind == "textarea" {
+        return aether_ui_textarea_get_text(handle)
+    }
+    if kind == "scrollview" {
+        if aether_ui_widget_kind_impl(handle + 1) == "textarea" {
+            return aether_ui_textarea_get_text(handle)
+        }
+    }
     return aether_ui_textfield_get_text(handle)
 }
 

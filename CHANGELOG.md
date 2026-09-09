@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **`get_text` returned "" for a textarea**, though `set_text` writes one
+  happily. `set_text` is universal, it puts the string through the label, the
+  textfield and the textarea setter, while the getter only ever looked at the
+  textfield, so a caller who used the universal setter got nothing back and no
+  hint why. It now recognises a textarea and reads it.
+
+  Recognising one is less obvious than it looks: the backends disagree about
+  which half IS the textarea. AppKit registers the scroll view as `"textarea"`
+  and its inner view as `"textarea_inner"`; GTK4 reports the scrolled window as
+  `"scrollview"` and the TEXT VIEW as `"textarea"`. So keying on this handle's
+  kind works on AppKit and misses on GTK4, while keying on `handle + 1`
+  misfires on any widget registered just before a textarea. What both agree on
+  is the ABI, that the reader takes the outer handle, so the dispatch knows
+  each backend's own spelling and confirms the ambiguous one.
+
+  A label still reads back "", because no backend exposes a getter for one, and
+  the comment says so rather than leaving it to be rediscovered.
+
+### Added
+
+- `tests/roundtrip` asserts that what you set is what you get, on whichever
+  backend is running: text (ordinary, empty and non-ASCII), a toggle driven
+  both ways, a slider at its minimum, maximum and a middle value, and every tab
+  index. Text is read twice, which catches a getter handing back a buffer it
+  then reuses. Four implementations of one ABI drift exactly here, and the
+  drift stays invisible until someone runs the odd one out.
+
 ### Added
 
 - `tests/no_echo` pins that a programmatic setter is not the user acting: an
