@@ -1,0 +1,118 @@
+// Bindings as data (SWING_ENVY C5), and the rebind its acceptance asks for.
+//
+// A shortcut declared with shortcut("Ctrl+S") callback { ... } bakes the key
+// into the registration: nothing can enumerate it and nothing can move it, so
+// a "customise shortcuts" panel cannot be written at all. A keymap separates
+// key -> NAME from NAME -> command, so either can change without the other.
+//
+// The doc's acceptance is: rebind Ctrl-S to Ctrl-Shift-S at runtime, old key
+// inert, new key fires, and the enumeration reflects it. Falsify by skipping
+// the unbind: both keys fire, red. That is asserted here through resolution
+// and firing, which is the whole of the behaviour except the platform
+// delivering the keystroke, and delivering one needs a real window.
+
+import ui
+import ui (root_vstack, command, command_set_enabled,
+    keymap, keymap_bind, keymap_unbind, keymap_lookup, keymap_register,
+    keymap_named, keymap_command, keymap_fire, keymap_count, keymap_key_at,
+    keymap_name_at, keymap_free)
+import std.string
+
+extern exit(code: int)
+
+var saves = 0
+var quits = 0
+var bad = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+check_s(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got='${got}' want='${want}'")  bad = bad + 1 }
+}
+
+main() {
+    _r = root_vstack(4) {
+    }
+
+    save = command("Save", "", || { saves = saves + 1 })
+    quit = command("Quit", "", || { quits = quits + 1 })
+
+    km = keymap(null)
+    keymap_register(km, "file.save", save)
+    keymap_register(km, "file.quit", quit)
+    keymap_bind(km, "Ctrl+S", "file.save")
+    keymap_bind(km, "Ctrl+Q", "file.quit")
+
+    check_s("a key resolves to its name", keymap_lookup(km, "Ctrl+S"), "file.save")
+    check("and to its command", keymap_command(km, "Ctrl+S") == save, 1)
+    check("firing it runs the command", keymap_fire(km, "Ctrl+S"), 1)
+    check("the command ran once", saves, 1)
+
+    check("an unbound key is inert, not an error", keymap_fire(km, "Ctrl+P"), 0)
+    check("and ran nothing", saves + quits, 1)
+
+    // --- the acceptance: rebind at runtime -------------------------------
+    _u = keymap_unbind(km, "Ctrl+S")
+    keymap_bind(km, "Ctrl+Shift+S", "file.save")
+
+    check("the OLD key is now inert", keymap_fire(km, "Ctrl+S"), 0)
+    check("the NEW key fires", keymap_fire(km, "Ctrl+Shift+S"), 1)
+    check("the command ran exactly once more", saves, 2)
+    check_s("the old key resolves to nothing", keymap_lookup(km, "Ctrl+S"), "")
+
+    // The enumeration a rebind panel reads must reflect it.
+    found_new = 0
+    found_old = 0
+    i = 0
+    n = keymap_count(km)
+    while i < n {
+        if keymap_key_at(km, i) == "Ctrl+Shift+S" {
+            found_new = 1
+            check_s("enumerated with its name", keymap_name_at(km, i), "file.save")
+        }
+        if keymap_key_at(km, i) == "Ctrl+S" { found_old = 1 }
+        i = i + 1
+    }
+    check("the new binding is enumerable", found_new, 1)
+    check("the old binding is gone from the enumeration", found_old, 0)
+
+    // Binding a key twice REPLACES, so a panel never shows two rows for one key.
+    before = keymap_count(km)
+    keymap_bind(km, "Ctrl+Shift+S", "file.quit")
+    check("re-binding replaces rather than duplicating", keymap_count(km), before)
+    check_s("and now names the other command", keymap_lookup(km, "Ctrl+Shift+S"), "file.quit")
+    keymap_bind(km, "Ctrl+Shift+S", "file.save")
+
+    // --- chaining: defaults a user keymap overrides ----------------------
+    user = keymap(km)
+    check_s("an unbound child inherits", keymap_lookup(user, "Ctrl+Q"), "file.quit")
+    check("and resolves the parent's command", keymap_command(user, "Ctrl+Q") == quit, 1)
+
+    keymap_bind(user, "Ctrl+Q", "file.save")
+    check_s("a child overrides the parent's key", keymap_lookup(user, "Ctrl+Q"), "file.save")
+    check_s("without touching the parent", keymap_lookup(km, "Ctrl+Q"), "file.quit")
+    check("the child's own enumeration shows only its change", keymap_count(user), 1)
+
+    // A child can redirect an INHERITED key by re-registering the name.
+    keymap_register(user, "file.quit", save)
+    check("the child redirects an inherited name", keymap_named(user, "file.quit") == save, 1)
+    check("the parent still resolves its own", keymap_named(km, "file.quit") == quit, 1)
+
+    // --- a disabled command's key is inert --------------------------------
+    command_set_enabled(save, 0)
+    check("a disabled command does not fire", keymap_fire(km, "Ctrl+Shift+S"), 0)
+    check("and did not run", saves, 2)
+    command_set_enabled(save, 1)
+
+    // A name nothing is registered under resolves to nothing, inertly.
+    keymap_bind(km, "Ctrl+X", "nothing.registered")
+    check("an unregistered name is inert", keymap_fire(km, "Ctrl+X"), 0)
+
+    _f1 = keymap_free(user)
+    _f2 = keymap_free(km)
+
+    if bad > 0 { println("keymap: ${bad} mismatch(es)")  exit(1) }
+    println("keymap: bindings are data, and rebinding at runtime works")
+    exit(0)
+}
