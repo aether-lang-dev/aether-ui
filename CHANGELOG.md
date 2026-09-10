@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The README documents the collection widgets, commands, undo and keymaps.**
+  `listbox`, `table`, `tree`, `vlist`, `tabs` and `splitview` all existed and
+  none appeared in it, so someone evaluating the toolkit could not tell they
+  were there. The widgets table now lists them with what each backend actually
+  uses, and there are worked sections for collections (including that selection
+  survives an update), commands, undo with `undo_group`, and keymaps.
+
+- `tests/docs_snippets` compiles and runs every snippet those sections show,
+  and asserts the round-trips they claim. Prose cannot be tested, but a snippet
+  can, and four of this repo's own comments turned out to be stale when
+  checked (#119), so the examples are held to the same standard as the code.
+
+### Fixed
+
+- The `get_text` line in the accessors table said "get textfield value". It
+  reads a textarea too, and a label reads back "" because no platform exposes a
+  getter for one. The table now says both, and notes that none of these setters
+  runs the widget's own `on_change`, with `tab_select` as the deliberate
+  exception.
+
+### Added
+
 - **`keymap`: bindings as data** (`SWING_ENVY.md` C5). A shortcut declared with
   `shortcut("Ctrl+S") callback { ... }` bakes the key into the registration:
   nothing can enumerate it and nothing can move it, so a "customise shortcuts"

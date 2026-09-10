@@ -1,0 +1,133 @@
+// Every code snippet the README shows for collections, commands, undo and
+// keymaps, compiled and run.
+//
+// A README that documents an API surface is only worth reading if its examples
+// are true, and four claims in this repo's own comments turned out to be stale
+// (#119). Prose cannot be tested, but a snippet can, so the snippets are
+// copied here verbatim in shape and the whole file has to build and run.
+
+import ui
+import ui (root_vstack, text, btn, listbox, listbox_update, listbox_selected,
+    listbox_move, on_select, table, table_cols, table_col, table_update,
+    table_sorter, table_filter_text, table_item_at, table_selected,
+    tree, tree_node, tree_add_child, tree_on_select, tree_selected,
+    tree_set_expanded, tree_refresh, vlist, vlist_native,
+    command, command_set_enabled, command_attach,
+    undoable, undo, redo, undo_depth, undo_label, undo_group,
+    keymap, keymap_register, keymap_bind, keymap_attach, keymap_unbind,
+    set_text, get_text, set_toggle, get_toggle, set_slider, get_slider,
+    textfield, textarea, toggle, slider)
+import std.list
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+
+struct Row { name: string }
+mkrow(nm: string) -> ptr {
+    r = malloc(sizeof(Row)) as *Row
+    r.name = nm
+    return r as ptr
+}
+
+var moved = 0
+var bad = 0
+
+// NOTE: named nudge/attach_one/detach_one rather than move/add/remove.
+// A program-level function whose name matches a libc symbol (remove, index,
+// write) reaches C unmangled and the generated file will not compile, so the
+// README's snippet must not suggest one either.
+nudge(x: int) { moved = moved + 1 }
+attach_one() { moved = moved + 1 }
+detach_one() { moved = moved - 1 }
+
+main() {
+    root = root_vstack(4) {
+    }
+    items = list.new()
+    _ = list.add(items, mkrow("alpha"))
+    _ = list.add(items, mkrow("beta"))
+
+    // --- README: Collections ------------------------------------------
+    lb = listbox(2) callback |item: ptr, i: int, row: int| {
+        _lbl = text(row, (item as *Row).name)
+    }
+    listbox_update(lb, items)
+    on_select(lb) callback |i: int| { }
+    i = listbox_selected(lb)
+    listbox_move(lb, 0, 1)
+
+    // --- README: Tables -----------------------------------------------
+    cols = table_cols()
+    table_col(cols, "Name", 160)
+    t = table(cols) callback |item: ptr, c: int| {
+        return (item as *Row).name
+    }
+    table_update(t, items)
+    table_sorter(t, items)
+    table_filter_text(t, "alpha")
+    item = table_item_at(t, table_selected(t))
+
+    // --- README: Trees ------------------------------------------------
+    roots = list.new()
+    rootnode = tree_node("docs")
+    tree_add_child(rootnode, tree_node("report"))
+    _ = list.add(roots, rootnode)
+    tr = tree(root, roots)
+    tree_on_select(tr) callback |node: ptr| { }
+    node = tree_selected(tr)
+    tree_set_expanded(rootnode, 1)
+    tree_refresh(tr)
+
+    // --- README: Virtualized lists ------------------------------------
+    v = vlist(root, "v", 10, |it: ptr, ix: int, parent: int| {
+    })
+    _nat = vlist_native(v)
+
+    // --- README: Commands ---------------------------------------------
+    button = btn(root, "Save") callback { }
+    save = command("Save", "Ctrl+S", || { })
+    command_set_enabled(save, 0)
+    command_attach(save, button)
+    command_set_enabled(save, 1)
+
+    // --- README: Undo -------------------------------------------------
+    undoable("Add", || { attach_one() }, || { detach_one() })
+    undo_group("Move 3 frames") callback {
+        nudge(1)
+        nudge(2)
+    }
+    _u = undo()
+    _r = redo()
+    depth = undo_depth()
+    label = undo_label()
+    if depth < 1 { println("  FAIL: the undo snippet recorded nothing")  bad = bad + 1 }
+
+    // --- README: Keymaps ----------------------------------------------
+    km = keymap(null)
+    keymap_register(km, "file.save", save)
+    keymap_bind(km, "Ctrl+S", "file.save")
+    keymap_attach(km)
+    _un = keymap_unbind(km, "Ctrl+S")
+    keymap_bind(km, "Ctrl+Shift+S", "file.save")
+
+    // --- README: Widget accessors -------------------------------------
+    tf = textfield(root, "hint", |val: string| { })
+    _ta = textarea(root, "hint", |val: string| { })
+    tg = toggle(root, "label", |active: int| { })
+    sl = slider(root, 0.0, 100.0, 10.0, |val: float| { })
+    _s1 = set_text(tf, "new text")
+    txt = get_text(tf)
+    _s2 = set_toggle(tg, 1)
+    on = get_toggle(tg)
+    _s3 = set_slider(sl, 75.0)
+    val = get_slider(sl)
+
+    // The README claims these round-trip; hold it to that here too.
+    if txt != "new text" { println("  FAIL: set_text/get_text snippet")  bad = bad + 1 }
+    if on != 1 { println("  FAIL: set_toggle/get_toggle snippet")  bad = bad + 1 }
+    if (val as int) != 75 { println("  FAIL: set_slider/get_slider snippet")  bad = bad + 1 }
+
+    if bad > 0 { println("docs_snippets: ${bad} snippet(s) do not hold")  exit(1) }
+    println("docs_snippets: every README snippet compiles and runs")
+    exit(0)
+}

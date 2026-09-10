@@ -217,6 +217,12 @@ a live window has "a life of its own" that ends on an external event, so only
 | Grid        | `ui.root_grid(cols, rspace, cspace)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
 | Menu bar    | `ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
 | GPU view    | `ui.gpuview_create(w, h)` (#92)                | GtkGLArea          | NSOpenGLView            | not yet (reports 0)        |
+| Tabs        | `ui.tabs() { tab("title") { … } }`             | GtkStackSwitcher + GtkStack | NSTabView      | button strip over a page zstack |
+| SplitView   | `ui.splitview("h") { pane1 pane2 }`            | GtkPaned           | NSSplitView             | plain stack, divider not draggable |
+| ListBox     | `ui.listbox(spacing) callback \|item, i, row\|` | composed from a stack of rows, identical on all backends |||
+| Table       | `ui.table(cols) callback \|item, col\|`        | composed on a ListBox, identical on all backends |||
+| Tree        | `ui.tree(roots)`                               | composed on a ListBox, identical on all backends |||
+| VList       | `ui.vlist("v", rows, \|item, i, parent\| { })`  | GtkListView        | NSTableView             | composed window (no native list) |
 
 
 ### GPU viewport
@@ -359,12 +365,131 @@ val = ui.ui_get(counter)              // read current value
 ## Widget accessors
 
 ```aether
-ui.set_text(handle, "new text")       // set textfield value
-text = ui.get_text(handle)            // get textfield value
+ui.set_text(handle, "new text")       // a label, a textfield or a textarea
+text = ui.get_text(handle)            // a textfield or a textarea
 ui.set_toggle(handle, 1)              // set toggle on/off
+value = ui.get_toggle(handle)
 ui.set_slider(handle, 75.0)           // set slider position
+value = ui.get_slider(handle)
 ui.set_progress(handle, 0.5)          // set progress bar
 ```
+
+`set_text` writes a label, a textfield or a textarea, and `get_text` reads the
+last two. A label reads back `""`: no platform exposes a getter for one, so
+there is nothing honest to return.
+
+A programmatic setter is **not** the user acting. None of these run the
+widget's own `on_change`, so an app writing into its own fields does not fight
+itself. `tab_select` is the deliberate exception and does notify, because a
+tab change is a navigation the app usually wants to hear about.
+
+## Collections: lists, tables and trees
+
+A `listbox` renders one row per item from a closure, and `table` and `tree` are
+built on it, so all three share their selection behaviour.
+
+```aether
+lb = listbox(2) callback |item: ptr, i: int, row: int| {
+    _lbl = text(row, (item as *Row).name)
+}
+listbox_update(lb, items)             // swap the model
+on_select(lb) callback |i: int| { }   // a row was picked
+i = listbox_selected(lb)              // which row, -1 for none
+listbox_move(lb, from, to)            // reorder, in place
+```
+
+`listbox_multi` toggles rows instead, with `listbox_is_selected`,
+`listbox_selected_count`, `listbox_set_selected` and `listbox_clear_selection`.
+
+**Selection survives an update.** It is carried by ITEM, not by row index, so
+refreshing, filtering, sorting or reordering keeps the row the user picked, and
+it is dropped only when that item is gone. A table refreshing on a timer can
+hold a selection.
+
+### Tables
+
+```aether
+cols = table_cols()
+table_col(cols, "Name", 160)
+t = table(cols) callback |item: ptr, c: int| {
+    return (item as *Row).name
+}
+table_update(t, items)
+table_sorter(t, items)                // header clicks sort
+table_filter_text(t, "needle")        // the search-box filter
+item = table_item_at(t, table_selected(t))
+```
+
+Sorting orders the **view** and leaves the app's list alone, and a numeric
+column sorts numerically, so 95 comes before 100 rather than after.
+
+### Trees
+
+```aether
+root = tree_node("docs")
+tree_add_child(root, tree_node("report"))
+t = tree(roots)                       // roots is a std.list of nodes
+tree_on_select(t) callback |node: ptr| { }   // the NODE, not a row index
+node = tree_selected(t)
+tree_set_expanded(root, 1)
+tree_refresh(t)
+```
+
+The selection is a node, so expanding an unrelated branch keeps it, and
+collapsing its parent then re-expanding brings it back rather than making the
+user find their place again.
+
+### Virtualized lists
+
+`vlist` shows a window into a large model. Where the platform has a collection
+view it uses it, otherwise it composes the window itself, and `vlist_native(v)`
+says which. That matters to a test, because the two virtualize to different
+numbers of realized rows.
+
+## Commands, undo and keymaps
+
+A `command` is one action with many surfaces: a button, a menu item and an
+accelerator that all route through the same enable/disable state.
+
+```aether
+save = command("Save", "Ctrl+S", || { })
+command_set_enabled(save, 0)          // greys every surface, key goes inert
+command_attach(save, button)
+```
+
+Undo is an app-wide edit stack. `undoable` runs an action now and records how
+to reverse it; `undo_group` collapses a gesture into one step, so a drag that
+records an edit per pixel costs the user one undo press rather than thirty.
+
+```aether
+undoable("Add", || { attach_one() }, || { detach_one() })
+undo_group("Move 3 frames") callback {
+    nudge(a)
+    nudge(b)
+}
+_u = undo()
+_r = redo()
+depth = undo_depth()
+label = undo_label()
+```
+
+A **keymap** makes bindings data, which is what a "customise shortcuts" panel
+needs. `shortcut` bakes its key into the registration and cannot be
+enumerated or moved; a keymap separates the key from the command it names, so
+either can change at runtime.
+
+```aether
+km = keymap(null)                            // or keymap(parent), chained
+keymap_register(km, "file.save", save)       // a NAME is a command
+keymap_bind(km, "Ctrl+S", "file.save")       // a KEY names a command
+keymap_attach(km)                            // register the accelerators
+_u = keymap_unbind(km, "Ctrl+S")             // the old key goes inert
+keymap_bind(km, "Ctrl+Shift+S", "file.save") // rebound, at runtime
+```
+
+Keymaps chain, so an app keymap can ship defaults a user keymap overrides, and
+`keymap_count` / `keymap_key_at` / `keymap_name_at` enumerate the bindings for
+a rebind UI.
 
 ## Examples
 
