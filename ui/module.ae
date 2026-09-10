@@ -553,6 +553,12 @@ gpuview_on_resize(gpu_id: int, cb: fn) {
 // Ask for one more frame. A GPU view does not redraw on its own, so an app
 // that animates calls this from its own timer and one that draws a static
 // scene never calls it again.
+//
+// Headless there is no display cycle to ask, so the frame is drawn on the spot,
+// into an offscreen target of the view's own: a view with no window has no
+// drawable, and what it draws into the default framebuffer goes nowhere.
+// gpuview_read_pixel reads that same target, so a spec sees the frame the app
+// last asked for.
 gpuview_request_render(gpu_id: int) {
     aether_ui_gpuview_request_render_impl(gpu_id)
 }

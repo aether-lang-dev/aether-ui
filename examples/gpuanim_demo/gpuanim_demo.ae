@@ -1,0 +1,92 @@
+// A GPU viewport that animates, driven by the app's own timer (#137).
+//
+// gpuview_request_render is what an app calls when it has something new to
+// draw. This asks for a frame every tick and counts the ones it gets, so
+// "the viewport is animating" is a number rather than an impression.
+//
+// It is also the case that could not be tested before: with no window on
+// screen there is no display cycle to mark dirty, so a request reached
+// nothing and the viewport drew exactly one frame however many were asked
+// for. Every run of this file is that case, because CI has no display.
+import ui
+import ui (window, vstack, text, set_text, gpuview_create, gpuview_widget,
+    gpuview_available, gpuview_on_render, gpuview_on_resize,
+    gpuview_request_render, fill_width, fill_height,
+    timer, timer_cancel, app_quit, enable_test_server, a11y_label)
+import std.os (os_getenv)
+
+// GL takes 32-bit floats. Aether's `float` is a C double, so these must be f32
+// or the call pushes the wrong width and the clear colour comes out as zero,
+// which reads exactly like a renderer that never ran.
+extern glClearColor(r: f32, g: f32, b: f32, a: f32)
+extern glClear(mask: int)
+extern glViewport(x: int, y: int, w: int, h: int)
+
+const GL_COLOR_BUFFER_BIT = 16384
+const WANTED = 12
+
+var g_drawn = 0
+var g_ticks = 0
+var g_count_label = 0
+
+main() {
+    window("gpuview animation", 480, 340) {
+        vstack(8) {
+            _title = text("a viewport asked to redraw")
+            g_count_label = text("frames 0")
+
+            if gpuview_available() == 1 {
+                gpu = gpuview_create(320, 200)
+                fill_width(gpuview_widget(gpu))
+                fill_height(gpuview_widget(gpu))
+                _ = a11y_label(gpuview_widget(gpu), "viewport")
+
+                gpuview_on_resize(gpu) callback |w: int, h: int| {
+                    glViewport(0, 0, w, h)
+                }
+                // A different colour every frame, so a reader can tell one
+                // frame from the next: green while it is still going, blue
+                // once it has drawn every frame that was asked for.
+                gpuview_on_render(gpu) callback |_dt: float| {
+                    g_drawn = g_drawn + 1
+                    set_text(g_count_label, "frames ${g_drawn}")
+                    if g_drawn >= WANTED {
+                        glClearColor(0.0, 0.0, 1.0, 1.0)
+                    } else {
+                        glClearColor(0.0, 1.0, 0.0, 1.0)
+                    }
+                    glClear(GL_COLOR_BUFFER_BIT)
+                }
+
+                // Bounded by ticks as well as by frames: where a request
+                // reaches nothing this stops and says so, rather than asking
+                // for a frame forever.
+                tid = 0
+                tid = timer(16) callback {
+                    g_ticks = g_ticks + 1
+                    gpuview_request_render(gpu)
+                    if g_drawn >= WANTED || g_ticks >= WANTED * 8 {
+                        timer_cancel(tid)
+                        // Says which of the two ways it stopped, so a reader
+                        // does not have to tell "12" from "1" in a label.
+                        if g_drawn >= WANTED {
+                            set_text(g_count_label, "animated ${g_drawn} frames")
+                        } else {
+                            set_text(g_count_label, "stalled at ${g_drawn} of ${g_ticks} asked")
+                        }
+                        if os_getenv("AETHER_UI_TEST_PORT") == null {
+                            println("asked ${g_ticks}, drawn ${g_drawn}")
+                            app_quit()
+                        }
+                    }
+                }
+            } else {
+                // The honest fallback, as gpuview_demo has: a backend with no
+                // context says so rather than showing a rectangle that never
+                // draws.
+                _none = text("renderer: CPU (no GPU surface on this backend)")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

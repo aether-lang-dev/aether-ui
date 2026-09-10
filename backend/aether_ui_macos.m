@@ -141,6 +141,35 @@ static int* widget_group = NULL;
 static int widget_count = 0;
 static int widget_capacity = 0;
 
+// Reverse lookup, view -> handle, in O(1).
+//
+// INVARIANT: the single place a view is written into `widgets` (below) also
+// stamps that view with its handle, and a stamp is replaced only when the one
+// already there is dead. So a stamp names the lowest LIVE slot holding the
+// view, which is exactly what a scan of the registry would find, and a stamp
+// whose slot no longer holds the view proves the view is not registered at
+// all. A NEW registry write must keep stamping, or these lookups start
+// missing widgets that are really there.
+//
+// This was a linear scan over a registry that only ever grows (slots are
+// never reused, so handles stay monotonic). Both the build path
+// (aeui_mark_expand, once per widget added) and the teardown path
+// (unregister_view_tree, once per view in the subtree) go through it, so a
+// list rebuild cost rows x every widget the app had ever created, and the same
+// rebuild got slower the longer the app ran.
+static int aeui_stamped_handle(NSView* v) {
+    id s = objc_getAssociatedObject(v, "aeui_handle");
+    if (![s isKindOfClass:[NSNumber class]]) return 0;
+    return [(NSNumber*)s intValue];
+}
+
+static void aeui_stamp_handle(NSView* v, int h) {
+    if (!v) return;
+    int prev = aeui_stamped_handle(v);
+    if (prev >= 1 && prev <= widget_count && widgets[prev - 1] == v) return;
+    objc_setAssociatedObject(v, "aeui_handle", @(h), OBJC_ASSOCIATION_RETAIN);
+}
+
 static int register_widget_typed(void* widget, int type) {
     if (widget_count >= widget_capacity) {
         int new_cap = widget_capacity == 0 ? 64 : widget_capacity * 2;
@@ -192,6 +221,7 @@ static int register_widget_typed(void* widget, int type) {
             ? (AEUI_EXPAND_H | AEUI_EXPAND_V) : 0;
     widget_group[widget_count] = 0;
     widget_count++;
+    aeui_stamp_handle((__bridge NSView*)widget, widget_count);
     return widget_count;
 }
 
@@ -216,9 +246,8 @@ static int get_widget_type(int handle) {
 
 static int handle_for_view(NSView* v) {
     if (!v) return 0;
-    for (int i = 0; i < widget_count; i++) {
-        if (widgets[i] == v) return i + 1;
-    }
+    int h = aeui_stamped_handle(v);
+    if (h >= 1 && h <= widget_count && widgets[h - 1] == v) return h;
     return 0;
 }
 
@@ -1532,11 +1561,23 @@ void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
 }
 @end
 
-// Keep strong refs so ARC doesn't release them
-static NSMutableArray* retained_targets = nil;
-static void retain_target(id obj) {
-    if (!retained_targets) retained_targets = [NSMutableArray array];
-    [retained_targets addObject:obj];
+// Give a widget a strong reference to one of its own helper objects (a
+// control target, a delegate, an observer), so the helper lives exactly as
+// long as the widget it serves and dies with it.
+//
+// AppKit keeps `target` and `delegate` WEAK, so nothing else holds these.
+// They used to go into a global array that was appended to and never emptied,
+// which is why rebuilding a list could not free anything: each row's helper
+// pinned the row, and through the row every subview it held, for the whole
+// life of the process. Measured on a 400-row listbox_update, 100 rebuilds:
+// 663MB resident and the 100th rebuild 2.3x slower than the first, against
+// 34MB and no slowdown once each helper is owned by its widget.
+//
+// The KEY must be distinct per role: one widget can hold several helpers at
+// once, and reusing a key would silently release the one already there.
+static void aeui_own_helper(id owner, const char* key, id helper) {
+    if (!owner || !helper) return;
+    objc_setAssociatedObject(owner, key, helper, OBJC_ASSOCIATION_RETAIN);
 }
 
 // Default low content-hugging priority so buttons fill horizontal space in
@@ -1562,7 +1603,7 @@ int aether_ui_button_create(const char* label, void* boxed_closure) {
         target.closure = (AeClosure*)boxed_closure;
         [btn setTarget:target];
         [btn setAction:@selector(buttonPressed:)];
-        retain_target(target);
+        aeui_own_helper(btn, "aeui_target", target);
     }
     return register_widget_typed((__bridge void*)btn, AUI_BUTTON);
 }
@@ -1584,7 +1625,7 @@ void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure) {
         target.closure = (AeClosure*)boxed_closure;
         [(NSButton*)v setTarget:target];
         [(NSButton*)v setAction:@selector(buttonPressed:)];
-        retain_target(target);
+        aeui_own_helper(v, "aeui_target", target);
     } else {
         // For non-button widgets, attach a click gesture recognizer
         aether_ui_on_click_impl(handle, boxed_closure);
@@ -1871,6 +1912,9 @@ void aether_ui_set_rtl(int handle, int on) {
 @end
 
 @implementation AetherLayoutObserver
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 - (void)frameChanged:(NSNotification*)note {
     NSView* v = [note object];
     if (!v) return;
@@ -1905,7 +1949,7 @@ void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
                                              selector:@selector(frameChanged:)
                                                  name:NSViewFrameDidChangeNotification
                                                object:v];
-    retain_target(obs);
+    aeui_own_helper(v, "aeui_layout_observer", obs);
 }
 
 // ---------------------------------------------------------------------------
@@ -2165,7 +2209,7 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
         AetherTextFieldDelegate* d = [[AetherTextFieldDelegate alloc] init];
         d.closure = (AeClosure*)boxed_closure;
         [field setDelegate:d];
-        retain_target(d);
+        aeui_own_helper(field, "aeui_delegate", d);
     }
     return register_widget_typed((__bridge void*)field, AUI_TEXTFIELD);
 }
@@ -2208,7 +2252,7 @@ const char* aether_ui_textfield_get_text(int handle) {
 // PropBinding; widget→state is the delegate's controlTextDidChange write-back,
 // keyed on stateHandle. Reuses the field's existing change-delegate if it has
 // one, else attaches a fresh delegate carrying just the state handle. (Defined
-// here, after the delegate class + retain_target, which it needs.)
+// here, after the delegate class + aeui_own_helper, which it needs.)
 void aether_ui_bind_value(int state_handle, int widget_handle) {
     PropBinding* b = prop_binding_new(AEUI_BIND_VALUE, state_handle, widget_handle);
     NSView* v = (__bridge NSView*)aether_ui_get_widget(widget_handle);
@@ -2221,7 +2265,7 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
             AetherTextFieldDelegate* d = [[AetherTextFieldDelegate alloc] init];
             d.stateHandle = state_handle;
             [field setDelegate:d];
-            retain_target(d);
+            aeui_own_helper(field, "aeui_delegate", d);
         }
     }
     apply_prop_binding(b);  // seed the field from the state's initial value
@@ -2239,7 +2283,7 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
         AetherTextFieldDelegate* d = [[AetherTextFieldDelegate alloc] init];
         d.closure = (AeClosure*)boxed_closure;
         [field setDelegate:d];
-        retain_target(d);
+        aeui_own_helper(field, "aeui_delegate", d);
     }
     return register_widget_typed((__bridge void*)field, AUI_SECUREFIELD);
 }
@@ -2288,7 +2332,7 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
         target.closure = (AeClosure*)boxed_closure;
         [check setTarget:target];
         [check setAction:@selector(toggleChanged:)];
-        retain_target(target);
+        aeui_own_helper(check, "aeui_target", target);
     }
     return register_widget_typed((__bridge void*)check, AUI_TOGGLE);
 }
@@ -2366,7 +2410,7 @@ int aether_ui_slider_create(double min_val, double max_val,
         target.closure = (AeClosure*)boxed_closure;
         [slider setTarget:target];
         [slider setAction:@selector(sliderChanged:)];
-        retain_target(target);
+        aeui_own_helper(slider, "aeui_target", target);
     }
     return register_widget_typed((__bridge void*)slider, AUI_SLIDER);
 }
@@ -2410,7 +2454,7 @@ int aether_ui_picker_create(void* boxed_closure) {
         target.closure = (AeClosure*)boxed_closure;
         [popup setTarget:target];
         [popup setAction:@selector(pickerChanged:)];
-        retain_target(target);
+        aeui_own_helper(popup, "aeui_target", target);
     }
     return register_widget_typed((__bridge void*)popup, AUI_PICKER);
 }
@@ -2509,7 +2553,7 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
         AetherTextViewDelegate* d = [[AetherTextViewDelegate alloc] init];
         d.closure = (AeClosure*)boxed_closure;
         [tv setDelegate:d];
-        retain_target(d);
+        aeui_own_helper(tv, "aeui_delegate", d);
     }
 
     int scroll_handle = register_widget_typed((__bridge void*)scrollView, AUI_TEXTAREA);
@@ -5478,8 +5522,9 @@ typedef struct {
     int realized;
     double last_render;
     int last_w, last_h;
-    unsigned int probe_fbo, probe_tex;   /* offscreen target for read_pixel */
+    unsigned int probe_fbo, probe_tex;   /* offscreen target for a windowless render */
     int probe_w, probe_h;
+    int probe_drawn;                     /* a frame has landed in it */
 } GpuState;
 
 static GpuState* gpu_states = NULL;
@@ -5640,10 +5685,97 @@ void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
     if (st) st->on_resize = boxed_closure;
 }
 
+static int aeui_gpu_render_offscreen(GpuState* st, AetherGpuView* v, int* out_w, int* out_h);
+
 void aether_ui_gpuview_request_render_impl(int gpu_id) {
     GpuState* st = get_gpu_state(gpu_id);
     if (!st) return;
+
+    /* Headless there is no display cycle to mark dirty for: marking is skipped,
+     * which is right for a widget with nothing to repaint into and wrong for
+     * this one, whose render callback is the whole of what the app does. An app
+     * that animates drew exactly one frame however many it asked for, so
+     * nothing could drive or test a moving viewport with no window on screen.
+     * Drive it here instead, into the target a windowless view can draw to. */
+    if (aeui_is_headless()) {
+        AetherGpuView* v = (AetherGpuView*)(__bridge NSView*)
+            aether_ui_get_widget(st->widget_handle);
+        NSOpenGLContext* ctx = v ? [v openGLContext] : nil;
+        if (!ctx) return;
+        [ctx makeCurrentContext];
+        aeui_gpu_render_offscreen(st, v, NULL, NULL);
+        return;
+    }
+
     aeui_mark_needs_display(st->widget_handle);
+}
+
+/* Render one frame into an offscreen target of this view's own.
+ *
+ * A view with no window has no DRAWABLE: its default framebuffer goes nowhere,
+ * so glClear writes nothing and every read is zero. An FBO belongs to the
+ * context rather than to a surface, so it renders correctly with no window on
+ * screen. That is what lets a headless run draw at all, and what lets a spec
+ * assert on real GPU output.
+ *
+ * The texture is kept and only reallocated when the size changes, so an app
+ * animating through this does not churn GPU memory.
+ *
+ * Answers 0 when there is no usable target, leaving nothing bound. */
+static int aeui_gpu_render_offscreen(GpuState* st, AetherGpuView* v, int* out_w, int* out_h) {
+    NSSize sz;
+    int w, h;
+    double now, dt;
+
+    if (!st || !v) return 0;
+    sz = [v aeui_backingPixels];
+    w = (int)lround(sz.width);
+    h = (int)lround(sz.height);
+    if (w <= 0 || h <= 0) { w = 1; h = 1; }
+
+    if (!st->probe_fbo) {
+        glGenFramebuffers(1, &st->probe_fbo);
+        glGenTextures(1, &st->probe_tex);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, st->probe_fbo);
+    if (st->probe_w != w || st->probe_h != h) {
+        glBindTexture(GL_TEXTURE_2D, st->probe_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, st->probe_tex, 0);
+        st->probe_w = w; st->probe_h = h;
+    }
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return 0;
+    }
+
+    glViewport(0, 0, w, h);
+    if (!st->realized) {
+        st->realized = 1;
+        st->last_w = w; st->last_h = h;
+        if (st->on_realize) gpu_fire_void(st->on_realize);
+        if (st->on_resize)  gpu_fire_wh(st->on_resize, w, h);
+    } else if (st->last_w != w || st->last_h != h) {
+        /* Only on a change, the rule -reshape already follows. Firing it every
+         * frame makes an app redo its resize work sixty times a second. */
+        st->last_w = w; st->last_h = h;
+        if (st->on_resize) gpu_fire_wh(st->on_resize, w, h);
+    }
+
+    now = (double)clock() / (double)CLOCKS_PER_SEC;
+    dt = st->last_render > 0 ? (now - st->last_render) : 0.0;
+    st->last_render = now;
+    if (st->on_render) gpu_fire_dt(st->on_render, dt);
+    glFinish();
+    st->probe_drawn = 1;
+
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return 1;
 }
 
 int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
@@ -5662,49 +5794,21 @@ int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
     if (w <= 0 || h <= 0) { w = 1; h = 1; }
     if (px < 0 || py < 0 || px >= w || py >= h) return -1;
 
-    /* Render one frame into an OFFSCREEN target and read that, rather than
-     * reading whatever is in the window's buffers.
+    /* The offscreen target, not the window's buffers: a double-buffered context
+     * swaps on present, so reading after the view's own draw samples the new
+     * back buffer and returns black, which looks exactly like a renderer that
+     * never ran.
      *
-     * Two reasons, and the second is the one that matters. A double-buffered
-     * context swaps on present, so reading after the view's own draw samples
-     * the new back buffer and returns black, which looks exactly like a
-     * renderer that never ran. And a view with no window has no DRAWABLE at
-     * all: the default framebuffer goes nowhere, so glClear writes nothing and
-     * every read is zero. An FBO is attached to the context rather than to a
-     * surface, so it renders correctly with no window on screen, which is what
-     * lets a spec assert on real GPU output headlessly.
-     *
-     * The texture is kept and only reallocated when the size changes, so
-     * polling this in a loop does not churn GPU memory. */
-    if (!st->probe_fbo) {
-        glGenFramebuffers(1, &st->probe_fbo);
-        glGenTextures(1, &st->probe_tex);
+     * Headless the frame is already there, because that is where every frame is
+     * drawn (see aeui_gpu_render_offscreen), and drawing another would run the
+     * app's render callback a second time for one frame it asked for once. With
+     * a window on screen there is nothing in it yet, so one is drawn now. */
+    if (!(aeui_is_headless() && st->probe_drawn)) {
+        if (!aeui_gpu_render_offscreen(st, v, &w, &h)) return -1;
+        if (px >= w || py >= h) { glBindFramebuffer(GL_FRAMEBUFFER, 0); return -1; }
+    } else {
+        glBindFramebuffer(GL_FRAMEBUFFER, st->probe_fbo);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, st->probe_fbo);
-    if (st->probe_w != w || st->probe_h != h) {
-        glBindTexture(GL_TEXTURE_2D, st->probe_tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, st->probe_tex, 0);
-        st->probe_w = w; st->probe_h = h;
-    }
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return -1;
-    }
-
-    glViewport(0, 0, w, h);
-    if (!st->realized) {
-        st->realized = 1;
-        st->last_w = w; st->last_h = h;
-        if (st->on_realize) gpu_fire_void(st->on_realize);
-    }
-    if (st->on_resize) gpu_fire_wh(st->on_resize, w, h);
-    if (st->on_render) gpu_fire_dt(st->on_render, 0.0);
-    glFinish();
 
     unsigned char rgba[4] = {0, 0, 0, 0};
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -6322,11 +6426,17 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
 void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || !boxed_closure) return;
+    // A second on_hover on the same widget replaces the first monitor, which
+    // then deallocates. NSTrackingArea does NOT retain its owner, so the area
+    // the old monitor left on the view would point at freed memory and fault
+    // on the next mouse move. Take the area off the view before its owner goes.
+    AetherHoverMonitor* prev = objc_getAssociatedObject(v, "aeui_hover_monitor");
+    if (prev && prev.trackingArea) [v removeTrackingArea:prev.trackingArea];
     AetherHoverMonitor* m = [[AetherHoverMonitor alloc] init];
     m.closure = (AeClosure*)boxed_closure;
     m.view = v;
     [m attach];
-    retain_target(m);
+    aeui_own_helper(v, "aeui_hover_monitor", m);
 }
 
 @interface AetherClickRecognizer : NSClickGestureRecognizer
@@ -6355,8 +6465,10 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     [rec setTarget:rec];
     [rec setAction:@selector(clicked:)];
     rec.numberOfClicksRequired = 1;
+    // The view's own gestureRecognizers array IS the strong reference. A
+    // second one outside it keeps the recognizer, and through the recognizer
+    // this widget's whole subtree, alive after the widget is retired.
     [v addGestureRecognizer:rec];
-    retain_target(rec);
 }
 
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
@@ -6368,7 +6480,6 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
     [rec setAction:@selector(clicked:)];
     rec.numberOfClicksRequired = 2;
     [v addGestureRecognizer:rec];
-    retain_target(rec);
     // Stash the closure for the driver's headless fire path.
     objc_setAssociatedObject(v, "aeui_dblclick",
         [NSValue valueWithPointer:boxed_closure], OBJC_ASSOCIATION_RETAIN);
@@ -6621,6 +6732,24 @@ static void unregister_view_tree(NSView* v) {
     widget_classes[h - 1] = NULL;
     widget_clicks[h - 1] = NULL;
     widget_weights[h - 1] = 0;
+    // TAKE THE GESTURE RECOGNIZERS OFF. AppKit's gesture machinery keeps a
+    // process-wide reference to every attached recognizer, and a recognizer
+    // holds its view STRONGLY, so dropping the registry slot and the
+    // superview is not enough: a retired widget stayed alive, and with it
+    // every subview under it, until the process exited. That is why a list
+    // whose rows carry a click handler grew without bound and got slower on
+    // every rebuild (400 rows, 100 rebuilds: 1.2GB resident and the last
+    // rebuild 2.4x the first). Each recognizer also owns the closure box
+    // on_click boxed for it, which nothing else can free once the recognizer
+    // is gone.
+    for (NSGestureRecognizer* g in [[v gestureRecognizers] copy]) {
+        if ([g isKindOfClass:[AetherClickRecognizer class]]) {
+            AetherClickRecognizer* cr = (AetherClickRecognizer*)g;
+            aeui_release_boxed(cr.closure);
+            cr.closure = NULL;
+        }
+        [v removeGestureRecognizer:g];
+    }
     // Per-handle state added outside this array set has to be released here
     // too. Handles are monotonic, so nothing INHERITS a dead widget's payload
     // and this is not a correctness bug; it is a leak, and an unbounded one,
@@ -7987,17 +8116,12 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
 }
 
 // ---------------------------------------------------------------------------
-// Reverse lookup — aether_ui_handle_for_widget.
-// Backend-specific: this is a linear scan over the widget registry. The
-// hash-backed O(1) version ships in the Win32 backend; porting to AppKit
-// is straightforward future work (NSView* maps cleanly to the same hash).
+// Reverse lookup — aether_ui_handle_for_widget. O(1), off the same stamp
+// handle_for_view reads (see the invariant at aeui_stamped_handle).
 // ---------------------------------------------------------------------------
 int aether_ui_handle_for_widget(void* widget) {
     if (!widget) return 0;
-    for (int i = 0; i < widget_count; i++) {
-        if (widgets[i] == widget) return i + 1;
-    }
-    return 0;
+    return handle_for_view((__bridge NSView*)widget);
 }
 
 // ---------------------------------------------------------------------------

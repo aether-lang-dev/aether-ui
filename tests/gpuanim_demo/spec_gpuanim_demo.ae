@@ -1,0 +1,31 @@
+// spec_gpuanim_demo.ae, #137: a GPU viewport redraws when the app asks it to.
+//
+// gpuview_demo asserts that one frame reached the GPU. This asserts the thing
+// an app actually does with a viewport: ask for the next frame, and get it.
+//
+// The distinction matters because a request used to reach nothing with no
+// window on screen, which is every CI run: the viewport drew its first frame
+// and then stood still however many were asked for. The demo says which of the
+// two happened in its own label rather than leaving a number to be read.
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a GPU viewport redraws on request (#137)") {
+        spec.it("the app animated, or says it has no GPU surface") callback {
+            // The demo asks for a frame every 16ms and stops at twelve, or
+            // gives up after eight times that many requests and says so.
+            uidriver.wait_body_contains("/widgets", "animated", 20)
+            body = uidriver.get_body("/widgets")
+            animated = string.contains(body, "animated")
+            no_gpu = string.contains(body, "no GPU surface on this backend")
+            spec.assert_true(animated == 1 || no_gpu == 1,
+                "twelve frames were asked for and drawn")
+        }
+    }
+    return spec.run_summary(fw)
+}
