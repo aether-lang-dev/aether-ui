@@ -63,6 +63,9 @@ exports (
     command_label, command_attach, btn_command, menu_item_command,
     undoable, undo, redo, undo_depth, redo_depth, undo_label,
     undo_group, undo_grouping,
+    keymap, keymap_bind, keymap_unbind, keymap_lookup, keymap_register,
+    keymap_named, keymap_command, keymap_fire, keymap_attach, keymap_free,
+    keymap_count, keymap_key_at, keymap_name_at,
     enable_undo_shortcuts,
     style_font_weight, style_font_family,
     a11y_role, a11y_label, a11y_description,
@@ -2857,6 +2860,228 @@ command_fire(cp: ptr) {
     if c.enabled == 0 { return }
     f = unbox_closure(c.cb)
     _command_invoke(f)
+}
+
+// ── Keymap: bindings as data (SWING_ENVY C5) ────────────────────────
+// A shortcut declared with `shortcut("Ctrl+S") callback { ... }` bakes the
+// key into the registration. Nothing can enumerate it, nothing can move it,
+// and a "customise shortcuts" panel is therefore impossible to write: the app
+// has no way to ask what is bound, let alone change it.
+//
+// A keymap separates the two halves that were fused:
+//
+//   keymap_bind(km, "Ctrl+S", "file.save")     a KEY names a command
+//   keymap_register(km, "file.save", save)     a NAME is a command
+//
+// so either can change without the other. Rebinding is then a data edit, and
+// keymap_count/keymap_key_at/keymap_name_at make the bindings enumerable,
+// which is what a rebind UI needs to exist at all.
+//
+// Keymaps CHAIN: a lookup that misses walks to the parent. That is how a
+// platform or app keymap ships defaults a user keymap overrides, without
+// copying them and without losing the ability to say what came from where.
+// A child overriding a name works too, so a chain can redirect an inherited
+// key to different behaviour.
+//
+// Everything here is ordinary Aether over std.list: no backend surface, so it
+// behaves identically on all four and needs no window to exercise.
+struct KeyBind { key: string, name: string }
+struct NameCmd { name: string, cmd: ptr }
+struct Keymap  { parent: ptr, binds: ptr, names: ptr }
+
+// keymap(parent) — a new keymap, chained to `parent` (null for a root).
+keymap(parent: ptr) -> ptr {
+    k = malloc(sizeof(Keymap)) as *Keymap
+    k.parent = parent
+    k.binds = list.new()
+    k.names = list.new()
+    return k as ptr
+}
+
+_keymap_find(km: ptr, key: string) -> int {
+    k = km as *Keymap
+    n = list.size(k.binds)
+    i = 0
+    while i < n {
+        bp, _e = list.get(k.binds, i)
+        if (bp as *KeyBind).key == key { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+// keymap_bind(km, key, name) — bind a key to a command NAME in THIS keymap.
+// Re-binding a key already bound here replaces it rather than shadowing it,
+// so the enumeration a rebind UI shows never contains two rows for one key.
+keymap_bind(km: ptr, key: string, name: string) {
+    if km == null { return }
+    k = km as *Keymap
+    at = _keymap_find(km, key)
+    if at >= 0 {
+        bp, _e = list.get(k.binds, at)
+        (bp as *KeyBind).name = name
+        return
+    }
+    b = malloc(sizeof(KeyBind)) as *KeyBind
+    b.key = key
+    b.name = name
+    _ = list.add(k.binds, b as ptr)
+}
+
+// keymap_unbind(km, key) — drop a binding made in THIS keymap. Returns 1 if
+// there was one. A key inherited from a parent is not removed by this: unbind
+// what you bound, or bind it here to "" to mask the parent's.
+keymap_unbind(km: ptr, key: string) -> int {
+    if km == null { return 0 }
+    k = km as *Keymap
+    at = _keymap_find(km, key)
+    if at < 0 { return 0 }
+    bp, _e = list.get(k.binds, at)
+    free(bp)
+    list.remove(k.binds, at)
+    return 1
+}
+
+// keymap_lookup(km, key) — the command NAME this key resolves to, walking the
+// parent chain, or "" if nothing claims it.
+keymap_lookup(km: ptr, key: string) -> string {
+    cur = km
+    while cur != null {
+        k = cur as *Keymap
+        at = _keymap_find(cur, key)
+        if at >= 0 {
+            bp, _e = list.get(k.binds, at)
+            return (bp as *KeyBind).name
+        }
+        cur = k.parent
+    }
+    return ""
+}
+
+// keymap_register(km, name, cmd) — a command under a name. Registering a name
+// already held here replaces it, which is how a child keymap redirects an
+// inherited key.
+keymap_register(km: ptr, name: string, cmd: ptr) {
+    if km == null { return }
+    k = km as *Keymap
+    n = list.size(k.names)
+    i = 0
+    while i < n {
+        np, _e = list.get(k.names, i)
+        if (np as *NameCmd).name == name {
+            (np as *NameCmd).cmd = cmd
+            return
+        }
+        i = i + 1
+    }
+    nc = malloc(sizeof(NameCmd)) as *NameCmd
+    nc.name = name
+    nc.cmd = cmd
+    _ = list.add(k.names, nc as ptr)
+}
+
+// keymap_named(km, name) — the command registered under `name`, through the
+// chain, or null.
+keymap_named(km: ptr, name: string) -> ptr {
+    if string.length(name) == 0 { return null }
+    cur = km
+    while cur != null {
+        k = cur as *Keymap
+        n = list.size(k.names)
+        i = 0
+        while i < n {
+            np, _e = list.get(k.names, i)
+            if (np as *NameCmd).name == name { return (np as *NameCmd).cmd }
+            i = i + 1
+        }
+        cur = k.parent
+    }
+    return null
+}
+
+// keymap_command(km, key) — the command a key resolves to, or null.
+keymap_command(km: ptr, key: string) -> ptr {
+    return keymap_named(km, keymap_lookup(km, key))
+}
+
+// keymap_fire(km, key) — resolve and fire. Returns 1 if a command ran.
+// An unbound key, or one bound to a name nothing is registered under, is
+// INERT rather than an error: that is what makes rebinding safe, since the
+// old key keeps whatever registration the backend already has and simply
+// stops resolving to anything.
+keymap_fire(km: ptr, key: string) -> int {
+    cp = keymap_command(km, key)
+    if cp == null { return 0 }
+    if command_enabled(cp) == 0 { return 0 }
+    command_fire(cp)
+    return 1
+}
+
+// Enumeration, for the rebind UI this exists to make possible. THIS keymap's
+// own bindings, not the chain's: a panel wants to show what the user changed
+// separately from what they inherited.
+keymap_count(km: ptr) -> int {
+    if km == null { return 0 }
+    return list.size((km as *Keymap).binds)
+}
+
+keymap_key_at(km: ptr, i: int) -> string {
+    if km == null { return "" }
+    k = km as *Keymap
+    if i < 0 { return "" }
+    if i >= list.size(k.binds) { return "" }
+    bp, _e = list.get(k.binds, i)
+    return (bp as *KeyBind).key
+}
+
+keymap_name_at(km: ptr, i: int) -> string {
+    if km == null { return "" }
+    k = km as *Keymap
+    if i < 0 { return "" }
+    if i >= list.size(k.binds) { return "" }
+    bp, _e = list.get(k.binds, i)
+    return (bp as *KeyBind).name
+}
+
+// keymap_attach(km) — register a real accelerator for every key bound HERE,
+// each resolving through the keymap when pressed rather than at attach time.
+// So a later keymap_bind or keymap_register changes what an already-attached
+// key does, and a keymap_unbind leaves the accelerator registered but inert,
+// which is exactly the behaviour rebinding needs.
+keymap_attach(km: ptr) {
+    if km == null { return }
+    n = keymap_count(km)
+    i = 0
+    while i < n {
+        key = keymap_key_at(km, i)
+        shortcut(key) callback { _k = keymap_fire(km, key) }
+        i = i + 1
+    }
+}
+
+// keymap_free(km) — give back a keymap's own rows. Does not touch the parent
+// or the commands, neither of which it owns.
+keymap_free(km: ptr) -> int {
+    if km == null { return 0 }
+    k = km as *Keymap
+    n = list.size(k.binds)
+    i = 0
+    while i < n {
+        bp, _e = list.get(k.binds, i)
+        if bp != null { free(bp) }
+        i = i + 1
+    }
+    list.free(k.binds)
+    m = list.size(k.names)
+    j = 0
+    while j < m {
+        np, _e2 = list.get(k.names, j)
+        if np != null { free(np) }
+        j = j + 1
+    }
+    list.free(k.names)
+    free(km)
+    return 1
 }
 
 // command(label, accel, cb) — accel may be "" for no keystroke.

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **`keymap`: bindings as data** (`SWING_ENVY.md` C5). A shortcut declared with
+  `shortcut("Ctrl+S") callback { ... }` bakes the key into the registration:
+  nothing can enumerate it and nothing can move it, so a "customise shortcuts"
+  panel could not be written at all. A keymap separates the two halves that
+  were fused, `keymap_bind` maps a KEY to a command NAME and `keymap_register`
+  maps a NAME to a command, so either can change without the other.
+
+  Keymaps chain, so a platform or app keymap can ship defaults a user keymap
+  overrides without copying them, and a child can redirect an inherited key by
+  re-registering the name. `keymap_count` / `keymap_key_at` / `keymap_name_at`
+  make the bindings enumerable, which is what a rebind UI needs to exist.
+  `keymap_attach` registers a real accelerator per key that resolves through
+  the keymap when pressed rather than at attach time, so rebinding an attached
+  keymap works and an unbound key goes inert.
+
+  Ordinary Aether over `std.list`: no backend surface, so it behaves
+  identically on all four and needs no window to exercise. `keymap_free` gives
+  a keymap's rows back; 200 built and freed add nothing to the leak count.
+
 ### Fixed
 
 - **`get_text` returned "" for a textarea**, though `set_text` writes one
