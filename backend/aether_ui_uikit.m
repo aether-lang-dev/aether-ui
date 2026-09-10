@@ -2149,6 +2149,30 @@ void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
  * required, leaving a user's own constraint able to win. */
 static const char kAeWidthKey;
 static const char kAeHeightKey;
+static const char kAeMinWidthKey;
+static const char kAeMinHeightKey;
+
+/* A FLOOR, not a pin (#136): greater-than-or-equal, so the view opens at least
+ * this big and anything that wants it bigger is free to make it so. An
+ * equal-to constraint states the size exactly and nothing can move it. */
+static void aeui_floor_size(UIView* v, const void* key, int px, int vertical) {
+    if (!v) return;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    if (c) {
+        c.constant = (CGFloat)px;
+    } else {
+        [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+        c = vertical
+            ? [[v heightAnchor] constraintGreaterThanOrEqualToConstant:(CGFloat)px]
+            : [[v widthAnchor]  constraintGreaterThanOrEqualToConstant:(CGFloat)px];
+        c.priority = UILayoutPriorityDefaultHigh + 1;   /* 751 */
+        c.active = YES;
+        objc_setAssociatedObject(v, key, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [v setNeedsLayout];
+    UIView* root = [v superview] ?: v;
+    [root layoutIfNeeded];
+}
 
 static void aeui_pin_size(UIView* v, const void* key, int px, int vertical) {
     if (!v) return;
@@ -2177,6 +2201,33 @@ void aether_ui_set_width_impl(int handle, int px) {
 void aether_ui_set_height_impl(int handle, int px) {
     aeui_pin_size((__bridge UIView*)aether_ui_get_widget(handle),
                   &kAeHeightKey, px, 1);
+}
+
+void aether_ui_set_min_width_impl(int handle, int px) {
+    aeui_floor_size((__bridge UIView*)aether_ui_get_widget(handle),
+                    &kAeMinWidthKey, px, 0);
+}
+
+void aether_ui_set_min_height_impl(int handle, int px) {
+    aeui_floor_size((__bridge UIView*)aether_ui_get_widget(handle),
+                    &kAeMinHeightKey, px, 1);
+}
+
+/* The floor as REQUESTED, answerable before any layout pass unlike get_width. */
+static int aeui_floor_of(UIView* v, const void* key) {
+    if (!v) return 0;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    return c ? (int)lround(c.constant) : 0;
+}
+
+int aether_ui_get_min_width_impl(int handle) {
+    return aeui_floor_of((__bridge UIView*)aether_ui_get_widget(handle),
+                         &kAeMinWidthKey);
+}
+
+int aether_ui_get_min_height_impl(int handle) {
+    return aeui_floor_of((__bridge UIView*)aether_ui_get_widget(handle),
+                         &kAeMinHeightKey);
 }
 
 /* CRITICAL (aether-ui #101): round the frame's EDGES, never its size. Auto

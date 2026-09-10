@@ -16,7 +16,9 @@ import ui (root_vstack, text, btn, listbox, listbox_update, listbox_selected,
     undoable, undo, redo, undo_depth, undo_label, undo_group,
     keymap, keymap_register, keymap_bind, keymap_attach, keymap_unbind,
     set_text, get_text, set_toggle, get_toggle, set_slider, get_slider,
-    textfield, textarea, toggle, slider)
+    set_width, set_height, set_min_width, set_min_height,
+    get_width, get_min_width,
+    textfield, textarea, toggle, slider, vstack)
 import std.list
 
 extern exit(code: int)
@@ -126,6 +128,22 @@ main() {
     if txt != "new text" { println("  FAIL: set_text/get_text snippet")  bad = bad + 1 }
     if on != 1 { println("  FAIL: set_toggle/get_toggle snippet")  bad = bad + 1 }
     if (val as int) != 75 { println("  FAIL: set_slider/get_slider snippet")  bad = bad + 1 }
+
+    // --- README: Sizing, a pin or a floor -----------------------------
+    panel = vstack(root, 0) {
+        text("id")
+    }
+    _w1 = set_width(panel, 280)
+    _w2 = set_min_width(panel, 280)
+    _w3 = set_height(panel, 120)
+    _w4 = set_min_height(panel, 120)
+    pw = get_width(panel)
+    pm = get_min_width(panel)
+
+    // The README claims get_min_width answers the requested floor whether or
+    // not a layout pass has run, and that get_width may be 0 until one has.
+    if pm != 280 { println("  FAIL: get_min_width does not answer the floor")  bad = bad + 1 }
+    if pw < 0 { println("  FAIL: get_width answered nonsense")  bad = bad + 1 }
 
     if bad > 0 { println("docs_snippets: ${bad} snippet(s) do not hold")  exit(1) }
     println("docs_snippets: every README snippet compiles and runs")

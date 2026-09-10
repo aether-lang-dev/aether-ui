@@ -1431,6 +1431,50 @@ void aether_ui_set_height_impl(int handle, int px) {
     gtk_widget_set_vexpand(w, FALSE);
 }
 
+/* A FLOOR, not a pin (#136): the size request on its own is already GTK's
+ * minimum, so this is set_width WITHOUT turning expand off. The widget opens
+ * at least this wide and a parent that wants it wider, or a paned divider
+ * dragged outward, still gets its way; dragging inward stops here. */
+void aether_ui_set_min_width_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_h = -1;
+    gtk_widget_get_size_request(w, NULL, &cur_h);
+    gtk_widget_set_size_request(w, px, cur_h);
+}
+
+void aether_ui_set_min_height_impl(int handle, int px) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return;
+    int cur_w = -1;
+    gtk_widget_get_size_request(w, &cur_w, NULL);
+    gtk_widget_set_size_request(w, cur_w, px);
+}
+
+/* The floor as REQUESTED, answerable before any layout pass unlike
+ * get_width, which reads an allocation a widget with no window does not have.
+ *
+ * On GTK there is ONE size request per axis, so this also answers a width
+ * given by set_width: the two verbs write the same field, because a size
+ * request is already GTK's minimum and set_width's extra work is turning
+ * expand off. It reports what the widget will not go below, which is true of
+ * either. */
+int aether_ui_get_min_width_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return 0;
+    int req_w = -1;
+    gtk_widget_get_size_request(w, &req_w, NULL);
+    return req_w > 0 ? req_w : 0;
+}
+
+int aether_ui_get_min_height_impl(int handle) {
+    GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
+    if (!w) return 0;
+    int req_h = -1;
+    gtk_widget_get_size_request(w, NULL, &req_h);
+    return req_h > 0 ? req_h : 0;
+}
+
 int aether_ui_get_width_impl(int handle) {
     GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
     return w ? gtk_widget_get_width(w) : 0;

@@ -797,6 +797,23 @@ typedef struct {
 // nested row spans its column's width, as on GTK) — only leaf widgets
 // shrink to their measured size for alignment.
 static void w32_note_layout(HWND hwnd, int w, int h);    // fwd (on_layout)
+static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h);
+
+// A FLOOR, not a pin (#136): min_width/min_height raise what a widget
+// MEASURES as and nothing else, so the layout pass hands it at least this
+// much while a weighted parent, or a divider dragged outward, can still give
+// it more. pref_width states the size exactly AND vetoes expansion (the pin
+// veto in stack_do_layout), which is why a panel could be the right width or
+// draggable and not both.
+//
+// Applied here rather than at each of measure_widget_intrinsic's returns so a
+// new widget kind cannot miss it. The weighted-child clamp reads min_primary
+// from this measure, so a floor also survives weight distribution.
+static void measure_widget(Widget* w, int* out_w, int* out_h) {
+    measure_widget_intrinsic(w, out_w, out_h);
+    if (w->min_width  > 0 && *out_w < w->min_width)  *out_w = w->min_width;
+    if (w->min_height > 0 && *out_h < w->min_height) *out_h = w->min_height;
+}
 
 static int w32_subtree_greedy(Widget* w, int orientation);  // fwd
 
@@ -813,7 +830,6 @@ static int w32_fills_cross(int kind) {
 // CURRENT rect, which is 0 until laid out — so nested stacks never grew,
 // every descendant inherited zero heights, and driver geometry (and real
 // rendering) was flat. Bottom-up natural sizing is how GTK/AppKit behave.
-static void measure_widget(Widget* w, int* out_w, int* out_h);
 static int  w32_measure_grid_natural(HWND grid_hwnd, int* out_w, int* out_h); /* fwd; grids live below */
 static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
     StackLayout* sl = &sw->stack;
@@ -861,7 +877,7 @@ static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
     }
 }
 
-static void measure_widget(Widget* w, int* out_w, int* out_h) {
+static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w->pref_width > 0 && w->pref_height > 0) {
         *out_w = w->pref_width;
         *out_h = w->pref_height;
@@ -1076,10 +1092,20 @@ static void stack_do_layout(HWND stack_hwnd) {
     if (sw->kind == WK_SPLITVIEW) {
         int primary = (orientation == 1) ? avail_h : avail_w;
         int pos = sw->split_pos_enc > 0 ? sw->split_pos_enc - 1 : primary / 2;
-        int min_pane = 24;
-        if (pos < min_pane) pos = min_pane;
-        if (pos > primary - AEUI_SPLIT_DIV - min_pane)
-            pos = primary - AEUI_SPLIT_DIV - min_pane;
+        // Each pane's own floor, where it set one, else the 24px hard floor
+        // that keeps a pane from vanishing entirely.
+        int min_a = 24, min_b = 24;
+        for (int i = 0; i < nchildren && i < 2; i++) {
+            Widget* pw = widget_at(handle_for_hwnd(children[i]));
+            if (!pw) continue;
+            int m = (orientation == 1) ? pw->min_height : pw->min_width;
+            if (m <= 0) continue;
+            if (i == 0) { if (m > min_a) min_a = m; }
+            else        { if (m > min_b) min_b = m; }
+        }
+        if (pos < min_a) pos = min_a;
+        if (pos > primary - AEUI_SPLIT_DIV - min_b)
+            pos = primary - AEUI_SPLIT_DIV - min_b;
         if (pos < 0) pos = 0;
         sw->split_eff = pos;
         for (int i = 0; i < nchildren; i++) {
@@ -3277,6 +3303,48 @@ void aether_ui_split_set_position_impl(int handle, int px) {
     stack_do_layout(w->hwnd);
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
+// A floor takes effect through the PARENT's layout pass, since a parent is
+// what hands a child its size. Only a stack parent is relaid out: calling
+// stack_do_layout on something else would lay its children out as an hstack.
+static void w32_relayout_parent(Widget* w) {
+    if (!w || !w->hwnd) return;
+    HWND p = GetParent(w->hwnd);
+    if (!p) return;
+    Widget* pw = widget_at(handle_for_hwnd(p));
+    if (!pw) return;
+    if (pw->kind != WK_VSTACK && pw->kind != WK_HSTACK
+        && pw->kind != WK_ZSTACK && pw->kind != WK_SPLITVIEW
+        && pw->kind != WK_TABS) return;
+    stack_do_layout(p);
+    InvalidateRect(p, NULL, TRUE);
+}
+
+void aether_ui_set_min_width_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->min_width = px;
+    w32_relayout_parent(w);
+}
+
+void aether_ui_set_min_height_impl(int handle, int px) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->min_height = px;
+    w32_relayout_parent(w);
+}
+
+/* The floor as REQUESTED, answerable before any layout pass unlike
+   get_width, which reads the window rect. */
+int aether_ui_get_min_width_impl(int handle) {
+    Widget* w = widget_at(handle);
+    return w && w->min_width > 0 ? w->min_width : 0;
+}
+
+int aether_ui_get_min_height_impl(int handle) {
+    Widget* w = widget_at(handle);
+    return w && w->min_height > 0 ? w->min_height : 0;
+}
+
 void aether_ui_widget_weight_impl(int handle, int n) {
     Widget* w = widget_at(handle);
     if (w) w->weight = n;
