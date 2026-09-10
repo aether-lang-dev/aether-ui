@@ -28,6 +28,30 @@ typedef struct {
     void* env;
 } AeClosure;
 
+// Give back a boxed Aether closure: the box and the environment it captured
+// are both ours, and once the widget holding them is gone nothing can reach
+// either again.
+//
+// g_signal_connect hands user data over with NO destroy notify, which is why
+// every callback box in this backend leaked: a widget retired by a list
+// rebuild took its handler's box with it, one box and one captured
+// environment per widget per rebuild, for as long as the app ran.
+//
+// ONE OWNER PER BOX, and the owner is always the SIGNAL. Several places hand
+// the same box to a second holder as well, a gesture plus g_object_set_data,
+// or hover's enter plus its leave; those references BORROW. Naming a notify
+// twice for one box is a double free, and making the object data the owner
+// instead would dangle the signal's copy when a second on_click replaces the
+// data while the first gesture is still attached.
+extern void aether_closure_env_free(void* env);
+
+static void aeui_release_boxed(gpointer boxed, GClosure* unused) {
+    (void)unused;
+    if (!boxed) return;
+    aether_closure_env_free(((AeClosure*)boxed)->env);
+    free(boxed);
+}
+
 // ---------------------------------------------------------------------------
 // GTK4 initialization — must be called before creating any widgets.
 // ---------------------------------------------------------------------------
@@ -1018,7 +1042,8 @@ void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !boxed_closure) return;
     if (GTK_IS_BUTTON(w)) {
-        g_signal_connect(w, "clicked", G_CALLBACK(on_button_clicked), boxed_closure);
+        g_signal_connect_data(w, "clicked", G_CALLBACK(on_button_clicked),
+                              boxed_closure, aeui_release_boxed, 0);
     }
 }
 
@@ -1059,7 +1084,8 @@ int aether_ui_button_create(const char* label, void* boxed_closure) {
     ensure_gtk_init();
     GtkWidget* btn = gtk_button_new_with_label(label ? label : "");
     if (boxed_closure) {
-        g_signal_connect(btn, "clicked", G_CALLBACK(on_button_clicked), boxed_closure);
+        g_signal_connect_data(btn, "clicked", G_CALLBACK(on_button_clicked),
+                              boxed_closure, aeui_release_boxed, 0);
     }
     return aether_ui_register_widget(btn);
 }
@@ -1494,7 +1520,8 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
                                g_strdup(placeholder), g_free);
     }
     if (boxed_closure) {
-        g_signal_connect(entry, "changed", G_CALLBACK(on_entry_changed), boxed_closure);
+        g_signal_connect_data(entry, "changed", G_CALLBACK(on_entry_changed),
+                              boxed_closure, aeui_release_boxed, 0);
     }
     return aether_ui_register_widget(entry);
 }
@@ -1554,7 +1581,8 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
         }
     }
     if (boxed_closure) {
-        g_signal_connect(entry, "changed", G_CALLBACK(on_entry_changed), boxed_closure);
+        g_signal_connect_data(entry, "changed", G_CALLBACK(on_entry_changed),
+                              boxed_closure, aeui_release_boxed, 0);
     }
     return aether_ui_register_widget(entry);
 }
@@ -1574,7 +1602,9 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
     ensure_gtk_init();
     GtkWidget* check = gtk_check_button_new_with_label(label ? label : "");
     if (boxed_closure) {
-        g_signal_connect(check, "notify::active", G_CALLBACK(on_toggle_changed), boxed_closure);
+        g_signal_connect_data(check, "notify::active",
+                              G_CALLBACK(on_toggle_changed),
+                              boxed_closure, aeui_release_boxed, 0);
     }
     return aether_ui_register_widget(check);
 }
@@ -1630,7 +1660,9 @@ int aether_ui_slider_create(double min_val, double max_val,
     gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
     gtk_widget_set_hexpand(scale, TRUE);
     if (boxed_closure) {
-        g_signal_connect(scale, "value-changed", G_CALLBACK(on_slider_changed), boxed_closure);
+        g_signal_connect_data(scale, "value-changed",
+                              G_CALLBACK(on_slider_changed),
+                              boxed_closure, aeui_release_boxed, 0);
     }
     return aether_ui_register_widget(scale);
 }
@@ -1905,7 +1937,9 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
 
     if (boxed_closure) {
         GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textview));
-        g_signal_connect(buf, "changed", G_CALLBACK(on_textbuffer_changed), boxed_closure);
+        g_signal_connect_data(buf, "changed",
+                              G_CALLBACK(on_textbuffer_changed),
+                              boxed_closure, aeui_release_boxed, 0);
     }
 
     // Store the textview handle separately so set/get text works on it
@@ -6196,7 +6230,10 @@ void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !boxed_closure) return;
     GtkEventController* motion = gtk_event_controller_motion_new();
-    g_signal_connect(motion, "enter", G_CALLBACK(on_hover_enter), boxed_closure);
+    // One box, two handlers: "enter" owns it, "leave" borrows. A notify on
+    // both would free it twice when the controller is finalized.
+    g_signal_connect_data(motion, "enter", G_CALLBACK(on_hover_enter),
+                          boxed_closure, aeui_release_boxed, 0);
     g_signal_connect(motion, "leave", G_CALLBACK(on_hover_leave), boxed_closure);
     gtk_widget_add_controller(w, motion);
 }
@@ -6216,7 +6253,8 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
     if (!w || !boxed_closure) return;
     GtkGesture* gesture = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 1);
-    g_signal_connect(gesture, "pressed", G_CALLBACK(on_double_click), boxed_closure);
+    g_signal_connect_data(gesture, "pressed", G_CALLBACK(on_double_click),
+                          boxed_closure, aeui_release_boxed, 0);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
     // Stash the closure so the driver can fire it headlessly (no real gesture).
     g_object_set_data(G_OBJECT(w), "aeui-dblclick", boxed_closure);
@@ -6471,7 +6509,8 @@ void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
        gesture; it must not be driven by momentum events nobody asked for. */
     GtkEventControllerScroll* sc = GTK_EVENT_CONTROLLER_SCROLL(
         gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL));
-    g_signal_connect(sc, "scroll", G_CALLBACK(on_canvas_scroll), boxed_closure);
+    g_signal_connect_data(sc, "scroll", G_CALLBACK(on_canvas_scroll),
+                          boxed_closure, aeui_release_boxed, 0);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(sc));
     g_object_set_data(G_OBJECT(w), "aeui-canvas-scroll", boxed_closure);
 }
@@ -6518,8 +6557,9 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     if (!w || !boxed_closure) return;
     GtkGesture* gesture = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(gesture), 1);
-    g_signal_connect(gesture, "released",
-        G_CALLBACK(on_gesture_click_released), boxed_closure);
+    g_signal_connect_data(gesture, "released",
+        G_CALLBACK(on_gesture_click_released), boxed_closure,
+        aeui_release_boxed, 0);
     gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(gesture));
     // Remember the closure so the AetherUIDriver's /widget/{id}/click can
     // fire gesture-based handlers on NON-buttons (listbox rows are plain
