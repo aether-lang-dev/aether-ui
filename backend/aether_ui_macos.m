@@ -1709,6 +1709,35 @@ static void aeui_drop_btneq(NSView* v) {
     if ([drop count]) [p removeConstraints:drop];
 }
 
+// A FLOOR, not a pin: greater-than-or-equal, so the widget starts at least
+// this big and anything that wants it bigger, a weighted parent or a divider
+// drag, is free to make it bigger. set_width states the size exactly, and an
+// equal-to constraint is not something a drag can move, which is why a panel
+// could be the right width or draggable and not both (#136).
+//
+// Same priority as the pin, 751: above a split view's own holding priority,
+// which is DefaultLow, so the floor holds against a drag toward nothing,
+// and below required, so a layout that genuinely cannot satisfy it bends
+// instead of breaking.
+static void aeui_floor_size(NSView* v, const char* key, int px, int vertical) {
+    if (!v) return;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    if (c) {
+        c.constant = (CGFloat)px;
+    } else {
+        [v setTranslatesAutoresizingMaskIntoConstraints:NO];
+        c = vertical
+            ? [[v heightAnchor] constraintGreaterThanOrEqualToConstant:(CGFloat)px]
+            : [[v widthAnchor]  constraintGreaterThanOrEqualToConstant:(CGFloat)px];
+        c.priority = NSLayoutPriorityDefaultHigh + 1;   /* 751 */
+        c.active = YES;
+        objc_setAssociatedObject(v, key, c, OBJC_ASSOCIATION_RETAIN);
+    }
+    [v setNeedsLayout:YES];
+    NSView* root = [v superview] ?: v;
+    [root layoutSubtreeIfNeeded];
+}
+
 static void aeui_pin_size(NSView* v, const char* key, int px, int vertical) {
     if (!v) return;
     NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
@@ -1736,6 +1765,36 @@ void aether_ui_set_width_impl(int handle, int px) {
 void aether_ui_set_height_impl(int handle, int px) {
     aeui_pin_size((__bridge NSView*)aether_ui_get_widget(handle),
                   "aeui_height_c", px, 1);
+}
+
+void aether_ui_set_min_width_impl(int handle, int px) {
+    aeui_floor_size((__bridge NSView*)aether_ui_get_widget(handle),
+                    "aeui_min_width_c", px, 0);
+}
+
+void aether_ui_set_min_height_impl(int handle, int px) {
+    aeui_floor_size((__bridge NSView*)aether_ui_get_widget(handle),
+                    "aeui_min_height_c", px, 1);
+}
+
+// The floor as REQUESTED, which is answerable before any layout pass, unlike
+// get_width. That matters for more than symmetry: a widget tree with no
+// window has no allocation to read on every backend, so this is the only way
+// a headless spec can see that a floor was taken at all.
+static int aeui_floor_of(NSView* v, const char* key) {
+    if (!v) return 0;
+    NSLayoutConstraint* c = objc_getAssociatedObject(v, key);
+    return c ? (int)lround(c.constant) : 0;
+}
+
+int aether_ui_get_min_width_impl(int handle) {
+    return aeui_floor_of((__bridge NSView*)aether_ui_get_widget(handle),
+                         "aeui_min_width_c");
+}
+
+int aether_ui_get_min_height_impl(int handle) {
+    return aeui_floor_of((__bridge NSView*)aether_ui_get_widget(handle),
+                         "aeui_min_height_c");
 }
 
 /* CRITICAL for #101: round the frame's EDGES, never its size. Auto Layout

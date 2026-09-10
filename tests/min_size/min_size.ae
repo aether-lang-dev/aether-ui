@@ -1,0 +1,109 @@
+// set_min_width / set_min_height are a FLOOR: the size a widget opens at at
+// least, which anything wanting it bigger is still free to exceed (#136).
+//
+// Two things are checked, for a reason. The floor as REQUESTED is readable on
+// every backend and is what proves the verb reached the backend at all. The
+// floor as ALLOCATED is the part that matters, and it is only readable where
+// the backend lays out a widget tree that has no window: AppKit solves
+// constraints on a detached tree, GTK4 leaves an unrealized widget with no
+// allocation to read. So the allocation half runs where there is an
+// allocation, and says so rather than passing quietly.
+//
+// The half that cannot be checked from here at all is the divider drag, a real
+// gesture with no headless equivalent.
+
+import ui
+import ui (root_vstack, hstack, vstack, text, set_width, set_min_width,
+    set_min_height, get_width, get_height, get_min_width, get_min_height,
+    weight, backend_name)
+
+extern exit(code: int)
+
+var bad = 0
+check_eq(label: string, got: int, want: int) {
+    if got != want {
+        println("  MISMATCH: ${label} got=${got} want=${want}")
+        bad = bad + 1
+    }
+}
+check_ge(label: string, got: int, floor: int) {
+    if got < floor {
+        println("  MISMATCH: ${label} got=${got} want >= ${floor}")
+        bad = bad + 1
+    }
+}
+check_lt(label: string, got: int, limit: int) {
+    if got >= limit {
+        println("  MISMATCH: ${label} got=${got} want < ${limit}")
+        bad = bad + 1
+    }
+}
+
+main() {
+    root = root_vstack(4) {
+    }
+
+    // --- the floor as requested, on every backend -----------------------
+    // A column whose only content is a short label is far narrower than an
+    // inspector needs, which is the case #136 opens with.
+    narrow = vstack(root, 0) {
+        text("id")
+    }
+    check_eq("no floor until one is set", get_min_width(narrow), 0)
+    _ = set_min_width(narrow, 280)
+    check_eq("the floor is taken", get_min_width(narrow), 280)
+    _ = set_min_width(narrow, 400)
+    check_eq("a raised floor replaces it, not stacks on it", get_min_width(narrow), 400)
+    _ = set_min_width(narrow, 120)
+    check_eq("a lowered floor replaces it too", get_min_width(narrow), 120)
+
+    tallcol = vstack(root, 0) {
+        text("one line")
+    }
+    check_eq("no height floor until one is set", get_min_height(tallcol), 0)
+    _ = set_min_height(tallcol, 200)
+    check_eq("the height floor is taken", get_min_height(tallcol), 200)
+
+    // --- the floor as allocated, where there is an allocation ------------
+    laid_out = 0
+    if get_width(narrow) > 0 { laid_out = 1 }
+    if get_height(tallcol) > 0 { laid_out = 1 }
+
+    if laid_out == 1 {
+        wide = vstack(root, 0) {
+            text("id")
+        }
+        check_lt("a label column is narrower than a panel needs", get_width(wide), 280)
+        _ = set_min_width(wide, 280)
+        check_ge("the floor lifts it to the panel width", get_width(wide), 280)
+
+        short = vstack(root, 0) {
+            text("one line")
+        }
+        check_lt("one line is shorter than the floor", get_height(short), 200)
+        _ = set_min_height(short, 200)
+        check_ge("the height floor lifts it", get_height(short), 200)
+
+        // Given more room, a floored child takes it rather than being held at
+        // the floor. This is the half a pin cannot do.
+        row = hstack(root, 0) {
+        }
+        _ = set_width(row, 900)
+        flexible = vstack(row, 0) {
+            text("x")
+        }
+        weight(flexible, 1)
+        _ = set_min_width(flexible, 100)
+        check_ge("a floored child grows past its floor", get_width(flexible), 101)
+    } else {
+        println("  note: ${backend_name()} does not allocate a windowless tree,")
+        println("        so the requested floor is all this backend can show.")
+    }
+
+    if bad == 0 {
+        println("min_size: OK")
+        exit(0)
+    }
+    println("min_size: ${bad} mismatch(es)")
+    exit(1)
+}
