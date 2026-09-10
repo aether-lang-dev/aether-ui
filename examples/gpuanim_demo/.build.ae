@@ -1,0 +1,25 @@
+import bldr
+import aether
+import aether (source, output, no_closure_regen, link_flag)
+import std.string
+import std.os (platform)
+import build_support.aetherui (ui_backend)
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("gpuanim_demo.ae")
+            output("gpuanim_demo")
+            no_closure_regen()
+            ui_backend(root)
+            // Calls GL itself (glClearColor / glClear / glViewport), so it
+            // links GL itself, exactly as gpuview_demo does. macOS resolves
+            // these through -framework OpenGL, already linked by ui_backend
+            // for the backend's own use; elsewhere the app asks.
+            if string.equals(platform(), "darwin") == 0 {
+                link_flag("-lGL")
+            }
+        }
+        return 0
+    }
+}
