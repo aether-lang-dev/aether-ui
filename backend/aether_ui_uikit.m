@@ -207,14 +207,46 @@ int aether_ui_handle_for_widget(void* widget) {
 const char* aether_ui_backend_name_impl(void) { return "uikit"; }
 
 // ---------------------------------------------------------------------------
-// Target trampolines — a UIControl's target is an unretained pointer, so each
-// closure-bearing target is parked in this array for the life of the app
-// (mirrors the AppKit backend's retain_target).
+// Target trampolines. A UIControl's target and a gesture recognizer's target
+// are unretained, so each closure-bearing target needs an owner elsewhere.
+// The owner is the WIDGET it serves, so it lives exactly as long as that
+// widget and dies with it.
+//
+// These used to go into a global array that was appended to and never
+// emptied, so a widget retired by a list rebuild left its target behind for
+// the life of the app, and through the target the Aether closure box it
+// carries. The AppKit backend had the same defect and has the same fix.
+//
+// The widget holds an ARRAY of them, and registrations APPEND. A widget can
+// hold several helpers at once, a single-tap and a double-tap target for
+// instance, and a second on_click on the same widget must not release the
+// first target: a UIControl's target and a recognizer's target are
+// unretained, so releasing one that is still attached leaves the control
+// firing into freed memory. Appending never does, and everything in the
+// array goes when the widget goes, which is the point.
 // ---------------------------------------------------------------------------
-static NSMutableArray* g_targets = nil;
-static void retain_target(id t) {
-    if (!g_targets) g_targets = [NSMutableArray array];
-    if (t) [g_targets addObject:t];
+static void aeui_own_helper(id owner, id helper) {
+    if (!owner || !helper) return;
+    NSMutableArray* held = objc_getAssociatedObject(owner, "aeui_helpers");
+    if (!held) {
+        held = [NSMutableArray array];
+        objc_setAssociatedObject(owner, "aeui_helpers", held,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [held addObject:helper];
+}
+
+// ONE helper is still parked globally, on purpose: on_layout's KVO observer.
+// Whether that observer may die with its view is a different question from
+// this leak, because KVO has an ordering rule an owner cannot satisfy on its
+// own. An observed object deallocating with observers still registered is a
+// hard error, and an observer deallocating while still registered leaves the
+// layer notifying freed memory, so simply moving it onto the view trades a
+// leak for a crash. The comment at aether_ui_on_layout_impl says the same.
+static NSMutableArray* g_parked = nil;
+static void park_forever(id t) {
+    if (!g_parked) g_parked = [NSMutableArray array];
+    if (t) [g_parked addObject:t];
 }
 
 @interface AeuiButtonTarget : NSObject
@@ -637,7 +669,7 @@ static void wire_button(UIButton* btn, void* boxed_closure) {
     t.closure = (AeClosure*)boxed_closure;
     [btn addTarget:t action:@selector(fire)
         forControlEvents:UIControlEventTouchUpInside];
-    retain_target(t);
+    aeui_own_helper(btn, t);
 }
 
 int aether_ui_button_create(const char* label, void* boxed_closure) {
@@ -682,7 +714,7 @@ static UITextField* make_field(const char* placeholder, void* boxed_closure,
         t.closure = (AeClosure*)boxed_closure;
         [f addTarget:t action:@selector(changed:)
             forControlEvents:UIControlEventEditingChanged];
-        retain_target(t);
+        aeui_own_helper(f, t);
     }
     return f;
 }
@@ -732,7 +764,7 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
         t.closure = (AeClosure*)boxed_closure;
         [sw addTarget:t action:@selector(changed:)
             forControlEvents:UIControlEventValueChanged];
-        retain_target(t);
+        aeui_own_helper(sw, t);
     }
     return register_widget_typed((__bridge void*)sw, AUI_TOGGLE);
 }
@@ -764,7 +796,7 @@ int aether_ui_slider_create(double min_val, double max_val, double initial,
         t.closure = (AeClosure*)boxed_closure;
         [s addTarget:t action:@selector(changed:)
             forControlEvents:UIControlEventValueChanged];
-        retain_target(t);
+        aeui_own_helper(s, t);
     }
     return register_widget_typed((__bridge void*)s, AUI_SLIDER);
 }
@@ -1027,7 +1059,7 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
         AeuiTextViewDelegate* d = [[AeuiTextViewDelegate alloc] init];
         d.closure = (AeClosure*)boxed_closure;
         tv.delegate = d;
-        retain_target(d);
+        aeui_own_helper(tv, d);
     }
     return register_widget_typed((__bridge void*)tv, AUI_TEXTAREA);
 }
@@ -3046,7 +3078,7 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
         t.stateHandle = state_handle;
         [(UITextField*)v addTarget:t action:@selector(changed:)
             forControlEvents:UIControlEventEditingChanged];
-        retain_target(t);
+        aeui_own_helper(v, t);
     }
     apply_prop_binding(b);  // seed the field from the state's initial value
 }
@@ -3081,7 +3113,7 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
         initWithTarget:t action:@selector(fire)];
     v.userInteractionEnabled = YES;
     [v addGestureRecognizer:tap];
-    retain_target(t);
+    aeui_own_helper(v, t);
 }
 
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
@@ -3094,7 +3126,7 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
     tap.numberOfTapsRequired = 2;
     v.userInteractionEnabled = YES;
     [v addGestureRecognizer:tap];
-    retain_target(t);
+    aeui_own_helper(v, t);
     // Also addressable by handle so the driver / fire_double_click can invoke it.
     objc_setAssociatedObject(v, &kDblClosure, [NSValue valueWithPointer:boxed_closure],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3121,7 +3153,7 @@ void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
         UIHoverGestureRecognizer* h = [[UIHoverGestureRecognizer alloc]
             initWithTarget:t action:@selector(hover:)];
         [v addGestureRecognizer:h];
-        retain_target(t);
+        aeui_own_helper(v, t);
     }
 }
 
@@ -3379,7 +3411,7 @@ int aether_ui_tabs_create(void* boxed_closure) {
     AeuiTabsTarget* t = [[AeuiTabsTarget alloc] init];
     t.tabsHandle = handle;
     [seg addTarget:t action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
-    retain_target(t);
+    aeui_own_helper(seg, t);
 
     if (tabs_state_count >= tabs_state_cap) {
         tabs_state_cap = tabs_state_cap == 0 ? 8 : tabs_state_cap * 2;
@@ -3604,7 +3636,7 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
             [scrim addGestureRecognizer:
                 [[UITapGestureRecognizer alloc] initWithTarget:t action:@selector(tap)]];
             scrim.userInteractionEnabled = YES;
-            retain_target(t);
+            aeui_own_helper(scrim, t);
             e->scrim = scrim;
         }
         content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -4204,7 +4236,7 @@ void aether_ui_toggle_set_group(int handle, int group_with) {
     t.handle = handle;
     [(UISwitch*)a addTarget:t action:@selector(changed:)
           forControlEvents:UIControlEventValueChanged];
-    retain_target(t);
+    aeui_own_helper(a, t);
 }
 
 // --- Keyboard shortcuts — a combo→closure registry, driver-drivable ---------
@@ -4293,11 +4325,19 @@ void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
     o.closure = (AeClosure*)boxed_closure;
     o.view = v; o.lastW = 0; o.lastH = 0;
     // CALayer.bounds is reliably KVO-compliant (Core Animation depends on it),
-    // unlike UIView.bounds. The view outlives the observer (held in the
-    // registry), so no removal is needed.
+    // unlike UIView.bounds.
+    //
+    // This observer is PARKED FOR THE LIFE OF THE APP rather than owned by
+    // the view, which every other helper here now is. It leaks one observer
+    // per on_layout, and that is the lesser of the two available bugs: KVO
+    // requires the observer to be removed BEFORE the observed layer goes, and
+    // an owner released by the view's own teardown cannot guarantee it runs
+    // first. Getting out of this needs the observation replaced, a UIView
+    // subclass overriding layoutSubviews rather than a KVO on its layer, not
+    // a change of owner.
     [v.layer addObserver:o forKeyPath:@"bounds"
                  options:NSKeyValueObservingOptionNew context:NULL];
-    retain_target(o);
+    park_forever(o);
 }
 
 // --- Inline CSS — parse "prop: val; …" and drive the set_* setters ----------
