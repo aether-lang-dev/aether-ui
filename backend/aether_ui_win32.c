@@ -8925,9 +8925,26 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     }
 }
 
-// Mark a widget and every descendant registered under it as dead, so the
-// driver stops listing them. Walks the live child tree BEFORE DestroyWindow
-// tears it down (afterwards GetWindow can't enumerate it).
+// Give back a boxed Aether closure and clear the slot that held it. The box
+// and the environment the closure captured are both ours, and once the widget
+// is dead nothing can reach either again.
+//
+// Nothing freed these, so a widget retired by a list rebuild leaked every
+// callback it carried, one box and one captured environment each, for as long
+// as the app ran. The AppKit and GTK4 backends had the same defect.
+//
+// Clearing the slot matters as much as the free: a dead widget's handler must
+// read NULL rather than a pointer to freed memory, and every caller here
+// already tests the slot before invoking it.
+extern void aether_closure_env_free(void* env);
+
+static void w32_release_box(AeClosure** slot) {
+    if (!slot || !*slot) return;
+    aether_closure_env_free((*slot)->env);
+    free(*slot);
+    *slot = NULL;
+}
+
 // Release the per-handle state a retired widget owned. Handles are monotonic,
 // so nothing inherits it and this is not a correctness bug; it is a leak, and
 // on Windows a GDI one, which matters more than a stray malloc: a process has
@@ -8954,8 +8971,31 @@ static void w32_release_handle_state(int h) {
         KillTimer(NULL, w->tr_timer);
         w->tr_timer = 0;
     }
+    if (w) {
+        w32_release_box(&w->on_click);
+        w32_release_box(&w->on_hover);
+        w32_release_box(&w->on_double_click);
+        w32_release_box(&w->on_change);
+        w32_release_box(&w->on_drop);
+        w32_release_box(&w->on_scroll);
+        w32_release_box(&w->on_layout);
+        // A context menu's items each carry a box, and a row that has one is
+        // rebuilt with the rest of the list, so these accumulated per rebuild.
+        for (int i = 0; i < w->ctx_count; i++) {
+            free(w->ctx_items[i].label);
+            w->ctx_items[i].label = NULL;
+            w32_release_box((AeClosure**)&w->ctx_items[i].closure);
+        }
+        free(w->ctx_items);
+        w->ctx_items = NULL;
+        w->ctx_count = 0;
+        w->ctx_cap = 0;
+    }
 }
 
+// Mark a widget and every descendant registered under it as dead, so the
+// driver stops listing them. Walks the live child tree BEFORE DestroyWindow
+// tears it down (afterwards GetWindow can't enumerate it).
 static void mark_subtree_dead(HWND hwnd) {
     int h = handle_for_hwnd(hwnd);
     if (h > 0) {
