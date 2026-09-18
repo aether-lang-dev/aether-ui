@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **win32 follows the system's dark mode for the ground it paints.** GTK4 and
+  AppKit hand an app the system's look, and on a dark system that look is
+  dark; the classic Win32 controls have no dark look of their own, so an app
+  here drew a white client under the dark title bar it already had. A widget
+  with no ground of its own, and none above it, now sits on Explorer's dark
+  window colour when the system is dark (the system window colour when it is
+  light): stacks, the app window, labels and captions (with legible text),
+  fields (dark, the common-dialog dark theme for the border), checkboxes,
+  sliders and scrollbars. The driver's `/appearance?dark=` override steers
+  it too, and a theme flip at run time repaints. The registry read behind
+  `is_dark_mode` is cached, since it is now asked on every erase: read per
+  question, a small form's first paint took seconds.
+
+### Fixed
+
+- **win32 dividers were one pixel wide.** `divider_create` pinned
+  `pref_width = 1` as the rule's thickness, and the layout reads a pref on
+  the cross axis as the app's own choice of size, so every rule in a vstack
+  came out as a dot at the left margin. The thickness is the intrinsic
+  measure now, the rule stretches across its stack, and it draws vertically
+  when an hstack makes it taller than wide.
+
+### Changed
+
 - **win32 draws Common Controls version 6.** Themed controls — the button,
   edit, checkbox, slider, progress bar and scrollbar every Windows app since
   XP draws — are opted into by a manifest, and a process without one gets
