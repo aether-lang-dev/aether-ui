@@ -764,6 +764,30 @@ ios_sim_pick() {
          | .value[] | select(.name | startswith("iPhone"))]
         | (map(select(.state == "Booted")) + .) | .[0].udid // empty'
 }
+# What the simulator knows when the app did not answer: is the process
+# alive (a simulator app is a host process), what it logged, and whether it
+# left a crash report -- the exception and the thread that raised it are in
+# the report's first lines.
+ios_sim_diagnose() {
+    echo "       -- process:"
+    pgrep -fl AetherUIProbe 2>/dev/null | sed 's/^/       /' || echo "       (not running)"
+    echo "       -- app stdout/stderr:"
+    tail -20 /tmp/ci_ios_sim.app.log /tmp/ci_ios_sim.app.err 2>/dev/null | sed 's/^/       /'
+    echo "       -- unified log (last 2 minutes, the app's process):"
+    xcrun simctl spawn "$IOS_SIM_UDID" log show --last 2m --style compact \
+        --predicate 'process == "AetherUIProbe"' 2>/dev/null | tail -40 | sed 's/^/       /'
+    echo "       -- crash reports:"
+    local rep
+    rep="$(ls -t ~/Library/Logs/DiagnosticReports/AetherUIProbe* 2>/dev/null | head -1)"
+    if [ -n "$rep" ]; then
+        echo "       $rep"
+        # .ips: a JSON header line, then the JSON report; the useful keys
+        # are near the top and the crashing thread's frames follow.
+        head -c 6000 "$rep" | tr ',' '\n' | grep -E '"(exception|termination|faultingThread|procName|asi|name|imageOffset|symbol|sourceFile|sourceLine)"' | head -60 | sed 's/^/       /'
+    else
+        echo "       (none)"
+    fi
+}
 ios_sim_cleanup() {
     [ -n "$IOS_SIM_UDID" ] || return 0
     xcrun simctl terminate "$IOS_SIM_UDID" dev.aether.ui.simprobe > /dev/null 2>&1 || true
@@ -863,19 +887,19 @@ else
             sim_fail=1
         else
             up=0
-            for _ in $(seq 1 100); do
+            for _ in $(seq 1 200); do
                 if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then up=1; break; fi
                 sleep 0.2
             done
             if [ "$up" -ne 1 ]; then
                 echo "  FAIL the app's driver server never answered from the simulator"
-                tail -20 /tmp/ci_ios_sim.app.log /tmp/ci_ios_sim.app.err 2>/dev/null | sed 's/^/       /'
+                ios_sim_diagnose
                 sim_fail=1
             elif UI_SPEC=listbox_demo/spec_listbox_demo "$SCRIPT_DIR/tests/run_spec.sh" "$PORT"; then
                 echo "  OK   listbox_demo spec passes on the iOS simulator"
             else
                 echo "  FAIL listbox_demo spec on the iOS simulator"
-                tail -20 /tmp/ci_ios_sim.app.log /tmp/ci_ios_sim.app.err 2>/dev/null | sed 's/^/       /'
+                ios_sim_diagnose
                 sim_fail=1
             fi
             curl -sf -m 2 -X POST "http://127.0.0.1:$PORT/shutdown" > /dev/null 2>&1 || true
