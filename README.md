@@ -604,7 +604,7 @@ capabilities the test harness is denied, not the other way around.
 |----------|---------------------------------|------------------------------------------------------------------------------------|
 | Linux    | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
 | macOS    | AppKit (`backend/aether_ui_macos.m`)    | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
-| Windows  | Native Win32 (`backend/aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls; per-monitor DPI v2; immersive dark mode; AetherUIDriver via winsock2 |
+| Windows  | Native Win32 (`backend/aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls v6 (themed); per-monitor DPI v2; follows the system's dark mode (title bar, ground, controls); AetherUIDriver via winsock2 |
 | FreeBSD  | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — shares the Linux backend; clang build, private-Xvfb spec runs           |
 
 "Full" above means the backend implements the whole widget/canvas/event/
