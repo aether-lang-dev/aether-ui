@@ -3464,12 +3464,17 @@ void aether_ui_textfield_set_text(int handle, const char* text) {
  * win32 handed back an allocation, so the same ABI call leaked on one platform
  * and, on macOS, returned an autoreleased buffer valid only until the pool
  * drained. */
+// Declared `@heap` on the Aether side, like the textarea's and the other
+// backends' (GTK4 and AppKit strdup theirs): the caller frees what it gets.
+// This handed back wide_to_utf8's rotating static buffer, and the first
+// free of it corrupted the heap -- an app reading a text field on Windows
+// died in whatever free came next, far from here.
 const char* aether_ui_textfield_get_text(int handle) {
     Widget* w = widget_at(handle);
     if (!w) return _strdup("");
     wchar_t buf[4096];
     GetWindowTextW(w->hwnd, buf, 4096);
-    return wide_to_utf8(buf);
+    return _strdup(wide_to_utf8(buf));
 }
 
 int aether_ui_toggle_create(const char* label, void* boxed_closure) {

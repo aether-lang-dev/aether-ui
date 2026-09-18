@@ -280,6 +280,32 @@ static void closure_survives_retiring_its_widget(void) {
               "self-retiring click: a stale click on the retired button reaches nothing");
 }
 
+// The strings the backend hands the Aether side are the caller's to free:
+// ui/module.ae declares textfield_get_text and textarea_get_text `@heap`,
+// and frees what they return. The text field returned a rotating static
+// buffer, so the first free corrupted the heap and the process died in
+// some later, unrelated free. Two reads must be two allocations, each
+// freed here without incident -- under the debug heap or Wine, a free of
+// a static buffer is a fault this run would not survive.
+static void text_reads_are_the_callers_to_free(void) {
+    int field = aether_ui_textfield_create("", NULL);
+    aether_ui_textfield_set_text(field, "twelve");
+    char* a = (char*)aether_ui_textfield_get_text(field);
+    char* b = (char*)aether_ui_textfield_get_text(field);
+    expect_eq((unsigned)(strcmp(a, "twelve") == 0), 1u,
+              "textfield_get_text: reads what was set");
+    expect_eq((unsigned)(a != b), 1u,
+              "textfield_get_text: two reads are two allocations");
+    free(a);
+    free(b);
+    char* again = (char*)aether_ui_textfield_get_text(field);
+    expect_eq((unsigned)(strcmp(again, "twelve") == 0), 1u,
+              "textfield_get_text: a read after the frees is intact");
+    free(again);
+    expect_eq((unsigned)(HeapValidate(GetProcessHeap(), 0, NULL) != 0), 1u,
+              "textfield_get_text: the heap is whole after freeing the reads");
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -293,6 +319,7 @@ int main(void) {
     canvas_group_opacity();
     canvas_gradient_stop_clamp();
     closure_survives_retiring_its_widget();
+    text_reads_are_the_callers_to_free();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);
