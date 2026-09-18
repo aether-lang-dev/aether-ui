@@ -20,7 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sliders and scrollbars. The driver's `/appearance?dark=` override steers
   it too, and a theme flip at run time repaints. The registry read behind
   `is_dark_mode` is cached, since it is now asked on every erase: read per
-  question, a small form's first paint took seconds.
+  question, a small form's first paint took seconds. A textarea takes
+  Explorer's dark theme so its scrollbar is dark as well, and a progress bar
+  on a dark system is unthemed and coloured — the themed track stays light and
+  ignores `PBM_SETBKCOLOR`. Push buttons keep the light themed face: the dark
+  button theme needs an undocumented uxtheme switch, tried and found to change
+  nothing here, so it is not used.
 
 ### Fixed
 

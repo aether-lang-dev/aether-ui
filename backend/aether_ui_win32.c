@@ -3508,7 +3508,10 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    w32_system_dark_edit(h);
+    // Explorer's theme rather than the dialog's edit theme: this control
+    // owns a scrollbar, and only the former draws that dark. Its frame is
+    // the client edge, which neither theme touches.
+    w32_system_dark_control(h);
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
@@ -3697,7 +3700,10 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    w32_system_dark_edit(h);
+    // Explorer's theme rather than the dialog's edit theme: this control
+    // owns a scrollbar, and only the former draws that dark. Its frame is
+    // the client edge, which neither theme touches.
+    w32_system_dark_control(h);
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
@@ -4073,6 +4079,14 @@ int aether_ui_progressbar_create(double fraction) {
         WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
+    // On a dark system the themed bar keeps its light track, and the theme
+    // ignores PBM_SETBKCOLOR. Unthemed, the classic bar honours both colours:
+    // the system ground for the track and the accent for the fill.
+    if (aether_ui_dark_mode_check()) {
+        SetWindowTheme(h, L"", L"");
+        SendMessageW(h, PBM_SETBKCOLOR, 0, (LPARAM)RGB(0x3a, 0x3a, 0x3a));
+        SendMessageW(h, PBM_SETBARCOLOR, 0, (LPARAM)RGB(0x4c, 0xc2, 0xff));
+    }
     // Range 0..1001, so a bar at 1000 is full to the eye and there is
     // always a position one above the value to step back from: see
     // w32_progress_set.
