@@ -9,14 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **win32: a rebuilt list left slivers of the previous rows' text between
-  the new ones (#151).** Windows moves a child by copying the pixels it had
-  at its old place to the new one, and under a clipping parent those pixels
-  are whatever the old place showed: for a row rebuilt in place, the previous
-  row's text, which then sat in the 2px gap between the new rows as the
-  bottoms of glyphs that were no longer there. Every move a stack layout
-  makes now carries `SWP_NOCOPYBITS`, so a moved child is repainted, and the
-  stack's own ground is erased once after each coalesced layout.
+- **win32: the driver's screenshot drew every label twice, and the second
+  copy read as slivers of text between rows (#151).** The hook takes
+  `PrintWindow(PW_RENDERFULLCONTENT)` and then asked every registered widget
+  to render itself again over it through `WM_PRINTCLIENT` — right for a
+  window that never mapped (headless: nothing is composited, so that pass is
+  the whole picture), wrong for one on screen, where a STATIC's print lands a
+  few pixels off its on-screen baseline and its glyph bottoms showed in the
+  gap under each row. The screen itself was clean the whole time
+  (`PrintWindow` of the same window at the same moment). The per-widget pass
+  now runs only when the window is not mapped, and skips dead registry slots
+  (Windows reuses HWND values). #153's `SWP_NOCOPYBITS` on layout moves and
+  the ground erase after a coalesced layout stay as the defensive measures
+  they are; they were not what the slivers came from.
+
+- **win32 labels sat in grey boxes on a white ground.** With no ground set
+  anywhere above a STATIC or a BUTTON caption, `WM_CTLCOLORSTATIC` fell to
+  `DefWindowProc`, which answers the dialog grey (`COLOR_3DFACE`), while
+  every container class here erases with the window colour: each table cell
+  and caption was a grey rectangle on white, where GTK4 and AppKit paint
+  nothing behind a label. Those controls now answer with the window colour.
 
 ### Changed
 

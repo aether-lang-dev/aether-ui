@@ -1886,6 +1886,18 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 return (LRESULT)w32_ground_brush(ground);
             }
             if (cw && cw->fg.has_value) SetTextColor(hdc, cw->fg.color);
+            // No ground anywhere above: the control sits on the window
+            // colour, because that is what every container class here
+            // erases with (hbrBackground = COLOR_WINDOW + 1). DefWindowProc
+            // would answer COLOR_3DFACE for a STATIC or a BUTTON's caption,
+            // the dialog grey, and a label read as a grey box on a white row
+            // -- every table cell, every caption, on a ground GTK4 and AppKit
+            // paint nothing behind at all. An EDIT already draws on the
+            // window colour, so this changes nothing for it.
+            if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN) {
+                SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+                return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
 
@@ -10317,16 +10329,30 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     RECT full = { 0, 0, w, h };
     FillRect(mem, &full, face);
     DeleteObject(face);
-    if (!PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT)) {
+    int printed = PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+    if (!printed) {
         BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
     }
     // 2. Ask each REGISTERED widget to render itself at its own position.
     //    PrintWindow on the toplevel misses children that live under the
     //    off-screen widget_holder (never composited), which is every control
     //    on a window that has not mapped — i.e. exactly the headless case.
-    for (int wi = 1; wi <= widget_count; wi++) {
+    //
+    //    ONLY that case. On a window that is on screen, PrintWindow with
+    //    PW_RENDERFULLCONTENT already returned the composited image, and
+    //    drawing every control again over it through WM_PRINTCLIENT is not
+    //    a no-op: a STATIC's print renders its text a few pixels off its
+    //    on-screen baseline, so every label came out twice, and the second
+    //    copy showed in the gap under each row as the bottoms of glyphs --
+    //    "fragments of the previous rows" (#151) that were never on screen
+    //    (PrintWindow of the same window at the same moment was clean).
+    //    A dead registry slot is skipped too: Windows reuses HWND values,
+    //    so IsWindow can be true of a handle that now belongs to some other
+    //    control.
+    int mapped = printed && IsWindowVisible(hwnd) && !aeui_is_headless();
+    for (int wi = 1; wi <= widget_count && !mapped; wi++) {
         Widget* cw = widget_at(wi);
-        if (!cw || !cw->hwnd || !IsWindow(cw->hwnd)) continue;
+        if (!cw || cw->dead || !cw->hwnd || !IsWindow(cw->hwnd)) continue;
         if (!IsWindowVisible(cw->hwnd) && !cw->owner_drawn) continue;
         RECT cr;
         if (!GetWindowRect(cw->hwnd, &cr)) continue;
