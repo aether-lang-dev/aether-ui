@@ -5012,12 +5012,10 @@ table_filter_text(tp: ptr, s: string) {
     // escapes and nothing reclaims it automatically: without this release a
     // search box leaked one string per keystroke. Releasing a literal (the
     // initial "") is a no-op, so the first call needs no special case.
-    //
-    // CRITICAL: release the FIELD, not a local copy of it. codegen lowers
-    // string.release(<identifier>) into a free guarded by that local's
-    // heap-tracking flag, and a local read out of a struct field is not
-    // tracked, so the guard is false and the release silently does nothing.
-    string.string_release(t.ftext)
+    // (Until aether 0.666 a release through a local read out of the field
+    // was silently dropped, aether#1977; releasing the field itself was the
+    // way round it. Either form frees now.)
+    string.release(t.ftext)
     t.ftext = string.to_lower(s)
     t.fmode = 2
     if t.items != null { table_update(tp, t.items) }
@@ -5028,7 +5026,7 @@ table_filter_clear(tp: ptr) {
     t = tp as *TableDef
     t.fmode = 0
     t.filter = null
-    string.string_release(t.ftext)
+    string.release(t.ftext)
     t.ftext = ""
     if t.items != null { table_update(tp, t.items) }
 }

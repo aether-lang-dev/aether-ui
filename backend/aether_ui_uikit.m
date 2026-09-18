@@ -236,19 +236,6 @@ static void aeui_own_helper(id owner, id helper) {
     [held addObject:helper];
 }
 
-// ONE helper is still parked globally, on purpose: on_layout's KVO observer.
-// Whether that observer may die with its view is a different question from
-// this leak, because KVO has an ordering rule an owner cannot satisfy on its
-// own. An observed object deallocating with observers still registered is a
-// hard error, and an observer deallocating while still registered leaves the
-// layer notifying freed memory, so simply moving it onto the view trades a
-// leak for a crash. The comment at aether_ui_on_layout_impl says the same.
-static NSMutableArray* g_parked = nil;
-static void park_forever(id t) {
-    if (!g_parked) g_parked = [NSMutableArray array];
-    if (t) [g_parked addObject:t];
-}
-
 @interface AeuiButtonTarget : NSObject
 @property (nonatomic, assign) AeClosure* closure;
 @end
@@ -532,8 +519,57 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 // alignment=Fill makes arranged children fill the cross axis (what the AppKit
 // backend pins by hand); distribution=Fill lets spacers absorb slack.
 // ---------------------------------------------------------------------------
+
+// on_layout's hook: the closure and the size it last fired for. A stack
+// keeps its hooks in an array of its own, so a second on_layout on the same
+// stack adds a hook rather than replacing the first, and they all go with
+// the stack.
+@interface AeuiLayoutHook : NSObject
+@property (nonatomic, assign) AeClosure* closure;
+@property (nonatomic, assign) int lastW, lastH;
+@end
+@implementation AeuiLayoutHook
+@end
+
+// Every vstack/hstack is one of these so that on_layout has a
+// layoutSubviews to hang off: the pass UIKit runs whenever the view's
+// allocation is recomputed, which is exactly the GeometryReader's signal.
+// It replaces a KVO on the layer's bounds (aether-ui#144). That observer
+// could never be owned by the view, because an observed layer must lose
+// its observers before it deallocates and a helper released by the view's
+// own teardown cannot promise to run first; so it was parked for the life
+// of the app instead, which leaked one observer per on_layout and still
+// left the layer deallocating with the observer registered when the stack
+// was retired. An override has nothing registered anywhere, so there is
+// nothing to unregister and no order to get wrong.
+@interface AeuiStackView : UIStackView
+@property (nonatomic, strong) NSMutableArray<AeuiLayoutHook*>* layoutHooks;
+@end
+@implementation AeuiStackView
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (!self.layoutHooks) return;
+    int w = (int)lround(self.bounds.size.width);
+    int h = (int)lround(self.bounds.size.height);
+    for (AeuiLayoutHook* hk in self.layoutHooks) {
+        if (w == hk.lastW && h == hk.lastH) continue;   // change only
+        hk.lastW = w; hk.lastH = h;
+        AeClosure* c = hk.closure;
+        if (!c || !c->fn) continue;
+        // Deferred, as GTK defers to an idle: the closure is free to build
+        // and mutate widgets (a GeometryReader), which must not happen
+        // inside a layout pass.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            /* on_layout hands its closure INTS (its callers declare
+               |w: int, h: int|), unlike the canvas pointer callbacks. */
+            ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+        });
+    }
+}
+@end
+
 static UIStackView* make_stack(UILayoutConstraintAxis axis, int spacing) {
-    UIStackView* stack = [[UIStackView alloc] init];
+    UIStackView* stack = [[AeuiStackView alloc] init];
     stack.axis = axis;
     stack.spacing = (CGFloat)spacing;
     stack.alignment = UIStackViewAlignmentFill;
@@ -4345,50 +4381,22 @@ static int aeui_try_fire_shortcut(const char* combo) {
 int aether_ui_fire_undo(void) { return aether_ui_undo_step_impl(); }
 int aether_ui_fire_redo(void) { return aether_ui_redo_step_impl(); }
 
-// --- on_layout — fire (w,h) when the view's allocation changes (via KVO) -----
-@interface AeuiLayoutObserver : NSObject
-@property (nonatomic, assign) AeClosure* closure;
-@property (nonatomic, assign) int lastW, lastH;
-@property (nonatomic, unsafe_unretained) UIView* view;
-@end
-@implementation AeuiLayoutObserver
-- (void)observeValueForKeyPath:(NSString*)kp ofObject:(id)obj
-                        change:(NSDictionary*)ch context:(void*)ctx {
-    (void)kp; (void)obj; (void)ch; (void)ctx;
-    if (!self.view) return;
-    int w = (int)lround(self.view.bounds.size.width);
-    int h = (int)lround(self.view.bounds.size.height);
-    if (w == self.lastW && h == self.lastH) return;   // change only
-    self.lastW = w; self.lastH = h;
-    AeClosure* c = self.closure;
-    if (!c || !c->fn) return;
-    // Deferred: the closure is free to build/mutate widgets (a GeometryReader),
-    // which must not happen inside a layout pass.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
-    });
-}
-@end
+// --- on_layout — cb(w,h) when the stack's allocation changes ---------------
+// The signal is AeuiStackView's layoutSubviews (see the class, by
+// make_stack). Stacks only, the contract on every backend: GTK4 returns
+// the same way when it cannot give the widget its flex layout.
 void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v || !boxed_closure) return;
-    AeuiLayoutObserver* o = [[AeuiLayoutObserver alloc] init];
-    o.closure = (AeClosure*)boxed_closure;
-    o.view = v; o.lastW = 0; o.lastH = 0;
-    // CALayer.bounds is reliably KVO-compliant (Core Animation depends on it),
-    // unlike UIView.bounds.
-    //
-    // This observer is PARKED FOR THE LIFE OF THE APP rather than owned by
-    // the view, which every other helper here now is. It leaks one observer
-    // per on_layout, and that is the lesser of the two available bugs: KVO
-    // requires the observer to be removed BEFORE the observed layer goes, and
-    // an owner released by the view's own teardown cannot guarantee it runs
-    // first. Getting out of this needs the observation replaced, a UIView
-    // subclass overriding layoutSubviews rather than a KVO on its layer, not
-    // a change of owner.
-    [v.layer addObserver:o forKeyPath:@"bounds"
-                 options:NSKeyValueObservingOptionNew context:NULL];
-    park_forever(o);
+    if (![v isKindOfClass:[AeuiStackView class]]) return;
+    AeuiStackView* stack = (AeuiStackView*)v;
+    AeuiLayoutHook* hk = [[AeuiLayoutHook alloc] init];
+    hk.closure = (AeClosure*)boxed_closure;
+    hk.lastW = 0; hk.lastH = 0;
+    if (!stack.layoutHooks) stack.layoutHooks = [NSMutableArray array];
+    [stack.layoutHooks addObject:hk];
+    // Fire for the size the stack already has, as GTK queues a resize.
+    [stack setNeedsLayout];
 }
 
 // --- Inline CSS — parse "prop: val; …" and drive the set_* setters ----------
