@@ -1,0 +1,8 @@
+// The program `ae build --target=<arch>-ios-simulator --emit=staticlib` is
+// given so that it compiles the Aether runtime for the simulator: the archive
+// it writes holds this program's objects together with the runtime, and it
+// is the runtime ci.sh Phase 1e2 links an aether-ui example against. Nothing
+// here is ever called; the example brings its own main().
+main() {
+    println("aether runtime, built for the iOS simulator")
+}

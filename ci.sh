@@ -739,6 +739,153 @@ else
 fi
 
 echo
+echo "=== Phase 1e2: iOS simulator run (listbox_demo through the driver) ==="
+# Compiling, linking and a Catalyst render prove the backend builds and
+# paints; they say nothing about an app RUNNING on iOS. `ae build
+# --target=<arch>-ios-simulator --emit=staticlib` (aether 0.6xx, the
+# prerequisite #22 named) builds the Aether runtime for the simulator, so an
+# example can now be linked for real -- its portable C from aetherc, the
+# UIKit backend, the driver -- wrapped in a bundle (tests/ios/Info.plist),
+# installed in a booted simulator and driven over the same AetherUIDriver
+# port every other backend answers: tests/listbox_demo's spec runs against
+# it unchanged. Rows rendered by UIKit, a tap selecting one through the
+# DSL's closure, selection surviving an update: that is #22's acceptance,
+# on every push.
+#
+# The simulator shares the host's loopback, so the spec talks to 127.0.0.1
+# as usual. Environment reaches the app through SIMCTL_CHILD_*.
+IOS_SIM_UDID=""
+ios_sim_pick() {
+    # An available iPhone, booted if one already is (a stale boot is fine to
+    # reuse), else the first listed. Prints the UDID.
+    xcrun simctl list devices available -j 2>/dev/null | jq -r '
+        [.devices | to_entries[]
+         | select(.key | contains("iOS"))
+         | .value[] | select(.name | startswith("iPhone"))]
+        | (map(select(.state == "Booted")) + .) | .[0].udid // empty'
+}
+ios_sim_cleanup() {
+    [ -n "$IOS_SIM_UDID" ] || return 0
+    xcrun simctl terminate "$IOS_SIM_UDID" dev.aether.ui.simprobe > /dev/null 2>&1 || true
+    xcrun simctl uninstall "$IOS_SIM_UDID" dev.aether.ui.simprobe > /dev/null 2>&1 || true
+    xcrun simctl shutdown "$IOS_SIM_UDID" > /dev/null 2>&1 || true
+}
+if [ "$PLATFORM" != "macos" ] || [ -z "$IOS_SDK" ] || [ ! -d "$IOS_SDK" ]; then
+    echo "  SKIP needs a Mac with the iOS simulator SDK"
+elif [ "$ios_fail" -ne 0 ]; then
+    echo "  SKIP Phase 1e failed"
+elif ! ae build --help 2>&1 | grep -q "ios-simulator"; then
+    echo "  SKIP this ae has no iOS target (aether #1385)"
+else
+    sim_fail=0
+    SIM_DIR="$ROOT/build/ios"
+    SIM_APP="$SIM_DIR/AetherUIProbe.app"
+    rm -rf "$SIM_DIR"; mkdir -p "$SIM_APP"
+    case "$(uname -m)" in
+        arm64)  SIM_AE_TARGET="aarch64-ios-simulator"; SIM_CLANG_TGT="arm64-apple-ios17.0-simulator" ;;
+        *)      SIM_AE_TARGET="x86_64-ios-simulator";  SIM_CLANG_TGT="x86_64-apple-ios17.0-simulator" ;;
+    esac
+    # 1. The runtime, compiled for the simulator (see tests/ios/runtime_seed.ae).
+    if ! AETHER_IOS_MIN=17.0 ae build --target="$SIM_AE_TARGET" --emit=staticlib \
+            "$ROOT/tests/ios/runtime_seed.ae" -o "$SIM_DIR/libaether_sim.a" \
+            > /tmp/ci_ios_sim_runtime.log 2>&1; then
+        echo "  FAIL runtime archive for $SIM_AE_TARGET"
+        tail -15 /tmp/ci_ios_sim_runtime.log | sed 's/^/       /'
+        sim_fail=1
+    else
+        echo "  OK   runtime archive for $SIM_AE_TARGET"
+    fi
+    # 2. The example's portable C, exactly as build.sh emits it for the host.
+    if [ "$sim_fail" -eq 0 ] && ! aetherc "$ROOT/examples/listbox_demo/listbox_demo.ae" \
+            "$SIM_DIR/listbox_demo.c" > /tmp/ci_ios_sim_aetherc.log 2>&1; then
+        echo "  FAIL aetherc listbox_demo"
+        tail -15 /tmp/ci_ios_sim_aetherc.log | sed 's/^/       /'
+        sim_fail=1
+    fi
+    # 3. Link it for the simulator: the app, the UIKit backend, the driver, the
+    #    runtime archive, the frameworks. The same clang line as Phase 1e's
+    #    link check, with the real runtime where tests/ios/link_stub.c stood.
+    if [ "$sim_fail" -eq 0 ]; then
+        if "$IOS_CLANG" -fobjc-arc -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
+                $(ae cflags | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ') -Ibackend \
+                "$SIM_DIR/listbox_demo.c" \
+                "$ROOT/backend/aether_ui_uikit.m" \
+                "$ROOT/backend/aether_ui_test_server.c" \
+                "$ROOT/backend/aether_ui_system_extras.c" \
+                "$SIM_DIR/libaether_sim.a" \
+                -framework UIKit -framework Foundation -framework QuartzCore \
+                -framework CoreGraphics -framework CoreText -framework ImageIO \
+                -framework UserNotifications -lpthread -lm \
+                -o "$SIM_APP/AetherUIProbe" > /tmp/ci_ios_sim_link.log 2>&1; then
+            echo "  OK   listbox_demo links against the simulator runtime"
+        else
+            echo "  FAIL link listbox_demo for the simulator"
+            grep -iE "undefined|error:" /tmp/ci_ios_sim_link.log | head -15 | sed 's/^/       /'
+            sim_fail=1
+        fi
+    fi
+    # 4. The bundle, and a simulator to put it in.
+    if [ "$sim_fail" -eq 0 ]; then
+        cp "$ROOT/tests/ios/Info.plist" "$SIM_APP/Info.plist"
+        IOS_SIM_UDID="$(ios_sim_pick)"
+        if [ -z "$IOS_SIM_UDID" ]; then
+            echo "  FAIL no available iPhone simulator on this host"
+            xcrun simctl list devices available 2>&1 | head -20 | sed 's/^/       /'
+            sim_fail=1
+        fi
+    fi
+    if [ "$sim_fail" -eq 0 ]; then
+        xcrun simctl boot "$IOS_SIM_UDID" > /tmp/ci_ios_sim_boot.log 2>&1 || true
+        if ! xcrun simctl bootstatus "$IOS_SIM_UDID" -b >> /tmp/ci_ios_sim_boot.log 2>&1; then
+            echo "  FAIL simulator $IOS_SIM_UDID did not boot"
+            tail -10 /tmp/ci_ios_sim_boot.log | sed 's/^/       /'
+            sim_fail=1
+        elif ! xcrun simctl install "$IOS_SIM_UDID" "$SIM_APP" > /tmp/ci_ios_sim_install.log 2>&1; then
+            echo "  FAIL install into the simulator"
+            tail -10 /tmp/ci_ios_sim_install.log | sed 's/^/       /'
+            sim_fail=1
+        else
+            echo "  OK   booted $IOS_SIM_UDID and installed the bundle"
+        fi
+    fi
+    # 5. Launch with the driver armed, then run the listbox spec against it as
+    #    Phase 5f does on the desktop.
+    if [ "$sim_fail" -eq 0 ]; then
+        if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets" 2>/dev/null; then
+            echo "  FAIL port $PORT already answering (stray app?)"
+            sim_fail=1
+        elif ! SIMCTL_CHILD_AETHER_UI_TEST_PORT="$PORT" \
+                SIMCTL_CHILD_AETHER_UI_NO_ANIMATION=1 \
+                xcrun simctl launch --stdout=/tmp/ci_ios_sim.app.log --stderr=/tmp/ci_ios_sim.app.err \
+                    "$IOS_SIM_UDID" dev.aether.ui.simprobe > /tmp/ci_ios_sim_launch.log 2>&1; then
+            echo "  FAIL launch"
+            tail -10 /tmp/ci_ios_sim_launch.log | sed 's/^/       /'
+            sim_fail=1
+        else
+            up=0
+            for _ in $(seq 1 100); do
+                if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then up=1; break; fi
+                sleep 0.2
+            done
+            if [ "$up" -ne 1 ]; then
+                echo "  FAIL the app's driver server never answered from the simulator"
+                tail -20 /tmp/ci_ios_sim.app.log /tmp/ci_ios_sim.app.err 2>/dev/null | sed 's/^/       /'
+                sim_fail=1
+            elif UI_SPEC=listbox_demo/spec_listbox_demo "$SCRIPT_DIR/tests/run_spec.sh" "$PORT"; then
+                echo "  OK   listbox_demo spec passes on the iOS simulator"
+            else
+                echo "  FAIL listbox_demo spec on the iOS simulator"
+                tail -20 /tmp/ci_ios_sim.app.log /tmp/ci_ios_sim.app.err 2>/dev/null | sed 's/^/       /'
+                sim_fail=1
+            fi
+            curl -sf -m 2 -X POST "http://127.0.0.1:$PORT/shutdown" > /dev/null 2>&1 || true
+        fi
+    fi
+    ios_sim_cleanup
+    [ "$sim_fail" -eq 0 ] || FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 2: smoke-launch non-driver examples ==="
 for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))

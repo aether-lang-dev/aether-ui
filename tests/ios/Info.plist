@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The bundle ci.sh Phase 1e2 installs in the iOS simulator around an
+         aether-ui example linked against the UIKit backend and a simulator
+         build of libaether. The executable name is the example's; ci.sh
+         copies the binary in as AetherUIProbe. -->
+    <key>CFBundleIdentifier</key>
+    <string>dev.aether.ui.simprobe</string>
+    <key>CFBundleName</key>
+    <string>AetherUIProbe</string>
+    <key>CFBundleExecutable</key>
+    <string>AetherUIProbe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>iPhoneSimulator</string>
+    </array>
+    <key>DTPlatformName</key>
+    <string>iphonesimulator</string>
+    <key>DTSDKName</key>
+    <string>iphonesimulator</string>
+    <key>MinimumOSVersion</key>
+    <string>15.0</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <!-- The scene manifest that puts the backend on its UIWindowScene path
+         (AetherSceneDelegate). No configurations are listed: the app delegate
+         supplies one in code, so no per-app class wiring lives here. -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+    <key>UILaunchScreen</key>
+    <dict/>
+</dict>
+</plist>
