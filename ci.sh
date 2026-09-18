@@ -781,9 +781,35 @@ ios_sim_diagnose() {
     rep="$(ls -t ~/Library/Logs/DiagnosticReports/AetherUIProbe* 2>/dev/null | head -1)"
     if [ -n "$rep" ]; then
         echo "       $rep"
-        # .ips: a JSON header line, then the JSON report; the useful keys
-        # are near the top and the crashing thread's frames follow.
-        head -c 6000 "$rep" | tr ',' '\n' | grep -E '"(exception|termination|faultingThread|procName|asi|name|imageOffset|symbol|sourceFile|sourceLine)"' | head -60 | sed 's/^/       /'
+        # .ips: a JSON header line, then the JSON report. The exception, the
+        # uncaught NSException's own message and backtrace if there was
+        # one (that is where an out-of-range index was raised), and the
+        # faulting thread's frames, each with its image.
+        python3 - "$rep" <<'PY' 2>&1 | sed 's/^/       /'
+import json, sys
+raw = open(sys.argv[1]).read().split('\n', 1)[1]
+r = json.loads(raw)
+imgs = r.get('usedImages', [])
+def frame(f):
+    i = f.get('imageIndex', -1)
+    img = imgs[i].get('name', '?') if 0 <= i < len(imgs) else '?'
+    return '%-28s %s %s%s' % (img, f.get('symbol', '+%d' % f.get('imageOffset', 0)),
+                              f.get('sourceFile', ''), (':%d' % f['sourceLine']) if 'sourceLine' in f else '')
+print('exception:', json.dumps(r.get('exception')))
+print('termination:', json.dumps(r.get('termination')))
+for k in ('asi', 'ktriageinfo'):
+    if r.get(k): print(k + ':', json.dumps(r[k])[:600])
+leb = r.get('lastExceptionBacktrace')
+if leb:
+    print('last exception backtrace:')
+    for f in leb[:25]: print('   ', frame(f))
+ft = r.get('faultingThread', 0)
+threads = r.get('threads', [])
+if ft < len(threads):
+    t = threads[ft]
+    print('faulting thread %d %s %s:' % (ft, t.get('name', ''), t.get('queue', '')))
+    for f in t.get('frames', [])[:25]: print('   ', frame(f))
+PY
     else
         echo "       (none)"
     fi

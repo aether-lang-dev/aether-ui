@@ -1148,6 +1148,10 @@ void aether_ui_picker_set_selected(int handle, int index) {
     p.selectedIndex = index;
     [p setTitle:p.items[index] forState:UIControlStateNormal];
     [p rebuildMenu];
+    // A programmatic selection fires the change callback, as it does on
+    // GTK4 and AppKit; the menu action above fires it for a tap.
+    if (p.closure && p.closure->fn)
+        ((void(*)(void*, intptr_t))p.closure->fn)(p.closure->env, (intptr_t)index);
 }
 
 int aether_ui_picker_get_selected(int handle) {
@@ -3139,6 +3143,7 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
 // Pass 6 wave 3 — events (tap/double-tap/hover), zstack, focus, sealing, misc.
 // ===========================================================================
 static const char kDblClosure;
+static const char kClickClosure;
 static const char kSealed;
 
 @interface AeuiTapTarget : NSObject
@@ -3165,6 +3170,10 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     v.userInteractionEnabled = YES;
     [v addGestureRecognizer:tap];
     aeui_own_helper(v, t);
+    // Addressable by handle too, so the driver's click on a plain container
+    // (a listbox row) fires what a tap would, as on_double_click below.
+    objc_setAssociatedObject(v, &kClickClosure, [NSValue valueWithPointer:boxed_closure],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
@@ -3688,6 +3697,7 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
                 [[UITapGestureRecognizer alloc] initWithTarget:t action:@selector(tap)]];
             scrim.userInteractionEnabled = YES;
             aeui_own_helper(scrim, t);
+            objc_setAssociatedObject(scrim, "aeui-scrim", @(1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             e->scrim = scrim;
         }
         content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -4553,21 +4563,178 @@ int aether_ui_fire_appearance(int dark) {
     return 1;
 }
 
-// --- AetherUIDriver hooks ---------------------------------------------------
-// Enough for the server to run and serve the canvas pixel routes (which call
-// aether_ui_canvas_read_pixel_impl directly, no hook) plus the cheap scalar
-// queries. The rest stay NULL — the shared server treats a NULL hook as 501 and
-// omits the field, so a partial table is safe. A full driver (widget geometry,
-// dispatch_action) is a later pass. Every hook here reads only plain state, no
-// off-main UIView mutation.
+// --- AetherUIDriver — UIKit adapter ------------------------------------------
+// The shared HTTP server (aether_ui_test_server.c) does the parsing, routing
+// and JSON; this table tells it how to read and drive UIKit widgets, as the
+// AppKit and Win32 tables do for theirs. Route parity is structural: a route
+// added to the shared server lands here at once.
+//
+// Threading: UIKit, like GTK and unlike AppKit, does not tolerate reads of
+// the view tree from another thread (the accessibility and layout paths
+// walk NSArrays the main thread is mutating, and an out-of-range index in
+// -[__NSArrayM objectAtIndex:] on the HTTP thread was the first thing the
+// simulator leg found). So run_on_ui_thread is supplied and the server
+// services every request on the main queue, one hop per request; the
+// mutations go through dispatch_action, which hops the same way.
+//
+// What iOS cannot do answers honestly rather than pretending: a window has
+// no size to set (WIN_RESIZE), there is no menu bar or tray (MENU_ACTIVATE,
+// TRAY_ACTIVATE) -- ctx->result = 3 and the route says 404.
+
 static int hook_widget_count(void) { return widget_count; }
-static const char* hook_widget_type(int handle) { return aeui_kind_name(get_widget_type(handle)); }
+
+static const char* hook_widget_type(int handle) {
+    if (handle < 1 || handle > widget_count) return "null";
+    // A retired slot must read as null, not as its stale type.
+    if (!aether_ui_get_widget(handle)) return "null";
+    return aeui_kind_name(get_widget_type(handle));
+}
+
+static void hook_widget_text_into(int handle, char* buf, int bufsize) {
+    buf[0] = '\0';
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    NSString* s = nil;
+    if ([v isKindOfClass:[UILabel class]]) {
+        s = [(UILabel*)v text];
+    } else if ([v isKindOfClass:[UIButton class]]) {
+        // A picker is a UIButton whose title tracks its selection, so this
+        // reports the chosen item, as the other backends do.
+        s = [(UIButton*)v currentTitle];
+    } else if ([v isKindOfClass:[UITextField class]]) {
+        s = [(UITextField*)v text];
+    } else if ([v isKindOfClass:[UITextView class]]) {
+        s = [(UITextView*)v text];
+    }
+    if (s) snprintf(buf, bufsize, "%s", [s UTF8String]);
+}
+
+static int hook_widget_visible(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    // The widget's OWN flag, not "is it on screen": parity with GTK's
+    // gtk_widget_get_visible and the win32 WS_VISIBLE read. Headless never
+    // maps a window, and an ancestry test would zero the whole app.
+    return v.hidden ? 0 : 1;
+}
+
+static int hook_widget_parent(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    // The nearest REGISTERED ancestor: a scroll view or a stack may
+    // interpose views of UIKit's own, and a raw superview would report an
+    // orphan for anything inside one.
+    for (UIView* p = v.superview; p; p = p.superview) {
+        int h = aether_ui_handle_for_widget((__bridge void*)p);
+        if (h > 0) return h;
+    }
+    return 0;
+}
+
 static int hook_toggle_active(int handle) { return aether_ui_toggle_get_active(handle); }
 static double hook_slider_value(int handle) { return aether_ui_slider_get_value(handle); }
+
+static double hook_progressbar_fraction(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIProgressView class]]) return 0.0;
+    return (double)[(UIProgressView*)v progress];
+}
+
+static int hook_widget_enabled(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    // Non-controls (stacks, labels) have no enabled state: report them
+    // enabled, as GTK's get_sensitive does for a plain box.
+    if (![v isKindOfClass:[UIControl class]]) return 1;
+    return [(UIControl*)v isEnabled] ? 1 : 0;
+}
+
+// The view geometry is reported against: the window's root view when there
+// is a window, the app body's root widget headless. UIKit's y already grows
+// downward, so this is the same frame GTK and Win32 report.
+static UIView* aeui_driver_reference_view(void) {
+    UIWindow* w = aeui_key_window();
+    if (w) return w.rootViewController ? w.rootViewController.view : (UIView*)w;
+    return (__bridge UIView*)aether_ui_get_widget(g_root_handle);
+}
+
+static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    UIView* ref = aeui_driver_reference_view();
+    if (!ref) return -1;
+    CGRect r = v.superview ? [v.superview convertRect:v.frame toView:ref]
+                           : [v convertRect:v.bounds toView:ref];
+    // Sizes from the rounded edges, so a row of flexible children reported
+    // here still tiles its parent (the AppKit adapter's #101 lesson).
+    int x0 = (int)lround(r.origin.x), y0 = (int)lround(r.origin.y);
+    *x = x0; *y = y0;
+    *w = (int)lround(r.origin.x + r.size.width) - x0;
+    *hgt = (int)lround(r.origin.y + r.size.height) - y0;
+    return 0;
+}
+
+static void hook_widget_classes_into(int handle, char* buf, int bufsize) {
+    buf[0] = '\0';
+    if (handle < 1 || handle > widget_count) return;
+    const char* c = widget_classes[handle - 1];
+    if (c) snprintf(buf, bufsize, "%s", c);
+}
+
 static void hook_widget_a11y(int handle, char* role, int rolesz,
                              char* name, int namesz, char* desc, int descsz) {
     aether_ui_a11y_get_impl(handle, role, rolesz, name, namesz, desc, descsz);
 }
+
+static int hook_focused_widget(void) { return aether_ui_focused_widget(); }
+
+static int hook_widget_children(int handle, int* out, int max) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSArray* subs = [v isKindOfClass:[UIStackView class]]
+        ? [(UIStackView*)v arrangedSubviews] : [v subviews];
+    int n = 0;
+    for (UIView* c in subs) {
+        int ch = aether_ui_handle_for_widget((__bridge void*)c);
+        if (ch <= 0) continue;
+        if (out) { if (n >= max) break; out[n] = ch; }
+        n++;
+    }
+    return n;
+}
+
+static int hook_widget_hovered(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    return v && objc_getAssociatedObject(v, "aeui-hovered") ? 1 : 0;
+}
+
+static int hook_widget_pressed(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    return v && objc_getAssociatedObject(v, "aeui-pressed") ? 1 : 0;
+}
+
+// The window as the user sees it, rendered through the view hierarchy the
+// way a screenshot is. Headless there is no window, and the route says so.
+static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
+    UIWindow* w = aeui_key_window();
+    if (!w) return 1;
+    CGRect b = w.bounds;
+    if (b.size.width < 1 || b.size.height < 1) return 1;
+    UIGraphicsImageRenderer* r = [[UIGraphicsImageRenderer alloc] initWithBounds:b];
+    UIImage* img = [r imageWithActions:^(UIGraphicsImageRendererContext* ctx) {
+        (void)ctx;
+        [w drawViewHierarchyInRect:b afterScreenUpdates:YES];
+    }];
+    NSData* png = img ? UIImagePNGRepresentation(img) : nil;
+    if (!png || png.length == 0) return 1;
+    unsigned char* copy = (unsigned char*)malloc(png.length);
+    if (!copy) return 1;
+    memcpy(copy, png.bytes, png.length);
+    *out_data = copy;
+    *out_len = png.length;
+    return 0;
+}
+
 static int hook_canvas_debug(int canvas_id, int* area, int* commands,
                              int* w, int* h) {
     CanvasState* cs = get_canvas_state(canvas_id);
@@ -4578,6 +4745,7 @@ static int hook_canvas_debug(int canvas_id, int* area, int* commands,
     if (h) *h = cs->created_h;
     return 0;
 }
+
 static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
                                       int* clip_paints, int* last_clip_area) {
     CanvasState* cs = get_canvas_state(canvas_id);
@@ -4588,14 +4756,315 @@ static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
     return 0;
 }
 
+// "ctrl+shift+s" -> the key name and the modifier bits window_key_deliver
+// takes (1 shift, 2 ctrl, 4 alt, 8 cmd), the same spelling the specs use on
+// every backend.
+static int aeui_driver_split_combo(const char* combo, char* key, int keysz) {
+    int mods = 0;
+    key[0] = '\0';
+    const char* p = combo ? combo : "";
+    while (*p) {
+        const char* plus = strchr(p, '+');
+        size_t n = plus ? (size_t)(plus - p) : strlen(p);
+        if (plus && n > 0) {
+            if (strncasecmp(p, "shift", n) == 0 && n == 5) mods |= 1;
+            else if ((strncasecmp(p, "ctrl", n) == 0 && n == 4)
+                  || (strncasecmp(p, "control", n) == 0 && n == 7)) mods |= 2;
+            else if ((strncasecmp(p, "alt", n) == 0 && n == 3)
+                  || (strncasecmp(p, "option", n) == 0 && n == 6)) mods |= 4;
+            else if ((strncasecmp(p, "cmd", n) == 0 && n == 3)
+                  || (strncasecmp(p, "meta", n) == 0 && n == 4)
+                  || (strncasecmp(p, "super", n) == 0 && n == 5)) mods |= 8;
+            p = plus + 1;
+            continue;
+        }
+        snprintf(key, (size_t)keysz, "%.*s", (int)n, p);
+        break;
+    }
+    return mods;
+}
+
+// Every hover flag cleared and the resting colour restored, so a pointer
+// that left everything leaves nothing wearing its hover colour.
+static void aeui_driver_clear_hover(void) {
+    for (int i = 1; i <= widget_count; i++) {
+        UIView* pv = (__bridge UIView*)aether_ui_get_widget(i);
+        if (!pv || !objc_getAssociatedObject(pv, "aeui-hovered")) continue;
+        objc_setAssociatedObject(pv, "aeui-hovered", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        id orig = objc_getAssociatedObject(pv, "aeui-hover-orig");
+        if (orig) pv.backgroundColor = (orig == [NSNull null]) ? nil : orig;
+    }
+}
+
+// A state colour (hover or active) put on the view the way the pointer
+// recognizer does it: the resting colour is kept once, under
+// "aeui-hover-orig", and comes back when the state ends.
+static void aeui_driver_apply_state_colour(UIView* v, const char* style_key) {
+    NSNumber* n = objc_getAssociatedObject(v, style_key);
+    if (!n) return;
+    if (!objc_getAssociatedObject(v, "aeui-hover-orig"))
+        objc_setAssociatedObject(v, "aeui-hover-orig", v.backgroundColor ?: [NSNull null],
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    int p = n.intValue;
+    v.backgroundColor = [UIColor colorWithRed:((p >> 16) & 255) / 255.0
+                                        green:((p >> 8) & 255) / 255.0
+                                         blue:(p & 255) / 255.0 alpha:1.0];
+}
+
+// Mutation, on the main queue.
+static void driver_perform(AetherDriverActionCtx* ctx) {
+    // Actions with no widget subject first.
+    switch (ctx->action) {
+        case AETHER_DRV_SET_STATE: {
+            switch (aether_ui_state_type(ctx->handle)) {
+                case 1: aether_ui_state_set_i(ctx->handle, atoi(ctx->sval)); break;
+                case 2: aether_ui_state_set_b(ctx->handle,
+                            (strcmp(ctx->sval, "true") == 0 || atoi(ctx->sval) != 0)); break;
+                case 3: aether_ui_state_set_s(ctx->handle, ctx->sval); break;
+                default: aether_ui_state_set(ctx->handle, ctx->dval);
+            }
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_WIN_RESIZE:
+            // An iOS window is the screen (or the scene the system sizes);
+            // nothing here can set it. 404 rather than a pretend success.
+            ctx->result = 3;
+            return;
+        case AETHER_DRV_WIN_KEY: {
+            char key[64];
+            int mods = aeui_driver_split_combo(ctx->sval, key, sizeof(key));
+            ctx->retval = aether_ui_window_key_deliver(key, mods);
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_SHUTDOWN:
+            // iOS has no programmatic quit for an app the user runs, and the
+            // ABI's app_quit is a documented no-op for that reason. The
+            // driver is the test harness, and its shutdown is the end of a
+            // test run: the process exits, and the port with it.
+            fflush(stdout);
+            fflush(stderr);
+            exit(0);
+        case AETHER_DRV_PICK: {
+            // A real hit-test at window coordinates: the proof that a modal
+            // scrim blocks input by z-order rather than by an honour system.
+            ctx->retval = 0;
+            int want_scrim = 0;
+            UIView* ref = aeui_driver_reference_view();
+            if (ref) {
+                UIView* hit = [ref hitTest:CGPointMake(ctx->ival, ctx->ival2) withEvent:nil];
+                for (UIView* v = hit; v; v = v.superview) {
+                    int h = aether_ui_handle_for_widget((__bridge void*)v);
+                    if (h > 0) {
+                        if (objc_getAssociatedObject(v, "aeui-scrim")) want_scrim = 1;
+                        else ctx->retval = h;
+                        break;
+                    }
+                }
+            }
+            ctx->ival2 = want_scrim;   // out-param: on_scrim
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_SPLIT_POS:
+            if (ctx->ival >= 0) aether_ui_split_set_position_impl(ctx->handle, ctx->ival);
+            ctx->retval = aether_ui_split_position_impl(ctx->handle);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_TAB_SELECT:
+            aether_ui_tabs_select(ctx->handle, ctx->ival);
+            ctx->retval = aether_ui_tabs_selected(ctx->handle);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_CTX_MENU: {
+            UIView* v = (__bridge UIView*)aether_ui_get_widget(ctx->handle);
+            AeuiCtxMenuDelegate* d = v ? objc_getAssociatedObject(v, &kCtxDelegate) : nil;
+            ctx->retval = (d && d.items.count > 0) ? 1 : 0;
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_CTX_ACTIVATE: {
+            UIView* v = (__bridge UIView*)aether_ui_get_widget(ctx->handle);
+            AeuiCtxMenuDelegate* d = v ? objc_getAssociatedObject(v, &kCtxDelegate) : nil;
+            ctx->retval = 0;
+            if (d && ctx->ival >= 0 && ctx->ival < (int)d.items.count) {
+                AeClosure* c = (AeClosure*)[d.items[(NSUInteger)ctx->ival][@"c"] pointerValue];
+                if (c && c->fn) { ((void(*)(void*))c->fn)(c->env); ctx->retval = 1; }
+            }
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_MENU_ACTIVATE:
+        case AETHER_DRV_TRAY_ACTIVATE:
+            // No menu bar and no tray on iOS; the registry these would
+            // reach is the desktop's.
+            ctx->result = 3;
+            return;
+        case AETHER_DRV_CANVAS_CLICK:
+        case AETHER_DRV_CANVAS_MOVE:
+        case AETHER_DRV_CANVAS_RELEASE:
+        case AETHER_DRV_CANVAS_KEY:
+        case AETHER_DRV_CANVAS_KEYUP:
+        case AETHER_DRV_CANVAS_SCROLL: {
+            CanvasState* cs = get_canvas_state(ctx->handle);
+            AeClosure* c = NULL;
+            if (cs) {
+                c = (ctx->action == AETHER_DRV_CANVAS_SCROLL)  ? cs->on_scroll
+                  : (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
+                  : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
+                  : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
+                  : (ctx->action == AETHER_DRV_CANVAS_KEYUP)   ? cs->on_key_release
+                                                               : cs->on_key;
+            }
+            if (!c || !c->fn) { ctx->result = 3; return; }  // 404: unwired, not missed
+            if (ctx->action == AETHER_DRV_CANVAS_KEY
+                || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
+                ((void(*)(void*, const char*))c->fn)(c->env, ctx->sval);
+            } else {
+                ((void(*)(void*, double, double))c->fn)(c->env, ctx->dval, ctx->dval2);
+            }
+            ctx->result = 0;
+            return;
+        }
+        default: break;
+    }
+
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(ctx->handle);
+    if (!v) {
+        // hover(0) = "the pointer is over NOTHING": clear every hover.
+        if (ctx->action == AETHER_DRV_HOVER && ctx->handle == 0) {
+            aeui_driver_clear_hover();
+            ctx->retval = 1; ctx->result = 0; return;
+        }
+        ctx->result = 3; return;
+    }
+    if (ctx->action == AETHER_DRV_FOCUS) {
+        aether_ui_focus_impl(ctx->handle);
+        ctx->result = 0;
+        return;
+    }
+    if (ctx->handle == aether_ui_test_server_banner_handle()) { ctx->result = 2; return; }
+    if (aether_ui_test_server_is_sealed(ctx->handle)) { ctx->result = 1; return; }
+
+    switch (ctx->action) {
+        case AETHER_DRV_HOVER:
+            // The flag the readback reports and the colour the pointer
+            // recognizer would have put on: what a hover looks like here.
+            aeui_driver_clear_hover();
+            objc_setAssociatedObject(v, "aeui-hovered", @(1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            aeui_driver_apply_state_colour(v, "aeui-hover-style");
+            ctx->retval = 1;
+            break;
+        case AETHER_DRV_PRESS:
+            objc_setAssociatedObject(v, "aeui-pressed", @(1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            aeui_driver_apply_state_colour(v, "aeui-active-style");
+            ctx->retval = 1;
+            break;
+        case AETHER_DRV_RELEASE: {
+            objc_setAssociatedObject(v, "aeui-pressed", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            // Back to the hover colour if the pointer is still over it,
+            // else to rest.
+            id orig = objc_getAssociatedObject(v, "aeui-hover-orig");
+            if (orig) v.backgroundColor = (orig == [NSNull null]) ? nil : orig;
+            if (objc_getAssociatedObject(v, "aeui-hovered"))
+                aeui_driver_apply_state_colour(v, "aeui-hover-style");
+            ctx->retval = 1;
+            break;
+        }
+        case AETHER_DRV_CLICK:
+            if ([v isKindOfClass:[UIControl class]] && ![v isKindOfClass:[UITextField class]]) {
+                // The control's own action, as a tap would send it: a
+                // button's target, a switch's, a segmented control's.
+                UIControl* c = (UIControl*)v;
+                if ([v isKindOfClass:[UISwitch class]]) {
+                    [(UISwitch*)v setOn:![(UISwitch*)v isOn] animated:NO];
+                    [c sendActionsForControlEvents:UIControlEventValueChanged];
+                } else {
+                    [c sendActionsForControlEvents:UIControlEventTouchUpInside];
+                }
+            } else {
+                // Any widget carrying an on_click closure: listbox rows are
+                // plain containers, and a tap on one must still fire.
+                NSValue* nv = objc_getAssociatedObject(v, &kClickClosure);
+                AeClosure* c = nv ? (AeClosure*)nv.pointerValue : NULL;
+                if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+            }
+            break;
+        case AETHER_DRV_SET_TEXT:
+            if ([v isKindOfClass:[UITextField class]]) {
+                // Through the toolkit setter, so a two-way bind_value field
+                // mirrors driver input into its state, then the editing
+                // event a keystroke would have sent, so on_change fires:
+                // setting .text sends no event of its own.
+                aether_ui_textfield_set_text(ctx->handle, ctx->sval);
+                [(UITextField*)v sendActionsForControlEvents:UIControlEventEditingChanged];
+            } else if ([v isKindOfClass:[UITextView class]]) {
+                aether_ui_textarea_set_text(ctx->handle, ctx->sval);
+                // Programmatic text sets do not call the delegate either.
+                id d = [(UITextView*)v delegate];
+                if ([d respondsToSelector:@selector(textViewDidChange:)])
+                    [d textViewDidChange:(UITextView*)v];
+            } else if ([v isKindOfClass:[UILabel class]]) {
+                aether_ui_text_set_string(ctx->handle, ctx->sval);
+            }
+            break;
+        case AETHER_DRV_TOGGLE:
+            if ([v isKindOfClass:[UISwitch class]]) {
+                [(UISwitch*)v setOn:![(UISwitch*)v isOn] animated:NO];
+                [(UISwitch*)v sendActionsForControlEvents:UIControlEventValueChanged];
+            }
+            break;
+        case AETHER_DRV_SET_VALUE:
+            if ([v isKindOfClass:[UISlider class]]) {
+                aether_ui_slider_set_value(ctx->handle, ctx->dval);
+                [(UISlider*)v sendActionsForControlEvents:UIControlEventValueChanged];
+            } else if ([v isKindOfClass:[UIProgressView class]]) {
+                aether_ui_progressbar_set_fraction(ctx->handle, ctx->dval);
+            } else if (get_widget_type(ctx->handle) == AUI_PICKER) {
+                // set_selected fires the change callback, as on every backend.
+                aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
+            }
+            break;
+        default:
+            break;
+    }
+    ctx->result = 0;
+}
+
+static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
+    if ([NSThread isMainThread]) driver_perform(ctx);
+    else dispatch_sync(dispatch_get_main_queue(), ^{ driver_perform(ctx); });
+    ctx->done = 1;
+}
+
+static void hook_run_on_ui_thread(void (*fn)(void*), void* arg) {
+    if ([NSThread isMainThread]) { fn(arg); return; }
+    dispatch_sync(dispatch_get_main_queue(), ^{ fn(arg); });
+}
+
 static const AetherDriverHooks uikit_driver_hooks = {
     .widget_count          = hook_widget_count,
     .widget_type           = hook_widget_type,
+    .widget_text_into      = hook_widget_text_into,
+    .widget_visible        = hook_widget_visible,
+    .widget_hovered        = hook_widget_hovered,
+    .widget_pressed        = hook_widget_pressed,
+    .widget_parent         = hook_widget_parent,
     .toggle_active         = hook_toggle_active,
     .slider_value          = hook_slider_value,
+    .progressbar_fraction  = hook_progressbar_fraction,
+    .dispatch_action       = hook_dispatch_action,
+    .widget_children       = hook_widget_children,
+    .widget_enabled        = hook_widget_enabled,
+    .widget_rect           = hook_widget_rect,
+    .widget_classes_into   = hook_widget_classes_into,
+    .focused_widget        = hook_focused_widget,
     .widget_a11y           = hook_widget_a11y,
+    .screenshot_png        = hook_screenshot_png,
     .canvas_debug          = hook_canvas_debug,
     .canvas_paint_counters = hook_canvas_paint_counters,
+    .run_on_ui_thread      = hook_run_on_ui_thread,
 };
 
 static int uikit_test_server_started = 0;
