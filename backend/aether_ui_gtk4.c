@@ -7500,6 +7500,14 @@ static gboolean test_action_idle(gpointer data) {
         case 0: { // click
             if (GTK_IS_BUTTON(w)) {
                 g_signal_emit_by_name(w, "clicked");
+            } else if (GTK_IS_CHECK_BUTTON(w)) {
+                // A toggle: GTK4's check button is not a GtkButton, so a
+                // click here reached nothing, while win32 (BS_AUTOCHECKBOX)
+                // and AppKit (NSButton) flip theirs on the same route. Flip
+                // it as a click does, which fires notify::active and the
+                // app's closure.
+                gboolean cur = gtk_check_button_get_active(GTK_CHECK_BUTTON(w));
+                gtk_check_button_set_active(GTK_CHECK_BUTTON(w), !cur);
             } else {
                 // Non-buttons with an on_click gesture (listbox rows, any
                 // container): invoke the registered closure directly — the
