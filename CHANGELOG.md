@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **The docs said a win32 splitview's divider cannot be dragged. It can, and
+  has been able to for some time:** `stack_wnd_proc` captures the mouse on a
+  press in the 6px divider band and relays out on every move, through the
+  same clamp that honours `set_min_width`. Measured with a real pointer drag
+  on `split_demo`: an 80px drag moved the first pane from 320 to 403 px.
+  `splitview`'s doc comment, `set_min_width`'s, and the README's widget table
+  and min-size section now say so.
+
 ### Changed
 
 - **win32 follows the system's dark mode for the ground it paints.** GTK4 and

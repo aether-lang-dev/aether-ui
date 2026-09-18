@@ -902,9 +902,10 @@ scrollview(_ctx: ptr) {
 // attach is silently dropped. Splitter position: split_position /
 // split_set_position (px from the left/top edge), and the driver route
 // POST /widget/{id}/split_position?px= so specs can drag it.
-// macOS uses a real NSSplitView with a thin divider. win32 is the one
-// backend that still renders a plain stack, so its divider cannot be
-// dragged and split_position answers the layout's split, not a drag.
+// macOS uses a real NSSplitView with a thin divider. win32 draws its own
+// 6px divider band inside the stack and drags it with mouse capture, and
+// split_position answers where the divider is after the drag, clamped the
+// way the layout clamps it.
 splitview(_ctx: ptr, orient: string) {
     vertical = 0
     if orient == "v" { vertical = 1 }
@@ -3574,10 +3575,9 @@ set_height(handle: int, px: int) -> int {
 // minimum), and the measured size the layout pass floors at on win32, where
 // the divider clamp reads it too.
 //
-// Where the DRAG is real differs, and the floor is honoured either way: GTK4
-// and AppKit have a draggable divider, win32 renders a splitview as a plain
-// stack whose divider cannot be dragged (see splitview), so there the floor is
-// what the layout pass and the clamp read rather than what a gesture meets.
+// The drag is real on every desktop backend, and the floor is honoured by
+// each: GTK4's paned and AppKit's split view stop at it, and win32's own
+// divider drag goes through the layout pass, whose clamp reads the floor.
 //
 //   panel = vstack(0) { ... }
 //   set_min_width(panel, 280)     // opens at 280, drag it wider or narrower

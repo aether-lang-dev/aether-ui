@@ -218,7 +218,7 @@ a live window has "a life of its own" that ends on an external event, so only
 | Menu bar    | `ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
 | GPU view    | `ui.gpuview_create(w, h)` (#92)                | GtkGLArea          | NSOpenGLView            | not yet (reports 0)        |
 | Tabs        | `ui.tabs() { tab("title") { … } }`             | GtkStackSwitcher + GtkStack | NSTabView      | button strip over a page zstack |
-| SplitView   | `ui.splitview("h") { pane1 pane2 }`            | GtkPaned           | NSSplitView             | plain stack, divider not draggable |
+| SplitView   | `ui.splitview("h") { pane1 pane2 }`            | GtkPaned           | NSSplitView             | own divider band, mouse-capture drag |
 | ListBox     | `ui.listbox(spacing) callback \|item, i, row\|` | composed from a stack of rows, identical on all backends |||
 | Table       | `ui.table(cols) callback \|item, col\|`        | composed on a ListBox, identical on all backends |||
 | Tree        | `ui.tree(roots)`                               | composed on a ListBox, identical on all backends |||
@@ -404,10 +404,9 @@ half: an exact size is not something a drag can move, so a panel was either
 the right size or resizable. A floor gives both, and it is also what stops a
 panel being dragged away to nothing.
 
-Where the drag is real differs by backend, and the floor is honoured either
-way: GTK4 and AppKit have a draggable divider, win32 renders a splitview as a
-plain stack whose divider cannot be dragged, so there the floor is what the
-layout pass and the divider clamp read.
+The drag is real on every desktop backend, and the floor is honoured by each:
+GTK4's paned and AppKit's split view stop at it, and win32's own divider drag
+goes through the layout pass, whose clamp reads the floor.
 
 `get_width` reads the allocation, so it answers 0 until the first layout pass,
 and a widget tree with no window may never have one. `get_min_width` answers
