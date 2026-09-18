@@ -18,11 +18,14 @@
 // that cannot be functional is the tray/menu-bar family (there is no iOS
 // status-bar tray); those are documented no-ops. A few carry a stated
 // limitation where iOS differs from the desktop ABI (synchronous file pickers →
-// empty selection, since iOS pickers are async; live hardware-keyboard shortcut
-// delivery is driver/registry-only pending UIKeyCommand responder wiring; a
+// empty selection, since iOS pickers are async; hardware-keyboard presses
+// reach the window's key handler through a focused stack (AeuiStackView
+// pressesBegan:), not yet through UIKeyCommand for unfocused shortcuts; a
 // bg-gradient layer that doesn't track resize). Gated by the iOS SDK
 // compile+link+RENDER check in ci.sh (Phase 1e, which pixel-checks the canvas
-// natively via Mac Catalyst).
+// natively via Mac Catalyst) and RUN in the iOS simulator (Phase 1e2:
+// listbox_demo linked against an `ae build --emit=staticlib` runtime for the
+// simulator, installed in a booted iPhone, driven by its driver spec).
 //   pass 1 — lifecycle, widget registry, stack layout, core widgets (text,
 //            button, textfield/securefield, toggle, slider).
 //   pass 2 — visibility/enablement, text getters+truncation, accessibility
