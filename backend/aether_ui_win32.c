@@ -2454,23 +2454,28 @@ int aether_ui_text_get_anchor(int handle) {
 // and was cut off, where GTK and AppKit re-measure a label on every
 // change. So a label whose natural size changes has its stack laid out
 // again -- only when it changes, since a status line is set every frame.
+static void w32_refit_text(Widget* w) {
+    RECT r;
+    int nat_w = 0, nat_h = 0;
+    if (!w || !w->hwnd) return;
+    if (w->kind != WK_TEXT && w->kind != WK_BUTTON) return;
+    if (w->pref_width > 0 && w->pref_height > 0) return;
+    measure_widget(w, &nat_w, &nat_h);
+    if (GetWindowRect(w->hwnd, &r) &&
+        (nat_w != r.right - r.left || nat_h != r.bottom - r.top)) {
+        HWND parent = GetAncestor(w->hwnd, GA_PARENT);
+        Widget* pw = widget_at(handle_for_hwnd(parent));
+        if (pw && (pw->kind == WK_VSTACK || pw->kind == WK_HSTACK || pw->kind == WK_ZSTACK)) {
+            stack_do_layout(parent);
+        }
+    }
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     Widget* w = widget_at(handle);
     if (!w || !w->hwnd) return;
     w32_set_text(w, text);
-    if (w->kind == WK_TEXT && (w->pref_width <= 0 || w->pref_height <= 0)) {
-        RECT r;
-        int nat_w = 0, nat_h = 0;
-        measure_widget(w, &nat_w, &nat_h);
-        if (GetWindowRect(w->hwnd, &r) &&
-            (nat_w != r.right - r.left || nat_h != r.bottom - r.top)) {
-            HWND parent = GetAncestor(w->hwnd, GA_PARENT);
-            Widget* pw = widget_at(handle_for_hwnd(parent));
-            if (pw && (pw->kind == WK_VSTACK || pw->kind == WK_HSTACK || pw->kind == WK_ZSTACK)) {
-                stack_do_layout(parent);
-            }
-        }
-    }
+    w32_refit_text(w);
 }
 
 void aether_ui_button_set_label(int handle, const char* label) {
@@ -3958,6 +3963,11 @@ static void apply_font(Widget* w) {
     if (w->custom_font) DeleteObject(w->custom_font);
     w->custom_font = CreateFontIndirectW(&lf);
     SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)w->custom_font, TRUE);
+    // A label measured in the default font and then set in a bolder or a
+    // larger one no longer fits the width it was given: the sheet is
+    // applied to a tree already laid out, and "CONSOLE" in bold was cut to
+    // "CONSOL". Its stack is laid out again where the size changed.
+    w32_refit_text(w);
 }
 
 void aether_ui_set_font_size(int handle, double size) {
