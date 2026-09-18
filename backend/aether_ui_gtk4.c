@@ -628,6 +628,19 @@ void aether_ui_app_quit_impl(void) {
 void aether_ui_app_run_raw(int app_handle) {
     if (app_handle < 1 || app_handle > app_count) return;
     AppEntry* e = &apps[app_handle - 1];
+    // Auto-start the driver test server when AETHER_UI_TEST_PORT is set, as
+    // win32 and macOS do: a driver (ae3d's tools/drive_editor.py) launches
+    // the app with the variable and waits on /widgets, and on GTK4 nothing
+    // answered -- this backend never read it. Here rather than in the
+    // window block's runner so an app built from app_create and run by
+    // hand gets it too; idempotent with an app's own enable_test_server.
+    {
+        const char* test_port_env = getenv("AETHER_UI_TEST_PORT");
+        if (test_port_env && e->root_handle > 0) {
+            int port = atoi(test_port_env);
+            if (port > 0) aether_ui_enable_test_server_impl(port, e->root_handle);
+        }
+    }
     e->gtk_app = gtk_application_new("dev.aether.ui",
         G_APPLICATION_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
     g_signal_connect(e->gtk_app, "activate", G_CALLBACK(on_activate), e);
@@ -8361,7 +8374,14 @@ static const AetherDriverHooks gtk4_driver_hooks = {
 // migration was unverified. Both came out once all four platforms ran green on
 // the shared path (routeparity 6/0, driveractions 6/0, testable 7/0 on Linux,
 // win32, FreeBSD and macOS).
+// Once: the env-var auto-start below and a demo's own enable_test_server
+// inside the window block may both ask, and a second server on the same
+// port would fail to bind and thread away for nothing (win32 guards the
+// same way).
+static int test_server_started = 0;
 void aether_ui_enable_test_server_impl(int port, int root_handle) {
+    if (test_server_started) return;
+    test_server_started = 1;
     test_server_port = port;
     inject_remote_control_banner(root_handle);
     aether_ui_test_server_start(port, &gtk4_driver_hooks);
