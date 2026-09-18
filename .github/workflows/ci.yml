@@ -154,18 +154,31 @@ jobs:
           #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
           #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
           #   math.lrint remains follow-up, not done here.
-          # v0.681.0 (2026-09-17). Forced by the aeb move below, not chosen:
+          # v0.683.0 (2026-09-18). Forced by the aeb move below, not chosen:
           # every aeb since v0.302 compiles its own `aeb-main` against
           # `bldr`, which imports std.zip (0.667), std.strarr (0.675) and
           # calls os.arch() (0.681), so `make install` of that aeb needs
-          # this on PATH. Scanned the 0.646-0.681 notes: additive stdlib
-          # (std.zip, std.strarr, std.cbor, std.resp, fs.find_ext & co.),
-          # a 4.5x faster type-check (0.666), @c_callback emitted weak
-          # (0.677, two TUs sharing one callback no longer collide at
-          # link), -fPIC on --emit=lib objects (0.680). No grammar or
-          # removed-API change this tree touches. The matrix run on this
-          # bump is the verification.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.681.0' }}
+          # at least 0.681 on PATH. Scanned the 0.646-0.681 notes: additive
+          # stdlib (std.zip, std.strarr, std.cbor, std.resp, fs.find_ext &
+          # co.), a 4.5x faster type-check (0.666), @c_callback emitted
+          # weak (0.677, two TUs sharing one callback no longer collide at
+          # link), -fPIC on --emit=lib objects (0.680).
+          #
+          # WHY NOT 0.681 OR 0.682: 0.667 added E0200, "block setter called
+          # as a node builder", discriminating by "the callee's module also
+          # defines a builder". ui/module.ae has four builders (window,
+          # render_to, record, nav_page) beside ~50 _ctx-first containers,
+          # so under 0.667-0.682 every `ui.vstack(10) { ... }` in every app
+          # is a compile error and the whole fan-out is red (#147's first
+          # run; the diagnostic was buried under make's own lines, see the
+          # ci.sh fix in the same PR). 0.683.0 carries aether#2060: the rule
+          # also requires the callee to yield no value, which is what
+          # separates a container (returns the handle its block runs
+          # inside) from a setter. All 260 .ae sources here type-check
+          # under it. The one genuine casualty of the move was LisMusic's
+          # audio_position_ms/audio_duration_ms colliding with std.audio's
+          # (E1001), renamed in the same PR.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.683.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
