@@ -743,21 +743,29 @@ echo "=== Phase 1f: AppKit label retention across list rebuilds (#139) ==="
 # tests/appkit_retention/retention_probe.ae rebuilds a 400-row listbox on a
 # timer and then sits still, and `heap` (Xcode's, in /usr/bin) counts the
 # NSTextField instances alive in it from outside. Rows a rebuild retires are
-# supposed to be freed with it, so the count is bounded by the rows on screen
-# plus the rebuild in flight, and a count that tracks the rows ever rendered
-# is the leak #139 describes. Run twice: with the run loop idle between
-# rebuilds, the shape of an app refreshing a list, which is the assertion;
-# and with the loop saturated (a period shorter than a rebuild), the shape
-# #139 was measured in, which is reported for the record and not asserted.
+# supposed to be freed with it, so the count is a steady state, and a count
+# that tracks the rows ever rendered is the leak #139 describes. The
+# assertion is growth, not a level: the same probe after 10 rebuilds and
+# after 20, with the run loop idle between rebuilds (the shape of an app
+# refreshing a list), may differ by one generation of rows at most -- the
+# 400 the last rebuild retired and the next run-loop turn frees. Ten
+# rebuilds that freed nothing would add 4 000. Two more runs are reported
+# for the record and not asserted: the loop saturated by a period shorter
+# than a rebuild, the shape #139 was measured in; and headless, where no
+# window is ever laid out.
 retention_count() {
     # The live NSTextField line of `heap`: COUNT BYTES AVG CLASS_NAME ...
     heap "$1" 2>/dev/null | awk '$4 == "NSTextField" { print $1; exit }'
 }
 retention_run() {
-    # $1 = rebuild period (ms), $2 = label for the log. Prints the count
-    # on stdout (the caller captures it) and any complaint on stderr.
-    local period="$1" tag="$2" log="/tmp/ci_retention_${2}.log" pid n i
-    AETHER_PROBE_PERIOD_MS="$period" AETHER_PROBE_ROUNDS=20         ./build/retention_probe > "$log" 2>&1 &
+    # $1 = rebuild period (ms), $2 = rebuilds, $3 = label for the log,
+    # $4 = 1 for headless. Prints the count on stdout (the caller captures
+    # it) and any complaint on stderr.
+    local period="$1" rounds="$2" tag="$3" headless="${4:-0}"
+    local log="/tmp/ci_retention_${3}.log" pid n i
+    AETHER_PROBE_PERIOD_MS="$period" AETHER_PROBE_ROUNDS="$rounds" \
+        AETHER_UI_HEADLESS="$headless" \
+        ./build/retention_probe > "$log" 2>&1 &
     pid=$!
     for i in $(seq 1 240); do
         grep -q "RETENTION_PROBE:" "$log" 2>/dev/null && break
@@ -786,22 +794,20 @@ if [ "$PLATFORM" = "macos" ]; then
         tail -20 /tmp/ci_retention_build.log | sed 's/^/       /'
         FAIL=$((FAIL + 1))
     else
-        # 400 rows on screen, up to 400 retired by the rebuild in flight,
-        # and the handful of other labels in the window: 1200 is the bound
-        # of a process that frees what it retires. Twenty rebuilds that do
-        # not would leave 8000.
-        RETENTION_BOUND=1200
-        idle="$(retention_run 500 idle)"; idle_rc=$?
-        if [ "$idle_rc" -ne 0 ]; then
+        ten="$(retention_run 500 10 idle10)"; ten_rc=$?
+        twenty="$(retention_run 500 20 idle20)"; twenty_rc=$?
+        if [ "$ten_rc" -ne 0 ] || [ "$twenty_rc" -ne 0 ]; then
             FAIL=$((FAIL + 1))
-        elif [ "$idle" -le "$RETENTION_BOUND" ]; then
-            echo "  OK   $idle NSTextField alive after 20 rebuilds, run loop idle between (bound $RETENTION_BOUND)"
+        elif [ $((twenty - ten)) -le 400 ]; then
+            echo "  OK   NSTextField alive: $ten after 10 rebuilds, $twenty after 20 (run loop idle between; growth bound 400)"
         else
-            echo "  FAIL $idle NSTextField alive after 20 rebuilds of 400 rows, run loop idle between (bound $RETENTION_BOUND)"
+            echo "  FAIL NSTextField alive: $ten after 10 rebuilds, $twenty after 20 of 400 rows, run loop idle between (growth bound 400)"
             FAIL=$((FAIL + 1))
         fi
-        saturated="$(retention_run 10 saturated)" || true
-        [ -n "$saturated" ] && echo "  INFO $saturated NSTextField alive after 20 rebuilds, run loop saturated (not asserted)"
+        saturated="$(retention_run 10 20 saturated)" || true
+        [ -n "$saturated" ] && echo "  INFO $saturated alive after 20 rebuilds, run loop saturated (not asserted)"
+        headless="$(retention_run 500 20 headless 1)" || true
+        [ -n "$headless" ] && echo "  INFO $headless alive after 20 rebuilds, headless (not asserted)"
     fi
 else
     echo "  SKIP AppKit only"
