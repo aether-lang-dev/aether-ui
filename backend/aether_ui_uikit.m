@@ -551,10 +551,74 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 // left the layer deallocating with the observer registered when the stack
 // was retired. An override has nothing registered anywhere, so there is
 // nothing to unregister and no order to get wrong.
+//
+// It is also what set_focusable turns on: UIView answers NO to
+// canBecomeFirstResponder and has no setter, so a plain container could
+// never take focus however hard focus_impl tried, and a listbox's rows
+// (focusable by contract, so arrow keys have somewhere to land) never
+// owned it -- Down and Home did nothing on iOS. The flag defaults to NO,
+// so an unmarked stack behaves as before; AppKit's AetherStackView does
+// the same. A focused stack delivers hardware-keyboard presses the way
+// the desktop backends deliver key events: to the window's key handler.
 @interface AeuiStackView : UIStackView
 @property (nonatomic, strong) NSMutableArray<AeuiLayoutHook*>* layoutHooks;
+@property (nonatomic, assign) BOOL aeuiFocusable;
 @end
+
+int aether_ui_window_key_deliver(const char* key_name, int mods);
+
+// A UIPress as the key name and modifier bits window_key_deliver takes:
+// the names the desktop backends use for the navigation keys, and the
+// character itself for the rest. 1 shift, 2 ctrl, 4 alt, 8 cmd.
+static int aeui_press_key_name(UIPress* press, char* out, int outsz) API_AVAILABLE(ios(13.4)) {
+    UIKey* key = press.key;
+    if (!key) return 0;
+    const char* name = NULL;
+    switch (key.keyCode) {
+        case UIKeyboardHIDUsageKeyboardUpArrow:    name = "Up"; break;
+        case UIKeyboardHIDUsageKeyboardDownArrow:  name = "Down"; break;
+        case UIKeyboardHIDUsageKeyboardLeftArrow:  name = "Left"; break;
+        case UIKeyboardHIDUsageKeyboardRightArrow: name = "Right"; break;
+        case UIKeyboardHIDUsageKeyboardHome:       name = "Home"; break;
+        case UIKeyboardHIDUsageKeyboardEnd:        name = "End"; break;
+        case UIKeyboardHIDUsageKeyboardPageUp:     name = "Page_Up"; break;
+        case UIKeyboardHIDUsageKeyboardPageDown:   name = "Page_Down"; break;
+        case UIKeyboardHIDUsageKeyboardReturnOrEnter: name = "Return"; break;
+        case UIKeyboardHIDUsageKeyboardEscape:     name = "Escape"; break;
+        case UIKeyboardHIDUsageKeyboardTab:        name = "Tab"; break;
+        case UIKeyboardHIDUsageKeyboardDeleteOrBackspace: name = "BackSpace"; break;
+        case UIKeyboardHIDUsageKeyboardDeleteForward: name = "Delete"; break;
+        case UIKeyboardHIDUsageKeyboardSpacebar:   name = "space"; break;
+        default: break;
+    }
+    if (name) snprintf(out, (size_t)outsz, "%s", name);
+    else {
+        const char* c = key.charactersIgnoringModifiers.UTF8String;
+        if (!c || !c[0]) return 0;
+        snprintf(out, (size_t)outsz, "%s", c);
+    }
+    int mods = 0;
+    if (key.modifierFlags & UIKeyModifierShift)     mods |= 1;
+    if (key.modifierFlags & UIKeyModifierControl)   mods |= 2;
+    if (key.modifierFlags & UIKeyModifierAlternate) mods |= 4;
+    if (key.modifierFlags & UIKeyModifierCommand)   mods |= 8;
+    return 1 | (mods << 1);
+}
+
 @implementation AeuiStackView
+- (BOOL)canBecomeFirstResponder { return self.aeuiFocusable; }
+- (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
+    BOOL handled = NO;
+    if (@available(iOS 13.4, *)) {
+        for (UIPress* press in presses) {
+            char name[64];
+            int r = aeui_press_key_name(press, name, sizeof(name));
+            if (!r) continue;
+            if (aether_ui_window_key_deliver(name, r >> 1)) handled = YES;
+        }
+    }
+    if (!handled) [super pressesBegan:presses withEvent:event];
+}
 - (void)layoutSubviews {
     [super layoutSubviews];
     if (!self.layoutHooks) return;
@@ -3287,7 +3351,12 @@ int aether_ui_focused_widget(void) {
 }
 void aether_ui_set_focusable_impl(int handle, int on) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v) v.userInteractionEnabled = (on != 0);
+    if (!v) return;
+    v.userInteractionEnabled = (on != 0);
+    // A stack answers canBecomeFirstResponder from this (see AeuiStackView);
+    // native controls accept focus by their own rules and need nothing here.
+    if ([v isKindOfClass:[AeuiStackView class]])
+        [(AeuiStackView*)v setAeuiFocusable:(on != 0)];
 }
 
 // --- window handle (single window on iOS; primary == 1) ---------------------

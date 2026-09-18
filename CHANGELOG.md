@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **UIKit `picker_set_selected` fires the change callback**, as on GTK4 and
   AppKit, and `on_click` keeps its closure addressable by handle so a
   driver click on a plain container (a listbox row) fires what a tap would.
+- **UIKit `set_focusable` works on a stack.** `UIView` answers NO to
+  `canBecomeFirstResponder` and has no setter, so a container could never
+  take focus and a listbox's rows never owned it: Down, Up, Home and End
+  did nothing on iOS. `AeuiStackView` answers from a flag `set_focusable`
+  sets, as AppKit's `AetherStackView` does, and a focused stack delivers
+  hardware-keyboard presses (`pressesBegan:`) to the window's key handler
+  with the desktop backends' key names.
 
 ### Changed
 
