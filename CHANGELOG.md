@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The gpuanim spec called a viewport stalled on a slow display.** With a
+  window on screen a render request marks the view dirty and the frame lands on
+  the next display cycle, so frames are coalesced to the display's rate; the
+  demo gave up after eight requests per wanted frame (1.5s), which a busy macOS
+  runner's display could not meet, and the same build failed on one run and
+  passed on the next (#142, #143, #145 all red on a one-file GTK4, UIKit or
+  win32 change). The demo now keeps asking for twelve seconds before saying
+  it stalled, the spec waits for that, and its failure message quotes the label
+  so the number is in the log rather than on the runner.
+
 - The `get_text` line in the accessors table said "get textfield value". It
   reads a textarea too, and a label reads back "" because no platform exposes a
   getter for one. The table now says both, and notes that none of these setters
