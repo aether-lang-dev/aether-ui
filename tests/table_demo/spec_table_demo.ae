@@ -251,13 +251,41 @@ main() {
         spec.it("announces itself as a table with column headers") callback {
             b = uidriver.get_body("/widgets")
             spec.assert_contains(b, "\"role\":\"table\"",
-                                 "the table announces the table role")
+                "the table announces the table role")
             spec.assert_contains(b, "\"role\":\"columnheader\"",
-                                 "its headers announce as column headers")
+                "its headers announce as column headers")
             hdrs = uidriver.count_occurrences(b, "\"role\":\"columnheader\"")
             spec.assert_gt(hdrs, 1, "every column gets a header role, not just one")
             spec.assert_contains(b, "\"role\":\"listitem\"",
-                                 "rows still announce as rows")
+                "rows still announce as rows")
+        }
+
+        // A table rebuilt by table_update (every sort click is one) must keep
+        // its rows placed across the next window resize. win32's #150 held
+        // painting across the rebuild with WM_SETREDRAW, which DefWindowProc
+        // implements by clearing WS_VISIBLE; that backend reads the bit as
+        // the widget's own visibility, so the column was laid out by its
+        // parent as absent and the body was gone after the next resize
+        // (#152). A cell rect with size is the assertion: it is 0x0 the
+        // moment a parent lays the column out as if it were not there.
+        spec.it("a rebuilt table keeps its cells placed across a window resize") callback {
+            h = uidriver.widget_id_by_text("Name")
+            uidriver.post_ok("/widget/${h}/click", "sort by name (a rebuild)")
+            ok = uidriver.wait_body_contains("/widgets", "carol", 20)
+            spec.assert_true(ok, "the rebuilt rows rendered")
+            cell = uidriver.widget_id_by_text("carol")
+            spec.assert_gt(cell, 0, "a rebuilt cell has a driver id")
+            w0 = uidriver.widget_int_field_by_id(cell, "w")
+            spec.assert_gt(w0, 0, "the cell has a width before the resize")
+
+            uidriver.resize_window(640, 700)
+            _ = uidriver.wait_int_field_change(cell, "w", w0, 20)
+            w1 = uidriver.widget_int_field_by_id(cell, "w")
+            h1 = uidriver.widget_int_field_by_id(cell, "h")
+            spec.assert_gt(w1, 0, "the cell still has a width after the resize")
+            spec.assert_gt(h1, 0, "the cell still has a height after the resize")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "carol", "the cell is still listed")
         }
     }
     return spec.run_summary(fw)

@@ -286,10 +286,6 @@ typedef struct {
     // A layout is owed to this stack (w32_request_layout) and has not yet
     // run. Cleared by stack_do_layout on entry.
     int layout_pending;
-    // Painting is held (WM_SETREDRAW FALSE) from a clear_children until the
-    // owed layout runs, so the rows a rebuild adds do not each invalidate
-    // the window on the way in. Released by w32_flush_layout.
-    int redraw_held;
 
     // Accessibility side-store (semantics layer). role/name/desc are the
     // author's a11y intent; MSAA surfaces name/description via WM_GETOBJECT
@@ -1108,14 +1104,8 @@ static void w32_flush_layout(void) {
         for (int i = 0; i < n; i++) {
             Widget* sw = widget_at(batch[i]);
             if (!sw || !sw->layout_pending) continue;   // already done by a parent's pass
-            if (sw->dead || !IsWindow(sw->hwnd)) { sw->layout_pending = 0; sw->redraw_held = 0; continue; }
+            if (sw->dead || !IsWindow(sw->hwnd)) { sw->layout_pending = 0; continue; }
             stack_do_layout(sw->hwnd);
-            if (sw->redraw_held) {
-                sw->redraw_held = 0;
-                SendMessageW(sw->hwnd, WM_SETREDRAW, TRUE, 0);
-                RedrawWindow(sw->hwnd, NULL, NULL,
-                             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
-            }
         }
         free(batch);
     }
@@ -9543,15 +9533,14 @@ static void mark_subtree_dead(HWND hwnd) {
 void aether_ui_clear_children_impl(int handle) {
     Widget* p = widget_at(handle);
     if (!p) return;
-    // A clear is the start of a rebuild: hold painting until the coalesced
-    // layout has placed what replaces the rows, so neither the destroys nor
-    // the adds invalidate the window one child at a time. Only for a stack,
-    // which is the only kind whose flush will release it.
-    if ((p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK)
-        && !p->redraw_held && IsWindowVisible(p->hwnd)) {
-        p->redraw_held = 1;
-        SendMessageW(p->hwnd, WM_SETREDRAW, FALSE, 0);
-    }
+    // NOT held with WM_SETREDRAW across the rebuild, though that halved the
+    // on-screen cost: DefWindowProc implements WM_SETREDRAW FALSE by clearing
+    // the window's WS_VISIBLE bit, and this backend reads that bit as the
+    // widget's own visibility everywhere -- measure_stack_natural and
+    // stack_do_layout leave such a child out, the driver reports it hidden,
+    // the screenshot skips it. A held column was laid out by its parent as
+    // if it were not there, and the table body was gone after the next
+    // resize.
     HWND c = GetWindow(p->hwnd, GW_CHILD);
     while (c) {
         HWND next = GetWindow(c, GW_HWNDNEXT);

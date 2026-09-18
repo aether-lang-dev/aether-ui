@@ -16,9 +16,9 @@
 //   (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, grid, grid_place,
+import ui(window, vstack, hstack, text, btn, divider, grid, grid_place,
     clear_children, remove_child, enable_test_server)
-import std.os (os_getenv)
+import std.os(os_getenv)
 import std.string
 
 extern aether_ui_text_set_string(handle: int, text: string)
@@ -83,6 +83,22 @@ main() {
                     remove_child(rows, stack_cell)
                     stack_cell = 0
                     aether_ui_text_set_string(status, "removed stack row")
+                }
+                // The list-rebuild shape: a STACK cleared and refilled in one
+                // handler, which is what every listbox_update / table_update
+                // does. Kept apart from the grid rebuild because the backends
+                // route a stack's clear differently (win32 lays the stack out
+                // once for the whole rebuild, #150).
+                _t = btn("Rebuild stack") callback {
+                    clear_children(rows)
+                    stack_cell = 0
+                    _c = btn(rows, "stack row C") callback {
+                        aether_ui_text_set_string(status, "clicked stack row C")
+                    }
+                    _e = btn(rows, "stack row D") callback {
+                        aether_ui_text_set_string(status, "clicked stack row D")
+                    }
+                    aether_ui_text_set_string(status, "rebuilt stack")
                 }
             }
         }

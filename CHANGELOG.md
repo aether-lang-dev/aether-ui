@@ -20,11 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lands without waiting for an event), before any geometry is read
   (`get_width`/`get_height`, the driver's rect hook, which hops from the HTTP
   thread to the UI thread), after every driver action, and before the window
-  is first shown. A `clear_children` also holds painting (`WM_SETREDRAW`)
-  until that layout runs, so the rows on the way in do not each invalidate
-  the window. Same table: **0.58s headless, 0.73s on screen** — 6x and 7.8x.
-  Geometry read through the driver is identical to before, and the win32
-  driver-spec catalogue passes natively against it.
+  is first shown. Same table: **0.58s headless, 1.15s on screen** — 6x and
+  5x. Geometry read through the driver is identical to before, and the win32
+  driver-spec catalogue passes natively against it. (#150 also held painting
+  with `WM_SETREDRAW` across a rebuild, which took the on-screen figure to
+  0.73s; that came out the same day: `DefWindowProc` implements the hold by
+  clearing `WS_VISIBLE`, which this backend reads as the widget's own
+  visibility, so the held column was laid out by its parent as absent and
+  the table body vanished on the next resize.)
 
 ### Added
 
