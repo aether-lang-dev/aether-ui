@@ -283,6 +283,14 @@ typedef struct {
     // nulling).
     int dead;
 
+    // A layout is owed to this stack (w32_request_layout) and has not yet
+    // run. Cleared by stack_do_layout on entry.
+    int layout_pending;
+    // Painting is held (WM_SETREDRAW FALSE) from a clear_children until the
+    // owed layout runs, so the rows a rebuild adds do not each invalidate
+    // the window on the way in. Released by w32_flush_layout.
+    int redraw_held;
+
     // Accessibility side-store (semantics layer). role/name/desc are the
     // author's a11y intent; MSAA surfaces name/description via WM_GETOBJECT
     // (get_accName/get_accDescription) over the standard accessible object,
@@ -415,6 +423,9 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static void w32_request_layout(HWND stack_hwnd);
+static void w32_flush_layout(void);
+static void w32_drv_settle_layout(void);
 
 static Widget* widget_at(int handle) {
     if (handle < 1 || handle > widget_count) return NULL;
@@ -1015,11 +1026,108 @@ static int w32_subtree_greedy(Widget* w, int orientation) {
 }
 
 // Layout all direct child windows of the stack.
+// Coalesced layout.
+//
+// stack_do_layout measures every child, recursively, and moves each one. It
+// used to run on EVERY add_child, remove_child and clear_children, so a list
+// that rebuilds 400 rows laid its column out 400 times, each pass measuring
+// and moving every row placed so far: O(n^2) measures and SetWindowPos calls,
+// 3.5 seconds for a 400-row three-column table headless, 5.7 with the window
+// on screen (measured). GTK and AppKit both defer layout to the frame; this
+// is the same idea. The per-child paths only MARK the stack
+// (w32_request_layout); the marked stacks are laid out once, in
+// w32_flush_layout, which runs:
+//   - in the run loop before each message is dispatched, so a frame never
+//     paints a stale tree (a request also posts AE_WM_FLUSH_LAYOUT so the
+//     loop wakes even when nothing else is queued, and a nested modal loop
+//     services it too);
+//   - before geometry is read (get_width/get_height, the driver's rect hook
+//     -- that one comes from the HTTP thread and hops to the UI thread
+//     through the app window), so a reader never sees the tree as it was
+//     before the last add;
+//   - after every driver action, before the spec's next GET;
+//   - before the window is first shown.
+// Measurement is intrinsic (measure_stack_natural sums children, it does not
+// read their rects), so deferring the moves changes nothing a measure sees.
+// The paths a resize takes (WM_SIZE, set_width, scroll) stay synchronous:
+// they run once per event, not once per child.
+#define AE_WM_FLUSH_LAYOUT (WM_USER + 0x43)
+
+static void stack_do_layout(HWND stack_hwnd);
+
+static int* w32_layout_queue = NULL;
+static int  w32_layout_queue_count = 0;
+static int  w32_layout_queue_cap = 0;
+static int  w32_layout_flush_posted = 0;
+
+static void w32_request_layout(HWND stack_hwnd) {
+    int h = handle_for_hwnd(stack_hwnd);
+    if (h == 0) return;
+    Widget* sw = widget_at(h);
+    if (!sw || sw->dead || sw->layout_pending) return;
+    if (w32_layout_queue_count >= w32_layout_queue_cap) {
+        int cap = w32_layout_queue_cap ? w32_layout_queue_cap * 2 : 64;
+        int* grown = (int*)realloc(w32_layout_queue, sizeof(int) * cap);
+        if (!grown) { stack_do_layout(stack_hwnd); return; }  // no memory: lay out now
+        w32_layout_queue = grown;
+        w32_layout_queue_cap = cap;
+    }
+    sw->layout_pending = 1;
+    w32_layout_queue[w32_layout_queue_count++] = h;
+    // Wake the run loop so the flush is not left waiting on the next event:
+    // a rebuild from a timer with nothing else queued must still land.
+    if (!w32_layout_flush_posted) {
+        HWND top = GetAncestor(stack_hwnd, GA_ROOT);
+        if (top && PostMessageW(top, AE_WM_FLUSH_LAYOUT, 0, 0)) {
+            w32_layout_flush_posted = 1;
+        }
+    }
+}
+
+static void w32_flush_layout(void) {
+    // A layout can request another (a parent's pass resizes a child, whose
+    // WM_SIZE lays it out synchronously; a scrollview shows its bar), so
+    // this loops until the queue is quiet, with a ceiling so a pathological
+    // ping-pong cannot hang the loop.
+    for (int pass = 0; pass < 16 && w32_layout_queue_count > 0; pass++) {
+        int n = w32_layout_queue_count;
+        int* batch = (int*)malloc(sizeof(int) * n);
+        if (!batch) return;
+        memcpy(batch, w32_layout_queue, sizeof(int) * n);
+        w32_layout_queue_count = 0;
+        // Parents before children: a parent's pass positions its children
+        // and, through WM_SIZE, lays them out; a child laid out first would
+        // just be laid out again. Handles are monotonic and a container is
+        // registered before what it holds, so ascending handle order is
+        // outer-to-inner.
+        for (int i = 1; i < n; i++) {
+            int v = batch[i], j = i - 1;
+            while (j >= 0 && batch[j] > v) { batch[j + 1] = batch[j]; j--; }
+            batch[j + 1] = v;
+        }
+        for (int i = 0; i < n; i++) {
+            Widget* sw = widget_at(batch[i]);
+            if (!sw || !sw->layout_pending) continue;   // already done by a parent's pass
+            if (sw->dead || !IsWindow(sw->hwnd)) { sw->layout_pending = 0; sw->redraw_held = 0; continue; }
+            stack_do_layout(sw->hwnd);
+            if (sw->redraw_held) {
+                sw->redraw_held = 0;
+                SendMessageW(sw->hwnd, WM_SETREDRAW, TRUE, 0);
+                RedrawWindow(sw->hwnd, NULL, NULL,
+                             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+            }
+        }
+        free(batch);
+    }
+    w32_layout_flush_posted = 0;
+}
+
 static void stack_do_layout(HWND stack_hwnd) {
     int h = handle_for_hwnd(stack_hwnd);
     if (h == 0) return;
     Widget* sw = widget_at(h);
     if (!sw) return;
+    sw->layout_pending = 0;
     StackLayout* sl = &sw->stack;
     int orientation = sl->orientation;
 
@@ -1876,6 +1984,12 @@ static const wchar_t* GRID_CLASS = L"AetherUIGrid";
 
 static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case AE_WM_FLUSH_LAYOUT:
+            // Posted by w32_request_layout so the loop wakes; also what a
+            // nested modal loop dispatches, and what the driver sends
+            // (cross-thread, blocking) before it reads geometry.
+            w32_flush_layout();
+            return 0;
         case WM_SETTINGCHANGE: {
             // OS light/dark flip ("ImmersiveColorSet") — tell the AeCS
             // appearance callback, already on the UI thread.
@@ -2242,6 +2356,7 @@ void aether_ui_app_run_raw(int app_handle) {
     // icons, no UAC/SmartScreen visibility, no chance of a stuck window).
     const char* headless = getenv("AETHER_UI_HEADLESS");
     int show_mode = (headless && headless[0] && headless[0] != '0') ? SW_HIDE : SW_SHOW;
+    w32_flush_layout();   // everything built so far is placed before it is seen
     ShowWindow(e->hwnd, show_mode);
     if (show_mode == SW_SHOW) UpdateWindow(e->hwnd);
 
@@ -2270,8 +2385,10 @@ void aether_ui_app_run_raw(int app_handle) {
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
         // The previous message's handlers have all returned: give back the
         // closure boxes the widgets they retired were carrying (see
-        // w32_release_box for why not sooner).
+        // w32_release_box for why not sooner), and lay out the stacks they
+        // marked, once each, before anything paints.
         w32_drain_graveyard();
+        w32_flush_layout();
         // When a key-registered canvas has focus, route keystrokes straight
         // to it — IsDialogMessage would otherwise eat Return (default button)
         // and Escape (cancel) before the canvas's WM_KEYDOWN sees them, and
@@ -3211,7 +3328,7 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     SetWindowPos(c->hwnd, HWND_BOTTOM, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     if (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK) {
-        stack_do_layout(p->hwnd);
+        w32_request_layout(p->hwnd);   // once per rebuild, not once per child
     }
 }
 
@@ -3546,6 +3663,7 @@ void aether_ui_set_height_impl(int handle, int px) {
 int aether_ui_get_width_impl(int handle) {
     Widget* w = widget_at(handle);
     if (!w || !w->hwnd) return 0;
+    w32_flush_layout();   // an allocation, so the tree must be placed first
     RECT r; GetWindowRect(w->hwnd, &r);
     return (int)(r.right - r.left);
 }
@@ -3553,6 +3671,7 @@ int aether_ui_get_width_impl(int handle) {
 int aether_ui_get_height_impl(int handle) {
     Widget* w = widget_at(handle);
     if (!w || !w->hwnd) return 0;
+    w32_flush_layout();
     RECT r; GetWindowRect(w->hwnd, &r);
     return (int)(r.bottom - r.top);
 }
@@ -9297,7 +9416,7 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
         DestroyWindow(c->hwnd);
     }
     if (p && (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK)) {
-        stack_do_layout(p->hwnd);
+        w32_request_layout(p->hwnd);
     }
 }
 
@@ -9424,6 +9543,15 @@ static void mark_subtree_dead(HWND hwnd) {
 void aether_ui_clear_children_impl(int handle) {
     Widget* p = widget_at(handle);
     if (!p) return;
+    // A clear is the start of a rebuild: hold painting until the coalesced
+    // layout has placed what replaces the rows, so neither the destroys nor
+    // the adds invalidate the window one child at a time. Only for a stack,
+    // which is the only kind whose flush will release it.
+    if ((p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK)
+        && !p->redraw_held && IsWindowVisible(p->hwnd)) {
+        p->redraw_held = 1;
+        SendMessageW(p->hwnd, WM_SETREDRAW, FALSE, 0);
+    }
     HWND c = GetWindow(p->hwnd, GW_CHILD);
     while (c) {
         HWND next = GetWindow(c, GW_HWNDNEXT);
@@ -9432,7 +9560,7 @@ void aether_ui_clear_children_impl(int handle) {
         c = next;
     }
     if (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK) {
-        stack_do_layout(p->hwnd);
+        w32_request_layout(p->hwnd);
     }
 }
 
@@ -9621,6 +9749,7 @@ static int hook_widget_enabled(int handle) {
 static int hook_widget_rect(int handle, int* x, int* y, int* wd, int* hgt) {
     Widget* w = widget_at(handle);
     if (!w) return -1;
+    w32_drv_settle_layout();
     RECT r;
     if (!GetWindowRect(w->hwnd, &r)) return -1;
     HWND top = GetAncestor(w->hwnd, GA_ROOT);
@@ -10102,8 +10231,21 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// Geometry reads come from the HTTP thread. A layout the UI thread still
+// owes would be read as it was before the last add, so the read first hops
+// to the UI thread for the flush (SendMessage blocks until the proc returns)
+// -- only when something is owed, so a quiet tree costs nothing.
+static void w32_drv_settle_layout(void) {
+    if (w32_layout_queue_count == 0) return;
+    HWND top = (app_count > 0) ? apps[0].hwnd : NULL;
+    if (top) SendMessageW(top, AE_WM_FLUSH_LAYOUT, 0, 0);
+}
+
 static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
     SendMessageW(driver_host_hwnd, AE_WM_DRIVER, 0, (LPARAM)ctx);
+    // The action's handlers have run; place what they built before the
+    // spec's next GET sees it.
+    w32_drv_settle_layout();
 }
 
 // List direct children of a widget. Returns the number written; -1 if

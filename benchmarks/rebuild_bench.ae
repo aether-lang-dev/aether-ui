@@ -1,0 +1,66 @@
+// Rebuild cost: a 400-row, three-column table rebuilt by table_update, timed
+// from inside the app, five times, then the app quits.
+//
+// This is the shape every list-backed screen has (a listbox or table whose
+// model changes is cleared and re-rendered), and the number that made win32
+// lay a stack out once per rebuild instead of once per child: 3.5s headless
+// / 5.7s on screen before, 0.58s / 0.73s after, on the same 1600 widgets.
+// The remaining cost is Win32's own CreateWindowExW + DestroyWindow, roughly
+// 0.2ms + 0.1ms per control.
+//
+// Build the way ci.sh builds a probe (see LLM.md), then:
+//   AETHER_UI_HEADLESS=1 ./rebuild_bench      # no window
+//   ./rebuild_bench                           # window on screen
+import ui
+import ui(window, vstack, text, table_cols, col, table, table_update, timer, app_quit)
+import std.string
+import std.list
+
+extern malloc(size: int) -> ptr
+struct Person { name: string, kb: int, city: string }
+
+mk_p(name: string, kb: int, city: string) -> ptr {
+    p = malloc(sizeof(Person)) as *Person
+    p.name = name
+    p.kb = kb
+    p.city = city
+    return p as ptr
+}
+
+var g_table: ptr = null
+var g_items: ptr = null
+var g_rounds = 0
+
+main() {
+    g_items = list.new()
+    i = 0
+    while i < 400 {
+        _ = list.add(g_items, mk_p("person ${i}", i * 7, "city ${i % 13}"))
+        i = i + 1
+    }
+    window("rebuild bench", 600, 700) {
+        vstack(4) {
+            _t = text("400-row table rebuild")
+            cols = table_cols() {
+                col("Name", 200)
+                col("Size", 80)
+                col("City", 160)
+            }
+            g_table = table(cols) callback | item: ptr, c: int | {
+                p = item as *Person
+                if c == 1 { return string.from_int(p.kb) }
+                if c == 2 { return p.city }
+                return p.name
+            }
+            table_update(g_table, g_items)
+        }
+        timer(300) callback {
+            t0 = clock_ns()
+            table_update(g_table, g_items)
+            t1 = clock_ns()
+            println("rebuild ${g_rounds}: ${(t1 - t0) / 1000000} ms")
+            g_rounds = g_rounds + 1
+            if g_rounds >= 5 { app_quit() }
+        }
+    }
+}

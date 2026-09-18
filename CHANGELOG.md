@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **win32 lays a stack out once per rebuild, not once per child.**
+  `stack_do_layout` measures every child recursively and moves each one, and
+  it ran on every `add_child`, `remove_child` and `clear_children`, so a list
+  that rebuilds n rows laid its column out n times, each pass over every row
+  placed so far. A 400-row three-column table took 3.5s to rebuild headless
+  and 5.7s with the window on screen. The per-child paths now only mark the
+  stack; the marked stacks are laid out once, in the run loop before the next
+  message is dispatched (a request posts a wake-up so a timer-driven rebuild
+  lands without waiting for an event), before any geometry is read
+  (`get_width`/`get_height`, the driver's rect hook, which hops from the HTTP
+  thread to the UI thread), after every driver action, and before the window
+  is first shown. A `clear_children` also holds painting (`WM_SETREDRAW`)
+  until that layout runs, so the rows on the way in do not each invalidate
+  the window. Same table: **0.58s headless, 0.73s on screen** — 6x and 7.8x.
+  Geometry read through the driver is identical to before, and the win32
+  driver-spec catalogue passes natively against it.
+
 ### Added
 
 - **`set_min_width` / `set_min_height`: a size floor, so a panel can be the
