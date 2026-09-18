@@ -7981,9 +7981,17 @@ static gboolean aeui_ui_call_idle(gpointer data) {
 // test_action_idle and widgets_json_idle, which is what the shared server's
 // contract requires ("MUST block: the caller reads the response back
 // immediately").
+//
+// At G_PRIORITY_DEFAULT, not the idle priority g_idle_add gives: an idle
+// source runs only when nothing of higher priority is ready, and an app
+// whose frame timer always has a frame to draw -- ae3d's editor at four
+// frames a second on a software renderer, rescheduling every 16 ms --
+// never lets one run. The driver waited two minutes for /widgets and got
+// nothing while the app drew on. A request is rare and small; it
+// interleaves with the timers at their own priority.
 static void hook_run_on_ui_thread(void (*fn)(void*), void* arg) {
     AeuiUiCall c = { fn, arg, 0 };
-    g_idle_add(aeui_ui_call_idle, &c);
+    g_idle_add_full(G_PRIORITY_DEFAULT, aeui_ui_call_idle, &c, NULL);
     while (!c.done) g_usleep(200);
 }
 
