@@ -280,6 +280,49 @@ static void closure_survives_retiring_its_widget(void) {
               "self-retiring click: a stale click on the retired button reaches nothing");
 }
 
+// A stack owed a layout has its painting held (WM_SETREDRAW FALSE) until
+// the flush, and DefWindowProc implements that hold by clearing the
+// WS_VISIBLE bit the backend reads as the widget's own visibility. The
+// hold must be invisible to the app: a stack the app never hid is visible
+// again once the layout has run, and a set_hidden made while the hold is
+// on is the app's, not undone when the hold lifts. (#160; the first hold,
+// #150, was reverted because a held column read as hidden.)
+static int own_visible_bit(int handle) {
+    HWND h = (HWND)aether_ui_get_widget(handle);
+    return (GetWindowLongPtrW(h, GWL_STYLE) & WS_VISIBLE) ? 1 : 0;
+}
+
+static void redraw_hold_is_invisible_to_the_app(void) {
+    int stack = aether_ui_vstack_create(0);
+    expect_eq((unsigned)own_visible_bit(stack), 1u, "redraw hold: a new stack is visible");
+
+    // An attach owes the stack a layout and holds its painting.
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, aether_ui_text_create("a"));
+    expect_eq((unsigned)own_visible_bit(stack), 0u,
+              "redraw hold: the bit is borrowed while the layout is owed");
+    // A geometry read flushes the layout, which lifts the hold first.
+    (void)aether_ui_get_width_impl(stack);
+    expect_eq((unsigned)own_visible_bit(stack), 1u,
+              "redraw hold: the stack is visible again once the layout has run");
+
+    // Hidden by the app while held: hidden after the flush, not shown by it.
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, aether_ui_text_create("b"));
+    aether_ui_widget_set_hidden(stack, 1);
+    (void)aether_ui_get_width_impl(stack);
+    expect_eq((unsigned)own_visible_bit(stack), 0u,
+              "redraw hold: set_hidden during the hold sticks past the flush");
+
+    // A hidden stack is not held: an attach into it leaves it hidden, and
+    // showing it shows it.
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, aether_ui_text_create("c"));
+    expect_eq((unsigned)own_visible_bit(stack), 0u,
+              "redraw hold: an attach into a hidden stack does not show it");
+    aether_ui_widget_set_hidden(stack, 0);
+    (void)aether_ui_get_width_impl(stack);
+    expect_eq((unsigned)own_visible_bit(stack), 1u,
+              "redraw hold: set_hidden(0) shows the stack");
+}
+
 // The strings the backend hands the Aether side are the caller's to free:
 // ui/module.ae declares textfield_get_text and textarea_get_text `@heap`,
 // and frees what they return. The text field returned a rotating static
@@ -319,6 +362,7 @@ int main(void) {
     canvas_group_opacity();
     canvas_gradient_stop_clamp();
     closure_survives_retiring_its_widget();
+    redraw_hold_is_invisible_to_the_app();
     text_reads_are_the_callers_to_free();
 
     if (failures) {
