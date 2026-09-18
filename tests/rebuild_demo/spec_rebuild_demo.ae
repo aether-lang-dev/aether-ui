@@ -117,6 +117,8 @@ main() {
 
             row = uidriver.widget_id_by_text("stack row D")
             spec.assert_gt(row, 0, "a rebuilt row has a driver id")
+            // GTK4 allocates on the next frame: wait for it before reading.
+            _ = uidriver.wait_int_field_change(row, "w", 0, 20)
             w0 = uidriver.widget_int_field_by_id(row, "w")
             h0 = uidriver.widget_int_field_by_id(row, "h")
             spec.assert_gt(w0, 0, "the row has a width before the resize")

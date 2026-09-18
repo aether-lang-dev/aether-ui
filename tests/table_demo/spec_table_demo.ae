@@ -275,6 +275,9 @@ main() {
             spec.assert_true(ok, "the rebuilt rows rendered")
             cell = uidriver.widget_id_by_text("carol")
             spec.assert_gt(cell, 0, "a rebuilt cell has a driver id")
+            // GTK4 allocates on the next frame, so a cell listed a beat ago
+            // can still read 0x0: wait for the allocation, then assert it.
+            _ = uidriver.wait_int_field_change(cell, "w", 0, 20)
             w0 = uidriver.widget_int_field_by_id(cell, "w")
             spec.assert_gt(w0, 0, "the cell has a width before the resize")
 
