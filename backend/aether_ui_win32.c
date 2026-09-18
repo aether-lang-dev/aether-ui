@@ -419,6 +419,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static void w32_forget_system_dark(void);
 static void w32_request_layout(HWND stack_hwnd);
 static void w32_flush_layout(void);
 static void w32_drv_settle_layout(void);
@@ -930,6 +931,18 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w->kind == WK_PROGRESSBAR) {
         *out_w = w->pref_width > 0 ? w->pref_width : 140;
         *out_h = w->pref_height > 0 ? w->pref_height : 16;
+        return;
+    }
+    // A rule is thin along the stack and stretches across it: 12px tall in
+    // a vstack, filling the width; 12px wide in an hstack, filling the
+    // height. Its natural size is that thickness on BOTH axes, and it is
+    // NOT a pin: divider_create used to set pref_width = 1, and the layout
+    // reads a pref on the cross axis as the app's own choice of size (the
+    // cross-axis pin veto), so every divider in a vstack came out one pixel
+    // wide -- a dot at the left margin where a line was meant.
+    if (w->kind == WK_DIVIDER) {
+        *out_w = w->pref_width > 0 ? w->pref_width : 12;
+        *out_h = w->pref_height > 0 ? w->pref_height : 12;
         return;
     }
     if (w->kind == WK_TOGGLE) {
@@ -1576,6 +1589,19 @@ static int w32_ground_behind(HWND hwnd, COLORREF* out) {
     return 0;
 }
 
+// The ground a widget with no ground of its own, and none above it, sits
+// on. GTK4 and AppKit hand an app the system's look, and on a dark system
+// that look is dark; the classic Win32 controls have no dark look of their
+// own, and until now an app here drew a white client under the dark title
+// bar DwmSetWindowAttribute already gave it. This is Explorer's dark
+// window colour when the system is dark, the system window colour when it
+// is light. It answers the driver's /appearance override too, since it
+// goes through aether_ui_dark_mode_check.
+static COLORREF w32_system_ground(void) {
+    return aether_ui_dark_mode_check() ? RGB(0x20, 0x20, 0x20)
+                                       : GetSysColor(COLOR_WINDOW);
+}
+
 // A brush a WM_CTLCOLOR* answer hands back has to outlive the message, and
 // the same few grounds come up for every control on a panel: a small table
 // of them, one brush a colour, kept for the life of the process.
@@ -1774,7 +1800,13 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 }
                 return 1;
             }
-            return DefWindowProcW(hwnd, msg, wp, lp);
+            {
+                HDC hdc = (HDC)wp;
+                RECT r;
+                GetClientRect(hwnd, &r);
+                FillRect(hdc, &r, w32_ground_brush(w32_system_ground()));
+                return 1;
+            }
         }
 
 
@@ -1894,11 +1926,12 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             // -- every table cell, every caption, on a ground GTK4 and AppKit
             // paint nothing behind at all. An EDIT already draws on the
             // window colour, so this changes nothing for it.
-            if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN) {
-                SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
-                return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+            {
+                COLORREF sys = w32_system_ground();
+                if (!(cw && cw->fg.has_value)) SetTextColor(hdc, w32_legible_text(sys));
+                SetBkColor(hdc, sys);
+                return (LRESULT)w32_ground_brush(sys);
             }
-            return DefWindowProcW(hwnd, msg, wp, lp);
         }
 
         case WM_DESTROY:
@@ -1949,9 +1982,10 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         // dark panel and a dark one on a light panel, never white on white
         // or a pale grey cut across a dark theme.
         Widget* dw = widget_at(handle_for_hwnd(hwnd));
-        COLORREF ground, line = RGB(200, 200, 200);
-        if (w32_ground_behind(hwnd, &ground)) {
-            FillRect(hdc, &r, w32_ground_brush(ground));
+        COLORREF ground, line;
+        if (!w32_ground_behind(hwnd, &ground)) ground = w32_system_ground();
+        FillRect(hdc, &r, w32_ground_brush(ground));
+        {
             int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
             int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
             if (luma < 128) line = RGB(min(255, r8 + 28), min(255, g8 + 28), min(255, b8 + 28));
@@ -1960,9 +1994,17 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (dw && dw->fg.has_value) line = dw->fg.color;
         HPEN pen = CreatePen(PS_SOLID, 1, line);
         HPEN old = (HPEN)SelectObject(hdc, pen);
-        int my = r.top + (r.bottom - r.top) / 2;
-        MoveToEx(hdc, r.left, my, NULL);
-        LineTo(hdc, r.right, my);
+        // Across the long side: a horizontal rule in a vstack, a vertical
+        // one in an hstack, where the stack made it taller than wide.
+        if (r.bottom - r.top > r.right - r.left) {
+            int mx = r.left + (r.right - r.left) / 2;
+            MoveToEx(hdc, mx, r.top, NULL);
+            LineTo(hdc, mx, r.bottom);
+        } else {
+            int my = r.top + (r.bottom - r.top) / 2;
+            MoveToEx(hdc, r.left, my, NULL);
+            LineTo(hdc, r.right, my);
+        }
         SelectObject(hdc, old);
         DeleteObject(pen);
         EndPaint(hwnd, &ps);
@@ -2001,6 +2043,15 @@ static const wchar_t* GRID_CLASS = L"AetherUIGrid";
 
 static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_ERASEBKGND: {
+            // What shows where no container does: the system ground, dark
+            // on a dark system, like the root stack that normally covers it.
+            HDC hdc = (HDC)wp;
+            RECT r;
+            GetClientRect(hwnd, &r);
+            FillRect(hdc, &r, w32_ground_brush(w32_system_ground()));
+            return 1;
+        }
         case AE_WM_FLUSH_LAYOUT:
             // Posted by w32_request_layout so the loop wakes; also what a
             // nested modal loop dispatches, and what the driver sends
@@ -2010,8 +2061,13 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         case WM_SETTINGCHANGE: {
             // OS light/dark flip ("ImmersiveColorSet") — tell the AeCS
             // appearance callback, already on the UI thread.
-            if (lp && wcscmp((const wchar_t*)lp, L"ImmersiveColorSet") == 0)
+            if (lp && wcscmp((const wchar_t*)lp, L"ImmersiveColorSet") == 0) {
+                w32_forget_system_dark();
                 aether_ui_appearance_invoke(aether_ui_dark_mode_check());
+                // Every default ground in the tree just changed colour.
+                RedrawWindow(hwnd, NULL, NULL,
+                             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_SIZE: {
@@ -2297,6 +2353,7 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
 }
 
 int aether_ui_dark_mode_check(void);
+static void w32_forget_system_dark(void);
 
 // The system's dark theme for a control whose chrome the system draws --
 // a scroll view's scrollbars, a slider's track -- when the system is in
@@ -2306,6 +2363,15 @@ int aether_ui_dark_mode_check(void);
 static void w32_system_dark_control(HWND hwnd) {
     if (hwnd && aether_ui_dark_mode_check()) {
         SetWindowTheme(hwnd, L"DarkMode_Explorer", NULL);
+    }
+}
+
+// The same for an EDIT, whose dark theme class is the common file dialog's
+// (DarkMode_Explorer has no Edit parts): a dark field with a dark border,
+// and the WM_CTLCOLOREDIT answer above supplies the text and fill.
+static void w32_system_dark_edit(HWND hwnd) {
+    if (hwnd && aether_ui_dark_mode_check()) {
+        SetWindowTheme(hwnd, L"DarkMode_CFD", NULL);
     }
 }
 
@@ -3286,6 +3352,7 @@ int aether_ui_button_create_plain(const char* label) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    w32_system_dark_control(h);
     return register_widget_typed(h, WK_BUTTON);
 }
 
@@ -3340,10 +3407,10 @@ int aether_ui_divider_create(void) {
     HWND h = CreateWindowExW(0, DIVIDER_CLASS, L"",
         WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
         widget_holder, NULL, GetModuleHandleW(NULL), NULL);
-    int handle = register_widget_typed(h, WK_DIVIDER);
-    Widget* w = widget_at(handle);
-    if (w) { w->pref_width = 1; w->pref_height = 12; }
-    return handle;
+    // No pref: the thickness is the intrinsic measure (see
+    // measure_widget_intrinsic), and a pref here would read as a pin on
+    // whichever axis the stack does not run along.
+    return register_widget_typed(h, WK_DIVIDER);
 }
 
 // ---------------------------------------------------------------------------
@@ -3417,6 +3484,7 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    w32_system_dark_edit(h);
     // Windows has no native placeholder on EDIT — use EM_SETCUEBANNER (comctl32 6+)
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501 /* EM_SETCUEBANNER */, TRUE,
@@ -3440,6 +3508,7 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    w32_system_dark_edit(h);
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
@@ -3480,6 +3549,7 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    w32_system_dark_control(h);
     int handle = register_widget_typed(h, WK_TOGGLE);
     Widget* w = widget_at(handle);
     if (w) w->on_change = (AeClosure*)boxed_closure;
@@ -3622,6 +3692,7 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    w32_system_dark_edit(h);
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
@@ -5019,19 +5090,31 @@ void aether_ui_open_url_impl(const char* url) {
     ShellExecuteW(NULL, L"open", utf8_to_wide(url), NULL, NULL, SW_SHOWNORMAL);
 }
 
+// The system setting, read once and kept: this is asked on every erase,
+// every WM_CTLCOLOR and every rule painted now that the default ground
+// follows it, and a registry open per question made a small form's first
+// paint take seconds. WM_SETTINGCHANGE ("ImmersiveColorSet") drops the cache
+// when the user flips the theme.
+static int w32_system_dark_cache = -1;
+
+static void w32_forget_system_dark(void) { w32_system_dark_cache = -1; }
+
 int aether_ui_dark_mode_check(void) {
     // Driver override first (POST /appearance?dark=N — headless spec steer).
     int ov = aether_ui_appearance_override_get();
     if (ov >= 0) return ov;
+    if (w32_system_dark_cache >= 0) return w32_system_dark_cache;
     HKEY key;
+    int dark = 0;
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
         L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        0, KEY_READ, &key) != ERROR_SUCCESS) return 0;
-    DWORD val = 1, sz = sizeof(val);
-    int dark = 0;
-    if (RegQueryValueExW(key, L"AppsUseLightTheme", NULL, NULL,
-        (LPBYTE)&val, &sz) == ERROR_SUCCESS) dark = (val == 0);
-    RegCloseKey(key);
+        0, KEY_READ, &key) == ERROR_SUCCESS) {
+        DWORD val = 1, sz = sizeof(val);
+        if (RegQueryValueExW(key, L"AppsUseLightTheme", NULL, NULL,
+            (LPBYTE)&val, &sz) == ERROR_SUCCESS) dark = (val == 0);
+        RegCloseKey(key);
+    }
+    w32_system_dark_cache = dark;
     return dark;
 }
 
