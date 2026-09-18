@@ -413,6 +413,7 @@ static void widget_hash_insert(HWND h, int handle) {
 }
 
 static void mark_subtree_dead(HWND hwnd);
+static void w32_drain_graveyard(void);
 
 static Widget* widget_at(int handle) {
     if (handle < 1 || handle > widget_count) return NULL;
@@ -2022,6 +2023,10 @@ void aether_ui_app_run_raw(int app_handle) {
     // controls (no focus traversal at all).
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        // The previous message's handlers have all returned: give back the
+        // closure boxes the widgets they retired were carrying (see
+        // w32_release_box for why not sooner).
+        w32_drain_graveyard();
         // When a key-registered canvas has focus, route keystrokes straight
         // to it — IsDialogMessage would otherwise eat Return (default button)
         // and Escape (cancel) before the canvas's WM_KEYDOWN sees them, and
@@ -8936,13 +8941,47 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
 // Clearing the slot matters as much as the free: a dead widget's handler must
 // read NULL rather than a pointer to freed memory, and every caller here
 // already tests the slot before invoking it.
+//
+// The free itself is DEFERRED to the run loop, because the widget is very
+// often retired BY the closure being given back: a row's Remove button clears
+// the list it sits in, a Refresh button rebuilds the panel that holds it. That
+// closure is still on the stack, reading its captured environment, when
+// mark_subtree_dead reaches its widget. GTK holds a reference on a closure for
+// the whole of an emission and ARC keeps an AppKit target alive through the
+// action that fired it, so on those backends the box outlives the call by
+// construction; win32 has no such thing, so a free here would be a
+// use-after-free the moment the closure touched a captured variable again.
+// The boxes wait in a graveyard, and the run loop empties it between one
+// message and the next, when nothing of ours is on the stack.
 extern void aether_closure_env_free(void* env);
+
+static AeClosure** w32_graveyard = NULL;
+static int w32_graveyard_count = 0;
+static int w32_graveyard_cap = 0;
 
 static void w32_release_box(AeClosure** slot) {
     if (!slot || !*slot) return;
-    aether_closure_env_free((*slot)->env);
-    free(*slot);
+    if (w32_graveyard_count >= w32_graveyard_cap) {
+        int cap = w32_graveyard_cap ? w32_graveyard_cap * 2 : 64;
+        AeClosure** grown = (AeClosure**)realloc(
+            w32_graveyard, sizeof(AeClosure*) * cap);
+        if (!grown) return;   // keep the leak over a crash; the slot still clears
+        w32_graveyard = grown;
+        w32_graveyard_cap = cap;
+    }
+    w32_graveyard[w32_graveyard_count++] = *slot;
     *slot = NULL;
+}
+
+// Called by the run loop between messages: the only time no closure of ours
+// can be executing. A nested loop (a modal, TrackPopupMenu) does not drain,
+// on purpose, because the closure that opened it is still on the outer stack.
+static void w32_drain_graveyard(void) {
+    for (int i = 0; i < w32_graveyard_count; i++) {
+        aether_closure_env_free(w32_graveyard[i]->env);
+        free(w32_graveyard[i]);
+    }
+    w32_graveyard_count = 0;
 }
 
 // Release the per-handle state a retired widget owned. Handles are monotonic,
