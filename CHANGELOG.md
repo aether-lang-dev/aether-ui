@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **An iOS simulator leg in CI (#22):** `ae build --target=<arch>-ios-simulator
+  --emit=staticlib` compiles the Aether runtime for the simulator
+  (`tests/ios/runtime_seed.ae`), `listbox_demo`'s portable C is linked
+  against it with the UIKit backend and the driver, the binary goes into a
+  bundle (`tests/ios/Info.plist`) and a booted iPhone simulator, and
+  `tests/listbox_demo`'s spec runs against it over the same driver port
+  every other backend answers (ci.sh Phase 1e2). The first time an
+  aether-ui app has run on iOS, and the acceptance #22 set out.
+- **UIKit answers the whole AetherUIDriver:** the backend's driver table
+  had the canvas pixel routes and four scalar reads. It now has what the
+  AppKit and Win32 tables have -- text, visibility, parent, children,
+  rect, enabled, classes, focus, hover/pressed readback, screenshot -- and
+  `dispatch_action` for click, set_text, toggle, set_value, set_state,
+  focus, key, split, tabs, context menu, pick, hover/press/release, the
+  canvas events and shutdown. Every request is serviced on the main thread
+  (`run_on_ui_thread`): UIKit, like GTK4, does not tolerate reads of its
+  view tree from another thread, and the simulator's first `/widgets`
+  died in `-[__NSArrayM objectAtIndex:]` on the HTTP thread. What iOS has
+  no counterpart for (window resize, menu bar, tray) answers 404.
+
+### Fixed
+
+- **UIKit retires what it removes.** `clear_children`, `remove_child`,
+  `set_child` and `navstack_pop` took views out of the tree and left them
+  in the widget registry: alive for the life of the process (the array is
+  strong), listed by the driver with their stale text and parent -- the
+  simulator leg's first spec run found the rows of a rebuild that was gone
+  and clicked those -- and their closure boxes never given back. A rebuild
+  clears and repopulates, so all three grew with every rebuild. Retired
+  views now leave the registry, and the boxes their helpers hold are
+  released on the next turn of the main queue (a closure retiring its own
+  widget is on the stack when this runs; the main queue is the graveyard
+  win32 drains from its run loop, #145). `AeuiClosureHolder` is the
+  protocol every closure-holding helper adopts so one walk finds them all.
+- **UIKit `picker_set_selected` fires the change callback**, as on GTK4 and
+  AppKit, and `on_click` keeps its closure addressable by handle so a
+  driver click on a plain container (a listbox row) fires what a tap would.
+- **UIKit `set_focusable` works on a stack.** `UIView` answers NO to
+  `canBecomeFirstResponder` and has no setter, so a container could never
+  take focus and a listbox's rows never owned it: Down, Up, Home and End
+  did nothing on iOS. `AeuiStackView` answers from a flag `set_focusable`
+  sets, as AppKit's `AetherStackView` does, and a focused stack delivers
+  hardware-keyboard presses (`pressesBegan:`) to the window's key handler
+  with the desktop backends' key names.
+
 ### Changed
 
 - **win32 holds a stack's painting while a rebuild attaches into it

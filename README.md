@@ -590,7 +590,8 @@ capabilities the test harness is denied, not the other way around.
 | GTK4 backend | `backend/aether_ui_gtk4.c` | Linux + FreeBSD: GTK4 C API calls, Cairo canvas, test server |
 | macOS backend | `backend/aether_ui_macos.m` | macOS: AppKit Objective-C |
 | Win32 backend | `backend/aether_ui_win32.c` | Windows: USER32 + GDI+ + Common Controls |
-| C header | `backend/aether_ui_backend.h` | Shared backend ABI — implemented by all three backends (four platforms; FreeBSD shares GTK4) |
+| UIKit backend | `backend/aether_ui_uikit.m` | iOS / iPadOS: UIKit Objective-C, one `UIWindowScene` |
+| C header | `backend/aether_ui_backend.h` | Shared backend ABI — implemented by all four backends (five platforms; FreeBSD shares GTK4) |
 | Build script | `build.sh` | Auto-detects platform (Darwin/Linux/FreeBSD/MinGW) |
 | Spec matrix | `tests/spec_matrix.sh` | Runs every AetherUIDriver spec, one app at a time |
 | Widget tests | `tests/test_widgets.c` | Cross-platform C-level smoke suite (40 assertions) |
@@ -605,6 +606,7 @@ capabilities the test harness is denied, not the other way around.
 | macOS    | AppKit (`backend/aether_ui_macos.m`)    | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
 | Windows  | Native Win32 (`backend/aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls v6 (themed); per-monitor DPI v2; follows the system's dark mode (title bar, ground, controls); AetherUIDriver via winsock2 |
 | FreeBSD  | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — shares the Linux backend; clang build, private-Xvfb spec runs           |
+| iOS      | UIKit (`backend/aether_ui_uikit.m`)     | Whole ABI implemented; AetherUIDriver served on the main thread. CI links `listbox_demo` against `ae build --target=aarch64-ios-simulator --emit=staticlib`, installs it in a booted iPhone simulator and runs its driver spec there (ci.sh Phase 1e2). No menu bar, tray, or window resize (those routes answer 404); file pickers are async on iOS and answer an empty selection. |
 
 "Full" above means the backend implements the whole widget/canvas/event/
 styling surface plus AetherUIDriver — not that every suite is green on every

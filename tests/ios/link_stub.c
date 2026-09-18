@@ -13,10 +13,13 @@
 // calling into the runtime somewhere new. Add it with a comment naming the
 // call site, exactly as tests/win32/win32_runtime_test.c says for its half.
 //
-// There is no iOS build of libaether on this box; when there is one, link
-// against it instead of this stub and delete this file. Until then this is the
-// difference between "the backend mirrors the others" and "is known to link
-// against the iOS frameworks".
+// The real link happens too: ci.sh Phase 1e2 builds the Aether runtime for
+// the simulator (`ae build --target=<arch>-ios-simulator --emit=staticlib`,
+// see tests/ios/runtime_seed.ae) and links an example against it, installs it
+// in a booted simulator and drives it. This stub stays for Phase 1e's own
+// check, which links the backend against the frameworks in seconds, before
+// the runtime is built, and names the runtime symbol a backend change starts
+// needing.
 
 #include <stddef.h>
 #include <stdlib.h>
