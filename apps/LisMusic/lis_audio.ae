@@ -26,7 +26,7 @@ extern malloc(size: int) -> ptr
 exports (
     Player, mk_player, close_audio, play_local, play_net, start_play, stop_play,
     is_playing, cur_title, cur_author, set_voice, trans_time, seek_frac,
-    audio_position_ms, audio_duration_ms
+    player_position_ms, player_duration_ms
 )
 
 struct Player {
@@ -125,11 +125,11 @@ seek_frac(p: *Player, frac: float) {
 }
 
 // Live position / duration in ms (for the seek slider + time labels).
-audio_position_ms(p: *Player) -> long {
+player_position_ms(p: *Player) -> long {
     if p.src == null { return 0 }
     return audio.position_ms(p.src)
 }
-audio_duration_ms(p: *Player) -> long {
+player_duration_ms(p: *Player) -> long {
     if p.src == null { return 0 }
     return audio.duration_ms(p.src)
 }
