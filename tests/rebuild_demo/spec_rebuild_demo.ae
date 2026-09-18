@@ -28,7 +28,6 @@ main() {
     uidriver.wait_server()
 
     spec.describe(fw, "clear_children / remove_child over AetherUIDriver") {
-
         spec.it("starts with three grid cells and two stack rows") callback {
             b = uidriver.get_body("/widgets")
             spec.assert_contains(b, "grid g0 #0", "first grid cell rendered")
@@ -98,6 +97,44 @@ main() {
 
             st = uidriver.post_status("/widget/${stale}/click")
             spec.assert_eq(st, 404, "clicking a removed row is refused")
+        }
+
+        // A rebuilt container must survive the next window resize with its
+        // rows placed. win32's #150 held painting across a rebuild with
+        // WM_SETREDRAW, which DefWindowProc implements by clearing
+        // WS_VISIBLE; that backend reads the bit as the widget's own
+        // visibility, so the parent's next layout treated the held column
+        // as absent and every row lost its rect (#152). A rect with size is
+        // the assertion: it is 0x0 the moment a parent lays a child out as
+        // if it were not there.
+        spec.it("a rebuilt stack keeps its rows placed across a window resize") callback {
+            r = uidriver.widget_id_by_text("Rebuild stack")
+            uidriver.post_ok("/widget/${r}/click", "rebuild stack")
+            ok = uidriver.wait_body_contains("/widgets", "stack row D", 20)
+            spec.assert_true(ok, "the rebuilt stack rendered")
+            gone = uidriver.widget_id_by_text("stack row B")
+            spec.assert_eq(gone, 0, "the cleared row is gone from /widgets")
+
+            row = uidriver.widget_id_by_text("stack row D")
+            spec.assert_gt(row, 0, "a rebuilt row has a driver id")
+            w0 = uidriver.widget_int_field_by_id(row, "w")
+            h0 = uidriver.widget_int_field_by_id(row, "h")
+            spec.assert_gt(w0, 0, "the row has a width before the resize")
+            spec.assert_gt(h0, 0, "the row has a height before the resize")
+
+            uidriver.resize_window(700, 560)
+            // The resize lands asynchronously on every backend; the row is
+            // read once its container has been laid out against the new
+            // client, which is when its width differs from before or, where
+            // a row does not stretch, when the wait simply times out and the
+            // size below is asserted as it stands.
+            _ = uidriver.wait_int_field_change(row, "w", w0, 20)
+            w1 = uidriver.widget_int_field_by_id(row, "w")
+            h1 = uidriver.widget_int_field_by_id(row, "h")
+            spec.assert_gt(w1, 0, "the row still has a width after the resize")
+            spec.assert_gt(h1, 0, "the row still has a height after the resize")
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "stack row D", "the row is still listed")
         }
     }
     return spec.run_summary(fw)

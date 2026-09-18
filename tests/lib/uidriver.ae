@@ -13,10 +13,10 @@
 // Resolution: specs reach this module via AETHER_LIB_DIR (multi-entry,
 // platform path separator) — tests/run_spec.sh wires it.
 
-exports (
+exports(
     url_of, get_body, get_status, post_ok, post_status, post_body,
     text_width, font_ascent,
-    click, click_widget, toggle_widget, key, move_to, resize_window,
+    click, click_widget, toggle_widget, key, move_to, resize_window, wait_int_field_change,
     hover_widget, unhover, press_widget, release_widget,
     window_key, focus_widget, focused_widget,
     set_state, state_value_int,
@@ -49,7 +49,7 @@ get_body(path: string) -> string {
     resp, cerr = client.send_request(req)
     client.request_free(req)
     if string.length(cerr) > 0 { return "" }
-    body = string.concat(client.response_body(resp), "")   // own a copy
+    body = string.concat(client.response_body(resp), "") // own a copy
     client.response_free(resp)
     return body
 }
@@ -442,9 +442,15 @@ count_occurrences(hay: string, needle: string) -> int {
 // grant a different size than asked), so polling for "different" is the only
 // honest wait.
 wait_root_height_change(id: int, was: int, tries: int) -> int {
+    return wait_int_field_change(id, "h", was, tries)
+}
+
+// The same wait for any integer field ("x", "y", "w", "h") of any widget:
+// 1 once it reads other than `was`, 0 when it never did within `tries`.
+wait_int_field_change(id: int, fieldname: string, was: int, tries: int) -> int {
     i = 0
     while i < tries {
-        if widget_int_field_by_id(id, "h") != was { return 1 }
+        if widget_int_field_by_id(id, fieldname) != was { return 1 }
         sleep(150)
         i = i + 1
     }
@@ -508,8 +514,8 @@ menu_handle_with(label: string) -> int {
             while k < kn {
                 lab = json.json_get_string_raw(json.json_array_get_raw(items, k))
                 if lab != null { if string.equals(lab, label) == 1 {
-                    if found == 0 { found = field_int(m, "handle") }
-                } }
+                        if found == 0 { found = field_int(m, "handle") }
+                    } }
                 k = k + 1
             }
         }
