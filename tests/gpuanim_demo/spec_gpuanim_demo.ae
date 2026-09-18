@@ -31,7 +31,7 @@ main() {
         spec.it("the app animated, or says it has no GPU surface") callback {
             // The demo asks for a frame every 16ms and stops at twelve, or
             // gives up after twelve seconds and says so. Its label changes
-            // every frame, so wait_server above cannot settle until it has
+            // every tick, so wait_server above cannot settle until it has
             // finished, and most of that budget is usually spent before this
             // line; the wait here is what remains of the demo's, plus slack.
             // On the wrong side the label says which way it stopped, so the
