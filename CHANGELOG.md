@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **UIKit `on_layout` no longer leaks an observer per call, and no longer
+  leaves a layer to deallocate with that observer still registered
+  (#144):** every vstack/hstack is now an `AeuiStackView`, a `UIStackView`
+  subclass whose `layoutSubviews` fires the stack's `on_layout` hooks on a
+  size change, the signal UIKit itself sends when an allocation is
+  recomputed. The hooks are an array the stack owns, so they go with it.
+  This replaces a KVO on the layer's `bounds` that could not be owned by
+  the view (an observed layer must lose its observers before it
+  deallocates, which a helper released by the view's own teardown cannot
+  promise) and so was parked for the life of the app, which leaked one
+  observer per `on_layout` and, when such a stack was retired by a rebuild
+  or a navstack pop, still hit the KVO ordering error. The parked-helper
+  array is gone with it: nothing in that backend is parked any more.
+  `on_layout` on a widget that is not a stack does nothing, the contract
+  on every backend (`ui/module.ae`, and GTK4 returns the same way).
+  Checked by CI's Phase 1e (compile and link against the UIKit
+  frameworks); there is still no iOS runtime leg (#22).
+
 - **The docs said a win32 splitview's divider cannot be dragged. It can, and
   has been able to for some time:** `stack_wnd_proc` captures the mouse on a
   press in the 6px divider band and relays out on every move, through the
@@ -18,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and min-size section now say so.
 
 ### Changed
+
+- **`table_filter_text` / `table_filter_clear` release the previous needle
+  with `string.release` (#126):** the `CRITICAL` comment that taught
+  "release the FIELD, not a local copy of it" described aether#1977, where
+  a release through a local read out of a struct field was silently
+  dropped. That has been fixed since aether 0.666 (either form frees, and
+  the pinned compiler is 0.684.0), so the note is now historical and the
+  plain intrinsic replaces the `string.string_release` spelling that was
+  chosen to dodge the identifier gate. No functional change; the comment
+  was teaching a rule that stopped being true.
 
 - **win32 follows the system's dark mode for the ground it paints.** GTK4 and
   AppKit hand an app the system's look, and on a dark system that look is
