@@ -739,6 +739,75 @@ else
 fi
 
 echo
+echo "=== Phase 1f: AppKit label retention across list rebuilds (#139) ==="
+# tests/appkit_retention/retention_probe.ae rebuilds a 400-row listbox on a
+# timer and then sits still, and `heap` (Xcode's, in /usr/bin) counts the
+# NSTextField instances alive in it from outside. Rows a rebuild retires are
+# supposed to be freed with it, so the count is bounded by the rows on screen
+# plus the rebuild in flight, and a count that tracks the rows ever rendered
+# is the leak #139 describes. Run twice: with the run loop idle between
+# rebuilds, the shape of an app refreshing a list, which is the assertion;
+# and with the loop saturated (a period shorter than a rebuild), the shape
+# #139 was measured in, which is reported for the record and not asserted.
+retention_count() {
+    # The live NSTextField line of `heap`: COUNT BYTES AVG CLASS_NAME ...
+    heap "$1" 2>/dev/null | awk '$4 == "NSTextField" { print $1; exit }'
+}
+retention_run() {
+    # $1 = rebuild period (ms), $2 = label for the log. Prints the count
+    # on stdout (the caller captures it) and any complaint on stderr.
+    local period="$1" tag="$2" log="/tmp/ci_retention_${2}.log" pid n i
+    AETHER_PROBE_PERIOD_MS="$period" AETHER_PROBE_ROUNDS=20         ./build/retention_probe > "$log" 2>&1 &
+    pid=$!
+    for i in $(seq 1 240); do
+        grep -q "RETENTION_PROBE:" "$log" 2>/dev/null && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.5
+    done
+    if ! grep -q "RETENTION_PROBE:" "$log" 2>/dev/null; then
+        echo "  FAIL retention probe ($tag) never finished its rebuilds" >&2
+        tail -10 "$log" | sed 's/^/       /' >&2
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        return 1
+    fi
+    n="$(retention_count "$pid")"
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    if [ -z "$n" ]; then
+        echo "  FAIL heap gave no NSTextField count for the $tag run" >&2
+        return 1
+    fi
+    echo "$n"
+}
+if [ "$PLATFORM" = "macos" ]; then
+    if ! command -v heap > /dev/null 2>&1; then
+        echo "  SKIP no heap(1) on this host (it ships with Xcode)"
+    elif ! ./build.sh tests/appkit_retention/retention_probe.ae retention_probe             > /tmp/ci_retention_build.log 2>&1; then
+        echo "  FAIL retention probe (build)"
+        tail -20 /tmp/ci_retention_build.log | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    else
+        # 400 rows on screen, up to 400 retired by the rebuild in flight,
+        # and the handful of other labels in the window: 1200 is the bound
+        # of a process that frees what it retires. Twenty rebuilds that do
+        # not would leave 8000.
+        RETENTION_BOUND=1200
+        idle="$(retention_run 500 idle)"; idle_rc=$?
+        if [ "$idle_rc" -ne 0 ]; then
+            FAIL=$((FAIL + 1))
+        elif [ "$idle" -le "$RETENTION_BOUND" ]; then
+            echo "  OK   $idle NSTextField alive after 20 rebuilds, run loop idle between (bound $RETENTION_BOUND)"
+        else
+            echo "  FAIL $idle NSTextField alive after 20 rebuilds of 400 rows, run loop idle between (bound $RETENTION_BOUND)"
+            FAIL=$((FAIL + 1))
+        fi
+        saturated="$(retention_run 10 saturated)" || true
+        [ -n "$saturated" ] && echo "  INFO $saturated NSTextField alive after 20 rebuilds, run loop saturated (not asserted)"
+    fi
+else
+    echo "  SKIP AppKit only"
+fi
+
+echo
 echo "=== Phase 2: smoke-launch non-driver examples ==="
 for ex in "${SMOKE_EXAMPLES[@]}"; do
     run_smoke_test "$(EX_BIN "$ex")" "$ex" || FAIL=$((FAIL + 1))

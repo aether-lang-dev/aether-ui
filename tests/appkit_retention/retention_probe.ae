@@ -1,0 +1,97 @@
+// Label retention across list rebuilds (aether-ui#139).
+//
+// A 400-row listbox rebuilt on a timer, then left running so the process
+// can be inspected from outside: ci.sh's AppKit phase runs `heap` against it
+// and counts the live NSTextField instances. Rows retired by a rebuild are
+// supposed to be freed, so the count is bounded by the rows on screen and
+// the rebuild in flight, and never tracks the total ever rendered.
+//
+// The rebuild period is the one knob, AETHER_PROBE_PERIOD_MS (default 500).
+// A period longer than a rebuild takes (~270ms for 400 rows on AppKit)
+// leaves the run loop idle between updates, which is how an app that
+// refreshes a list behaves; a period shorter than that keeps the loop
+// saturated, which is how #139 was measured. AETHER_PROBE_ROUNDS (default
+// 20) is how many rebuilds happen before the marker line is printed.
+//
+//   ./build.sh tests/appkit_retention/retention_probe.ae retention_probe
+//   ./build/retention_probe &
+//   heap $! | grep -E '^ *NSTextField '
+import ui
+import ui(window, vstack, text, listbox, listbox_update, timer, app_quit)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern malloc(size: int) -> ptr
+extern fflush(stream: ptr) -> int
+
+struct Row { label: string }
+
+mk_row(i: int, gen: int) -> ptr {
+    r = malloc(sizeof(Row)) as *Row
+    r.label = "row ${i} of generation ${gen}"
+    return r as ptr
+}
+
+// Two 400-row lists, alternated, so every rebuild renders text the previous
+// one did not: a rebuild that reused its rows would be a different test.
+mk_items(gen: int) -> ptr {
+    items = list.new()
+    i = 0
+    while i < 400 {
+        _ = list.add(items, mk_row(i, gen))
+        i = i + 1
+    }
+    return items
+}
+
+env_int(name: string, fallback: int) -> int {
+    v = os_getenv(name)
+    if v == null { return fallback }
+    n, err = string.to_int(v)
+    if string.length(err) > 0 { return fallback }
+    return n
+}
+
+var g_list: ptr = null
+var g_items_a: ptr = null
+var g_items_b: ptr = null
+var g_rounds = 0
+var g_target = 20
+
+main() {
+    period = env_int("AETHER_PROBE_PERIOD_MS", 500)
+    g_target = env_int("AETHER_PROBE_ROUNDS", 20)
+    g_items_a = mk_items(0)
+    g_items_b = mk_items(1)
+    window("retention probe", 480, 640) {
+        vstack(4) {
+            _t = text("400-row listbox, rebuilt ${g_target} times every ${period} ms")
+            g_list = listbox(2) callback |item: ptr, i: int, row: int| {
+                r = item as *Row
+                _l = text(row, r.label)
+            }
+            listbox_update(g_list, g_items_a)
+        }
+        timer(period) callback {
+            if g_rounds < g_target {
+                if g_rounds % 2 == 0 {
+                    listbox_update(g_list, g_items_b)
+                } else {
+                    listbox_update(g_list, g_items_a)
+                }
+                g_rounds = g_rounds + 1
+                if g_rounds == g_target {
+                    // The line ci.sh waits for. stdout is a pipe there, so
+                    // it is fully buffered and has to be pushed out.
+                    println("RETENTION_PROBE: ${g_rounds} rebuilds done, 400 rows on screen")
+                    _f = fflush(null)
+                }
+                return
+            }
+            // Inspected from outside now; quit on our own if nobody does.
+            g_rounds = g_rounds + 1
+            if g_rounds > g_target + 120000 / period { app_quit() }
+        }
+    }
+}
