@@ -94,6 +94,15 @@ typedef struct {
     void* env;
 } AeClosure;
 
+// Adopted by every helper that holds a boxed closure for its widget (a
+// control's target, a tap target, a delegate, a layout hook, the picker),
+// so retiring the widget can give every box back through one question.
+@protocol AeuiClosureHolder <NSObject>
+@property (nonatomic, assign) AeClosure* closure;
+@end
+
+static void aeui_unregister_view_tree(UIView* v);
+
 // AETHER_UI_HEADLESS — set by CI / smoke tests. Suppresses anything that would
 // spin a modal/user-input loop with no user present.
 static int aeui_is_headless(void) {
@@ -236,7 +245,7 @@ static void aeui_own_helper(id owner, id helper) {
     [held addObject:helper];
 }
 
-@interface AeuiButtonTarget : NSObject
+@interface AeuiButtonTarget : NSObject <AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @end
 @implementation AeuiButtonTarget
@@ -246,7 +255,7 @@ static void aeui_own_helper(id owner, id helper) {
 }
 @end
 
-@interface AeuiToggleTarget : NSObject
+@interface AeuiToggleTarget : NSObject <AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @end
 @implementation AeuiToggleTarget
@@ -257,7 +266,7 @@ static void aeui_own_helper(id owner, id helper) {
 }
 @end
 
-@interface AeuiSliderTarget : NSObject
+@interface AeuiSliderTarget : NSObject <AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @end
 @implementation AeuiSliderTarget
@@ -267,7 +276,7 @@ static void aeui_own_helper(id owner, id helper) {
 }
 @end
 
-@interface AeuiFieldTarget : NSObject
+@interface AeuiFieldTarget : NSObject <AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @end
 @implementation AeuiFieldTarget
@@ -524,7 +533,7 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 // keeps its hooks in an array of its own, so a second on_layout on the same
 // stack adds a hook rather than replacing the first, and they all go with
 // the stack.
-@interface AeuiLayoutHook : NSObject
+@interface AeuiLayoutHook : NSObject <AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @property (nonatomic, assign) int lastW, lastH;
 @end
@@ -643,17 +652,23 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     }
 }
 
+// Retired, not just detached: see aeui_unregister_view_tree.
 void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     (void)parent_handle;
     UIView* child = (__bridge UIView*)aether_ui_get_widget(child_handle);
-    if (child) [child removeFromSuperview];  // also removes it as arranged
+    if (!child) return;
+    aeui_unregister_view_tree(child);
+    [child removeFromSuperview];  // also removes it as arranged
 }
 
 void aether_ui_clear_children_impl(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v) return;
     NSArray<UIView*>* kids = [v.subviews copy];
-    for (UIView* k in kids) [k removeFromSuperview];
+    for (UIView* k in kids) {
+        aeui_unregister_view_tree(k);
+        [k removeFromSuperview];
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,7 +1088,7 @@ void aether_ui_progressbar_set_fraction(int handle, double fraction) {
 }
 
 // --- Text area — UITextView -------------------------------------------------
-@interface AeuiTextViewDelegate : NSObject <UITextViewDelegate>
+@interface AeuiTextViewDelegate : NSObject <UITextViewDelegate, AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @end
 @implementation AeuiTextViewDelegate
@@ -1125,7 +1140,7 @@ int aether_ui_scrollview_create(void) {
 }
 
 // --- Picker — a UIButton driving a UIMenu (iPad-friendly; iOS 14+) ----------
-@interface AeuiPicker : UIButton
+@interface AeuiPicker : UIButton <AeuiClosureHolder>
 @property (nonatomic, strong) NSMutableArray<NSString*>* items;
 @property (nonatomic, assign) int selectedIndex;
 @property (nonatomic, assign) AeClosure* closure;
@@ -3182,7 +3197,7 @@ static const char kDblClosure;
 static const char kClickClosure;
 static const char kSealed;
 
-@interface AeuiTapTarget : NSObject
+@interface AeuiTapTarget : NSObject <AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
 @end
 @implementation AeuiTapTarget
@@ -3305,7 +3320,11 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
     UIView* parent = (__bridge UIView*)aether_ui_get_widget(parent_handle);
     UIView* child = (__bridge UIView*)aether_ui_get_widget(child_handle);
     if (!parent || !child) return;
-    for (UIView* k in [parent.subviews copy]) [k removeFromSuperview];
+    for (UIView* k in [parent.subviews copy]) {
+        if (k == child) continue;
+        aeui_unregister_view_tree(k);
+        [k removeFromSuperview];
+    }
     child.translatesAutoresizingMaskIntoConstraints = NO;
     [parent addSubview:child];
     [NSLayoutConstraint activateConstraints:@[
@@ -3597,7 +3616,13 @@ void aether_ui_navstack_pop(int handle) {
     NSNumber* d = objc_getAssociatedObject(container, &kNavDepth);
     int depth = d ? d.intValue : 0;
     if (depth <= 0) return;   // root: no-op
-    for (UIView* k in [container.subviews copy]) [k removeFromSuperview];
+    // Retired as well as detached, so the driver's count shrinks with the
+    // page (the spec that caught this on win32 and AppKit: "pop SHRANK the
+    // widget tree").
+    for (UIView* k in [container.subviews copy]) {
+        aeui_unregister_view_tree(k);
+        [k removeFromSuperview];
+    }
     objc_setAssociatedObject(container, &kNavDepth, @(depth - 1),
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
@@ -4569,6 +4594,70 @@ int aether_ui_fire_appearance(int dark) {
     }
     aether_ui_appearance_invoke(dark ? 1 : 0);
     return 1;
+}
+
+// --- Retiring widgets -------------------------------------------------------
+// removeFromSuperview takes a view out of the tree; the registry is ours,
+// and until this a retired view stayed in it: alive for the life of the
+// process (the registry's array is strong), listed by the driver with its
+// stale text and parent -- the simulator leg's first spec run found the
+// rows of a rebuild that was gone and clicked those -- and its closure
+// boxes never given back. A rebuild clears and repopulates, so all three
+// grew with every rebuild. This is what AppKit's unregister_view_tree and
+// win32's mark_subtree_dead do for theirs.
+extern void aether_closure_env_free(void* env);
+
+// A box is released on the next turn of the main queue, not here: the
+// closure retiring its own widget (a row's click handler that calls
+// listbox_update) is on the stack when this runs, and freeing its env under
+// it is the use-after-free win32 met (#145) and answered with a graveyard
+// drained by its run loop. The main queue is that graveyard here.
+static void aeui_release_boxed_later(AeClosure* boxed) {
+    if (!boxed) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        aether_closure_env_free(boxed->env);
+        free(boxed);
+    });
+}
+
+static void aeui_unregister_view_tree(UIView* v) {
+    if (!v) return;
+    for (UIView* c in [v.subviews copy]) aeui_unregister_view_tree(c);
+    int h = aether_ui_handle_for_widget((__bridge void*)v);
+    if (h < 1) return;
+    widgets[h - 1] = nil;
+    widget_types[h - 1] = AUI_UNKNOWN;
+    free(widget_classes[h - 1]);
+    widget_classes[h - 1] = NULL;
+    // The boxes its helpers hold (tap targets, a control's target, a
+    // field's, a text view's delegate), and the by-handle aliases of the
+    // click and double-click ones, so nothing dangles.
+    NSMutableArray* held = objc_getAssociatedObject(v, "aeui_helpers");
+    for (id helper in held) {
+        if (![helper conformsToProtocol:@protocol(AeuiClosureHolder)]) continue;
+        id<AeuiClosureHolder> hc = helper;
+        aeui_release_boxed_later(hc.closure);
+        hc.closure = NULL;
+    }
+    objc_setAssociatedObject(v, &kClickClosure, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(v, &kDblClosure, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if ([v isKindOfClass:[AeuiStackView class]]) {
+        for (AeuiLayoutHook* hk in ((AeuiStackView*)v).layoutHooks) {
+            aeui_release_boxed_later(hk.closure);
+            hk.closure = NULL;
+        }
+    }
+    if ([v conformsToProtocol:@protocol(AeuiClosureHolder)]) {   // the picker
+        id<AeuiClosureHolder> hc = (id<AeuiClosureHolder>)v;
+        aeui_release_boxed_later(hc.closure);
+        hc.closure = NULL;
+    }
+    AeuiCtxMenuDelegate* d = objc_getAssociatedObject(v, &kCtxDelegate);
+    if (d) {
+        for (NSDictionary* it in d.items)
+            aeui_release_boxed_later((AeClosure*)[it[@"c"] pointerValue]);
+        [d.items removeAllObjects];
+    }
 }
 
 // --- AetherUIDriver — UIKit adapter ------------------------------------------
