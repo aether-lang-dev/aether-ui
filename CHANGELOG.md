@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **win32 draws Common Controls version 6.** Themed controls — the button,
+  edit, checkbox, slider, progress bar and scrollbar every Windows app since
+  XP draws — are opted into by a manifest, and a process without one gets
+  version 5: the Windows-95 chrome, flat grey buttons with a black bevel.
+  This backend had no manifest (the build is a plain gcc link with no
+  resource step), so that is what every app here has been drawing, and cue
+  banners (`EM_SETCUEBANNER`, the placeholder in an empty field) do not exist
+  in version 5 at all. The opt-in is now made at run time, before the first
+  control: an activation context over the manifest shell32.dll carries as its
+  resource 124, activated on the UI thread. Two version-6 behaviours had to be
+  met: a progress bar starts over on `WM_STYLECHANGED`, so `add_child` no
+  longer rewrites a style that is not changing; and it animates toward a
+  higher position, so a position is set from one above and straight down.
+
 ### Fixed
 
 - **win32: the driver's screenshot drew every label twice, and the second

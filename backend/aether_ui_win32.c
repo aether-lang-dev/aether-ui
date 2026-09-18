@@ -2206,10 +2206,44 @@ static void aeui_focus_pending_key_canvas(void);
 static int  aeui_hwnd_is_key_canvas(HWND hwnd);
 
 static int init_done = 0;
+// Common Controls version 6 -- the themed BUTTON, EDIT, checkbox, slider,
+// progress bar and scrollbar every Windows app since XP draws -- is opted
+// into by a manifest, and a process without one gets version 5: the
+// Windows-95 chrome, flat grey buttons with a black-and-white bevel. This
+// backend has no manifest (the build is a plain gcc link with no resource
+// step), so that is what every app here has been drawing. The opt-in can
+// also be made at run time, before the first control exists, with an
+// activation context; the manifest it needs is one that names comctl32
+// 6.0.0.0, and shell32.dll carries exactly that as its resource 124, the
+// way the shell's own dialogs get their controls themed. Activated on this
+// thread, which is the thread every window here is created on: the control
+// class a CreateWindowEx resolves is looked up through the creating thread's
+// activation context. NOT set as the process default -- a mingw-w64 build
+// already carries a default manifest (supportedOS only, no comctl32 line),
+// and a process with a default refuses a second one. If any step fails the
+// process simply stays on version 5, as before.
+static void w32_enable_visual_styles(void) {
+    HMODULE shell = LoadLibraryW(L"shell32.dll");
+    if (!shell) return;
+    ACTCTXW ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.cbSize = sizeof(ctx);
+    ctx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID | ACTCTX_FLAG_HMODULE_VALID;
+    ctx.hModule = shell;
+    ctx.lpResourceName = MAKEINTRESOURCEW(124);
+    HANDLE h = CreateActCtxW(&ctx);
+    if (h == INVALID_HANDLE_VALUE) return;
+    ULONG_PTR cookie = 0;
+    ActivateActCtx(h, &cookie);
+    // Deliberately never deactivated or released: it stays active on the UI
+    // thread for the life of the process.
+}
+
 static void ensure_win_init(void) {
     if (init_done) return;
     init_done = 1;
     init_dpi_awareness();
+    w32_enable_visual_styles();
     INITCOMMONCONTROLSEX icc = { sizeof(icc),
         ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS
             | ICC_DATE_CLASSES | ICC_UPDOWN_CLASS };
@@ -3335,8 +3369,13 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     Widget* c = widget_at(child_handle);
     if (!p || !c) return;
     SetParent(c->hwnd, p->hwnd);
+    // Only write the style when it changes. Every control here is created
+    // WS_CHILD | WS_VISIBLE already, and a Common Controls 6 progress bar
+    // answers WM_STYLECHANGED by starting over: a bar created at 0.75 read
+    // 0 the moment it was attached, and painted empty.
     LONG_PTR st = GetWindowLongPtrW(c->hwnd, GWL_STYLE);
-    SetWindowLongPtrW(c->hwnd, GWL_STYLE, st | WS_CHILD | WS_VISIBLE);
+    LONG_PTR want = st | WS_CHILD | WS_VISIBLE;
+    if (want != st) SetWindowLongPtrW(c->hwnd, GWL_STYLE, want);
     ShowWindow(c->hwnd, SW_SHOW);
     // SetParent inserts the child at the TOP of the sibling Z-order, so
     // GetWindow(GW_CHILD) later enumerates children in REVERSE creation order
@@ -3938,17 +3977,31 @@ void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
     if (ts) ts->on_change = (AeClosure*)boxed_closure;
 }
 
+// A themed (Common Controls 6) progress bar ANIMATES toward a higher
+// position over a good fraction of a second, and only starts once it has a
+// display cycle, so a bar set to 0.5 and shown read as empty for as long as
+// a screenshot cares about, and a bar set from a handler lagged the value
+// the app holds. A move DOWN is instant. So the value is set from one above:
+// up to v+1 (which may animate, nobody sees it) and straight down to v.
+static void w32_progress_set(HWND h, double fraction) {
+    int v = (int)(fraction * 1000);
+    if (v < 0) v = 0;
+    if (v > 1000) v = 1000;
+    SendMessageW(h, PBM_SETPOS, (WPARAM)(v + 1), 0);
+    SendMessageW(h, PBM_SETPOS, (WPARAM)v, 0);
+}
+
 int aether_ui_progressbar_create(double fraction) {
     ensure_win_init();
     HWND h = CreateWindowExW(0, PROGRESS_CLASSW, L"",
         WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, PBM_SETRANGE32, 0, 1000);
-    int v = (int)(fraction * 1000);
-    if (v < 0) v = 0;
-    if (v > 1000) v = 1000;
-    SendMessageW(h, PBM_SETPOS, (WPARAM)v, 0);
+    // Range 0..1001, so a bar at 1000 is full to the eye and there is
+    // always a position one above the value to step back from: see
+    // w32_progress_set.
+    SendMessageW(h, PBM_SETRANGE32, 0, 1001);
+    w32_progress_set(h, fraction);
     int handle = register_widget_typed(h, WK_PROGRESSBAR);
     Widget* w = widget_at(handle);
     if (w) { w->u.progressbar.fraction = fraction; w->pref_height = 20; }
@@ -3958,10 +4011,7 @@ int aether_ui_progressbar_create(double fraction) {
 void aether_ui_progressbar_set_fraction(int handle, double fraction) {
     Widget* w = widget_at(handle);
     if (!w) return;
-    int v = (int)(fraction * 1000);
-    if (v < 0) v = 0;
-    if (v > 1000) v = 1000;
-    SendMessageW(w->hwnd, PBM_SETPOS, (WPARAM)v, 0);
+    w32_progress_set(w->hwnd, fraction);
     w->u.progressbar.fraction = fraction;
 }
 
