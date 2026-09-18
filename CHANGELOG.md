@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`set_min_width` / `set_min_height`: a size floor, so a panel can be the
+  right width AND draggable.** `set_width` states a size exactly, and an exact
+  size is not something a splitview divider drag can move, so a side panel was
+  either usable or resizable and never both. A floor opens the panel at the
+  width an inspector needs, leaves a drag outward free, and stops a drag inward
+  rather than letting the panel collapse to nothing. Implemented as a real
+  minimum on each backend: a greater-than-or-equal constraint at priority 751
+  on AppKit and UIKit, the size request without expand off on GTK4, and the
+  measured size the layout pass floors at on win32, where the divider clamp
+  reads it too. `min_width` and `min_height` were declared on the win32 widget
+  and never used; they are what carries it there now.
+
+- `get_min_width` / `get_min_height` read the floor as requested. Unlike
+  `get_width`, which reads an allocation a windowless tree does not have, this
+  answers before the first layout pass, which is what lets a headless spec see
+  a floor at all. `tests/min_size` uses both halves: the requested floor on
+  every backend, and the allocated size where the backend lays out a tree with
+  no window.
+
 - **The README documents the collection widgets, commands, undo and keymaps.**
   `listbox`, `table`, `tree`, `vlist`, `tabs` and `splitview` all existed and
   none appeared in it, so someone evaluating the toolkit could not tell they

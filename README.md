@@ -383,6 +383,39 @@ widget's own `on_change`, so an app writing into its own fields does not fight
 itself. `tab_select` is the deliberate exception and does notify, because a
 tab change is a navigation the app usually wants to hear about.
 
+### Sizing: a pin or a floor
+
+```aether
+ui.set_width(handle, 280)             // exactly this wide
+ui.set_min_width(handle, 280)         // at least this wide
+ui.set_height(handle, 120)
+ui.set_min_height(handle, 120)
+w = ui.get_width(handle)              // what it ACTUALLY got, 0 before layout
+m = ui.get_min_width(handle)          // the floor as requested, 0 if none
+```
+
+`set_width` states a size and holds it. `set_min_width` states a size the
+widget will not go below and stops there, so a parent that wants it bigger, or
+a splitview divider dragged outward, still gets its way.
+
+That difference is the whole point of having both. A side panel wants to open
+at an inspector's width and still be draggable, and a pin cannot do the second
+half: an exact size is not something a drag can move, so a panel was either
+the right size or resizable. A floor gives both, and it is also what stops a
+panel being dragged away to nothing.
+
+Where the drag is real differs by backend, and the floor is honoured either
+way: GTK4 and AppKit have a draggable divider, win32 renders a splitview as a
+plain stack whose divider cannot be dragged, so there the floor is what the
+layout pass and the divider clamp read.
+
+`get_width` reads the allocation, so it answers 0 until the first layout pass,
+and a widget tree with no window may never have one. `get_min_width` answers
+what was requested, which is readable immediately. On GTK4 the two verbs share
+one size request per axis, so a width given by `set_width` reads back through
+`get_min_width` as well: what it reports is the size the widget will not go
+below, which is true of either verb.
+
 ## Collections: lists, tables and trees
 
 A `listbox` renders one row per item from a closure, and `table` and `tree` are

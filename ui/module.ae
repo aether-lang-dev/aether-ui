@@ -76,7 +76,8 @@ exports (
     is_dark_mode,
     timer, timer_cancel, backend_name,
     window_create, window_set_body, window_show, window_close, app_quit,
-    set_width, set_height, get_width, get_height,
+    set_width, set_height, set_min_width, set_min_height,
+    get_width, get_height, get_min_width, get_min_height,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
     transition_overlay, overlay_is_exiting,
     overlay_material, overlay_material_effective,
@@ -401,6 +402,10 @@ extern aether_ui_window_close_impl(win_handle: int)
 extern aether_ui_app_quit_impl()
 extern aether_ui_set_width_impl(handle: int, px: int)
 extern aether_ui_set_height_impl(handle: int, px: int)
+extern aether_ui_set_min_width_impl(handle: int, px: int)
+extern aether_ui_set_min_height_impl(handle: int, px: int)
+extern aether_ui_get_min_width_impl(handle: int) -> int
+extern aether_ui_get_min_height_impl(handle: int) -> int
 extern aether_ui_get_width_impl(handle: int) -> int
 extern aether_ui_get_height_impl(handle: int) -> int
 
@@ -927,7 +932,9 @@ split_position(handle: int) -> int {
 // well, so the window could no longer be resized past it.
 //
 // set_width / set_height state a panel size directly and DO hold, which is
-// the supported way to lay out fixed panels.
+// the supported way to lay out a FIXED panel. For a panel that should open at
+// a width and still be draggable, set_min_width is the floor version and does
+// not fight the divider (#136).
 split_set_position(handle: int, px: int) {
     aether_ui_split_set_position_impl(handle, px)
 }
@@ -3538,6 +3545,9 @@ app_quit() {
 // constraint, which is the only thing that survives layout re-deriving a
 // pane's width from its content; on GTK4 it is the size request with expand
 // off; on win32 it is the preferred size the layout pass reads.
+//
+// A pin is EXACTLY this size, which a splitview divider drag cannot move. Use
+// set_min_width for a panel that should open at a width and still be dragged.
 set_width(handle: int, px: int) -> int {
     aether_ui_set_width_impl(handle, px)
     return handle
@@ -3546,6 +3556,54 @@ set_width(handle: int, px: int) -> int {
 set_height(handle: int, px: int) -> int {
     aether_ui_set_height_impl(handle, px)
     return handle
+}
+
+// set_min_width(h, px) / set_min_height(h, px): the size a widget opens at
+// AT LEAST, which anything that wants it bigger is still free to change.
+//
+// This is the half of a panel that set_width cannot give (#136). set_width
+// states the size exactly, and an exact size is not something a splitview
+// divider drag can move, so a panel was either the width an inspector needs
+// or draggable and never both. A floor gives it both: it opens usably wide,
+// a drag outward is free, and a drag inward stops rather than collapsing the
+// panel to nothing.
+//
+// It is a real minimum on every backend, not an approximation of one: a
+// greater-than-or-equal constraint at priority 751 on AppKit and UIKit, the
+// size request WITHOUT expand off on GTK4 (a size request already IS GTK's
+// minimum), and the measured size the layout pass floors at on win32, where
+// the divider clamp reads it too.
+//
+// Where the DRAG is real differs, and the floor is honoured either way: GTK4
+// and AppKit have a draggable divider, win32 renders a splitview as a plain
+// stack whose divider cannot be dragged (see splitview), so there the floor is
+// what the layout pass and the clamp read rather than what a gesture meets.
+//
+//   panel = vstack(0) { ... }
+//   set_min_width(panel, 280)     // opens at 280, drag it wider or narrower
+set_min_width(handle: int, px: int) -> int {
+    aether_ui_set_min_width_impl(handle, px)
+    return handle
+}
+
+set_min_height(handle: int, px: int) -> int {
+    aether_ui_set_min_height_impl(handle, px)
+    return handle
+}
+
+// get_min_width(h) / get_min_height(h): the floor as REQUESTED, 0 where none
+// was set. Unlike get_width this answers before the first layout pass, which
+// is the only way to see a floor on a widget tree that has no window.
+//
+// On GTK4 there is one size request per axis, so a width given by set_width
+// reads back here too: both verbs write the field, and what it reports is what
+// the widget will not go below, which is true of either.
+get_min_width(handle: int) -> int {
+    return aether_ui_get_min_width_impl(handle)
+}
+
+get_min_height(handle: int) -> int {
+    return aether_ui_get_min_height_impl(handle)
 }
 
 // get_width(h) / get_height(h) — what the widget ACTUALLY got, read from its

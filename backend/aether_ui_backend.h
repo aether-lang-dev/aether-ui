@@ -295,6 +295,10 @@ void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, d
 
 void aether_ui_set_width_impl(int handle, int px);
 void aether_ui_set_height_impl(int handle, int px);
+void aether_ui_set_min_width_impl(int handle, int px);
+void aether_ui_set_min_height_impl(int handle, int px);
+int  aether_ui_get_min_width_impl(int handle);
+int  aether_ui_get_min_height_impl(int handle);
 int  aether_ui_get_width_impl(int handle);
 int  aether_ui_get_height_impl(int handle);
 
