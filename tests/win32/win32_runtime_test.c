@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <windows.h>
 #include "aether_ui_backend.h"
 
 // aether_ui_win32.c reads canvas gradient stops and paint clip rects out of a
@@ -206,6 +207,79 @@ static void canvas_gradient_stop_clamp(void) {
     }
 }
 
+// A closure that retires its own widget must outlive the call.
+//
+// This is the shape of every Remove button in a row and every Refresh that
+// rebuilds the panel it sits in: the handler clears the container, which
+// destroys the button, which gives back the button's closure box, which is
+// the box whose environment the handler is still reading. GTK holds a
+// reference on a closure for the whole emission and ARC keeps an AppKit
+// target alive through its action, so those backends get this for free;
+// win32 defers the free to the run loop, and this pins that it does.
+//
+// The box here is shaped the way codegen shapes one (fn + env, and an env
+// whose first word is its destructor), so the backend's release path runs
+// the real steps: the env's dtor sets a flag, which must NOT be set while the
+// click is still being handled, and the handler must be able to read its env
+// after the clear.
+typedef struct { void (*fn)(void); void* env; } TestBox;
+typedef struct {
+    void (*dtor)(void*);   // what aether_closure_env_free runs first
+    int container;
+    int hits;
+    int read_after_clear;  // the env was still intact after retiring itself
+} SelfRetiringEnv;
+
+static int self_retiring_env_freed = 0;
+
+static void self_retiring_env_dtor(void* env) {
+    self_retiring_env_freed = 1;
+    free(env);
+}
+
+static void self_retiring_click(void* env_) {
+    SelfRetiringEnv* env = (SelfRetiringEnv*)env_;
+    env->hits++;
+    aether_ui_clear_children_impl(env->container);   // retires the button
+    // Still on the stack, still ours: with an immediate free this read is
+    // into a freed block, and the earlier bookkeeping above is what would
+    // have been corrupted first.
+    env->read_after_clear = (env->hits == 1);
+}
+
+static void closure_survives_retiring_its_widget(void) {
+    SelfRetiringEnv* env = (SelfRetiringEnv*)calloc(1, sizeof(*env));
+    env->dtor = self_retiring_env_dtor;
+    TestBox* box = (TestBox*)calloc(1, sizeof(*box));
+    box->fn = (void (*)(void))self_retiring_click;
+    box->env = env;
+
+    int stack = aether_ui_vstack_create(0);
+    int button = aether_ui_button_create("remove me", box);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, button);
+    env->container = stack;
+
+    HWND stack_hwnd = (HWND)aether_ui_get_widget(stack);
+    HWND button_hwnd = (HWND)aether_ui_get_widget(button);
+    // What the control sends its parent on a click.
+    SendMessageW(stack_hwnd, WM_COMMAND, MAKEWPARAM(0, BN_CLICKED),
+                 (LPARAM)button_hwnd);
+
+    expect_eq((unsigned)env->hits, 1u, "self-retiring click: the handler ran once");
+    expect_eq((unsigned)env->read_after_clear, 1u,
+              "self-retiring click: the env was intact after clearing its own container");
+    expect_eq((unsigned)self_retiring_env_freed, 0u,
+              "self-retiring click: the box was NOT freed while its closure was running");
+    // Not freed here either: the run loop gives it back between messages,
+    // and this harness has none. But the slot is cleared, so a stale click
+    // on the retired button reaches nothing rather than a box in the
+    // graveyard.
+    SendMessageW(stack_hwnd, WM_COMMAND, MAKEWPARAM(0, BN_CLICKED),
+                 (LPARAM)button_hwnd);
+    expect_eq((unsigned)env->hits, 1u,
+              "self-retiring click: a stale click on the retired button reaches nothing");
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -218,6 +292,7 @@ int main(void) {
     canvas_clip_and_reset();
     canvas_group_opacity();
     canvas_gradient_stop_clamp();
+    closure_survives_retiring_its_widget();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);

@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A widget retired by a list rebuild gave back none of its closures, on any
+  backend.** A row's `on_click`, `on_hover`, `on_change`, its context-menu
+  items, each leaked its box and the Aether environment the closure captured,
+  once per widget per rebuild, for as long as the app ran. GTK4 now names a
+  destroy notify for every `g_signal_connect` user datum (#142), UIKit's target
+  trampolines are owned by the widget they serve instead of a global array
+  (#143), and win32's `w32_release_handle_state` gives back every closure slot
+  and the context-menu items (#145). On win32 the free is deferred to the run
+  loop: the widget is very often retired by the closure being given back (a
+  Remove button clearing its own row), and that closure is still reading its
+  environment. `tests/win32/win32_runtime_test.c` pins that a handler which
+  clears its own container is not freed underneath itself.
+
 - **gpuanim_demo wrote its label from inside the render callback, and with a
   window on screen that never settled.** A `set_text` in `on_render`
   invalidates the layout of the stack the viewport sits in, which redisplays

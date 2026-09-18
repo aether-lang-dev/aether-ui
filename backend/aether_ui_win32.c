@@ -414,6 +414,7 @@ static void widget_hash_insert(HWND h, int handle) {
 }
 
 static void mark_subtree_dead(HWND hwnd);
+static void w32_drain_graveyard(void);
 
 static Widget* widget_at(int handle) {
     if (handle < 1 || handle > widget_count) return NULL;
@@ -2241,6 +2242,10 @@ void aether_ui_app_run_raw(int app_handle) {
     // controls (no focus traversal at all).
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        // The previous message's handlers have all returned: give back the
+        // closure boxes the widgets they retired were carrying (see
+        // w32_release_box for why not sooner).
+        w32_drain_graveyard();
         // When a key-registered canvas has focus, route keystrokes straight
         // to it — IsDialogMessage would otherwise eat Return (default button)
         // and Escape (cancel) before the canvas's WM_KEYDOWN sees them, and
@@ -9228,9 +9233,60 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     }
 }
 
-// Mark a widget and every descendant registered under it as dead, so the
-// driver stops listing them. Walks the live child tree BEFORE DestroyWindow
-// tears it down (afterwards GetWindow can't enumerate it).
+// Give back a boxed Aether closure and clear the slot that held it. The box
+// and the environment the closure captured are both ours, and once the widget
+// is dead nothing can reach either again.
+//
+// Nothing freed these, so a widget retired by a list rebuild leaked every
+// callback it carried, one box and one captured environment each, for as long
+// as the app ran. The AppKit and GTK4 backends had the same defect.
+//
+// Clearing the slot matters as much as the free: a dead widget's handler must
+// read NULL rather than a pointer to freed memory, and every caller here
+// already tests the slot before invoking it.
+//
+// The free itself is DEFERRED to the run loop, because the widget is very
+// often retired BY the closure being given back: a row's Remove button clears
+// the list it sits in, a Refresh button rebuilds the panel that holds it. That
+// closure is still on the stack, reading its captured environment, when
+// mark_subtree_dead reaches its widget. GTK holds a reference on a closure for
+// the whole of an emission and ARC keeps an AppKit target alive through the
+// action that fired it, so on those backends the box outlives the call by
+// construction; win32 has no such thing, so a free here would be a
+// use-after-free the moment the closure touched a captured variable again.
+// The boxes wait in a graveyard, and the run loop empties it between one
+// message and the next, when nothing of ours is on the stack.
+extern void aether_closure_env_free(void* env);
+
+static AeClosure** w32_graveyard = NULL;
+static int w32_graveyard_count = 0;
+static int w32_graveyard_cap = 0;
+
+static void w32_release_box(AeClosure** slot) {
+    if (!slot || !*slot) return;
+    if (w32_graveyard_count >= w32_graveyard_cap) {
+        int cap = w32_graveyard_cap ? w32_graveyard_cap * 2 : 64;
+        AeClosure** grown = (AeClosure**)realloc(
+            w32_graveyard, sizeof(AeClosure*) * cap);
+        if (!grown) return;   // keep the leak over a crash; the slot still clears
+        w32_graveyard = grown;
+        w32_graveyard_cap = cap;
+    }
+    w32_graveyard[w32_graveyard_count++] = *slot;
+    *slot = NULL;
+}
+
+// Called by the run loop between messages: the only time no closure of ours
+// can be executing. A nested loop (a modal, TrackPopupMenu) does not drain,
+// on purpose, because the closure that opened it is still on the outer stack.
+static void w32_drain_graveyard(void) {
+    for (int i = 0; i < w32_graveyard_count; i++) {
+        aether_closure_env_free(w32_graveyard[i]->env);
+        free(w32_graveyard[i]);
+    }
+    w32_graveyard_count = 0;
+}
+
 // Release the per-handle state a retired widget owned. Handles are monotonic,
 // so nothing inherits it and this is not a correctness bug; it is a leak, and
 // on Windows a GDI one, which matters more than a stray malloc: a process has
@@ -9257,8 +9313,31 @@ static void w32_release_handle_state(int h) {
         KillTimer(NULL, w->tr_timer);
         w->tr_timer = 0;
     }
+    if (w) {
+        w32_release_box(&w->on_click);
+        w32_release_box(&w->on_hover);
+        w32_release_box(&w->on_double_click);
+        w32_release_box(&w->on_change);
+        w32_release_box(&w->on_drop);
+        w32_release_box(&w->on_scroll);
+        w32_release_box(&w->on_layout);
+        // A context menu's items each carry a box, and a row that has one is
+        // rebuilt with the rest of the list, so these accumulated per rebuild.
+        for (int i = 0; i < w->ctx_count; i++) {
+            free(w->ctx_items[i].label);
+            w->ctx_items[i].label = NULL;
+            w32_release_box((AeClosure**)&w->ctx_items[i].closure);
+        }
+        free(w->ctx_items);
+        w->ctx_items = NULL;
+        w->ctx_count = 0;
+        w->ctx_cap = 0;
+    }
 }
 
+// Mark a widget and every descendant registered under it as dead, so the
+// driver stops listing them. Walks the live child tree BEFORE DestroyWindow
+// tears it down (afterwards GetWindow can't enumerate it).
 static void mark_subtree_dead(HWND hwnd) {
     int h = handle_for_hwnd(hwnd);
     if (h > 0) {
