@@ -794,14 +794,17 @@ if [ "$PLATFORM" = "macos" ]; then
         tail -20 /tmp/ci_retention_build.log | sed 's/^/       /'
         FAIL=$((FAIL + 1))
     else
+        # Three points, so a slow drift shows as a slope rather than hiding
+        # inside one generation's slack: 10, 20 and 40 rebuilds.
         ten="$(retention_run 500 10 idle10)"; ten_rc=$?
         twenty="$(retention_run 500 20 idle20)"; twenty_rc=$?
-        if [ "$ten_rc" -ne 0 ] || [ "$twenty_rc" -ne 0 ]; then
+        forty="$(retention_run 500 40 idle40)"; forty_rc=$?
+        if [ "$ten_rc" -ne 0 ] || [ "$twenty_rc" -ne 0 ] || [ "$forty_rc" -ne 0 ]; then
             FAIL=$((FAIL + 1))
-        elif [ $((twenty - ten)) -le 400 ]; then
-            echo "  OK   NSTextField alive: $ten after 10 rebuilds, $twenty after 20 (run loop idle between; growth bound 400)"
+        elif [ $((twenty - ten)) -le 400 ] && [ $((forty - twenty)) -le 400 ]; then
+            echo "  OK   NSTextField alive: $ten after 10 rebuilds, $twenty after 20, $forty after 40 (run loop idle between; growth bound 400 per step)"
         else
-            echo "  FAIL NSTextField alive: $ten after 10 rebuilds, $twenty after 20 of 400 rows, run loop idle between (growth bound 400)"
+            echo "  FAIL NSTextField alive: $ten after 10 rebuilds, $twenty after 20, $forty after 40 of 400 rows, run loop idle between (growth bound 400 per step)"
             FAIL=$((FAIL + 1))
         fi
         saturated="$(retention_run 10 20 saturated)" || true
