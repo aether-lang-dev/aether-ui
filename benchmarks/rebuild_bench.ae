@@ -4,9 +4,11 @@
 // This is the shape every list-backed screen has (a listbox or table whose
 // model changes is cleared and re-rendered), and the number that made win32
 // lay a stack out once per rebuild instead of once per child: 3.5s headless
-// / 5.7s on screen before, 0.58s / 0.73s after, on the same 1600 widgets.
+// / 5.7s on screen before, 0.58s / 0.73s after, on the same 1600 widgets,
+// and then hold a stack's painting while the rebuild attaches into it
+// (#160): 1.15s -> 0.88s on screen on the same box, headless unchanged.
 // The remaining cost is Win32's own CreateWindowExW + DestroyWindow, roughly
-// 0.2ms + 0.1ms per control.
+// 0.2ms + 0.1ms per control, and the SetParent of each into the tree.
 //
 // Build the way ci.sh builds a probe (see LLM.md), then:
 //   AETHER_UI_HEADLESS=1 ./rebuild_bench      # no window

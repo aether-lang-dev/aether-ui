@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **win32 holds a stack's painting while a rebuild attaches into it
+  (#160):** a stack owed a layout (`w32_request_layout`) is a stack in
+  the middle of a batch, and every child attached into a visible tree had
+  the window manager recompute the siblings' visible regions and
+  invalidate -- quadratic in the rows under one column, and 611ms of a
+  400-row table rebuild's 1 046ms on screen. `WM_SETREDRAW`, Win32's own
+  batch switch, is now sent at the request and lifted at the flush before
+  the layout passes, with one `RedrawWindow` of the stack and its children
+  on release: `benchmarks/rebuild_bench.ae` 1.15s -> 0.88s on screen on
+  the same box, headless unchanged. The first attempt (#150, reverted in
+  #152) read the `WS_VISIBLE` bit `DefWindowProc` clears for the hold as
+  the widget's own visibility and laid a held column out as hidden; every
+  reader of that bit -- measuring, layout, `set_hidden`, the overlay
+  promotion, focus traversal, the picker, the driver's `visible` -- now
+  goes through `w32_own_visible`, which knows about the hold, and
+  `set_hidden` lifts a hold before it compares or changes the bit, so the
+  hold never outlives the bit's meaning.
+
 ### Fixed
 
 - **UIKit `on_layout` no longer leaks an observer per call, and no longer

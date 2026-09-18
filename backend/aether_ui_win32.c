@@ -287,6 +287,11 @@ typedef struct {
     // run. Cleared by stack_do_layout on entry.
     int layout_pending;
 
+    // Painting is held (WM_SETREDRAW FALSE) while the layout is owed, so the
+    // children a rebuild attaches do not each invalidate the tree on the
+    // way in. See w32_hold_redraw.
+    int redraw_held;
+
     // Accessibility side-store (semantics layer). role/name/desc are the
     // author's a11y intent; MSAA surfaces name/description via WM_GETOBJECT
     // (get_accName/get_accDescription) over the standard accessible object,
@@ -420,6 +425,7 @@ static void widget_hash_insert(HWND h, int handle) {
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
 static void w32_forget_system_dark(void);
+static int  w32_own_visible(HWND hwnd);
 static void w32_request_layout(HWND stack_hwnd);
 static void w32_flush_layout(void);
 static void w32_drv_settle_layout(void);
@@ -851,7 +857,7 @@ static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
         if (!cw || cw->dead) continue;
         // A hidden child is no part of the stack's size, as on GTK and
         // AppKit, where a hidden widget is not allocated.
-        if (!(GetWindowLongPtrW(c, GWL_STYLE) & WS_VISIBLE)) continue;
+        if (!w32_own_visible(c)) continue;
         int mw = 0, mh = 0;
         if (cw->kind == WK_SPACER) { n++; continue; }   // spacers are flex-only
         measure_widget(cw, &mw, &mh);
@@ -1069,6 +1075,57 @@ static int  w32_layout_queue_count = 0;
 static int  w32_layout_queue_cap = 0;
 static int  w32_layout_flush_posted = 0;
 
+// A stack owed a layout is a stack in the middle of a batch: rows being
+// attached, cells being destroyed. Every attach into a visible tree has
+// the window manager recompute the visible regions of the siblings and
+// invalidate, and with 400 rows under one column that work is quadratic
+// in the rows and was the largest cost of a rebuild on screen (#160:
+// 611ms of a 1 046ms rebuild went to add_child, against 279ms headless).
+// WM_SETREDRAW is Win32's own batch switch for exactly this, what every
+// list and tree control expects around a bulk insert: while it is off the
+// window is not painted and its children's changes are not propagated as
+// invalidations. Held from the request until the flush, before the layout
+// passes, and released early by anything that changes the widget's own
+// visibility (set_hidden) so the hold never outlives the bit's meaning.
+// One RedrawWindow of the stack and its children on release brings what
+// was attached meanwhile onto the screen at once.
+//
+// DefWindowProc implements WM_SETREDRAW FALSE by clearing WS_VISIBLE,
+// which this backend reads as the widget's own visibility; every such
+// reader goes through w32_own_visible, which knows about the hold. The
+// first attempt at this (#150) released the hold after the layout passes
+// and read the bit raw, so a held column was laid out by its parent as if
+// the app had hidden it, and the table body was gone after a resize.
+static void w32_hold_redraw(Widget* sw) {
+    if (!sw || sw->redraw_held || sw->dead) return;
+    if (!(GetWindowLongPtrW(sw->hwnd, GWL_STYLE) & WS_VISIBLE)) return;  // hidden: nothing to hold
+    sw->redraw_held = 1;
+    SendMessageW(sw->hwnd, WM_SETREDRAW, FALSE, 0);
+}
+
+static void w32_release_redraw(Widget* sw) {
+    if (!sw || !sw->redraw_held) return;
+    sw->redraw_held = 0;
+    if (sw->dead || !IsWindow(sw->hwnd)) return;
+    SendMessageW(sw->hwnd, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(sw->hwnd, NULL, NULL,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
+// The widget's own visibility, as the app set it: the WS_VISIBLE bit --
+// parity with gtk_widget_get_visible, and NOT IsWindowVisible, which needs
+// the whole ancestor chain shown and reads a headless tree, or one under an
+// ssh service session, as invisible app-wide -- unless a redraw hold has
+// borrowed the bit, in which case the widget is a visible one that is not
+// painting right now, not one the app hid. Every reader of the bit is this
+// function, so a hold is invisible to layout, the driver, focus and the
+// picker alike.
+static int w32_own_visible(HWND hwnd) {
+    if (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_VISIBLE) return 1;
+    Widget* w = widget_at(handle_for_hwnd(hwnd));
+    return w && w->redraw_held && !w->dead;
+}
+
 static void w32_request_layout(HWND stack_hwnd) {
     int h = handle_for_hwnd(stack_hwnd);
     if (h == 0) return;
@@ -1083,6 +1140,7 @@ static void w32_request_layout(HWND stack_hwnd) {
     }
     sw->layout_pending = 1;
     w32_layout_queue[w32_layout_queue_count++] = h;
+    w32_hold_redraw(sw);
     // Wake the run loop so the flush is not left waiting on the next event:
     // a rebuild from a timer with nothing else queued must still land.
     if (!w32_layout_flush_posted) {
@@ -1094,6 +1152,13 @@ static void w32_request_layout(HWND stack_hwnd) {
 }
 
 static void w32_flush_layout(void) {
+    // Every hold ends here, before a pass runs: the passes below move and
+    // resize, and a window whose painting is off would not show the result
+    // until something else invalidated it. A stack that a synchronous
+    // layout already served (its layout_pending is clear) is still in the
+    // queue and still held, so this walks the queue, not the pending flags.
+    for (int i = 0; i < w32_layout_queue_count; i++)
+        w32_release_redraw(widget_at(w32_layout_queue[i]));
     // A layout can request another (a parent's pass resizes a child, whose
     // WM_SIZE lays it out synchronously; a scrollview shows its bar), so
     // this loops until the queue is quiet, with a ceiling so a pathological
@@ -1117,7 +1182,7 @@ static void w32_flush_layout(void) {
         for (int i = 0; i < n; i++) {
             Widget* sw = widget_at(batch[i]);
             if (!sw || !sw->layout_pending) continue;   // already done by a parent's pass
-            if (sw->dead || !IsWindow(sw->hwnd)) { sw->layout_pending = 0; continue; }
+            if (sw->dead || !IsWindow(sw->hwnd)) { sw->layout_pending = 0; sw->redraw_held = 0; continue; }
             stack_do_layout(sw->hwnd);
             // The ground between the children is the stack's own to paint,
             // and a layout that moved or replaced them leaves whatever was
@@ -1130,6 +1195,10 @@ static void w32_flush_layout(void) {
             RedrawWindow(sw->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
         }
         free(batch);
+        // A pass may have requested (and so held) more stacks; the next
+        // pass lays them out, and they must paint too.
+        for (int i = 0; i < w32_layout_queue_count; i++)
+            w32_release_redraw(widget_at(w32_layout_queue[i]));
     }
     w32_layout_flush_posted = 0;
 }
@@ -1160,7 +1229,7 @@ static void stack_do_layout(HWND stack_hwnd) {
     HWND* children = NULL;
     int nchildren = 0, cap = 0;
     for (HWND c = GetWindow(stack_hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
-        if (!(GetWindowLongPtrW(c, GWL_STYLE) & WS_VISIBLE)) continue;
+        if (!w32_own_visible(c)) continue;
         if (nchildren >= cap) {
             cap = cap == 0 ? 16 : cap * 2;
             children = (HWND*)realloc(children, sizeof(HWND) * cap);
@@ -3459,6 +3528,9 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
     Widget* w = widget_at(handle);
     HWND parent;
     if (!w) return;
+    // A hold has borrowed the bit this compares and ShowWindow sets; it
+    // ends here, so the change below is the app's and stays the app's.
+    w32_release_redraw(w);
     if (((GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_VISIBLE) == 0) == (hidden != 0)) return;
     ShowWindow(w->hwnd, hidden ? SW_HIDE : SW_SHOW);
     // The stack it sits in closes the gap, or opens one, and the view the
@@ -5504,8 +5576,7 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
     // WS_VISIBLE unconditionally, so such content arrived in the overlay
     // layer force-shown — "sidebar starts hidden" read visible:1 on win32
     // while GTK4's promotion preserves gtk_widget_get_visible.
-    int was_visible =
-        (GetWindowLongPtrW(content->hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
+    int was_visible = w32_own_visible(content->hwnd);
     SetParent(content->hwnd, host);
     SetWindowPos(content->hwnd, HWND_TOP, x, y, cw, ch,
                  was_visible ? SWP_SHOWWINDOW : SWP_NOACTIVATE);
@@ -9712,14 +9783,9 @@ static void mark_subtree_dead(HWND hwnd) {
 void aether_ui_clear_children_impl(int handle) {
     Widget* p = widget_at(handle);
     if (!p) return;
-    // NOT held with WM_SETREDRAW across the rebuild, though that halved the
-    // on-screen cost: DefWindowProc implements WM_SETREDRAW FALSE by clearing
-    // the window's WS_VISIBLE bit, and this backend reads that bit as the
-    // widget's own visibility everywhere -- measure_stack_natural and
-    // stack_do_layout leave such a child out, the driver reports it hidden,
-    // the screenshot skips it. A held column was laid out by its parent as
-    // if it were not there, and the table body was gone after the next
-    // resize.
+    // The layout request at the end holds the stack's painting until the
+    // flush (w32_hold_redraw), so the rows the rebuild adds after this do
+    // not each invalidate the tree on the way in.
     HWND c = GetWindow(p->hwnd, GW_CHILD);
     while (c) {
         HWND next = GetWindow(c, GW_HWNDNEXT);
@@ -9833,13 +9899,11 @@ static void hook_widget_text_into(int handle, char* buf, int bufsize) {
 }
 
 static int hook_widget_visible(int handle) {
-    // The widget's OWN visibility flag — parity with GTK's
-    // gtk_widget_get_visible. NOT IsWindowVisible: that requires the
-    // whole ancestor chain shown, and under an ssh service session the
-    // top-level window never is, which zeroed "visible" app-wide.
+    // The widget's OWN visibility flag (w32_own_visible says why not
+    // IsWindowVisible) -- parity with GTK's gtk_widget_get_visible.
     Widget* w = widget_at(handle);
     if (!w || !IsWindow(w->hwnd)) return 0;
-    return (GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_VISIBLE) ? 1 : 0;
+    return w32_own_visible(w->hwnd);
 }
 
 static int hook_widget_parent(int handle) {
@@ -10055,7 +10119,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     if (!cand || cand->dead || !IsWindow(cand->hwnd)) continue;
                     LONG style = GetWindowLongW(cand->hwnd, GWL_STYLE);
                     if (!(style & WS_TABSTOP)) continue;
-                    if (!(style & WS_VISIBLE)) continue;
+                    if (!w32_own_visible(cand->hwnd)) continue;
                     if (!IsWindowEnabled(cand->hwnd)) continue;
                     SetFocus(cand->hwnd);
                     ctx->retval = 1;
@@ -10122,7 +10186,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                         // hidden/headless toplevel the ancestor-chain check
                         // reads the whole tree invisible (the documented
                         // win32 lesson) and every pick would return none.
-                        if (!(GetWindowLongW(c, GWL_STYLE) & WS_VISIBLE)) continue;
+                        if (!w32_own_visible(c)) continue;
                         RECT r;
                         GetWindowRect(c, &r);
                         POINT sp = pt;
