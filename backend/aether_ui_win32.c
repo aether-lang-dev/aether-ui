@@ -1106,12 +1106,27 @@ static void w32_flush_layout(void) {
             if (!sw || !sw->layout_pending) continue;   // already done by a parent's pass
             if (sw->dead || !IsWindow(sw->hwnd)) { sw->layout_pending = 0; continue; }
             stack_do_layout(sw->hwnd);
+            // The ground between the children is the stack's own to paint,
+            // and a layout that moved or replaced them leaves whatever was
+            // there before: a rebuilt table showed slivers of the previous
+            // rows' text in the 2px gaps between the new ones (#151). A move
+            // invalidates the child's new rect, a destroy its old one, and
+            // neither reaches a gap the old row's text had crossed. One
+            // erase of the stack, children excluded (WS_CLIPCHILDREN), after
+            // each coalesced layout.
+            RedrawWindow(sw->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
         }
         free(batch);
     }
     w32_layout_flush_posted = 0;
 }
 
+// Every move a layout makes carries SWP_NOCOPYBITS. Without it, Windows
+// moves a child by copying the pixels it had at its old place to the new
+// one, and under a clipping parent those pixels are whatever the old place
+// showed -- for a row rebuilt in place, the previous row's text, which then
+// sat in the 2px gap between the new rows as the bottom of glyphs that were
+// no longer there (#151). A moved child is repainted instead.
 static void stack_do_layout(HWND stack_hwnd) {
     int h = handle_for_hwnd(stack_hwnd);
     if (h == 0) return;
@@ -1155,14 +1170,14 @@ static void stack_do_layout(HWND stack_hwnd) {
         }
         SetWindowPos(children[0], NULL,
                      sl->padding_left, sl->padding_top,
-                     avail_w, header_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                     avail_w, header_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         int content_y = sl->padding_top + header_h + sl->spacing;
         int content_h = (client.bottom - client.top) - content_y - sl->padding_bottom;
         if (content_h < 0) content_h = 0;
         for (int i = 1; i < nchildren; i++) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, content_y,
-                         avail_w, content_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                         avail_w, content_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         }
         free(children);
         return;
@@ -1208,7 +1223,7 @@ static void stack_do_layout(HWND stack_hwnd) {
         for (int i = 0; i < nchildren; i++) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, sl->padding_top - sw->scroll_y,
-                         doc_w, doc_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                         doc_w, doc_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
             w32_note_layout(children[i], doc_w, doc_h);
         }
         // Everything the move uncovered, and every child that moved, is
@@ -1234,7 +1249,7 @@ static void stack_do_layout(HWND stack_hwnd) {
                 row_h = 0;
             }
             SetWindowPos(children[i], NULL, cx, cy, mw, mh,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+                         SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
             w32_note_layout(children[i], mw, mh);
             cx += mw + sl->spacing;
             if (mh > row_h) row_h = mh;
@@ -1281,7 +1296,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             if (cw < 0) cw = 0;
             if (chh < 0) chh = 0;
             SetWindowPos(children[i], NULL, x, y, cw, chh,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+                         SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
             w32_note_layout(children[i], cw, chh);
         }
         free(children);
@@ -1293,7 +1308,7 @@ static void stack_do_layout(HWND stack_hwnd) {
         for (int i = 0; i < nchildren; i++) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, sl->padding_top,
-                         avail_w, avail_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                         avail_w, avail_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
             w32_note_layout(children[i], avail_w, avail_h);
         }
         free(children);
@@ -1495,7 +1510,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             if (rtl) x = client_w - x - w;   // mirror within the row
         }
         SetWindowPos(children[i], NULL, x, y, w, h,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         w32_note_layout(children[i], w, h);
     }
 

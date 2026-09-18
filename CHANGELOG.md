@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **win32: a rebuilt list left slivers of the previous rows' text between
+  the new ones (#151).** Windows moves a child by copying the pixels it had
+  at its old place to the new one, and under a clipping parent those pixels
+  are whatever the old place showed: for a row rebuilt in place, the previous
+  row's text, which then sat in the 2px gap between the new rows as the
+  bottoms of glyphs that were no longer there. Every move a stack layout
+  makes now carries `SWP_NOCOPYBITS`, so a moved child is repainted, and the
+  stack's own ground is erased once after each coalesced layout.
+
 ### Changed
 
 - **win32 lays a stack out once per rebuild, not once per child.**
