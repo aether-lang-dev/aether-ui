@@ -154,7 +154,18 @@ jobs:
           #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
           #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
           #   math.lrint remains follow-up, not done here.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.645.0' }}
+          # v0.681.0 (2026-09-17). Forced by the aeb move below, not chosen:
+          # every aeb since v0.302 compiles its own `aeb-main` against
+          # `bldr`, which imports std.zip (0.667), std.strarr (0.675) and
+          # calls os.arch() (0.681), so `make install` of that aeb needs
+          # this on PATH. Scanned the 0.646-0.681 notes: additive stdlib
+          # (std.zip, std.strarr, std.cbor, std.resp, fs.find_ext & co.),
+          # a 4.5x faster type-check (0.666), @c_callback emitted weak
+          # (0.677, two TUs sharing one callback no longer collide at
+          # link), -fPIC on --emit=lib objects (0.680). No grammar or
+          # removed-API change this tree touches. The matrix run on this
+          # bump is the verification.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.681.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
@@ -166,7 +177,18 @@ jobs:
           # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
           # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
           # links). v0.297 carries all of that, so this is a strict move forward.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.297' }}
+          #
+          # 9bfd8e88 (2026-09-18, main after aeb#15; becomes the next tag
+          # when one is cut — install.sh takes a SHA). Carries the fix this
+          # tree needed: the fan-out orchestrator is one generated main
+          # file, and aetherc lexes a main file into a fixed 50,000-token
+          # array. The old generator spent ~360 tokens per node, so 137
+          # nodes sat at 49,412 and the 138th (#140, tests/min_size) failed
+          # the whole fan-out with "source file exceeds maximum token limit"
+          # naming no file. The generator now emits the per-node bookkeeping
+          # once: the same tree is 7,227 tokens. aether#2059 asks for the
+          # compiler-side cap to go too.
+          AEB_REF: ${{ vars.AEB_REF || '9bfd8e88952cce71456fcb8329363cf872a20cc9' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
