@@ -981,7 +981,7 @@ retention_run() {
     # 400 rows on screen and more than that alive, most samples are retired
     # labels, and the path says what keeps a retired label alive. Reported
     # to stderr, which the phase shows; not asserted.
-    if [ "$rounds" -ge 40 ] && command -v leaks > /dev/null 2>&1; then
+    if [ "$tag" = "idle40" ] && command -v leaks > /dev/null 2>&1; then
         {
             echo "  -- $tag: live view classes"
             heap "$pid" 2>/dev/null | awk '$4 ~ /^(NSTextField|AetherStackView|NSTextFieldCell|_NSViewLayoutAux)$/ { print "     " $1, $4 }'
@@ -1031,6 +1031,11 @@ if [ "$PLATFORM" = "macos" ]; then
         [ -n "$saturated" ] && echo "  INFO $saturated alive after 20 rebuilds, run loop saturated (not asserted)"
         headless="$(retention_run 500 20 headless 1)" || true
         [ -n "$headless" ] && echo "  INFO $headless alive after 20 rebuilds, headless (not asserted)"
+        # The rows dimension: the drift at 100 rows against the one at 400
+        # says whether it is a fraction of the rows or a count per rebuild.
+        r100a="$(AETHER_PROBE_ROWS=100 retention_run 500 20 rows100_20)" || true
+        r100b="$(AETHER_PROBE_ROWS=100 retention_run 500 40 rows100_40)" || true
+        [ -n "$r100a" ] && [ -n "$r100b" ] && echo "  INFO $r100a / $r100b alive after 20 / 40 rebuilds of 100 rows (not asserted)"
     fi
 else
     echo "  SKIP AppKit only"
