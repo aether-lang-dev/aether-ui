@@ -154,7 +154,7 @@ jobs:
           #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
           #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
           #   math.lrint remains follow-up, not done here.
-          # v0.683.0 (2026-09-18). Forced by the aeb move below, not chosen:
+          # v0.684.0 (2026-09-18). Forced by the aeb move below, not chosen:
           # every aeb since v0.302 compiles its own `aeb-main` against
           # `bldr`, which imports std.zip (0.667), std.strarr (0.675) and
           # calls os.arch() (0.681), so `make install` of that aeb needs
@@ -178,7 +178,19 @@ jobs:
           # under it. The one genuine casualty of the move was LisMusic's
           # audio_position_ms/audio_duration_ms colliding with std.audio's
           # (E1001), renamed in the same PR.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.683.0' }}
+          #
+          # WHY NOT 0.683: under 0.682-0.683 table_demo aborts at startup on
+          # macOS AND Linux (free(): invalid pointer). 0.682's #2054 made a
+          # `-> string` function that returns `cb(...)` through a bare fn
+          # own its result, on the promise that a string-returning closure
+          # copies out whatever it returns. The table's cell callback returns
+          # string.from_int(p.kb) on one path (declared `-> ptr`) and p.name
+          # on the other, was typed by its FIRST return, and so was not a
+          # string closure: the literal reached the caller uncopied and was
+          # free()d. Reproduced natively on Windows (STATUS_HEAP_CORRUPTION)
+          # and root-caused with gdb; 0.684.0 carries aether#2070 (any
+          # string-typed return site makes the closure a string closure).
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.684.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
