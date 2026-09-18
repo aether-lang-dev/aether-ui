@@ -2641,10 +2641,17 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 // ---------------------------------------------------------------------------
 // Core widgets: text, button, vstack, hstack, spacer, divider.
 // ---------------------------------------------------------------------------
+// Created WITHOUT WS_VISIBLE, on purpose. A label is created under the
+// hidden holder and attached by add_child with SetParent, and SetParent on
+// a VISIBLE window is a hide-reparent-show with an invalidation at each
+// step; on a hidden one it is a list operation. The attach shows it, once
+// (w32_attach_show). Measured on benchmarks/rebuild_bench.ae with the
+// window on screen: 1046 -> 860 ms for the 400-row table, from the 1200
+// labels alone (#160).
 int aether_ui_text_create(const char* text) {
     ensure_win_init();
     HWND h = CreateWindowExW(0, L"STATIC", utf8_to_wide(text),
-        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+        WS_CHILD | SS_LEFT | SS_NOPREFIX,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT,
@@ -3421,11 +3428,29 @@ int aether_ui_divider_create(void) {
 /* set_child — parent a widget INTO another widget (the chrome-drawn
    button face). On win32 the native BUTTON keeps its window text (so the
    /widgets text hook needs no stash) and the child hwnd covers its face. */
+// The attach's half of a hidden creation (see aether_ui_text_create): a
+// child that was created without WS_VISIBLE gets the bit here, by style,
+// not by ShowWindow. ShowWindow on a hidden window is a show with an
+// invalidation of its own, per child; the bit alone makes the window
+// visible for every purpose (IsWindowVisible, painting, hit-testing), and
+// the layout that follows every attach moves the child from 0x0 into its
+// place, which is the one invalidation it needs. A child that already has
+// the bit is left alone, which is also what keeps a Common Controls 6
+// progress bar from starting over on a WM_STYLECHANGED it did not need (a
+// bar created at 0.75 read 0 the moment it was attached, and painted
+// empty).
+static void w32_attach_show(HWND c) {
+    LONG_PTR st = GetWindowLongPtrW(c, GWL_STYLE);
+    LONG_PTR want = st | WS_CHILD | WS_VISIBLE;
+    if (want != st) SetWindowLongPtrW(c, GWL_STYLE, want);
+}
+
 void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
     Widget* p = widget_at(parent_handle);
     Widget* c = widget_at(child_handle);
     if (!p || !c || !p->hwnd || !c->hwnd) return;
     SetParent(c->hwnd, p->hwnd);
+    w32_attach_show(c->hwnd);
     RECT r; GetClientRect(p->hwnd, &r);
     MoveWindow(c->hwnd, 0, 0, r.right, r.bottom, TRUE);
 }
@@ -3436,14 +3461,7 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     Widget* c = widget_at(child_handle);
     if (!p || !c) return;
     SetParent(c->hwnd, p->hwnd);
-    // Only write the style when it changes. Every control here is created
-    // WS_CHILD | WS_VISIBLE already, and a Common Controls 6 progress bar
-    // answers WM_STYLECHANGED by starting over: a bar created at 0.75 read
-    // 0 the moment it was attached, and painted empty.
-    LONG_PTR st = GetWindowLongPtrW(c->hwnd, GWL_STYLE);
-    LONG_PTR want = st | WS_CHILD | WS_VISIBLE;
-    if (want != st) SetWindowLongPtrW(c->hwnd, GWL_STYLE, want);
-    ShowWindow(c->hwnd, SW_SHOW);
+    w32_attach_show(c->hwnd);
     // SetParent inserts the child at the TOP of the sibling Z-order, so
     // GetWindow(GW_CHILD) later enumerates children in REVERSE creation order
     // (a row built A,B,C enumerates C,B,A) — which reversed stack layout order.
@@ -6508,8 +6526,7 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
     if (col_span < 1) col_span = 1;
     // Reparent the child to the grid.
     SetParent(c->hwnd, g->hwnd);
-    LONG_PTR st = GetWindowLongPtrW(c->hwnd, GWL_STYLE);
-    SetWindowLongPtrW(c->hwnd, GWL_STYLE, st | WS_CHILD | WS_VISIBLE);
+    w32_attach_show(c->hwnd);
     ge->items[ge->item_count].hwnd = c->hwnd;
     ge->items[ge->item_count].row = row;
     ge->items[ge->item_count].col = col;
@@ -10630,8 +10647,7 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
     Widget* root = widget_at(root_handle);
     if (root && bw && root->kind == WK_VSTACK) {
         SetParent(bw->hwnd, root->hwnd);
-        LONG_PTR st = GetWindowLongPtrW(bw->hwnd, GWL_STYLE);
-        SetWindowLongPtrW(bw->hwnd, GWL_STYLE, st | WS_CHILD | WS_VISIBLE);
+        w32_attach_show(bw->hwnd);
         SetWindowPos(bw->hwnd, HWND_TOP, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         stack_do_layout(root->hwnd);
