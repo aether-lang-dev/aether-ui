@@ -24,6 +24,15 @@ extern glViewport(x: int, y: int, w: int, h: int)
 
 const GL_COLOR_BUFFER_BIT = 16384
 const WANTED = 12
+// How long to keep asking before calling the viewport stalled, in ticks of
+// the 16ms timer: twelve seconds. With a window on screen a request marks
+// the view dirty and the frame lands on the next display cycle, so frames
+// are coalesced to the display's rate, and a busy CI runner's display can
+// take a large fraction of a second per cycle. The old bound of eight
+// requests per wanted frame (1.5s) called such a run stalled after ten or
+// eleven frames; the same build passed on the next run. Headless there is
+// no cycle and a request draws at once, so the bound never matters there.
+const GIVE_UP_TICKS = 750
 
 var g_drawn = 0
 var g_ticks = 0
@@ -47,9 +56,18 @@ main() {
                 // A different colour every frame, so a reader can tell one
                 // frame from the next: green while it is still going, blue
                 // once it has drawn every frame that was asked for.
+                //
+                // Only the COUNT changes here; the label is written from the
+                // timer. With a window on screen, a set_text from inside the
+                // render callback invalidates the layout of the stack the
+                // viewport sits in, which redisplays the viewport, which runs
+                // this callback again, and AppKit's layout-and-display pass
+                // never settles: the run loop never gets back to the timer,
+                // so the frames climbed into the hundreds while the label
+                // never said "animated". A render callback draws; it does not
+                // touch the widget tree.
                 gpuview_on_render(gpu) callback |_dt: float| {
                     g_drawn = g_drawn + 1
-                    set_text(g_count_label, "frames ${g_drawn}")
                     if g_drawn >= WANTED {
                         glClearColor(0.0, 0.0, 1.0, 1.0)
                     } else {
@@ -58,14 +76,15 @@ main() {
                     glClear(GL_COLOR_BUFFER_BIT)
                 }
 
-                // Bounded by ticks as well as by frames: where a request
+                // Bounded by time as well as by frames: where a request
                 // reaches nothing this stops and says so, rather than asking
                 // for a frame forever.
                 tid = 0
                 tid = timer(16) callback {
                     g_ticks = g_ticks + 1
                     gpuview_request_render(gpu)
-                    if g_drawn >= WANTED || g_ticks >= WANTED * 8 {
+                    set_text(g_count_label, "frames ${g_drawn}")
+                    if g_drawn >= WANTED || g_ticks >= GIVE_UP_TICKS {
                         timer_cancel(tid)
                         // Says which of the two ways it stopped, so a reader
                         // does not have to tell "12" from "1" in a label.

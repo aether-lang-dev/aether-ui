@@ -204,6 +204,7 @@ typedef struct {
     int border_set;            // 1 = explicitly set (readback)
     COLORREF border_color;
     int owner_drawn;           // styled painter installed (see styled_btn_proc)
+    int scroll_y;              // scrollview: how far its document is scrolled up
     int hover_set;             // interaction states (0=hover, 1=active)
     COLORREF hover_bg;
     int active_set;
@@ -413,6 +414,7 @@ static void widget_hash_insert(HWND h, int handle) {
 }
 
 static void mark_subtree_dead(HWND hwnd);
+static void w32_drain_graveyard(void);
 
 static Widget* widget_at(int handle) {
     if (handle < 1 || handle > widget_count) return NULL;
@@ -839,6 +841,9 @@ static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
         int ch = handle_for_hwnd(c);
         Widget* cw = widget_at(ch);
         if (!cw || cw->dead) continue;
+        // A hidden child is no part of the stack's size, as on GTK and
+        // AppKit, where a hidden widget is not allocated.
+        if (!(GetWindowLongPtrW(c, GWL_STYLE) & WS_VISIBLE)) continue;
         int mw = 0, mh = 0;
         if (cw->kind == WK_SPACER) { n++; continue; }   // spacers are flex-only
         measure_widget(cw, &mw, &mh);
@@ -1023,10 +1028,13 @@ static void stack_do_layout(HWND stack_hwnd) {
     int avail_w = (client.right - client.left) - sl->padding_left - sl->padding_right;
     int avail_h = (client.bottom - client.top) - sl->padding_top - sl->padding_bottom;
 
-    // Collect children in z-order.
+    // Collect children in z-order. A hidden child is left out: it takes no
+    // room and moves nothing, as on the other backends, where a hidden
+    // section of an inspector is a section that is not there.
     HWND* children = NULL;
     int nchildren = 0, cap = 0;
     for (HWND c = GetWindow(stack_hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (!(GetWindowLongPtrW(c, GWL_STYLE) & WS_VISIBLE)) continue;
         if (nchildren >= cap) {
             cap = cap == 0 ? 16 : cap * 2;
             children = (HWND*)realloc(children, sizeof(HWND) * cap);
@@ -1058,6 +1066,57 @@ static void stack_do_layout(HWND stack_hwnd) {
                          sl->padding_left, content_y,
                          avail_w, content_h, SWP_NOZORDER | SWP_NOACTIVATE);
         }
+        free(children);
+        return;
+    }
+
+    // Scrollview: the document -- the first child -- is laid out at its own
+    // natural height, never squeezed to the view's, and shown from
+    // scroll_y down; the bar says how much of it there is. A scrollview
+    // used to be a vstack with scrollbar styles, which sized the document
+    // to the view and gave every child past the bottom no room at all: an
+    // inspector with eleven sections showed four, with nothing to scroll.
+    if (sw->kind == WK_SCROLLVIEW) {
+        int doc_w = avail_w, doc_h = avail_h;
+        int ch = handle_for_hwnd(children[0]);
+        Widget* cw = widget_at(ch);
+        SCROLLINFO si;
+        int mw = 0, mh = 0;
+        if (cw) {
+            measure_widget(cw, &mw, &mh);
+            if (mh > doc_h) doc_h = mh;
+        }
+        if (doc_h > avail_h) {
+            if (sw->scroll_y > doc_h - avail_h) sw->scroll_y = doc_h - avail_h;
+        } else {
+            sw->scroll_y = 0;
+        }
+        if (sw->scroll_y < 0) sw->scroll_y = 0;
+        memset(&si, 0, sizeof(si));
+        si.cbSize = sizeof(si);
+        si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+        si.nMin = 0;
+        si.nMax = doc_h - 1;
+        si.nPage = (UINT)(avail_h > 0 ? avail_h : 0);
+        si.nPos = sw->scroll_y;
+        SetScrollInfo(stack_hwnd, SB_VERT, &si, TRUE);
+        ShowScrollBar(stack_hwnd, SB_VERT, doc_h > avail_h);
+        // The bar takes its width from the client area once shown, so the
+        // document is laid out against the client as it is now.
+        GetClientRect(stack_hwnd, &client);
+        doc_w = (client.right - client.left) - sl->padding_left - sl->padding_right;
+        avail_h = (client.bottom - client.top) - sl->padding_top - sl->padding_bottom;
+        if (doc_h < avail_h) doc_h = avail_h;
+        for (int i = 0; i < nchildren; i++) {
+            SetWindowPos(children[i], NULL,
+                         sl->padding_left, sl->padding_top - sw->scroll_y,
+                         doc_w, doc_h, SWP_NOZORDER | SWP_NOACTIVATE);
+            w32_note_layout(children[i], doc_w, doc_h);
+        }
+        // Everything the move uncovered, and every child that moved, is
+        // painted again from the ground up: a row that came into view was
+        // otherwise left as the window had it, which was white.
+        RedrawWindow(stack_hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         free(children);
         return;
     }
@@ -1374,6 +1433,94 @@ static void w32_set_text(Widget* w, const char* text) {
     w32_cache_text(w, text);
 }
 
+// ---------------------------------------------------------------------------
+// The ground behind a widget.
+//
+// On GTK and AppKit a label, a stack or a field with no background of its own
+// sits on whatever is behind it, so a theme that paints the panels has
+// painted everything in them. Win32 controls erase themselves with the
+// window class's brush -- white -- and answer WM_CTLCOLOR* with the system
+// window colour, so on this backend a themed panel was a dark rectangle full
+// of white boxes: every caption, every list row, every section body the
+// sheet had not named. The ground a widget shows is its own background, in
+// its hover or active state where it has one, or else the nearest
+// ancestor's; only with no ancestor painted at all does the class brush
+// stand.
+// ---------------------------------------------------------------------------
+static int w32_own_ground(const Widget* w, COLORREF* out) {
+    if (!w) return 0;
+    if (w->active_set && w->is_pressed) { *out = w->active_bg; return 1; }
+    if (w->hover_set && w->is_hovered)  { *out = w->hover_bg;  return 1; }
+    if (w->bg.has_value)                { *out = w->bg.color;  return 1; }
+    return 0;
+}
+
+static int w32_ground_behind(HWND hwnd, COLORREF* out) {
+    while (hwnd) {
+        if (w32_own_ground(widget_at(handle_for_hwnd(hwnd)), out)) return 1;
+        hwnd = GetAncestor(hwnd, GA_PARENT);
+    }
+    return 0;
+}
+
+// A brush a WM_CTLCOLOR* answer hands back has to outlive the message, and
+// the same few grounds come up for every control on a panel: a small table
+// of them, one brush a colour, kept for the life of the process.
+static HBRUSH w32_ground_brush(COLORREF color) {
+    enum { GROUND_BRUSHES = 32 };
+    static COLORREF colors[GROUND_BRUSHES];
+    static HBRUSH brushes[GROUND_BRUSHES];
+    static int count = 0, next = 0;
+    int i;
+    for (i = 0; i < count; i++) {
+        if (colors[i] == color) return brushes[i];
+    }
+    if (count < GROUND_BRUSHES) {
+        i = count++;
+    } else {
+        // Full: the oldest slot is retired, and its brush with it.
+        i = next;
+        next = (next + 1) % GROUND_BRUSHES;
+        if (brushes[i]) DeleteObject(brushes[i]);
+    }
+    colors[i] = color;
+    brushes[i] = CreateSolidBrush(color);
+    return brushes[i];
+}
+
+// Text with no colour of its own reads against the ground it is on: the
+// system's on a light ground, a light grey on a dark one. Not the parent's
+// text colour -- AeCS does not inherit -- only the platform's default made
+// legible on the platform's own ground.
+static COLORREF w32_legible_text(COLORREF ground) {
+    int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
+    return luma < 128 ? RGB(0xE0, 0xE2, 0xE6) : GetSysColor(COLOR_WINDOWTEXT);
+}
+
+// Scrolls a scrollview to `pos`, clamped to its document, and lays it out
+// again from there.
+static void w32_scrollview_to(Widget* sv, int pos) {
+    if (!sv || sv->kind != WK_SCROLLVIEW) return;
+    if (pos < 0) pos = 0;
+    if (pos == sv->scroll_y) return;
+    sv->scroll_y = pos;
+    stack_do_layout(sv->hwnd);
+    InvalidateRect(sv->hwnd, NULL, TRUE);
+}
+
+// The scrollview a point of the screen is over, if any: the wheel is
+// delivered to whatever has the focus, and turns the view under the
+// pointer, the way every desktop does it.
+static Widget* w32_scrollview_under(POINT screen) {
+    HWND hwnd = WindowFromPoint(screen);
+    while (hwnd) {
+        Widget* w = widget_at(handle_for_hwnd(hwnd));
+        if (w && w->kind == WK_SCROLLVIEW) return w;
+        hwnd = GetAncestor(hwnd, GA_PARENT);
+    }
+    return NULL;
+}
+
 static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_SIZE:
@@ -1470,29 +1617,48 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                         w->on_scroll->env, (intptr_t)step);
                 return 0;
             }
+            {
+                // Otherwise the scrollview under the pointer turns, three
+                // rows of text a notch, the system's default.
+                POINT at = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                Widget* sv = w32_scrollview_under(at);
+                if (sv) {
+                    int delta = GET_WHEEL_DELTA_WPARAM(wp);
+                    UINT lines = 3;
+                    SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+                    if (lines == 0) lines = 3;
+                    w32_scrollview_to(sv, sv->scroll_y - (delta * (int)lines * 16) / WHEEL_DELTA);
+                    return 0;
+                }
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
 
         case WM_ERASEBKGND: {
-            int h = handle_for_hwnd(hwnd);
-            Widget* w = widget_at(h);
             /* Effective state colour: active beats hover beats base — the
                same ladder the ownerdraw button paint uses. Containers
                STORED st_hover/st_active but never painted them (the aecs
-               gap hoverpaint finally specs): a hovered row kept its base. */
-            if (w && (w->bg.has_value
-                      || (w->hover_set && w->is_hovered)
-                      || (w->active_set && w->is_pressed))) {
+               gap hoverpaint finally specs): a hovered row kept its base.
+               A container with no ground of its own shows its ancestor's. */
+            COLORREF bg;
+            if (w32_ground_behind(hwnd, &bg)) {
                 HDC hdc = (HDC)wp;
                 RECT r;
+                Widget* w = widget_at(handle_for_hwnd(hwnd));
                 GetClientRect(hwnd, &r);
-                COLORREF bg = w->bg.has_value ? w->bg.color
-                                              : GetSysColor(COLOR_BTNFACE);
-                if (w->hover_set && w->is_hovered)  bg = w->hover_bg;
-                if (w->active_set && w->is_pressed) bg = w->active_bg;
-                HBRUSH br = CreateSolidBrush(bg);
-                FillRect(hdc, &r, br);
-                DeleteObject(br);
+                FillRect(hdc, &r, w32_ground_brush(bg));
+                // The sheet's border, where the container has one: drawn
+                // inside the edge, one ring a pixel of width, which is
+                // what the insets a bordered panel carries leave room for.
+                if (w && w->border_set && w->border_width > 0) {
+                    HBRUSH edge = w32_ground_brush(w->border_color);
+                    int ring;
+                    for (ring = 0; ring < w->border_width; ring++) {
+                        RECT e = { r.left + ring, r.top + ring, r.right - ring, r.bottom - ring };
+                        if (e.right <= e.left || e.bottom <= e.top) break;
+                        FrameRect(hdc, &e, edge);
+                    }
+                }
                 return 1;
             }
             return DefWindowProcW(hwnd, msg, wp, lp);
@@ -1550,6 +1716,32 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             HWND child = (HWND)lp;
             int ch = handle_for_hwnd(child);
             Widget* cw = widget_at(ch);
+            if (!child) {
+                // The scrollview's own bar: no child sent this.
+                Widget* sv = widget_at(handle_for_hwnd(hwnd));
+                if (sv && sv->kind == WK_SCROLLVIEW) {
+                    SCROLLINFO si;
+                    int pos;
+                    memset(&si, 0, sizeof(si));
+                    si.cbSize = sizeof(si);
+                    si.fMask = SIF_ALL;
+                    GetScrollInfo(hwnd, SB_VERT, &si);
+                    pos = si.nPos;
+                    switch (LOWORD(wp)) {
+                        case SB_LINEUP:        pos -= 16; break;
+                        case SB_LINEDOWN:      pos += 16; break;
+                        case SB_PAGEUP:        pos -= (int)si.nPage; break;
+                        case SB_PAGEDOWN:      pos += (int)si.nPage; break;
+                        case SB_TOP:           pos = si.nMin; break;
+                        case SB_BOTTOM:        pos = si.nMax; break;
+                        case SB_THUMBTRACK:
+                        case SB_THUMBPOSITION: pos = si.nTrackPos; break;
+                        default: break;
+                    }
+                    w32_scrollview_to(sv, pos);
+                }
+                return 0;
+            }
             if (cw && cw->kind == WK_SLIDER) {
                 int pos = (int)SendMessageW(child, TBM_GETPOS, 0, 0);
                 // Map pos back to the slider's min/max range.
@@ -1569,27 +1761,18 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             HDC hdc = (HDC)wp;
             int ch = handle_for_hwnd(child);
             Widget* cw = widget_at(ch);
-            if (cw) {
-                if (cw->fg.has_value) SetTextColor(hdc, cw->fg.color);
-                if (cw->bg.has_value) {
-                    COLORREF use = cw->bg.color;
-                    SetBkColor(hdc, use);
-                    // Keep a cached brush per-widget (leaked for now; cleaned
-                    // in WM_DESTROY via DeleteObject for widgets we know of).
-                    static HBRUSH last_brush = NULL;
-                    static COLORREF last_color = 0;
-                    if (last_brush && last_color != use) {
-                        DeleteObject(last_brush);
-                        last_brush = NULL;
-                    }
-                    if (!last_brush) {
-                        last_brush = CreateSolidBrush(use);
-                        last_color = use;
-                    }
-                    return (LRESULT)last_brush;
-                }
-                SetBkMode(hdc, TRANSPARENT);
+            COLORREF ground;
+            if (w32_ground_behind(child, &ground)) {
+                // The control's own ground, or the one behind it: painted
+                // opaque under the text, so ClearType has a ground to blend
+                // against and a caption that changes leaves no ghost of
+                // the old one.
+                SetTextColor(hdc, (cw && cw->fg.has_value) ? cw->fg.color
+                                                           : w32_legible_text(ground));
+                SetBkColor(hdc, ground);
+                return (LRESULT)w32_ground_brush(ground);
             }
+            if (cw && cw->fg.has_value) SetTextColor(hdc, cw->fg.color);
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
 
@@ -1636,7 +1819,21 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT r;
         GetClientRect(hwnd, &r);
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
+        // The rule takes the divider's own colour where the sheet gave it
+        // one, else a shade off the ground it crosses: a light line on a
+        // dark panel and a dark one on a light panel, never white on white
+        // or a pale grey cut across a dark theme.
+        Widget* dw = widget_at(handle_for_hwnd(hwnd));
+        COLORREF ground, line = RGB(200, 200, 200);
+        if (w32_ground_behind(hwnd, &ground)) {
+            FillRect(hdc, &r, w32_ground_brush(ground));
+            int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
+            int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
+            if (luma < 128) line = RGB(min(255, r8 + 28), min(255, g8 + 28), min(255, b8 + 28));
+            else            line = RGB(max(0, r8 - 40), max(0, g8 - 40), max(0, b8 - 40));
+        }
+        if (dw && dw->fg.has_value) line = dw->fg.color;
+        HPEN pen = CreatePen(PS_SOLID, 1, line);
         HPEN old = (HPEN)SelectObject(hdc, pen);
         int my = r.top + (r.bottom - r.top) / 2;
         MoveToEx(hdc, r.left, my, NULL);
@@ -1651,7 +1848,17 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 }
 
 static LRESULT CALLBACK spacer_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_ERASEBKGND) {
+        // A spacer is the ground behind it, painted: left unerased it kept
+        // whatever the window last showed there.
+        COLORREF bg;
+        if (w32_ground_behind(hwnd, &bg)) {
+            RECT r;
+            GetClientRect(hwnd, &r);
+            FillRect((HDC)wp, &r, w32_ground_brush(bg));
+        }
+        return 1;
+    }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -1924,6 +2131,19 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
     apps[app_handle - 1].root_handle = root_handle;
 }
 
+int aether_ui_dark_mode_check(void);
+
+// The system's dark theme for a control whose chrome the system draws --
+// a scroll view's scrollbars, a slider's track -- when the system is in
+// dark mode, the way the title bar already follows it. The theme class is
+// the one Explorer's own windows use; a light system leaves the control
+// as it is.
+static void w32_system_dark_control(HWND hwnd) {
+    if (hwnd && aether_ui_dark_mode_check()) {
+        SetWindowTheme(hwnd, L"DarkMode_Explorer", NULL);
+    }
+}
+
 // Apply immersive dark mode to a window if the system is in dark mode.
 static void apply_window_theme(HWND hwnd) {
     BOOL dark = FALSE;
@@ -2048,6 +2268,10 @@ void aether_ui_app_run_raw(int app_handle) {
     // controls (no focus traversal at all).
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        // The previous message's handlers have all returned: give back the
+        // closure boxes the widgets they retired were carrying (see
+        // w32_release_box for why not sooner).
+        w32_drain_graveyard();
         // When a key-registered canvas has focus, route keystrokes straight
         // to it — IsDialogMessage would otherwise eat Return (default button)
         // and Escape (cancel) before the canvas's WM_KEYDOWN sees them, and
@@ -2256,9 +2480,33 @@ int aether_ui_text_get_anchor(int handle) {
     return (w && w->kind == WK_TEXT) ? w->text_anchor : 0;
 }
 
+// A label sized to its first string kept that size: a status line that
+// opened on one word and grew to a sentence wrapped into the row's height
+// and was cut off, where GTK and AppKit re-measure a label on every
+// change. So a label whose natural size changes has its stack laid out
+// again -- only when it changes, since a status line is set every frame.
+static void w32_refit_text(Widget* w) {
+    RECT r;
+    int nat_w = 0, nat_h = 0;
+    if (!w || !w->hwnd) return;
+    if (w->kind != WK_TEXT && w->kind != WK_BUTTON) return;
+    if (w->pref_width > 0 && w->pref_height > 0) return;
+    measure_widget(w, &nat_w, &nat_h);
+    if (GetWindowRect(w->hwnd, &r) &&
+        (nat_w != r.right - r.left || nat_h != r.bottom - r.top)) {
+        HWND parent = GetAncestor(w->hwnd, GA_PARENT);
+        Widget* pw = widget_at(handle_for_hwnd(parent));
+        if (pw && (pw->kind == WK_VSTACK || pw->kind == WK_HSTACK || pw->kind == WK_ZSTACK)) {
+            stack_do_layout(parent);
+        }
+    }
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     Widget* w = widget_at(handle);
-    if (w && w->hwnd) w32_set_text(w, text);
+    if (!w || !w->hwnd) return;
+    w32_set_text(w, text);
+    w32_refit_text(w);
 }
 
 void aether_ui_button_set_label(int handle, const char* label) {
@@ -2969,7 +3217,18 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
 
 void aether_ui_widget_set_hidden(int handle, int hidden) {
     Widget* w = widget_at(handle);
-    if (w) ShowWindow(w->hwnd, hidden ? SW_HIDE : SW_SHOW);
+    HWND parent;
+    if (!w) return;
+    if (((GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_VISIBLE) == 0) == (hidden != 0)) return;
+    ShowWindow(w->hwnd, hidden ? SW_HIDE : SW_SHOW);
+    // The stack it sits in closes the gap, or opens one, and the view the
+    // stack scrolls in learns its new height.
+    for (parent = GetAncestor(w->hwnd, GA_PARENT); parent; parent = GetAncestor(parent, GA_PARENT)) {
+        Widget* pw = widget_at(handle_for_hwnd(parent));
+        if (!pw) break;
+        stack_do_layout(parent);
+        if (pw->kind == WK_SCROLLVIEW || pw->pref_height > 0) break;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3109,6 +3368,7 @@ int aether_ui_slider_create(double min_val, double max_val,
     SendMessageW(h, TBM_SETRANGE, TRUE, MAKELPARAM(0, 1000));
     double frac = (max_val > min_val) ? (initial - min_val) / (max_val - min_val) : 0;
     SendMessageW(h, TBM_SETPOS, TRUE, (LPARAM)(int)(frac * 1000));
+    w32_system_dark_control(h);
     int handle = register_widget_typed(h, WK_SLIDER);
     Widget* w = widget_at(handle);
     if (w) {
@@ -3226,8 +3486,9 @@ int aether_ui_scrollview_create(void) {
     Widget* w = widget_at(handle);
     if (w) {
         LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
-        SetWindowLongPtrW(w->hwnd, GWL_STYLE, st | WS_VSCROLL | WS_HSCROLL);
+        SetWindowLongPtrW(w->hwnd, GWL_STYLE, st | WS_VSCROLL);
         w->kind = WK_SCROLLVIEW;
+        w32_system_dark_control(w->hwnd);
     }
     return handle;
 }
@@ -3775,6 +4036,11 @@ static void apply_font(Widget* w) {
     if (w->custom_font) DeleteObject(w->custom_font);
     w->custom_font = CreateFontIndirectW(&lf);
     SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)w->custom_font, TRUE);
+    // A label measured in the default font and then set in a bolder or a
+    // larger one no longer fits the width it was given: the sheet is
+    // applied to a tree already laid out, and "CONSOLE" in bold was cut to
+    // "CONSOL". Its stack is laid out again where the size changed.
+    w32_refit_text(w);
 }
 
 void aether_ui_set_font_size(int handle, double size) {
@@ -3851,9 +4117,51 @@ static int w32_needs_owner_draw(Widget* w) {
     return w->border_set || w->hover_set || w->active_set || w->bg.has_value;
 }
 
+// A field is a native EDIT with the system's sunken client edge, which on a
+// dark ground is a white line down two of its sides. A field the sheet gave
+// a border paints that border over the edge instead, in the non-client
+// area, the two pixels the client edge measures; the client area and the
+// text are the control's own. What the sheet asked for, at the width the
+// control has.
+static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                          UINT_PTR id, DWORD_PTR ref) {
+    (void)id; (void)ref;
+    if (msg == WM_NCPAINT) {
+        Widget* w = widget_at(handle_for_hwnd(hwnd));
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        if (w && w->border_set && w->border_width > 0) {
+            HDC hdc = GetWindowDC(hwnd);
+            RECT rc;
+            int ring;
+            GetWindowRect(hwnd, &rc);
+            OffsetRect(&rc, -rc.left, -rc.top);
+            for (ring = 0; ring < 2; ring++) {
+                RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
+                COLORREF c = w->border_color;
+                // The inner ring of the two is the field's own ground, so a
+                // one-pixel border reads as one pixel.
+                if (ring >= w->border_width && w->bg.has_value) c = w->bg.color;
+                FrameRect(hdc, &e, w32_ground_brush(c));
+            }
+            ReleaseDC(hwnd, hdc);
+        }
+        return r;
+    }
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, styled_field_proc, 1);
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
 // Install (idempotent) the styled painter on a widget that now has styles.
 static void w32_ensure_owner_draw(Widget* w) {
     if (!w || w->owner_drawn) return;
+    if ((w->kind == WK_TEXTFIELD || w->kind == WK_SECUREFIELD) && w->border_set) {
+        if (SetWindowSubclass(w->hwnd, styled_field_proc, 1, 0)) {
+            w->owner_drawn = 1;
+            SetWindowPos(w->hwnd, NULL, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        return;
+    }
     if (!w32_needs_owner_draw(w)) return;
     if (SetWindowSubclass(w->hwnd, styled_btn_proc, 1, 0)) {
         w->owner_drawn = 1;
@@ -8993,9 +9301,60 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
     }
 }
 
-// Mark a widget and every descendant registered under it as dead, so the
-// driver stops listing them. Walks the live child tree BEFORE DestroyWindow
-// tears it down (afterwards GetWindow can't enumerate it).
+// Give back a boxed Aether closure and clear the slot that held it. The box
+// and the environment the closure captured are both ours, and once the widget
+// is dead nothing can reach either again.
+//
+// Nothing freed these, so a widget retired by a list rebuild leaked every
+// callback it carried, one box and one captured environment each, for as long
+// as the app ran. The AppKit and GTK4 backends had the same defect.
+//
+// Clearing the slot matters as much as the free: a dead widget's handler must
+// read NULL rather than a pointer to freed memory, and every caller here
+// already tests the slot before invoking it.
+//
+// The free itself is DEFERRED to the run loop, because the widget is very
+// often retired BY the closure being given back: a row's Remove button clears
+// the list it sits in, a Refresh button rebuilds the panel that holds it. That
+// closure is still on the stack, reading its captured environment, when
+// mark_subtree_dead reaches its widget. GTK holds a reference on a closure for
+// the whole of an emission and ARC keeps an AppKit target alive through the
+// action that fired it, so on those backends the box outlives the call by
+// construction; win32 has no such thing, so a free here would be a
+// use-after-free the moment the closure touched a captured variable again.
+// The boxes wait in a graveyard, and the run loop empties it between one
+// message and the next, when nothing of ours is on the stack.
+extern void aether_closure_env_free(void* env);
+
+static AeClosure** w32_graveyard = NULL;
+static int w32_graveyard_count = 0;
+static int w32_graveyard_cap = 0;
+
+static void w32_release_box(AeClosure** slot) {
+    if (!slot || !*slot) return;
+    if (w32_graveyard_count >= w32_graveyard_cap) {
+        int cap = w32_graveyard_cap ? w32_graveyard_cap * 2 : 64;
+        AeClosure** grown = (AeClosure**)realloc(
+            w32_graveyard, sizeof(AeClosure*) * cap);
+        if (!grown) return;   // keep the leak over a crash; the slot still clears
+        w32_graveyard = grown;
+        w32_graveyard_cap = cap;
+    }
+    w32_graveyard[w32_graveyard_count++] = *slot;
+    *slot = NULL;
+}
+
+// Called by the run loop between messages: the only time no closure of ours
+// can be executing. A nested loop (a modal, TrackPopupMenu) does not drain,
+// on purpose, because the closure that opened it is still on the outer stack.
+static void w32_drain_graveyard(void) {
+    for (int i = 0; i < w32_graveyard_count; i++) {
+        aether_closure_env_free(w32_graveyard[i]->env);
+        free(w32_graveyard[i]);
+    }
+    w32_graveyard_count = 0;
+}
+
 // Release the per-handle state a retired widget owned. Handles are monotonic,
 // so nothing inherits it and this is not a correctness bug; it is a leak, and
 // on Windows a GDI one, which matters more than a stray malloc: a process has
@@ -9022,8 +9381,31 @@ static void w32_release_handle_state(int h) {
         KillTimer(NULL, w->tr_timer);
         w->tr_timer = 0;
     }
+    if (w) {
+        w32_release_box(&w->on_click);
+        w32_release_box(&w->on_hover);
+        w32_release_box(&w->on_double_click);
+        w32_release_box(&w->on_change);
+        w32_release_box(&w->on_drop);
+        w32_release_box(&w->on_scroll);
+        w32_release_box(&w->on_layout);
+        // A context menu's items each carry a box, and a row that has one is
+        // rebuilt with the rest of the list, so these accumulated per rebuild.
+        for (int i = 0; i < w->ctx_count; i++) {
+            free(w->ctx_items[i].label);
+            w->ctx_items[i].label = NULL;
+            w32_release_box((AeClosure**)&w->ctx_items[i].closure);
+        }
+        free(w->ctx_items);
+        w->ctx_items = NULL;
+        w->ctx_count = 0;
+        w->ctx_cap = 0;
+    }
 }
 
+// Mark a widget and every descendant registered under it as dead, so the
+// driver stops listing them. Walks the live child tree BEFORE DestroyWindow
+// tears it down (afterwards GetWindow can't enumerate it).
 static void mark_subtree_dead(HWND hwnd) {
     int h = handle_for_hwnd(hwnd);
     if (h > 0) {

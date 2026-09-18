@@ -154,7 +154,43 @@ jobs:
           #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
           #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
           #   math.lrint remains follow-up, not done here.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.645.0' }}
+          # v0.684.0 (2026-09-18). Forced by the aeb move below, not chosen:
+          # every aeb since v0.302 compiles its own `aeb-main` against
+          # `bldr`, which imports std.zip (0.667), std.strarr (0.675) and
+          # calls os.arch() (0.681), so `make install` of that aeb needs
+          # at least 0.681 on PATH. Scanned the 0.646-0.681 notes: additive
+          # stdlib (std.zip, std.strarr, std.cbor, std.resp, fs.find_ext &
+          # co.), a 4.5x faster type-check (0.666), @c_callback emitted
+          # weak (0.677, two TUs sharing one callback no longer collide at
+          # link), -fPIC on --emit=lib objects (0.680).
+          #
+          # WHY NOT 0.681 OR 0.682: 0.667 added E0200, "block setter called
+          # as a node builder", discriminating by "the callee's module also
+          # defines a builder". ui/module.ae has four builders (window,
+          # render_to, record, nav_page) beside ~50 _ctx-first containers,
+          # so under 0.667-0.682 every `ui.vstack(10) { ... }` in every app
+          # is a compile error and the whole fan-out is red (#147's first
+          # run; the diagnostic was buried under make's own lines, see the
+          # ci.sh fix in the same PR). 0.683.0 carries aether#2060: the rule
+          # also requires the callee to yield no value, which is what
+          # separates a container (returns the handle its block runs
+          # inside) from a setter. All 260 .ae sources here type-check
+          # under it. The one genuine casualty of the move was LisMusic's
+          # audio_position_ms/audio_duration_ms colliding with std.audio's
+          # (E1001), renamed in the same PR.
+          #
+          # WHY NOT 0.683: under 0.682-0.683 table_demo aborts at startup on
+          # macOS AND Linux (free(): invalid pointer). 0.682's #2054 made a
+          # `-> string` function that returns `cb(...)` through a bare fn
+          # own its result, on the promise that a string-returning closure
+          # copies out whatever it returns. The table's cell callback returns
+          # string.from_int(p.kb) on one path (declared `-> ptr`) and p.name
+          # on the other, was typed by its FIRST return, and so was not a
+          # string closure: the literal reached the caller uncopied and was
+          # free()d. Reproduced natively on Windows (STATUS_HEAP_CORRUPTION)
+          # and root-caused with gdb; 0.684.0 carries aether#2070 (any
+          # string-typed return site makes the closure a string closure).
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.684.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
@@ -166,7 +202,18 @@ jobs:
           # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
           # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
           # links). v0.297 carries all of that, so this is a strict move forward.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.297' }}
+          #
+          # 9bfd8e88 (2026-09-18, main after aeb#15; becomes the next tag
+          # when one is cut — install.sh takes a SHA). Carries the fix this
+          # tree needed: the fan-out orchestrator is one generated main
+          # file, and aetherc lexes a main file into a fixed 50,000-token
+          # array. The old generator spent ~360 tokens per node, so 137
+          # nodes sat at 49,412 and the 138th (#140, tests/min_size) failed
+          # the whole fan-out with "source file exceeds maximum token limit"
+          # naming no file. The generator now emits the per-node bookkeeping
+          # once: the same tree is 7,227 tokens. aether#2059 asks for the
+          # compiler-side cap to go too.
+          AEB_REF: ${{ vars.AEB_REF || '9bfd8e88952cce71456fcb8329363cf872a20cc9' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh

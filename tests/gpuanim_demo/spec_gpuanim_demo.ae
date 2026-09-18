@@ -11,6 +11,18 @@ import std.spec
 import uidriver
 import std.string
 
+// The text of the frame-count label out of the /widgets listing: the
+// "text" field of the first entry that carries "frames", "animated" or
+// "stalled". Kept short so an assertion message stays one line.
+_label_of(body: string) -> string {
+    at = string.index_of(body, "stalled")
+    if at < 0 { at = string.index_of(body, "frames") }
+    if at < 0 { return "(no frame-count label)" }
+    from = at
+    if from > 12 { from = from - 12 }
+    return string.substring(body, from, at + 40)
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -18,13 +30,19 @@ main() {
     spec.describe(fw, "a GPU viewport redraws on request (#137)") {
         spec.it("the app animated, or says it has no GPU surface") callback {
             // The demo asks for a frame every 16ms and stops at twelve, or
-            // gives up after eight times that many requests and says so.
-            uidriver.wait_body_contains("/widgets", "animated", 20)
+            // gives up after twelve seconds and says so. Its label changes
+            // every tick, so wait_server above cannot settle until it has
+            // finished, and most of that budget is usually spent before this
+            // line; the wait here is what remains of the demo's, plus slack.
+            // On the wrong side the label says which way it stopped, so the
+            // failure names the number rather than leaving it to be read
+            // off the runner.
+            uidriver.wait_body_contains("/widgets", "animated", 100)
             body = uidriver.get_body("/widgets")
             animated = string.contains(body, "animated")
             no_gpu = string.contains(body, "no GPU surface on this backend")
             spec.assert_true(animated == 1 || no_gpu == 1,
-                "twelve frames were asked for and drawn")
+                "twelve frames were asked for and drawn; the viewport label reads: ${_label_of(body)}")
         }
     }
     return spec.run_summary(fw)

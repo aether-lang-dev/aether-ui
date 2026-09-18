@@ -427,8 +427,14 @@ else
     # error names the missing symbol on the lines AFTER the match, so print
     # trailing context or the actual cause is lost (that is how an undefined
     # symbol reached CI as four unattributed line numbers).
+    #
+    # And not make's own lines: under the parallel scheduler every node that
+    # fails costs one `make: *** [bldr.mk:N: label] Error 1`, printed BEFORE
+    # aeb's per-node "FAILED (see <log>)" dump, so a change that breaks every
+    # node (a compiler bump) filled the 60 lines with 60 make lines and the
+    # actual diagnostic never reached the CI log (#147).
     grep -nEi -A6 "error|failed|undefined|cannot |no such file" /tmp/ci_build_all.log \
-        | grep -viE "^[0-9]+[:-] *build: " | head -60 | sed 's/^/       /'
+        | grep -viE "^[0-9]+[:-] *build: |make: \*\*\*" | head -60 | sed 's/^/       /'
     echo "       --- last 60 lines ---"
     tail -60 /tmp/ci_build_all.log | sed 's/^/       /'
     FAIL=$((FAIL + 1))
