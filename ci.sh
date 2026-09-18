@@ -779,6 +779,29 @@ retention_run() {
         return 1
     fi
     n="$(retention_count "$pid")"
+    # Who holds them: for the longest run, the root paths (`leaks --trace`)
+    # to a sample of the live labels, spread through the address list. With
+    # 400 rows on screen and more than that alive, most samples are retired
+    # labels, and the path says what keeps a retired label alive. Reported
+    # to stderr, which the phase shows; not asserted.
+    if [ "$rounds" -ge 40 ] && command -v leaks > /dev/null 2>&1; then
+        {
+            echo "  -- $tag: live view classes"
+            heap "$pid" 2>/dev/null | awk '$4 ~ /^(NSTextField|AetherStackView|NSTextFieldCell|_NSViewLayoutAux)$/ { print "     " $1, $4 }'
+            echo "  -- $tag: root paths to a sample of live NSTextField"
+            local addrs
+            addrs="$(heap "$pid" --addresses=NSTextField 2>/dev/null | awk '/^ *0x/ { a=$1; sub(/:$/, "", a); print a }')"
+            local total
+            total="$(printf '%s\n' "$addrs" | grep -c . || true)"
+            if [ "$total" -gt 0 ]; then
+                local step=$(( total / 6 + 1 )) k=0
+                printf '%s\n' "$addrs" | awk -v s="$step" 'NR % s == 1' | head -6 | while read -r a; do
+                    echo "     -- $a"
+                    leaks "$pid" --trace="$a" 2>/dev/null | grep -vE '^(Process|Load Address|Identifier|Version|Code Type|Platform|Parent Process|Date/Time|Launch Time|OS Version|Report Version|Analysis Tool|Physical footprint|----|$)' | head -30 | sed 's/^/       /'
+                done
+            fi
+        } >&2
+    fi
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     if [ -z "$n" ]; then
         echo "  FAIL heap gave no NSTextField count for the $tag run" >&2
