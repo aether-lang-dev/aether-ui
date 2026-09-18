@@ -56,9 +56,18 @@ main() {
                 // A different colour every frame, so a reader can tell one
                 // frame from the next: green while it is still going, blue
                 // once it has drawn every frame that was asked for.
+                //
+                // Only the COUNT changes here; the label is written from the
+                // timer. With a window on screen, a set_text from inside the
+                // render callback invalidates the layout of the stack the
+                // viewport sits in, which redisplays the viewport, which runs
+                // this callback again, and AppKit's layout-and-display pass
+                // never settles: the run loop never gets back to the timer,
+                // so the frames climbed into the hundreds while the label
+                // never said "animated". A render callback draws; it does not
+                // touch the widget tree.
                 gpuview_on_render(gpu) callback |_dt: float| {
                     g_drawn = g_drawn + 1
-                    set_text(g_count_label, "frames ${g_drawn}")
                     if g_drawn >= WANTED {
                         glClearColor(0.0, 0.0, 1.0, 1.0)
                     } else {
@@ -74,6 +83,7 @@ main() {
                 tid = timer(16) callback {
                     g_ticks = g_ticks + 1
                     gpuview_request_render(gpu)
+                    set_text(g_count_label, "frames ${g_drawn}")
                     if g_drawn >= WANTED || g_ticks >= GIVE_UP_TICKS {
                         timer_cancel(tid)
                         // Says which of the two ways it stopped, so a reader

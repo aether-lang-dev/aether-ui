@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **gpuanim_demo wrote its label from inside the render callback, and with a
+  window on screen that never settled.** A `set_text` in `on_render`
+  invalidates the layout of the stack the viewport sits in, which redisplays
+  the viewport, which runs `on_render` again; AppKit's layout-and-display pass
+  never finished, so the run loop never got back to the 16ms timer and the
+  label read "frames 433" with "animated" never reached (#145's macOS leg,
+  after the bound below was widened). The callback now only counts; the timer
+  writes the label. A render callback draws; it does not touch the widget tree.
+
 - **The gpuanim spec called a viewport stalled on a slow display.** With a
   window on screen a render request marks the view dirty and the frame lands on
   the next display cycle, so frames are coalesced to the display's rate; the
