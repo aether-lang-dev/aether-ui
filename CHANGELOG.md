@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32 sets its controls in the system UI font at the monitor's DPI.**
+  Every control was set in `DEFAULT_GUI_FONT`, the stock object that still
+  answers "MS Shell Dlg" (Tahoma at 8 points), while the message font every
+  Windows app has drawn its controls in since Vista is what
+  `NONCLIENTMETRICS` carries (Segoe UI at 9 points, or the user's choice).
+  A stock font also never scales, and the backend declares itself
+  per-monitor DPI aware, so on a 150% monitor every label drew at 96-DPI
+  size. `w32_ui_font_for_dpi` answers `SystemParametersInfoForDpi`'s
+  message font, cached per DPI; every `WM_SETFONT`, the tab strip's bold
+  base, a custom `font_size` (points, at the window's DPI) and the vg
+  metrics face go through it, and `WM_DPICHANGED` re-fonts every widget
+  under the window and lays the stacks out again.
 - **win32: `opacity(v)` on a child widget fades it, tweened when a
   transition was declared.** The ABI's `aether_ui_set_opacity` was
   top-level-only on win32, so a widget styled `{ opacity(0.25) }` in a

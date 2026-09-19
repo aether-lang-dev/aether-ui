@@ -427,6 +427,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static void w32_refont_tree(HWND top, UINT dpi);
 static void w32_make_layered(HWND h);
 static void w32_settle_owed_opacity(HWND top);
 static void w32_forget_system_dark(void);
@@ -2191,12 +2192,17 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             return 0;
         }
         case WM_DPICHANGED: {
+            // The window moved to a monitor of another DPI: its suggested
+            // size, then every control under it in the system font at that
+            // DPI (a custom size or face is re-derived from it), then a
+            // layout, since every text just changed its measure.
             RECT* suggested = (RECT*)lp;
             SetWindowPos(hwnd, NULL,
                          suggested->left, suggested->top,
                          suggested->right - suggested->left,
                          suggested->bottom - suggested->top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
+            w32_refont_tree(hwnd, HIWORD(wp));
             return 0;
         }
         case WM_CLOSE:
@@ -2311,6 +2317,48 @@ static void register_window_classes(HINSTANCE inst) {
 
     win_classes_registered = 1;
 }
+
+// The system's UI font, at a DPI. Every control here used to be set in
+// DEFAULT_GUI_FONT, the stock object that still answers "MS Shell Dlg" --
+// Tahoma at 8 points, the face of 2001 -- while the message font every
+// Windows app has drawn its controls in since Vista is what
+// NONCLIENTMETRICS carries (Segoe UI at 9 points, or whatever the user
+// chose). And a stock font never scales: this backend declares itself
+// per-monitor DPI aware, so on a 150% monitor Windows scaled nothing for
+// it and every label drew at 96-DPI size. SystemParametersInfoForDpi
+// answers for the monitor's DPI (Windows 10 1607+); the fonts are cached
+// per DPI and outlive every window.
+static HFONT w32_ui_font_for_dpi(UINT dpi) {
+    static struct { UINT dpi; HFONT font; } cache[8];
+    static int cached = 0;
+    if (dpi == 0) dpi = 96;
+    for (int i = 0; i < cached; i++)
+        if (cache[i].dpi == dpi) return cache[i].font;
+    NONCLIENTMETRICSW ncm;
+    memset(&ncm, 0, sizeof(ncm));
+    ncm.cbSize = sizeof(ncm);
+    HFONT font = NULL;
+    if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, dpi)) {
+        font = CreateFontIndirectW(&ncm.lfMessageFont);
+    } else if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
+        // Pre-1607: the system-DPI metrics, scaled to the monitor's.
+        ncm.lfMessageFont.lfHeight = MulDiv(ncm.lfMessageFont.lfHeight, (int)dpi,
+                                            (int)GetDpiForSystem());
+        font = CreateFontIndirectW(&ncm.lfMessageFont);
+    }
+    if (!font) font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    if (cached < 8) { cache[cached].dpi = dpi; cache[cached].font = font; cached++; }
+    return font;
+}
+
+// The DPI a window is drawn at: its monitor's once it has one, the system's
+// while it sits on the hidden holder (every widget is created there).
+static UINT w32_dpi_for(HWND hwnd) {
+    UINT dpi = hwnd ? GetDpiForWindow(hwnd) : 0;
+    return dpi ? dpi : GetDpiForSystem();
+}
+
+static HFONT w32_ui_font(HWND hwnd) { return w32_ui_font_for_dpi(w32_dpi_for(hwnd)); }
 
 // DPI awareness setup — try the newest API first, fall back for older Windows.
 typedef BOOL (WINAPI *SetProcessDpiAwarenessContextFn)(DPI_AWARENESS_CONTEXT);
@@ -2730,8 +2778,7 @@ int aether_ui_text_create(const char* text) {
         WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     return register_widget_typed(h, WK_TEXT);
 }
 
@@ -2743,7 +2790,7 @@ int aether_ui_text_wrapped_create(const char* text, int wrap_width_px) {
         WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     int handle = register_widget_typed(h, WK_TEXT);
     Widget* w = widget_at(handle);
     if (w) {
@@ -3433,8 +3480,7 @@ int aether_ui_button_create_plain(const char* label) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     w32_system_dark_control(h);
     return register_widget_typed(h, WK_BUTTON);
 }
@@ -3568,8 +3614,7 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_LEFT | ES_AUTOHSCROLL,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     w32_system_dark_edit(h);
     // Windows has no native placeholder on EDIT — use EM_SETCUEBANNER (comctl32 6+)
     if (placeholder && *placeholder) {
@@ -3592,8 +3637,7 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_LEFT | ES_PASSWORD | ES_AUTOHSCROLL,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     // Explorer's theme rather than the dialog's edit theme: this control
     // owns a scrollbar, and only the former draws that dark. Its frame is
     // the client edge, which neither theme touches.
@@ -3641,8 +3685,7 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     w32_system_dark_control(h);
     int handle = register_widget_typed(h, WK_TOGGLE);
     Widget* w = widget_at(handle);
@@ -3740,8 +3783,7 @@ int aether_ui_picker_create(void* boxed_closure) {
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     int handle = register_widget_typed(h, WK_PICKER);
     Widget* w = widget_at(handle);
     if (w) { w->on_change = (AeClosure*)boxed_closure; w->pref_height = 200; }
@@ -3784,8 +3826,7 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
             | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
-    SendMessageW(h, WM_SETFONT,
-        (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     // Explorer's theme rather than the dialog's edit theme: this control
     // owns a scrollbar, and only the former draws that dark. Its frame is
     // the client edge, which neither theme touches.
@@ -4054,7 +4095,7 @@ static void tabs_do_select(TabsState* ts, int index, int fire) {
         // Active strip button gets a bold font as the visible selection cue.
         Widget* bw = widget_at(ts->btn_handles[p]);
         if (bw && bw->hwnd) {
-            HFONT base = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            HFONT base = w32_ui_font(bw->hwnd);
             if (p == index) {
                 LOGFONTW lf; GetObjectW(base, sizeof(lf), &lf);
                 lf.lfWeight = FW_BOLD;
@@ -4380,15 +4421,13 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
 static void apply_font(Widget* w) {
     if (!w) return;
     LOGFONTW lf = {0};
-    HFONT base = (HFONT)SendMessageW(w->hwnd, WM_GETFONT, 0, 0);
-    if (base) GetObjectW(base, sizeof(lf), &lf);
-    else GetObjectW((HFONT)GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+    // From the system font at the window's DPI, not from whatever the
+    // control wears now: a re-apply after a DPI change (w32_refont_tree)
+    // must start from the new size, and a custom size below is in points.
+    GetObjectW(w32_ui_font(w->hwnd), sizeof(lf), &lf);
     if (w->font_size > 0) {
-        // Font size in points → logical units for current DPI
-        HDC hdc = GetDC(w->hwnd);
-        int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(w->hwnd, hdc);
-        lf.lfHeight = -MulDiv((int)w->font_size, dpi, 72);
+        // Font size in points -> logical units at the window's DPI
+        lf.lfHeight = -MulDiv((int)w->font_size, (int)w32_dpi_for(w->hwnd), 72);
     }
     lf.lfWeight = w->font_bold ? FW_BOLD : FW_NORMAL;
     if (w->font_family) {
@@ -4403,6 +4442,23 @@ static void apply_font(Widget* w) {
     // applied to a tree already laid out, and "CONSOLE" in bold was cut to
     // "CONSOL". Its stack is laid out again where the size changed.
     w32_refit_text(w);
+}
+
+// Every widget under a top-level, in the system font at `dpi` (see
+// w32_ui_font_for_dpi); one with a size, weight or face of its own gets
+// that re-derived from the new base. Then the stacks lay out again, since
+// every text just changed its measure.
+static void w32_refont_tree(HWND top, UINT dpi) {
+    HFONT font = w32_ui_font_for_dpi(dpi);
+    for (int i = 1; i <= widget_count; i++) {
+        Widget* w = widget_at(i);
+        if (!w || w->dead || !IsWindow(w->hwnd)) continue;
+        if (GetAncestor(w->hwnd, GA_ROOT) != top) continue;
+        if (w->font_size > 0 || w->font_bold || w->font_family) apply_font(w);
+        else SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)font, TRUE);
+        if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK)
+            w32_request_layout(w->hwnd);
+    }
 }
 
 void aether_ui_set_font_size(int handle, double size) {
@@ -7158,7 +7214,7 @@ static HFONT aeui_metrics_font(double size) {
     if (cached && cached_px == px) return cached;
     if (cached) DeleteObject(cached);
     LOGFONTW lf = {0};
-    GetObjectW((HFONT)GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+    GetObjectW(w32_ui_font_for_dpi(GetDpiForSystem()), sizeof(lf), &lf);   // the system face
     lf.lfHeight = -px;   // negative = character height in px
     cached = CreateFontIndirectW(&lf);
     cached_px = px;
