@@ -604,7 +604,7 @@ capabilities the test harness is denied, not the other way around.
 |----------|---------------------------------|------------------------------------------------------------------------------------|
 | Linux    | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
 | macOS    | AppKit (`backend/aether_ui_macos.m`)    | Full — all widgets, canvas, events, styling, AetherUIDriver test server            |
-| Windows  | Native Win32 (`backend/aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls v6 (themed); per-monitor DPI v2; follows the system's dark mode (title bar, ground, controls); AetherUIDriver via winsock2 |
+| Windows  | Native Win32 (`backend/aether_ui_win32.c`) | Full — USER32 + GDI+ + Common Controls v6 (themed); the system UI font at the monitor's DPI (per-monitor DPI v2, re-fonted on a DPI change); follows the system's dark mode (title bar, ground, controls); AetherUIDriver via winsock2 |
 | FreeBSD  | GTK4  (`backend/aether_ui_gtk4.c`)      | Full — shares the Linux backend; clang build, private-Xvfb spec runs           |
 | iOS      | UIKit (`backend/aether_ui_uikit.m`)     | Whole ABI implemented; AetherUIDriver served on the main thread. CI links `listbox_demo` against `ae build --target=aarch64-ios-simulator --emit=staticlib`, installs it in a booted iPhone simulator and runs its driver spec there (ci.sh Phase 1e2). No menu bar, tray, or window resize (those routes answer 404); file pickers are async on iOS and answer an empty selection. |
 
