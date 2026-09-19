@@ -54,13 +54,22 @@ main() {
         enable_test_server_root(9222, main_root)
     }
 
+    // Read the allocation once there is one. A single read at a fixed
+    // delay raced the first layout on a loaded CI runner (GTK4 under Xvfb
+    // read 0 at 120ms), and 0 is not a measurement of anything. Polled
+    // until the pane has a width, with a ceiling so an app that never lays
+    // out still reports and quits.
     tid = 0
-    tid = timer(120) callback {
-        timer_cancel(tid)
+    polls = 0
+    tid = timer(40) callback {
         lw = get_width(left)
-        set_text(report, "panels: left=${lw}")
-        println("left panel width = ${lw} (asked 240)")
-        app_quit()
+        polls = polls + 1
+        if lw > 0 || polls >= 100 {
+            timer_cancel(tid)
+            set_text(report, "panels: left=${lw}")
+            println("left panel width = ${lw} (asked 240)")
+            app_quit()
+        }
     }
     ui.app_start(app, main_root)
 }
