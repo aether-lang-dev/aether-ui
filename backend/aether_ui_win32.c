@@ -430,6 +430,8 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
+static void w32_picker_cache_selection(Widget* w);
 static COLORREF w32_accent_color(void);
 static COLORREF w32_system_ground(void);
 static void w32_field_frame(HWND hwnd);
@@ -987,6 +989,13 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w->kind == WK_TEXTAREA) {
         *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 200);
         *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 80);
+        return;
+    }
+    if (w->kind == WK_CANVAS) {
+        int nw = 0, nh = 0;
+        w32_canvas_natural(w, &nw, &nh);
+        *out_w = w->pref_width > 0 ? w->pref_width : nw;
+        *out_h = w->pref_height > 0 ? w->pref_height : nh;
         return;
     }
     RECT r;
@@ -1975,6 +1984,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                         }
                     }
                 } else if (cw->kind == WK_PICKER && code == CBN_SELCHANGE) {
+                    w32_picker_cache_selection(cw);
                     if (!cw->sealed) invoke_closure(cw->on_change);
                 }
             }
@@ -3866,6 +3876,24 @@ int aether_ui_picker_create(void* boxed_closure) {
     return handle;
 }
 
+// A picker's text is its selection, on every backend: what the driver's
+// `text` reports and a spec asserts ("label tracks the selection"). A
+// combo box has no window text of its own to cache, so the selected item
+// is read out after every change of selection.
+static void w32_picker_cache_selection(Widget* w) {
+    if (!w) return;
+    LRESULT idx = SendMessageW(w->hwnd, CB_GETCURSEL, 0, 0);
+    if (idx == CB_ERR) { w32_cache_text(w, ""); return; }
+    LRESULT len = SendMessageW(w->hwnd, CB_GETLBTEXTLEN, (WPARAM)idx, 0);
+    if (len == CB_ERR || len < 0 || len > 4096) { w32_cache_text(w, ""); return; }
+    wchar_t* wbuf = (wchar_t*)malloc(sizeof(wchar_t) * ((size_t)len + 1));
+    if (!wbuf) return;
+    wbuf[0] = 0;
+    SendMessageW(w->hwnd, CB_GETLBTEXT, (WPARAM)idx, (LPARAM)wbuf);
+    w32_cache_text(w, wide_to_utf8(wbuf));
+    free(wbuf);
+}
+
 void aether_ui_picker_add_item(int handle, const char* item) {
     Widget* w = widget_at(handle);
     if (!w) return;
@@ -3877,11 +3905,19 @@ void aether_ui_picker_add_item(int handle, const char* item) {
     if (SendMessageW(w->hwnd, CB_GETCURSEL, 0, 0) == CB_ERR) {
         SendMessageW(w->hwnd, CB_SETCURSEL, 0, 0);
     }
+    w32_picker_cache_selection(w);
 }
 
+// A programmatic selection fires on_change, as it does on GTK4 (the drop
+// down's notify::selected), AppKit and UIKit: CB_SETCURSEL sends no
+// CBN_SELCHANGE, so the closure is invoked here when the index changed.
 void aether_ui_picker_set_selected(int handle, int index) {
     Widget* w = widget_at(handle);
-    if (w) SendMessageW(w->hwnd, CB_SETCURSEL, (WPARAM)index, 0);
+    if (!w) return;
+    LRESULT was = SendMessageW(w->hwnd, CB_GETCURSEL, 0, 0);
+    SendMessageW(w->hwnd, CB_SETCURSEL, (WPARAM)index, 0);
+    w32_picker_cache_selection(w);
+    if (was != (LRESULT)index && !w->sealed) invoke_closure(w->on_change);
 }
 
 int aether_ui_picker_get_selected(int handle) {
@@ -7033,11 +7069,28 @@ int aether_ui_canvas_create_impl(int width, int height) {
     int widget_handle = register_widget_typed(h, WK_CANVAS);
     Widget* ww = widget_at(widget_handle);
     if (ww) {
-        ww->pref_width = width;
-        ww->pref_height = height;
+        // The size is the canvas's NATURAL size, what the measure answers
+        // when no parent forces one (w32_canvas_natural), and not a pin:
+        // GTK4 expands a drawing area past its content size and AppKit holds
+        // the size at priority 150, so on both a canvas fills its stack's
+        // slack and on_resize fires when the window grows. Here it went
+        // into pref_width/pref_height, which the layout reads as the app's
+        // own choice of size (width()/height(), canvas_size), so a canvas
+        // created 80x80 stayed 80x80 in a 700px window and on_resize never
+        // fired. canvas_size still pins: it goes through set_width.
         ww->u.canvas.canvas_id = canvas_count;
     }
     return canvas_count;
+}
+
+// The natural size of a canvas: what canvas_create was given.
+static int w32_canvas_natural(const Widget* w, int* out_w, int* out_h) {
+    if (!w || w->kind != WK_CANVAS) return 0;
+    int id = w->u.canvas.canvas_id;
+    if (id < 1 || id > canvas_count) return 0;
+    *out_w = canvases[id - 1].width;
+    *out_h = canvases[id - 1].height;
+    return 1;
 }
 
 

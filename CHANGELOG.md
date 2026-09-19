@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a canvas grows with its window, and `on_resize` fires.**
+  `canvas_create`'s width and height are the canvas's natural size on
+  every backend (GTK4 expands the drawing area past its content size,
+  AppKit holds the size at priority 150); win32 stored them as the pin
+  `width()`/`height()`/`canvas_size` set, so a canvas created 80x80 stayed
+  80x80 in a 700px window and `canvas_on_resize` never fired
+  (`tests/resizecb_demo` failed on Windows for that reason). The natural
+  size is the measure's answer now; a pin is still a pin.
+- **win32: a picker's text is its selection, and a programmatic selection
+  fires `on_change`.** The driver's `text` for a picker was always empty
+  (a combo box has no window text to cache), so `tests/picker` failed on
+  Windows; the selected item is cached after every change. `CB_SETCURSEL`
+  sends no `CBN_SELCHANGE`, so `picker_set_selected` invokes the closure
+  itself when the index changed, as GTK4, AppKit and UIKit do.
 - **A selected list row is visible on every backend.** `.aui-row-selected`
   was painted by GTK4's stylesheet and, on AppKit, Win32 and UIKit, only
   reported to the driver: a listbox's selection could be read by a spec
