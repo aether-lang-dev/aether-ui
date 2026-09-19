@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **win32: `opacity(v)` on a child widget fades it, tweened when a
+  transition was declared.** The ABI's `aether_ui_set_opacity` was
+  top-level-only on win32, so a widget styled `{ opacity(0.25) }` in a
+  build block stayed opaque while GTK4 and AppKit faded it; `style_opacity`
+  (the CSS path) already used a layered child window. Both now share one
+  path. A child given `WS_EX_LAYERED` before its top-level has been shown
+  never paints, so the alpha is owed until the window shows
+  (`WM_WINDOWPOSCHANGED` / `SWP_SHOWWINDOW`); and a transition
+  declaration makes the widget layered at full alpha up front, since the
+  switch to a layered window, not the alpha, is what cost the first frames
+  of a tween. Measured on screen: a `{ opacity(0.25) }` label reads 38.9
+  mean brightness against 60.3 opaque; a 1200ms ease-out goes 59.9 → 46.1
+  → 36.1; the spring overshoots at ~300ms. `tests/win32/win32_runtime_test.c`
+  covers the owed alpha.
+- **win32 `/screenshot` reads the composed frame from the screen** when the
+  window is on screen and unobscured (raised without activation first),
+  and falls back to `PrintWindow(PW_RENDERFULLCONTENT)` otherwise -- the
+  headless case, and still frames. PrintWindow, mid-tween of a layered
+  child, now and then returns a frame without the child, which is what made
+  the easing tests unreadable on Windows.
+- **The transition curve tests measure contrast, not "ink".** 255 −
+  brightness assumes dark text on a light ground; under a dark system
+  theme a fade raised it and the tests read "no fade". Mean distance from
+  the ground (the frame's median) falls in either theme. Single-frame
+  capture holes are filtered (median of three) and the start value is the
+  middle of three captures. Both tests pass on win32 now; TODO.md's
+  "win32 child-widget opacity" is closed with the measurements.
+
 ### Added
 
 - **An iOS simulator leg in CI (#22):** `ae build --target=<arch>-ios-simulator

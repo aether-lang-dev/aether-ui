@@ -32,18 +32,21 @@
 # ease-out curve's predicted 0.438 and 0.750. Linear would read 0.25/0.50, so
 # the two are cleanly separated.
 #
-# ON WIN32 THIS IS NOT YET MEASURABLE, and the guard below does not catch it.
-# The screenshot decodes fine, so the no-image SKIP does not fire, but every
-# pixel is the SAME background grey (min == max == 240, zero dark pixels): the
-# capture contains no child controls at all, faded or opaque. Constant ink
-# across the samples is therefore a BLANK CAPTURE, not a failed tween -- this
-# path cannot see the label either way, so it can neither confirm nor refute
-# the curve on win32. Two other instruments failed the same way while checking
-# this: GetPixel on a Session-0 desktop reads nothing, and PrintWindow returns
-# a uniformly black bitmap. Whether win32 child alpha actually animates is
-# still OPEN; the overlay exit fade uses the same mechanism on child windows
-# and does work, so do not assume it is broken. Needs a capture path that sees
-# child controls before this test means anything here.
+# ON WIN32 this is measurable since the driver's /screenshot became a
+# PrintWindow(PW_RENDERFULLCONTENT) of the mapped window (#154): the capture
+# has the child controls in it, faded and opaque. Measured on a Windows 11
+# box with the window on screen: the label's region went 59.9 -> 46.1 ->
+# 36.1 (before, 400ms in, settled) in a screen grab, and the driver's capture
+# agrees. The older note here about a uniform capture described a Session-0
+# box reached over ssh, where nothing can see the screen; it was the
+# instrument, not the tween.
+#
+# THE MEASURE IS CONTRAST, NOT INK. "Ink" (255 - brightness) assumes dark
+# text on a light ground; a box whose system theme is dark draws light text
+# on a dark ground, and there a fade LOWERS the ink and the old assertion
+# read the tween as no fade at all (seen on win32 under the system dark
+# mode). Mean distance from the ground -- the frame's median brightness --
+# falls as the label fades in either theme, and is the same curve.
 #
 # NB the demo fades over 1200ms, which is luxuriously slow for real UI (150-250ms
 # is typical) -- it is long on purpose so a mid-flight frame is easy to sample.
@@ -61,16 +64,17 @@ PASS=0; FAIL=0
 ok()  { echo "  [PASS] $1"; PASS=$((PASS+1)); }
 bad() { echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 
-# Mean ink of a screenshot: how much dark text is on screen. As the label
-# fades toward the background this falls, so it is a direct proxy for the
-# animated opacity — no per-widget probe needed.
+# Mean contrast of a screenshot: how far, on average, the pixels sit from
+# the ground (the frame's median brightness). As the label fades toward the
+# ground this falls, in a light theme and a dark one alike, so it is a direct
+# proxy for the animated opacity -- no per-widget probe needed.
 ink() {
   python3 - "$1" <<'PY'
 import sys
 from PIL import Image
 import numpy as np
 a = np.asarray(Image.open(sys.argv[1]).convert("L"), dtype=float)
-print(f"{(255.0 - a).mean():.4f}")
+print(f"{np.abs(a - np.median(a)).mean():.4f}")
 PY
 }
 
@@ -122,16 +126,20 @@ fi
 #
 # 14 samples at 100ms across a 1200ms tween. Deadlines are computed from ONE t0
 # so capture cost cannot accumulate into drift.
-python3 - "$BASE" "$BTN" > $SCRATCH/ec_curve.txt <<'PY'
+python3 - "$BASE" "$BTN" "$SCRATCH" > $SCRATCH/ec_curve.txt <<'PY'
 import sys, time, urllib.request
 from PIL import Image
 import numpy as np
 base, btn = sys.argv[1], sys.argv[2]
+scratch = sys.argv[3]
 def ink():
-    urllib.request.urlretrieve(base + "/screenshot", "/tmp/_ec.png")
-    a = np.asarray(Image.open("/tmp/_ec.png").convert("L"), dtype=float)
-    return (255.0 - a).mean()
-i0 = ink()
+    # contrast against the ground: theme-agnostic (see the header)
+    urllib.request.urlretrieve(base + "/screenshot", scratch + "/_ec.png")
+    a = np.asarray(Image.open(scratch + "/_ec.png").convert("L"), dtype=float)
+    return np.abs(a - np.median(a)).mean()
+# The start value anchors every progress figure, and a dropped frame here
+# (see the median filter below) would skew all of them: the middle of three.
+i0 = sorted(ink() for _ in range(3))[1]
 t0 = time.time()
 urllib.request.urlopen(urllib.request.Request(base + "/widget/" + btn + "/click",
                                               method="POST")).read()
@@ -146,11 +154,11 @@ PY
 
 read -r I_START < $SCRATCH/ec_curve.txt
 I_END=$(tail -1 $SCRATCH/ec_curve.txt | cut -d' ' -f2)
-echo "  ink: start=$I_START settled=$I_END  (14 samples over 1400ms)"
+echo "  contrast: start=$I_START settled=$I_END  (14 samples over 1400ms)"
 
-# A tween happened at all: the settled frame is lighter than the start.
+# A tween happened at all: the settled frame has less contrast than the start.
 python3 -c "import sys; sys.exit(0 if $I_END < $I_START - 0.01 else 1)" \
-  && ok "the label faded (settled is lighter than start)" \
+  && ok "the label faded (settled has less contrast than start)" \
   || bad "the label faded"
 
 # NOT A SNAP: an instant change is fully done by the first 100ms sample.
@@ -173,7 +181,16 @@ ls = open(sys.argv[1]).read().split("\n")
 i0 = float(ls[0])
 pts = [tuple(map(float, l.split())) for l in ls[1:] if l.strip()]
 vals = [i0] + [v for _, v in pts]
-steps = [vals[i] - vals[i + 1] for i in range(len(vals) - 1)]   # ink lost per step
+# A DROPPED FRAME IS NOT A POINT ON THE CURVE. On win32 the driver's capture
+# (PrintWindow of a window whose child is mid-tween as a layered window)
+# now and then returns a frame with the label, or most of the window,
+# missing: a contrast far below both neighbours, then back. A screen grab
+# of the same tween never shows it, so it is the instrument. Median of
+# three replaces each sample with its neighbourhood's middle value, which
+# passes a curve unchanged and drops a one-frame hole.
+vals = [sorted(vals[max(0, i - 1):i + 2])[len(vals[max(0, i - 1):i + 2]) // 2]
+        for i in range(len(vals))]
+steps = [vals[i] - vals[i + 1] for i in range(len(vals) - 1)]   # contrast lost per step
 live = [s for s in steps if s > 1e-6]                            # ignore settled tail
 if len(live) < 4:
     print(f"  only {len(live)} moving samples — too few to judge the shape")

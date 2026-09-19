@@ -249,55 +249,41 @@ grids. Worth remembering: a .sig is a 24x16 grid where each cell averages
 tripwire on averaged colour, not a picture. Judging rendering quality from
 one is a mistake I made twice in a row.
 
-## win32 child-widget opacity (and the capture path that would prove it)
+## ~~win32 child-widget opacity (and the capture path that would prove it)~~ — DONE 2026-09-19
 
-`ui.style_opacity` on a child widget does nothing visible on win32, and
-`ui.transition`'s easing therefore has nothing to animate there. Two separate
-pieces, only the first of which is understood.
+Both halves resolved, on a Windows 11 box with the window on screen.
 
-**Wiring it up.** `aether_ui_set_opacity` is top-level-only by design. The
-guard that enforced this was broken until 2026-08-14 — it tested `WS_CHILD`
-against `GWL_EXSTYLE`, where that bit is `WS_EX_NOINHERITLAYOUT` and normally
-clear, so children *were* being made `WS_EX_LAYERED` while the comment claimed
-they were skipped. Now fixed, which makes the no-op honest but still a no-op.
+**The opacity.** `style_opacity` (the CSS path) had been wired to a layered
+child window all along; what did nothing on win32 was the ABI's own
+`aether_ui_set_opacity`, which `opacity(v)` in a build block reaches, and
+which was top-level-only. It now takes the same path (`w32_apply_opacity`),
+tweened when a transition was declared, as GTK4 and AppKit do. Two things
+had to be learned to make that work for a widget styled during the build:
+a child given `WS_EX_LAYERED` before its top-level has ever been shown
+never paints at all (not after a forced redraw either), so the alpha is
+*owed* until the window shows (`WM_WINDOWPOSCHANGED` with
+`SWP_SHOWWINDOW`); and the switch to a layered window, not the alpha, is
+what costs, so a transition declaration makes the widget layered at full
+alpha up front, the way a CoreAnimation view is layer-backed before it
+animates. Measured with a screen grab (not the driver): a label under a
+1200ms ease-out went 59.9 → 46.1 → 36.1 mean brightness (before, 400ms in,
+settled); the spring overshoots at ~300ms and settles; a
+`text("…") { opacity(0.25) }` label reads 38.9 against 60.3 opaque.
 
-Child alpha is **not** known to be impossible here: uniform alpha has worked on
-child windows since Win8, and the overlay exit fade (`w32_make_layered` +
-`SetLayeredWindowAttributes` on `e->content`, a child) depends on it and is
-green at 3/3. So the likely job is wiring `set_opacity` and the tween through
-the same mechanism the overlays already use, not inventing a new one. The open
-design question is whether a STATIC label honours it the way the overlay's
-container does, and if not, whether to owner-draw the label or fade a layered
-parent.
-
-**Proving it is the harder half, and is a prerequisite.** Three instruments
-were tried on 2026-08-14 and all three are blind to child controls on that box:
-
-| instrument | result |
-|---|---|
-| driver `/screenshot` | decodes fine, but **uniform** — `min == max == 240`, zero dark pixels, no controls in frame |
-| `GetPixel` on the live desktop | reads nothing (Session 0, no interactive desktop over ssh) |
-| `PrintWindow` into a DIB | uniformly black bitmap |
-
-This matters more than it looks. A capture that is merely *blank* still decodes
-and still yields a number, so a pixel test reads constant ink and reports "the
-label did not fade" — a false accusation against code that may be correct.
-`tests/transitions_demo/test_easing_curve.sh` now guards on pixel SPREAD and
-skips as a blind instrument rather than failing; until that skip stops firing,
-**no pixel evidence about win32 easing is admissible either way**.
-
-Worth fixing the capture first: it is the same instrument golden-image tests
-would need on win32, so it is not effort spent only on this item.
-
-**It now blocks a second thing.** The spring easing added 2026-08-14 is
-verified on GTK4 by pixels (peak progress 1.103, overshooting its target) and
-on win32 only by compiling `w32_spring_progress` with MinGW and running it
-standalone there (peak 1.1515, endpoints pinned at 0 and 1). The maths is
-right on Windows; whether it reaches the screen is unproven, for exactly the
-reason above. `test_spring_curve.sh` skips there rather than guessing — which
-is correct behaviour, but a skip is not a pass. Every future animation
-feature will land in the same position until the capture can see child
-controls.
+**The capture.** The session-0 box could see nothing because nothing there
+is on a screen. On a box with a screen the driver's `/screenshot` reads the
+composed frame from the desktop when the window is on screen and
+unobscured (after raising it without activation), and falls back to
+`PrintWindow(PW_RENDERFULLCONTENT)` otherwise. PrintWindow is what CI's
+headless runs get, and it is fine for still frames; while a layered child
+is mid-tween it now and then returns a frame without the child, so the two
+curve tests filter single-frame holes (median of three) and anchor their
+start on the middle of three captures. They also measure contrast against
+the ground rather than "ink" (255 − brightness), which read a fade on a
+dark-theme box as no fade. Both pass on win32 now:
+`tests/transitions_demo/test_easing_curve.sh` (ease-out ratio ~5–6×) and
+`test_spring_curve.sh` (peak progress ~1.10 at 360ms, the designed curve).
+`tests/win32/win32_runtime_test.c` covers the owed alpha headless.
 
 ## Push rendering semantics out of the backends and into the vg layer
 

@@ -58,16 +58,23 @@ if python3 -c "import sys; sys.exit(0 if $SPREAD < 1.0 else 1)"; then
 fi
 
 # 16 samples at 90ms across a 1200ms tween, deadlines from one t0.
-python3 - "$BASE" "$BTN" > $SCRATCH/sp_curve.txt <<'PY'
+python3 - "$BASE" "$BTN" "$SCRATCH" > $SCRATCH/sp_curve.txt <<'PY'
 import sys, time, urllib.request
 from PIL import Image
 import numpy as np
 base, btn = sys.argv[1], sys.argv[2]
+scratch = sys.argv[3]
 def ink():
-    urllib.request.urlretrieve(base + "/screenshot", "/tmp/_sp.png")
-    a = np.asarray(Image.open("/tmp/_sp.png").convert("L"), dtype=float)
-    return (255.0 - a).mean()
-i0 = ink()
+    # contrast against the ground (the frame's median brightness), not
+    # "ink": a fade lowers it in a light theme and a dark one alike, where
+    # 255-brightness only falls for dark text on a light ground (see
+    # test_easing_curve.sh).
+    urllib.request.urlretrieve(base + "/screenshot", scratch + "/_sp.png")
+    a = np.asarray(Image.open(scratch + "/_sp.png").convert("L"), dtype=float)
+    return np.abs(a - np.median(a)).mean()
+# The start value anchors every progress figure, and a dropped frame here
+# (see the median filter below) would skew all of them: the middle of three.
+i0 = sorted(ink() for _ in range(3))[1]
 t0 = time.time()
 urllib.request.urlopen(urllib.request.Request(base + "/widget/" + btn + "/click",
                                               method="POST")).read()
@@ -82,10 +89,10 @@ PY
 
 read -r I_START < $SCRATCH/sp_curve.txt
 I_END=$(tail -1 $SCRATCH/sp_curve.txt | cut -d' ' -f2)
-echo "  ink: start=$I_START settled=$I_END  (16 samples over 1440ms)"
+echo "  contrast: start=$I_START settled=$I_END  (16 samples over 1440ms)"
 
 python3 -c "import sys; sys.exit(0 if $I_END < $I_START - 0.01 else 1)" \
-  && ok "the label faded (settled is lighter than start)" \
+  && ok "the label faded (settled has less contrast than start)" \
   || bad "the label faded"
 
 # THE SPRING ASSERTION. Peak progress above 1.0 means the tween went PAST its
@@ -97,6 +104,12 @@ import sys
 ls = open(sys.argv[1]).read().split("\n")
 i0 = float(ls[0])
 pts = [tuple(map(float, l.split())) for l in ls[1:] if l.strip()]
+# Median of three over the samples: a frame the capture dropped (see
+# test_easing_curve.sh) would otherwise read as a huge overshoot and pass
+# this test for the wrong reason.
+vs = [v for _, v in pts]
+vs = [sorted(vs[max(0, i - 1):i + 2])[len(vs[max(0, i - 1):i + 2]) // 2] for i in range(len(vs))]
+pts = [(el, v) for (el, _), v in zip(pts, vs)]
 end = pts[-1][1]
 d = i0 - end
 if d <= 0.001:

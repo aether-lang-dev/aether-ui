@@ -323,6 +323,24 @@ static void redraw_hold_is_invisible_to_the_app(void) {
               "redraw hold: set_hidden(0) shows the stack");
 }
 
+// Opacity on a child widget: the model value is recorded at once (what the
+// driver reports), and the layered alpha is OWED while the widget's
+// top-level is not yet shown -- a child given WS_EX_LAYERED before its
+// window has ever been shown never paints at all, so the backend applies
+// the alpha when the window shows (w32_settle_owed_opacity). This harness
+// shows no window, so here the alpha must be owed, not applied.
+static void child_opacity_is_owed_until_the_window_shows(void) {
+    int stack = aether_ui_vstack_create(0);
+    int label = aether_ui_text_create("faded");
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, label);
+    aether_ui_set_opacity(label, 0.25);
+    expect_eq((unsigned)aether_ui_styled_opacity_impl(label), 25u,
+              "child opacity: the model value is recorded at once");
+    HWND h = (HWND)aether_ui_get_widget(label);
+    expect_eq((unsigned)(GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_LAYERED), 0u,
+              "child opacity: no layered alpha while the top-level is unmapped (owed)");
+}
+
 // The strings the backend hands the Aether side are the caller's to free:
 // ui/module.ae declares textfield_get_text and textarea_get_text `@heap`,
 // and frees what they return. The text field returned a rotating static
@@ -363,6 +381,7 @@ int main(void) {
     canvas_gradient_stop_clamp();
     closure_survives_retiring_its_widget();
     redraw_hold_is_invisible_to_the_app();
+    child_opacity_is_owed_until_the_window_shows();
     text_reads_are_the_callers_to_free();
 
     if (failures) {
