@@ -300,6 +300,9 @@ typedef struct {
     char* a11y_name;
     char* a11y_desc;
     int styled_opacity_enc;   // explicit opacity readback: 0=unset, else v*100+1
+    // The layered alpha is owed: set while the top-level was not yet shown,
+    // applied when it is (see w32_apply_opacity).
+    int opacity_owed;
     /* Implicit opacity transition (ui.transition). tr_ms > 0 means the NEXT
        opacity change tweens instead of snapping; tr_ease_out picks the curve.
        win32 had NO easing code at all -- apply_css set the layered alpha
@@ -425,6 +428,8 @@ static void widget_hash_insert(HWND h, int handle) {
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
 static void w32_refont_tree(HWND top, UINT dpi);
+static void w32_make_layered(HWND h);
+static void w32_settle_owed_opacity(HWND top);
 static void w32_forget_system_dark(void);
 static int  w32_own_visible(HWND hwnd);
 static void w32_request_layout(HWND stack_hwnd);
@@ -2128,6 +2133,15 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             // (cross-thread, blocking) before it reads geometry.
             w32_flush_layout();
             return 0;
+        case WM_WINDOWPOSCHANGED: {
+            // The window was just shown: the alpha of every widget whose
+            // opacity was set while it was still unmapped is applied now
+            // (w32_settle_owed_opacity says why not before). Falls through
+            // to DefWindowProc, which turns this into WM_SIZE and WM_MOVE.
+            const WINDOWPOS* pos = (const WINDOWPOS*)lp;
+            if (pos && (pos->flags & SWP_SHOWWINDOW)) w32_settle_owed_opacity(hwnd);
+            break;
+        }
         case WM_SETTINGCHANGE: {
             // OS light/dark flip ("ImmersiveColorSet") — tell the AeCS
             // appearance callback, already on the UI thread.
@@ -4751,30 +4765,50 @@ void aether_ui_set_height(int handle, int height) {
     if (w) w->pref_height = height;
 }
 
+static void w32_apply_opacity(Widget* w, double v);
+static void w32_present_opacity(Widget* w, double v);
+
+// A layered child presents only once its top-level has been shown: given
+// WS_EX_LAYERED and an alpha before that, it never paints at all (measured:
+// `text("...") { opacity(0.25) }` in a window's build block was simply
+// absent from the screen, a forced redraw did not bring it back, the same
+// alpha applied after the show fades it). So w32_apply_opacity records the
+// alpha as owed while the top-level is unmapped, and every show of a
+// top-level (WM_WINDOWPOSCHANGED with SWP_SHOWWINDOW, whichever path
+// showed it) settles what its widgets are owed.
+static void w32_settle_owed_opacity(HWND top) {
+    for (int i = 1; i <= widget_count; i++) {
+        Widget* w = widget_at(i);
+        if (!w || !w->opacity_owed || w->dead || !IsWindow(w->hwnd)) continue;
+        if (GetAncestor(w->hwnd, GA_ROOT) != top) continue;
+        w->opacity_owed = 0;
+        // No model value means the widget only declared a transition:
+        // layered at full alpha, ready to tween.
+        double v = (w->styled_opacity_enc > 0) ? (w->styled_opacity_enc - 1) / 100.0 : 1.0;
+        w32_make_layered(w->hwnd);
+        SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(v * 255.0), LWA_ALPHA);
+    }
+}
+
+// The one opacity path, for a top-level window and a child alike: the
+// declarative `opacity(v)`, `style_opacity` (which arrives as CSS) and the
+// tween all end here. It used to be top-level only, on the belief that a
+// child could not carry alpha; a child window has carried uniform alpha
+// since Windows 8, the overlay scrim and exit fade have relied on it for as
+// long as they have existed, and a screen grab of transitions_demo shows a
+// label under a 1200ms ease-out going 59.9 -> 46.1 -> 36.1 mean brightness
+// (before, 400ms in, settled) and the spring overshooting at 300ms. What
+// the ABI's own `opacity(v)` on a child did here was nothing, while GTK4
+// and AppKit faded the widget. The driver's pick walks the Z order itself
+// (ChildWindowFromPointEx skips layered children), so a faded widget stays
+// hit-testable there as it does for the pointer.
 void aether_ui_set_opacity(int handle, double opacity) {
     Widget* w = widget_at(handle);
     if (!w) return;
     w->opacity = opacity;
-    // Top-level windows only, deliberately. NB WS_CHILD is a REGULAR style, so
-    // it must be read from GWL_STYLE: this line used to query GWL_EXSTYLE,
-    // where the same bit (0x40000000) means WS_EX_NOINHERITLAYOUT and is
-    // normally clear -- so the guard never fired and children DID get made
-    // layered, the opposite of what it says. That is not harmless: line ~7788
-    // notes ChildWindowFromPointEx skips WS_EX_LAYERED children, so hit-testing
-    // could break on any widget an app set opacity on.
-    //
-    // Child alpha itself is NOT known-broken (uniform alpha works on child
-    // windows since Win8, and the overlay exit fade relies on it) -- it is
-    // simply not wired up here. See TODO.md, "win32 child-widget opacity".
-    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
-    if (!(st & WS_CHILD)) {
-        LONG_PTR ex = GetWindowLongPtrW(w->hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(w->hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED);
-        double a = opacity;
-        if (a < 0) a = 0;
-        if (a > 1) a = 1;
-        SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(a * 255), LWA_ALPHA);
-    }
+    if (opacity < 0) opacity = 0;
+    if (opacity > 1) opacity = 1;
+    w32_apply_opacity(w, opacity);
 }
 
 void aether_ui_set_enabled(int handle, int enabled) {
@@ -5853,29 +5887,50 @@ void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
            does not parse control points); it overrides the ease flag. */
         w->tr_spring = strstr(tr, "spring") ? 1 : 0;
         w->tr_ease_out = strstr(tr, "linear") ? 0 : 1;
+        // Layered from the declaration on, at full alpha, the way a
+        // CoreAnimation view is layer-backed before it animates: the
+        // switch to a layered window is what costs, not the alpha, and
+        // made at the first change it cost the first frames of the tween
+        // (the driver's capture read them blank; a screen grab did not
+        // always). Presentation only -- the model value stays unset until
+        // the app sets one.
+        if (w->styled_opacity_enc <= 0) w32_present_opacity(w, 1.0);
         return;
     }
     if (strncmp(property_css, "opacity:", 8) == 0) {
         double v = atof(property_css + 8);
         if (v < 0) v = 0;
         if (v > 1) v = 1;
-        double from = (w->styled_opacity_enc > 0)
-                      ? (w->styled_opacity_enc - 1) / 100.0 : 1.0;
-        /* Record the MODEL value immediately either way: the driver reports
-           it, and a tween must not make the readback lag reality. Only the
-           presentation is animated -- the same split GTK4 and macOS have. */
-        w->styled_opacity_enc = (int)(v * 100.0) + 1;
-        if (w->tr_ms > 0 && !w32_anim_off() && from != v) {
-            if (w->tr_timer) KillTimer(NULL, w->tr_timer);
-            w->tr_from = from;
-            w->tr_to = v;
-            w->tr_start = GetTickCount();
-            w->tr_timer = SetTimer(NULL, 0, 16, w32_opacity_tween_proc);
-            return;
-        }
-        w32_make_layered(w->hwnd);
-        SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(v * 255.0), LWA_ALPHA);
+        w32_apply_opacity(w, v);
     }
+}
+
+// Opacity v (0..1) on a widget: the model value at once, the presentation
+// tweened when the app declared a transition, snapped otherwise. See
+// aether_ui_set_opacity for why a child takes this path too.
+static void w32_present_opacity(Widget* w, double v) {
+    HWND top = GetAncestor(w->hwnd, GA_ROOT);
+    if (top && !IsWindowVisible(top)) { w->opacity_owed = 1; return; }
+    w32_make_layered(w->hwnd);
+    SetLayeredWindowAttributes(w->hwnd, 0, (BYTE)(v * 255.0), LWA_ALPHA);
+}
+
+static void w32_apply_opacity(Widget* w, double v) {
+    double from = (w->styled_opacity_enc > 0)
+                  ? (w->styled_opacity_enc - 1) / 100.0 : 1.0;
+    /* Record the MODEL value immediately either way: the driver reports
+       it, and a tween must not make the readback lag reality. Only the
+       presentation is animated -- the same split GTK4 and macOS have. */
+    w->styled_opacity_enc = (int)(v * 100.0) + 1;
+    if (w->tr_ms > 0 && !w32_anim_off() && from != v) {
+        if (w->tr_timer) KillTimer(NULL, w->tr_timer);
+        w->tr_from = from;
+        w->tr_to = v;
+        w->tr_start = GetTickCount();
+        w->tr_timer = SetTimer(NULL, 0, 16, w32_opacity_tween_proc);
+        return;
+    }
+    w32_present_opacity(w, v);
 }
 
 int aether_ui_styled_opacity_impl(int handle) {
@@ -10601,7 +10656,43 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     RECT full = { 0, 0, w, h };
     FillRect(mem, &full, face);
     DeleteObject(face);
-    int printed = PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+    // On screen and unobscured, the truth is the screen: the frame the
+    // compositor put there, read back from the desktop. PrintWindow asks
+    // the window to render itself again, and while a layered child is
+    // mid-tween that rendering now and then comes back without the child,
+    // or without most of the client (measured: single frames at 1.4 mean
+    // contrast among neighbours at 3.1, in a fade a screen grab of the
+    // same moments showed smooth). Only when every corner and the centre
+    // of the client belong to this window, so another window on top does
+    // not end up in the picture; otherwise, and always when unmapped or
+    // headless, PrintWindow as before.
+    int printed = 0;
+    if (IsWindowVisible(hwnd) && !aeui_is_headless() && !IsIconic(hwnd)) {
+        // A screenshot is of the app: raise it (no activation, focus stays
+        // where it is) so an editor or terminal over a corner does not
+        // decide which capture this is. A window that still is not on top
+        // afterwards -- one the shell keeps above -- takes the other path.
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        POINT o = { 0, 0 };
+        ClientToScreen(hwnd, &o);
+        POINT probe[5] = { { o.x + 1, o.y + 1 }, { o.x + w - 2, o.y + 1 },
+                           { o.x + 1, o.y + h - 2 }, { o.x + w - 2, o.y + h - 2 },
+                           { o.x + w / 2, o.y + h / 2 } };
+        int ours = 1;
+        for (int i = 0; i < 5 && ours; i++) {
+            HWND at = WindowFromPoint(probe[i]);
+            if (!at || GetAncestor(at, GA_ROOT) != hwnd) ours = 0;
+        }
+        if (ours) {
+            HDC screen = GetDC(NULL);
+            if (screen) {
+                printed = BitBlt(mem, 0, 0, w, h, screen, o.x, o.y, SRCCOPY) ? 1 : 0;
+                ReleaseDC(NULL, screen);
+            }
+        }
+    }
+    if (!printed) printed = PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
     if (!printed) {
         BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
     }
