@@ -35,11 +35,11 @@ exports (
     shortcut, shortcut_when, shortcut_chord, widget_shortcut,
     window_on_key, on_key, on_file_drop, draggable, focus, set_focusable, focused_widget,
     set_slider, get_slider, set_progress,
-    bg_color, text_color, font_size, font_bold, corner_radius,
+    bg_color, text_color, font_size, font_bold, corner_radius, flat,
     opacity, enabled, tooltip, onclick,
     style_bg_color, style_text_color, style_font_size, style_font_bold,
     styled_bg, styled_fg,
-    style_bg_gradient, style_corner_radius, style_opacity, style_border,
+    style_bg_gradient, style_corner_radius, style_flat, style_opacity, style_border,
     style_hover, style_active,
     style_enabled, style_tooltip,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
@@ -204,6 +204,7 @@ extern aether_ui_set_text_color_ctx(ctx: ptr, r: float, g: float, b: float)
 extern aether_ui_set_font_size_ctx(ctx: ptr, size: float)
 extern aether_ui_set_font_bold_ctx(ctx: ptr, bold: int)
 extern aether_ui_set_corner_radius_ctx(ctx: ptr, radius: float)
+extern aether_ui_button_set_flat_ctx(ctx: ptr, on: int)
 extern aether_ui_set_opacity_ctx(ctx: ptr, opacity: float)
 extern aether_ui_set_enabled_ctx(ctx: ptr, enabled: int)
 extern aether_ui_set_tooltip_ctx(ctx: ptr, text: string)
@@ -329,6 +330,7 @@ extern aether_ui_set_font_size(handle: int, size: float)
 extern aether_ui_set_font_bold(handle: int, bold: int)
 extern aether_ui_set_font_family(handle: int, family: string)
 extern aether_ui_set_corner_radius(handle: int, radius: float)
+extern aether_ui_button_set_flat(handle: int, on: int)
 extern aether_ui_set_border(handle: int, width: float, r: float, g: float, b: float)
 extern aether_ui_set_state_style(handle: int, which: int,
     br: float, bg: float, bb: float, fr: float, fg: float, fb: float)
@@ -1776,6 +1778,14 @@ corner_radius(_ctx: ptr, radius: float) {
     aether_ui_set_corner_radius_ctx(_ctx, radius)
 }
 
+// flat() — a button with no frame and no face of its own until the pointer
+// is over it: a toolbar's icon buttons, a tree's disclosure chevron, an
+// inline action next to a field.
+//   button("▸") { flat() }
+flat(_ctx: ptr) {
+    aether_ui_button_set_flat_ctx(_ctx, 1)
+}
+
 opacity(_ctx: ptr, val: float) {
     aether_ui_set_opacity_ctx(_ctx, val)
 }
@@ -1882,6 +1892,13 @@ style_border(handle: int, width: float, r: float, g: float, b: float) -> int {
 }
 style_corner_radius(handle: int, radius: float) -> int {
     aether_ui_set_corner_radius(handle, radius)
+    return handle
+}
+
+// style_flat(handle) — the chainable form of flat(): no frame, no face of
+// its own until the pointer is over it.
+style_flat(handle: int) -> int {
+    aether_ui_button_set_flat(handle, 1)
     return handle
 }
 
@@ -5214,6 +5231,9 @@ tree(_ctx: ptr, roots: ptr) -> ptr {
                 if node.expanded == 1 { node.expanded = 0 } else { node.expanded = 1 }
                 _tree_reflatten(tp)
             }
+            // A chevron, not a push button: the disclosure is a glyph on
+            // the row, framed only under the pointer.
+            _df = style_flat(_dt)
         } else {
             _lt = text(row, "  ")
         }

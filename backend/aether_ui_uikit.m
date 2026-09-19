@@ -2757,6 +2757,18 @@ void aether_ui_set_corner_radius(int handle, double radius) {
 void aether_ui_set_corner_radius_ctx(void* ctx, double radius) {
     aether_ui_set_corner_radius((int)(intptr_t)ctx, radius);
 }
+
+// A UIButtonTypeSystem button is flat already: a tinted title on the
+// ground, no frame. Flat takes off any face a style gave it; the frame a
+// desktop backend puts back for 0 has no counterpart here.
+void aether_ui_button_set_flat(int handle, int on) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIButton class]]) return;
+    if (on) { v.backgroundColor = nil; v.layer.borderWidth = 0; }
+}
+void aether_ui_button_set_flat_ctx(void* ctx, int on) {
+    aether_ui_button_set_flat((int)(intptr_t)ctx, on);
+}
 void aether_ui_set_opacity(int handle, double opacity) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v) return;

@@ -225,6 +225,13 @@ void aether_ui_set_text_color(int handle, double r, double g, double b);
 void aether_ui_set_font_size(int handle, double size);
 void aether_ui_set_font_bold(int handle, int bold);
 void aether_ui_set_corner_radius(int handle, double radius);
+// A flat button: no frame and no face of its own until the pointer is over
+// it -- a toolbar's icon buttons, a tree's disclosure chevron, an inline
+// action next to a field. GTK4 drops the frame, AppKit the bezel, Win32
+// paints only the caption on the ground (a tint under the pointer), UIKit's
+// system button is flat already. 0 puts the frame back.
+void aether_ui_button_set_flat(int handle, int on);
+void aether_ui_button_set_flat_ctx(void* ctx, int on);
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left);
 void aether_ui_set_width(int handle, int width);

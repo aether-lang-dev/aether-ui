@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **`flat()` / `style_flat(handle)`: a button with no frame and no face of
+  its own until the pointer is over it** -- a toolbar's icon buttons, a
+  tree's disclosure chevron, an inline action next to a field. One ABI
+  entry point on all four backends (`aether_ui_button_set_flat`): GTK4
+  drops the frame (`gtk_button_set_has_frame`), AppKit the bezel
+  (`setBordered:NO`, the border shown only while the pointer is inside),
+  Win32 paints only the caption on the ground with a tint under the
+  pointer and a deeper one while pressed, UIKit's system button is flat
+  already. The tree's disclosure control is a flat chevron now rather than
+  a push button.
+- **win32's styled buttons follow the theme.** A button given only a
+  corner radius or a border painted the light system face on the dark
+  theme's ground, with black text; the face is the dark theme's on a dark
+  system now, and the caption is legible on whatever the face is (white on
+  a green Submit, dark on a light chip).
+
 ### Fixed
 
 - **A form section's children go into the section, on win32 and UIKit.**

@@ -1081,6 +1081,16 @@ void aether_ui_set_corner_radius_ctx(void* ctx, double radius) {
     aether_ui_set_corner_radius((int)(intptr_t)ctx, radius);
 }
 
+// A flat button is GTK's frameless one: the theme draws no bezel and a
+// tint under the pointer, exactly the toolbar look.
+void aether_ui_button_set_flat(int handle, int on) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (w && GTK_IS_BUTTON(w)) gtk_button_set_has_frame(GTK_BUTTON(w), on ? FALSE : TRUE);
+}
+void aether_ui_button_set_flat_ctx(void* ctx, int on) {
+    aether_ui_button_set_flat((int)(intptr_t)ctx, on);
+}
+
 void aether_ui_set_opacity_ctx(void* ctx, double opacity) {
     aether_ui_set_opacity((int)(intptr_t)ctx, opacity);
 }
