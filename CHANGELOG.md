@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32's natural sizes and paddings follow the monitor's DPI (#171).**
+  The measure's defaults for a control with no size of its own (a field
+  140x26, a progress bar 140x16, a text area 200x80, a button's 24/10 of
+  padding, a checkbox's box) were 96-DPI numbers used as pixels, so on a
+  150% monitor they were two thirds of themselves around a font that had
+  grown. `w32_px` scales them at the window's DPI, and a DPI change lays
+  the tree out again through `w32_refont_tree`.
 - **win32 sets its controls in the system UI font at the monitor's DPI.**
   Every control was set in `DEFAULT_GUI_FONT`, the stock object that still
   answers "MS Shell Dlg" (Tahoma at 8 points), while the message font every

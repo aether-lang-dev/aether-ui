@@ -427,6 +427,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static int  w32_px(HWND hwnd, int at96);
 static void w32_refont_tree(HWND top, UINT dpi);
 static void w32_make_layered(HWND h);
 static void w32_settle_owed_opacity(HWND top);
@@ -927,22 +928,24 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
         if (w->pref_height > 0) *out_h = w->pref_height;
         return;
     }
-    // Input widgets start 0x0 on the hidden holder — give them the natural
-    // sizes a dialog would (heights match DEFAULT_GUI_FONT rows).
+    // Input widgets start 0x0 on the hidden holder -- give them the natural
+    // sizes a dialog would (heights fit the system font's rows), at the
+    // window's DPI (w32_px).
+    HWND dh = w->hwnd;
     if (w->kind == WK_TEXTFIELD || w->kind == WK_SECUREFIELD
         || w->kind == WK_PICKER) {
-        *out_w = w->pref_width > 0 ? w->pref_width : 140;
-        *out_h = w->pref_height > 0 ? w->pref_height : 26;
+        *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 140);
+        *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 26);
         return;
     }
     if (w->kind == WK_SLIDER) {
-        *out_w = w->pref_width > 0 ? w->pref_width : 140;
-        *out_h = w->pref_height > 0 ? w->pref_height : 26;
+        *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 140);
+        *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 26);
         return;
     }
     if (w->kind == WK_PROGRESSBAR) {
-        *out_w = w->pref_width > 0 ? w->pref_width : 140;
-        *out_h = w->pref_height > 0 ? w->pref_height : 16;
+        *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 140);
+        *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 16);
         return;
     }
     // A rule is thin along the stack and stretches across it: 12px tall in
@@ -953,8 +956,8 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     // cross-axis pin veto), so every divider in a vstack came out one pixel
     // wide -- a dot at the left margin where a line was meant.
     if (w->kind == WK_DIVIDER) {
-        *out_w = w->pref_width > 0 ? w->pref_width : 12;
-        *out_h = w->pref_height > 0 ? w->pref_height : 12;
+        *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 12);
+        *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 12);
         return;
     }
     if (w->kind == WK_TOGGLE) {
@@ -968,18 +971,16 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
         GetTextExtentPoint32W(hdc, text, tlen, &sz);
         if (old) SelectObject(hdc, old);
         ReleaseDC(w->hwnd, hdc);
-        *out_w = sz.cx + 28;
-        *out_h = (sz.cy > 18 ? sz.cy : 18) + 4;
-        return;
-    }
-    if (w->kind == WK_DIVIDER) {
-        *out_w = w->pref_width > 0 ? w->pref_width : 2;
-        *out_h = w->pref_height > 0 ? w->pref_height : 2;
+        // The box and its gap to the text: the checkbox glyph is drawn at
+        // the DPI's size by the theme.
+        int box = w32_px(dh, 18);
+        *out_w = sz.cx + w32_px(dh, 28);
+        *out_h = (sz.cy > box ? sz.cy : box) + w32_px(dh, 4);
         return;
     }
     if (w->kind == WK_TEXTAREA) {
-        *out_w = w->pref_width > 0 ? w->pref_width : 200;
-        *out_h = w->pref_height > 0 ? w->pref_height : 80;
+        *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 200);
+        *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 80);
         return;
     }
     RECT r;
@@ -999,8 +1000,8 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
             GetTextExtentPoint32W(hdc, text, tlen, &sz);
             if (old) SelectObject(hdc, old);
             ReleaseDC(w->hwnd, hdc);
-            int pad_x = w->kind == WK_BUTTON ? 24 : 4;
-            int pad_y = w->kind == WK_BUTTON ? 10 : 4;
+            int pad_x = w32_px(dh, w->kind == WK_BUTTON ? 24 : 4);
+            int pad_y = w32_px(dh, w->kind == WK_BUTTON ? 10 : 4);
             *out_w = sz.cx + pad_x;
             *out_h = sz.cy + pad_y;
             if (w->pref_width > 0) *out_w = w->pref_width;
@@ -1011,8 +1012,8 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
         *out_h = w->pref_height > 0 ? w->pref_height : cur_h;
         return;
     }
-    *out_w = w->pref_width > 0 ? w->pref_width : 100;
-    *out_h = w->pref_height > 0 ? w->pref_height : 24;
+    *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 100);
+    *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 24);
 }
 
 // A widget is "greedy" along `orientation` when it should take the stack's
@@ -2359,6 +2360,15 @@ static UINT w32_dpi_for(HWND hwnd) {
 }
 
 static HFONT w32_ui_font(HWND hwnd) { return w32_ui_font_for_dpi(w32_dpi_for(hwnd)); }
+
+// A size meant at 96 DPI, at the window's: the natural sizes and paddings
+// the measure gives a control that has none of its own (a field 140x26, a
+// button's 24px of side room) are designed for 96 DPI, and on a 150%
+// monitor were two thirds of themselves around a font that had grown --
+// a 26px field around an 18px face clipped it (#171).
+static int w32_px(HWND hwnd, int at96) {
+    return MulDiv(at96, (int)w32_dpi_for(hwnd), 96);
+}
 
 // DPI awareness setup — try the newest API first, fall back for older Windows.
 typedef BOOL (WINAPI *SetProcessDpiAwarenessContextFn)(DPI_AWARENESS_CONTEXT);
