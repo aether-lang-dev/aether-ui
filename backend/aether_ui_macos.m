@@ -2980,8 +2980,26 @@ static void aeui_apply_state_bg(NSView* v) {
         style = objc_getAssociatedObject(v, "aeui-active-style");
     if (!style && objc_getAssociatedObject(v, "aeui-hovered"))
         style = objc_getAssociatedObject(v, "aeui-hover-style");
+    // A selected list row (.aui-row-selected) paints the system's selection
+    // ground over whatever ground it has, the one the other backends paint
+    // too: the unemphasized one, which keeps the labels' own colours legible
+    // in both appearances (an emphasized selection wants white text, and
+    // the row's labels are the app's).
+    if (!style && objc_getAssociatedObject(v, "aeui-row-selected")) {
+        [v setWantsLayer:YES];
+        v.layer.backgroundColor = [[NSColor unemphasizedSelectedContentBackgroundColor] CGColor];
+        return;
+    }
     if (!style) style = objc_getAssociatedObject(v, "aeui_styled_bg");
-    if (!style) return;
+    if (!style) {
+        // Nothing to paint: a row that just lost its selection goes back to
+        // no ground of its own.
+        if (objc_getAssociatedObject(v, "aeui-row-selection-painted")) {
+            objc_setAssociatedObject(v, "aeui-row-selection-painted", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (v.layer) v.layer.backgroundColor = NULL;
+        }
+        return;
+    }
     int packed = [style intValue];
     if (!(packed & 0x1000000)) return;
     [v setWantsLayer:YES];
@@ -4308,12 +4326,28 @@ static int class_list_has(const char* list, const char* cls) {
     return 0;
 }
 
+// A class is a name the driver reads back, and on GTK4 a stylesheet's hook.
+// One has a look here as well: .aui-row-selected, the listbox's selection,
+// which every list on every backend has to show (see aeui_apply_state_bg).
+static void aeui_class_visual(int handle, const char* cls, int on) {
+    if (strcmp(cls, "aui-row-selected") != 0) return;
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui-row-selected", on ? @(1) : nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (on) objc_setAssociatedObject(v, "aeui-row-selection-painted", @(1),
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    aeui_apply_state_bg(v);
+    [v setNeedsDisplay:YES];
+}
+
 void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     if (handle < 1 || handle > widget_count || !cls || !*cls) return;
     char* cur = widget_classes[handle - 1];
     if (class_list_has(cur, cls)) return;  // idempotent, like GTK's
     if (!cur) {
         widget_classes[handle - 1] = strdup(cls);
+        aeui_class_visual(handle, cls, 1);
         return;
     }
     char* joined = (char*)malloc(strlen(cur) + strlen(cls) + 2);
@@ -4321,6 +4355,7 @@ void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     sprintf(joined, "%s %s", cur, cls);
     free(cur);
     widget_classes[handle - 1] = joined;
+    aeui_class_visual(handle, cls, 1);
 }
 
 void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
@@ -4341,6 +4376,7 @@ void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     free(work);
     free(cur);
     widget_classes[handle - 1] = out;  // "" when the last class was removed
+    aeui_class_visual(handle, cls, 0);
 }
 // ---------------------------------------------------------------------------
 // The drawn tooltip — a vg-drawn shape's tooltip, rendered as an overlay

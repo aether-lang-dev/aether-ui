@@ -2934,10 +2934,33 @@ void aether_ui_widget_weight_impl(int handle, int n) {
 }
 
 // --- CSS classes (per-widget, space-separated; drives selectors + the driver)
+// A class is a name the driver reads back, and on GTK4 a stylesheet's hook.
+// One has a look here as well: .aui-row-selected, the listbox's selection,
+// which every list on every backend has to show. The system fill is the
+// tint an iOS list draws under a selected cell; the row's own colour is
+// kept and comes back when the selection leaves.
+static void aeui_class_visual(int handle, const char* cls, int on) {
+    if (strcmp(cls, "aui-row-selected") != 0) return;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    if (on) {
+        if (!objc_getAssociatedObject(v, "aeui-row-orig"))
+            objc_setAssociatedObject(v, "aeui-row-orig", v.backgroundColor ?: [NSNull null],
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        v.backgroundColor = [UIColor tertiarySystemFillColor];
+    } else {
+        id orig = objc_getAssociatedObject(v, "aeui-row-orig");
+        if (orig) {
+            v.backgroundColor = (orig == [NSNull null]) ? nil : orig;
+            objc_setAssociatedObject(v, "aeui-row-orig", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+}
+
 void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     if (handle < 1 || handle > widget_count || !cls || !cls[0]) return;
     char* cur = widget_classes[handle - 1];
-    if (!cur) { widget_classes[handle - 1] = strdup(cls); return; }
+    if (!cur) { widget_classes[handle - 1] = strdup(cls); aeui_class_visual(handle, cls, 1); return; }
     // Already present? (whole-token match)
     size_t clen = strlen(cls);
     const char* p = cur;
@@ -2952,6 +2975,7 @@ void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     snprintf(joined, n, "%s %s", cur, cls);
     free(cur);
     widget_classes[handle - 1] = joined;
+    aeui_class_visual(handle, cls, 1);
 }
 void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     if (handle < 1 || handle > widget_count || !cls || !cls[0]) return;
@@ -2973,6 +2997,7 @@ void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     }
     free(cur);
     widget_classes[handle - 1] = out[0] ? out : (free(out), (char*)NULL);
+    aeui_class_visual(handle, cls, 0);
 }
 const char* aether_ui_widget_classes_impl(int handle) {
     if (handle < 1 || handle > widget_count) return "";

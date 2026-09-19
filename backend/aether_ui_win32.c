@@ -333,6 +333,9 @@ typedef struct {
     // LIST is the driver's selection-visibility contract (.aui-row-selected)
     // — tracked here, emitted in widget JSON. Space-separated, owned.
     char* classes;
+    // The one class with a look of its own: a selected list row paints the
+    // selection ground (w32_selection_ground) over whatever ground it has.
+    int row_selected;
 } Widget;
 
 static Widget** widgets = NULL;
@@ -427,6 +430,8 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static COLORREF w32_accent_color(void);
+static COLORREF w32_system_ground(void);
 static void w32_field_frame(HWND hwnd);
 static int  w32_px(HWND hwnd, int at96);
 static void w32_refont_tree(HWND top, UINT dpi);
@@ -1134,21 +1139,48 @@ static int w32_own_visible(HWND hwnd) {
     return w && w->redraw_held && !w->dead;
 }
 
-static void w32_request_layout(HWND stack_hwnd) {
-    int h = handle_for_hwnd(stack_hwnd);
-    if (h == 0) return;
-    Widget* sw = widget_at(h);
-    if (!sw || sw->dead || sw->layout_pending) return;
+// One stack into the queue. Returns 0 when it was already there (or is not
+// a live stack), which is what stops the climb in w32_request_layout: a
+// stack already owed a layout had its ancestors marked when it was.
+static int w32_queue_layout(Widget* sw, HWND stack_hwnd) {
+    if (!sw || sw->dead || sw->layout_pending) return 0;
     if (w32_layout_queue_count >= w32_layout_queue_cap) {
         int cap = w32_layout_queue_cap ? w32_layout_queue_cap * 2 : 64;
         int* grown = (int*)realloc(w32_layout_queue, sizeof(int) * cap);
-        if (!grown) { stack_do_layout(stack_hwnd); return; }  // no memory: lay out now
+        if (!grown) { stack_do_layout(stack_hwnd); return 0; }  // no memory: lay out now
         w32_layout_queue = grown;
         w32_layout_queue_cap = cap;
     }
     sw->layout_pending = 1;
-    w32_layout_queue[w32_layout_queue_count++] = h;
+    w32_layout_queue[w32_layout_queue_count++] = handle_for_hwnd(stack_hwnd);
     w32_hold_redraw(sw);
+    return 1;
+}
+
+// A stack whose children changed, and every container above it whose
+// size that can change. A child added to a nested stack -- a listbox's
+// rows go into the `each` container inside the app's column -- changes
+// the nested stack's natural size, and the column has to place what
+// follows it lower; GTK and AppKit propagate a size request up on their
+// own, and until this the request stopped at the nested stack: the column
+// kept the container at the height it had when empty, and 200 rows were
+// drawn over the buttons under it. The climb stops after a scrollview
+// (its viewport does not grow with its document; its own layout moves the
+// document and the bar) and after a stack pinned in height, the same
+// bounds set_hidden's synchronous climb uses. The flush lays the outermost
+// out first, and a parent's pass resizes its children, whose WM_SIZE lays
+// them out in turn.
+static void w32_request_layout(HWND stack_hwnd) {
+    HWND h = stack_hwnd;
+    while (h) {
+        Widget* sw = widget_at(handle_for_hwnd(h));
+        if (!sw) break;
+        if (!(sw->kind == WK_VSTACK || sw->kind == WK_HSTACK || sw->kind == WK_ZSTACK
+              || sw->kind == WK_SCROLLVIEW)) break;
+        if (!w32_queue_layout(sw, h)) break;
+        if (sw->kind == WK_SCROLLVIEW || sw->pref_height > 0) break;
+        h = GetAncestor(h, GA_PARENT);
+    }
     // Wake the run loop so the flush is not left waiting on the next event:
     // a rebuild from a timer with nothing else queued must still land.
     if (!w32_layout_flush_posted) {
@@ -1650,10 +1682,26 @@ static void w32_set_text(Widget* w, const char* text) {
 // ancestor's; only with no ancestor painted at all does the class brush
 // stand.
 // ---------------------------------------------------------------------------
+// The ground of a selected list row: the user's accent, as a tint the row's
+// text stays legible on -- a quarter of it over white on a light system, a
+// good third over the dark ground on a dark one, the weights Windows' own
+// list views use. GTK4 paints .aui-row-selected from its theme's selection
+// colour; this is that, for a backend with no stylesheet.
+static COLORREF w32_selection_ground(void) {
+    COLORREF a = w32_accent_color();
+    int dark = aether_ui_dark_mode_check();
+    COLORREF base = dark ? w32_system_ground() : RGB(255, 255, 255);
+    int k = dark ? 38 : 25;   // percent of accent
+    return RGB((GetRValue(a) * k + GetRValue(base) * (100 - k)) / 100,
+               (GetGValue(a) * k + GetGValue(base) * (100 - k)) / 100,
+               (GetBValue(a) * k + GetBValue(base) * (100 - k)) / 100);
+}
+
 static int w32_own_ground(const Widget* w, COLORREF* out) {
     if (!w) return 0;
     if (w->active_set && w->is_pressed) { *out = w->active_bg; return 1; }
     if (w->hover_set && w->is_hovered)  { *out = w->hover_bg;  return 1; }
+    if (w->row_selected)                { *out = w32_selection_ground(); return 1; }
     if (w->bg.has_value)                { *out = w->bg.color;  return 1; }
     return 0;
 }
@@ -6008,6 +6056,18 @@ int aether_ui_fire_appearance(int dark) {
     // /drop fire path, which cross-thread SendMessages tolerate.
     return aether_ui_appearance_invoke(dark ? 1 : 0);
 }
+// A class is a name the driver reads back, and on GTK4 a stylesheet's
+// hook. One of them has a look here as well: .aui-row-selected, the listbox's
+// selection, which every list on every backend has to show. The row repaints
+// with its children, so the labels take the new ground's legible text.
+static void w32_class_visual(Widget* w, const char* cls, int on) {
+    if (strcmp(cls, "aui-row-selected") != 0) return;
+    if (w->row_selected == on) return;
+    w->row_selected = on;
+    if (IsWindow(w->hwnd))
+        RedrawWindow(w->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
 void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     Widget* w = widget_at(handle);
     if (!w || !cls || !cls[0]) return;
@@ -6021,6 +6081,7 @@ void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
     }
     free(w->classes);
     w->classes = nc;
+    w32_class_visual(w, cls, 1);
 }
 void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     Widget* w = widget_at(handle);
@@ -6033,6 +6094,7 @@ void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
     if (*from == ' ') from++;
     else if (pos > w->classes && pos[-1] == ' ') pos--;
     memmove(pos, from, strlen(from) + 1);
+    w32_class_visual(w, cls, 0);
 }
 /* Group opacity lives with the other canvas command builders, below the
    CanvasCmd definition — see aether_ui_canvas_group_begin_impl there. */

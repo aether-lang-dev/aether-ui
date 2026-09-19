@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A selected list row is visible on every backend.** `.aui-row-selected`
+  was painted by GTK4's stylesheet and, on AppKit, Win32 and UIKit, only
+  reported to the driver: a listbox's selection could be read by a spec
+  and not seen by a user. Each backend now paints its system's selection
+  tint over the row's own ground -- Win32 the accent colour as a tint the
+  labels stay legible on (`w32_selection_ground`, a quarter over white or
+  a good third over the dark ground), AppKit
+  `unemphasizedSelectedContentBackgroundColor`, UIKit
+  `tertiarySystemFillColor` -- and takes it off when the class leaves.
+- **win32 lays the containers above a changed stack out again.** A child
+  added to a nested stack (a listbox's rows go into the `each` container
+  inside the app's column) changes that stack's natural size, and the
+  column has to place what follows it lower; the layout request stopped at
+  the nested stack, the column kept the container at the height it had
+  when empty, and 200 rows were drawn over the buttons under it.
+  `w32_request_layout` now climbs to every container whose size can
+  change, stopping after a scrollview or a stack pinned in height, the
+  bounds `set_hidden`'s synchronous climb already used. rebuild_bench is
+  unchanged (0.88-0.95s on screen, 0.63-0.67s headless).
 - **win32 dark mode: fields and text areas wear a dark edge, the accent
   colour while focused.** The dark theme class darkens an EDIT and what it
   draws inside, but the sunken client edge around it is the system's and
