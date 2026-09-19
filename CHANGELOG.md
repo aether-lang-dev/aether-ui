@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32 dark mode: fields and text areas wear a dark edge, the accent
+  colour while focused.** The dark theme class darkens an EDIT and what it
+  draws inside, but the sunken client edge around it is the system's and
+  stayed a white two-pixel line on the dark ground. Every field and text
+  area now paints its own edge (`styled_field_proc`, installed at
+  creation): a sheet border at the width and colour asked for; otherwise,
+  on a dark system, the dark frame Explorer's fields wear, in the user's
+  accent colour while the field has the focus, as a Windows 11 text box
+  does; otherwise the system's own. The progress bar's fill is the user's
+  accent colour too (`w32_accent_color`, from DWM), not a hard-coded blue.
 - **win32's natural sizes and paddings follow the monitor's DPI (#171).**
   The measure's defaults for a control with no size of its own (a field
   140x26, a progress bar 140x16, a text area 200x80, a button's 24/10 of
