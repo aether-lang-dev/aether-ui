@@ -427,6 +427,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static void w32_field_frame(HWND hwnd);
 static void w32_refont_tree(HWND top, UINT dpi);
 static void w32_make_layered(HWND h);
 static void w32_settle_owed_opacity(HWND top);
@@ -2148,9 +2149,10 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             if (lp && wcscmp((const wchar_t*)lp, L"ImmersiveColorSet") == 0) {
                 w32_forget_system_dark();
                 aether_ui_appearance_invoke(aether_ui_dark_mode_check());
-                // Every default ground in the tree just changed colour.
+                // Every default ground in the tree just changed colour,
+                // and every field's edge with it (RDW_FRAME).
                 RedrawWindow(hwnd, NULL, NULL,
-                             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+                             RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
             }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
@@ -2498,12 +2500,26 @@ static void w32_system_dark_control(HWND hwnd) {
 }
 
 // The same for an EDIT, whose dark theme class is the common file dialog's
-// (DarkMode_Explorer has no Edit parts): a dark field with a dark border,
-// and the WM_CTLCOLOREDIT answer above supplies the text and fill.
+// (DarkMode_Explorer has no Edit parts): the theme darkens the field and
+// what it draws inside it; the sunken client edge around it is the
+// system's, and stays a white line on a dark ground -- w32_field_frame
+// paints that edge (WM_NCPAINT) in the dark frame colour instead.
 static void w32_system_dark_edit(HWND hwnd) {
     if (hwnd && aether_ui_dark_mode_check()) {
         SetWindowTheme(hwnd, L"DarkMode_CFD", NULL);
     }
+}
+
+// The user's accent colour, what the system draws a focused field's edge,
+// a progress fill and a selection in. DWM reports it as ARGB; the fallback
+// is Windows' default blue.
+static COLORREF w32_accent_color(void) {
+    DWORD argb = 0;
+    BOOL opaque = FALSE;
+    if (DwmGetColorizationColor(&argb, &opaque) == S_OK && (argb & 0xFFFFFF)) {
+        return RGB((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF);
+    }
+    return RGB(0x00, 0x78, 0xD4);
 }
 
 // Apply immersive dark mode to a window if the system is in dark mode.
@@ -3616,6 +3632,7 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     w32_system_dark_edit(h);
+    w32_field_frame(h);
     // Windows has no native placeholder on EDIT — use EM_SETCUEBANNER (comctl32 6+)
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501 /* EM_SETCUEBANNER */, TRUE,
@@ -3640,8 +3657,9 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
     SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     // Explorer's theme rather than the dialog's edit theme: this control
     // owns a scrollbar, and only the former draws that dark. Its frame is
-    // the client edge, which neither theme touches.
+    // the client edge, which neither theme touches: w32_field_frame does.
     w32_system_dark_control(h);
+    w32_field_frame(h);
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
@@ -3829,8 +3847,9 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
     // Explorer's theme rather than the dialog's edit theme: this control
     // owns a scrollbar, and only the former draws that dark. Its frame is
-    // the client edge, which neither theme touches.
+    // the client edge, which neither theme touches: w32_field_frame does.
     w32_system_dark_control(h);
+    w32_field_frame(h);
     if (placeholder && *placeholder) {
         SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
     }
@@ -4212,7 +4231,7 @@ int aether_ui_progressbar_create(double fraction) {
     if (aether_ui_dark_mode_check()) {
         SetWindowTheme(h, L"", L"");
         SendMessageW(h, PBM_SETBKCOLOR, 0, (LPARAM)RGB(0x3a, 0x3a, 0x3a));
-        SendMessageW(h, PBM_SETBARCOLOR, 0, (LPARAM)RGB(0x4c, 0xc2, 0xff));
+        SendMessageW(h, PBM_SETBARCOLOR, 0, (LPARAM)w32_accent_color());
     }
     // Range 0..1001, so a bar at 1000 is full to the eye and there is
     // always a position one above the value to step back from: see
@@ -4535,49 +4554,74 @@ static int w32_needs_owner_draw(Widget* w) {
     return w->border_set || w->hover_set || w->active_set || w->bg.has_value;
 }
 
-// A field is a native EDIT with the system's sunken client edge, which on a
-// dark ground is a white line down two of its sides. A field the sheet gave
-// a border paints that border over the edge instead, in the non-client
-// area, the two pixels the client edge measures; the client area and the
-// text are the control's own. What the sheet asked for, at the width the
-// control has.
+// A field is a native EDIT with the system's sunken client edge: two pixels
+// of non-client area the system draws in its 3D colours, which on a dark
+// ground is a white line down two of its sides -- the one thing the dark
+// theme class leaves as it was. Every field and text area is subclassed at
+// creation, and its edge is painted here, over the system's:
+//   - a border the sheet gave it, at the width and colour asked for;
+//   - otherwise, on a dark system, the dark frame Explorer's fields wear,
+//     and the accent colour while the field has the focus, which is what a
+//     Windows 11 text box does;
+//   - otherwise nothing: the light theme's edge is the system's own.
+// The inner ring of the two is the field's own ground, so a one-pixel
+// frame reads as one pixel.
 static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                                           UINT_PTR id, DWORD_PTR ref) {
     (void)id; (void)ref;
     if (msg == WM_NCPAINT) {
         Widget* w = widget_at(handle_for_hwnd(hwnd));
         LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
-        if (w && w->border_set && w->border_width > 0) {
+        if (!w) return r;
+        int sheet = w->border_set && w->border_width > 0;
+        int dark = !sheet && aether_ui_dark_mode_check();
+        if (sheet || dark) {
             HDC hdc = GetWindowDC(hwnd);
             RECT rc;
             int ring;
             GetWindowRect(hwnd, &rc);
             OffsetRect(&rc, -rc.left, -rc.top);
+            COLORREF inner = w->bg.has_value ? w->bg.color : w32_system_ground();
+            COLORREF outer = sheet ? w->border_color
+                           : (GetFocus() == hwnd ? w32_accent_color() : RGB(0x45, 0x45, 0x45));
             for (ring = 0; ring < 2; ring++) {
                 RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
-                COLORREF c = w->border_color;
-                // The inner ring of the two is the field's own ground, so a
-                // one-pixel border reads as one pixel.
-                if (ring >= w->border_width && w->bg.has_value) c = w->bg.color;
+                COLORREF c = outer;
+                if (sheet ? (ring >= w->border_width && w->bg.has_value) : ring >= 1) c = inner;
                 FrameRect(hdc, &e, w32_ground_brush(c));
             }
             ReleaseDC(hwnd, hdc);
         }
         return r;
     }
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
+        // The edge changes colour with the focus; the control itself only
+        // repaints its client.
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        RedrawWindow(hwnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_NOCHILDREN);
+        return r;
+    }
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, styled_field_proc, 1);
     return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+// Every field and text area gets the edge painter at creation (see
+// styled_field_proc); a sheet border later only changes what it paints.
+static void w32_field_frame(HWND hwnd) {
+    if (hwnd) SetWindowSubclass(hwnd, styled_field_proc, 1, 0);
 }
 
 // Install (idempotent) the styled painter on a widget that now has styles.
 static void w32_ensure_owner_draw(Widget* w) {
     if (!w || w->owner_drawn) return;
-    if ((w->kind == WK_TEXTFIELD || w->kind == WK_SECUREFIELD) && w->border_set) {
-        if (SetWindowSubclass(w->hwnd, styled_field_proc, 1, 0)) {
-            w->owner_drawn = 1;
-            SetWindowPos(w->hwnd, NULL, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-        }
+    if ((w->kind == WK_TEXTFIELD || w->kind == WK_SECUREFIELD || w->kind == WK_TEXTAREA)
+        && w->border_set) {
+        // The painter is on every field from creation (w32_field_frame);
+        // the border it now has is painted on the next frame paint.
+        w32_field_frame(w->hwnd);
+        w->owner_drawn = 1;
+        SetWindowPos(w->hwnd, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         return;
     }
     if (!w32_needs_owner_draw(w)) return;
