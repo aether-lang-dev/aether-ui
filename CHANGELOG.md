@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **A tree indents by a margin, 16px a level, rather than a run of
+  spaces.** Spaces measure differently in every face (a serif skin
+  indented less than a monospace one, a proportional one unevenly); the
+  margin on the row's first cell is what the lists on every desktop do.
+
 ### Fixed
 
 - **win32 menus are dark on a dark system.** A dark app popped light

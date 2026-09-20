@@ -5214,16 +5214,14 @@ tree(_ctx: ptr, roots: ptr) -> ptr {
         tr = item as *TreeRow
         node = tr.node as *TreeNode
         // Indent: one blank spacer-string per depth level.
-        pad = ""
-        d = 0
-        while d < tr.depth {
-            pad = string.concat(pad, "    ")
-            d = d + 1
-        }
-        _pad = text(row, pad)
+        // Indent by depth as a margin on the row's first cell, 16px a level:
+        // a run of spaces measured differently in every face (a serif skin
+        // indented less than a monospace one), and a margin is what the
+        // other lists on every desktop do.
         // Disclosure: a real toggle for parents, blank for leaves.
         has_kids = 0
         if node.children != null { if list.size(node.children) > 0 { has_kids = 1 } }
+        first = 0
         if has_kids == 1 {
             glyph = "▸"
             if node.expanded == 1 { glyph = "▾" }
@@ -5234,9 +5232,12 @@ tree(_ctx: ptr, roots: ptr) -> ptr {
             // A chevron, not a push button: the disclosure is a glyph on
             // the row, framed only under the pointer.
             _df = style_flat(_dt)
+            first = _dt
         } else {
             _lt = text(row, "  ")
+            first = _lt
         }
+        if tr.depth > 0 { _mi = margin_of(first, 0, 0, 0, 16 * tr.depth) }
         _lbl = text(row, node.label)
     }
     // A row click is a NODE selection. Without this a tree could render a
