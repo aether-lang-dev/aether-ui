@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a canvas sits on the ground, not in a white box.** The canvas
+  washed white before replaying its commands, so on a dark theme every
+  icon, every plot and every drawing was a white rectangle on the dark
+  panel -- where GTK4's drawing area is transparent to its parent. The
+  wash is now the ground the canvas sits on: its own where the sheet gave
+  it one, else the one behind it. A pixel read and a PNG keep their
+  documented white backdrop, which the colour probes classify against.
+  The canvas also answers `WM_PRINTCLIENT`, so the driver's off-screen
+  capture shows it (every canvas was blank in a headless capture).
+- **win32: a paragraph wraps, and an anchored label is anchored.** A
+  wrapping label measured as one line whatever its width, so a paragraph
+  was cut after its first line; it is as tall as its lines at the width
+  it wraps at (the one it was given, else the one it has, with the stack
+  going round again once it has one). A label anchored middle or end kept
+  its natural width, and at its natural width a centred label has nothing
+  to be centred in -- it read as left; it takes the stack's width, as
+  GTK4's box gives a label its width and `xalign` places the text in it.
+
+### Fixed
+
 - **GTK4: a container's geometry includes its edge insets, as on the
   other backends.** GTK reports a widget's size as its content box, which
   excludes the CSS padding `edge_insets` becomes, so a 640-wide window's
