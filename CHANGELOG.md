@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a rule prints, and a field's edge prints as it paints on screen. A
   headless capture and an on-screen one of the same app are now pixel
   for pixel the same.
+- **win32: a text area shows its hint.** `textarea("Type your notes
+  here...")` showed nothing on Windows: the cue banner it was given is
+  single-line only (`EM_SETCUEBANNER` accepts it on a multi-line edit and
+  draws nothing). The hint is drawn by the field painter while the text
+  is empty, where the first line of typing goes, in the control's font,
+  halfway between the ground and the ink -- the grey the cue banner on a
+  field wears -- as GTK4 (an overlay label) and AppKit (`drawRect:`)
+  already did; it prints into the driver's capture too.
 
 - **win32: a skin reaches everything.** A container whose ground changed
   repaints with everything in it that paints the ground behind itself (a

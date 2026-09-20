@@ -4279,9 +4279,9 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     // the client edge, which neither theme touches: w32_field_frame does.
     w32_system_dark_control(h);
     w32_field_frame(h);
-    if (placeholder && *placeholder) {
-        SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
-    }
+    // No cue banner: EM_SETCUEBANNER is single-line only. The hint is
+    // drawn by the field painter while the text is empty
+    // (w32_textarea_paint_hint), from placeholder_u8.
     int handle = register_widget_typed(h, WK_TEXTAREA);
     if (placeholder && *placeholder) {
         Widget* pw = widget_at(handle);
@@ -5075,9 +5075,52 @@ static void w32_field_paint_edge(HWND hwnd, Widget* w, HDC hdc) {
     }
 }
 
+// A text area's hint, drawn while it holds no text: where the first line
+// of typing will go (the control's formatting rectangle), in its font,
+// halfway between the ground and the ink -- the grey the cue banner on a
+// single-line field wears. EM_SETCUEBANNER is single-line only; on a
+// multi-line edit it is accepted and shows nothing, so the hint the other
+// backends draw themselves (GTK4 an overlay label, AppKit in drawRect:)
+// is drawn here too, after the control's own paint.
+static void w32_textarea_paint_hint(HWND hwnd, const Widget* w, HDC hdc) {
+    if (!w->placeholder_u8 || !*w->placeholder_u8) return;
+    if (GetWindowTextLengthW(hwnd) != 0) return;
+    RECT fr;
+    SendMessageW(hwnd, EM_GETRECT, 0, (LPARAM)&fr);
+    COLORREF ground;
+    if (!w32_ground_behind(hwnd, &ground)) ground = w32_system_ground();
+    if (w->bg.has_value) ground = w->bg.color;
+    COLORREF ink = w32_legible_text(ground);
+    COLORREF hint = RGB((GetRValue(ground) + GetRValue(ink)) / 2,
+                        (GetGValue(ground) + GetGValue(ink)) / 2,
+                        (GetBValue(ground) + GetBValue(ink)) / 2);
+    const wchar_t* text = utf8_to_wide(w->placeholder_u8);   // rotating static buffer
+    HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    HGDIOBJ old = SelectObject(hdc, font ? font : w32_ui_font(hwnd));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, hint);
+    DrawTextW(hdc, text, -1, &fr, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(hdc, old);
+}
+
 static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                                           UINT_PTR id, DWORD_PTR ref) {
     (void)id; (void)ref;
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        Widget* w = widget_at(handle_for_hwnd(hwnd));
+        if (w && w->kind == WK_TEXTAREA && w->placeholder_u8
+            && GetWindowTextLengthW(hwnd) == 0) {
+            int printing = (msg == WM_PRINTCLIENT);
+            HDC hdc = printing ? (HDC)wp : GetDC(hwnd);
+            // The caret sits where the hint starts; drawn over, it would
+            // leave its inverse behind on its next blink.
+            if (!printing) HideCaret(hwnd);
+            w32_textarea_paint_hint(hwnd, w, hdc);
+            if (!printing) { ShowCaret(hwnd); ReleaseDC(hwnd, hdc); }
+        }
+        return r;
+    }
     if (msg == WM_NCPAINT) {
         Widget* w = widget_at(handle_for_hwnd(hwnd));
         LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
