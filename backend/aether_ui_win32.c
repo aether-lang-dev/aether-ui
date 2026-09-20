@@ -2312,9 +2312,12 @@ static void ensure_gdiplus(void) {
 }
 
 static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_PAINT) {
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+        // WM_PRINTCLIENT hands the DC to draw into (the driver's capture
+        // of a window that never mapped); WM_PAINT gets one from BeginPaint.
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        int printing = (msg == WM_PRINTCLIENT);
+        HDC hdc = printing ? (HDC)wp : BeginPaint(hwnd, &ps);
         RECT r;
         GetClientRect(hwnd, &r);
         // The rule takes the divider's own colour where the sheet gave it
@@ -2346,7 +2349,7 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         }
         SelectObject(hdc, old);
         DeleteObject(pen);
-        EndPaint(hwnd, &ps);
+        if (!printing) EndPaint(hwnd, &ps);
         return 0;
     }
     if (msg == WM_ERASEBKGND) return 1;
@@ -5048,6 +5051,30 @@ static int w32_needs_owner_draw(Widget* w) {
 //   - otherwise nothing: the light theme's edge is the system's own.
 // The inner ring of the two is the field's own ground, so a one-pixel
 // frame reads as one pixel.
+// The field's edge, over the frame the control drew: the sheet's border
+// where it gave one, else on a dark system a hairline a step off the
+// ground (the accent while focused) inside the control's own light edge.
+// Into `hdc`, whose origin is the window's top-left corner: the window DC
+// on a frame paint, the driver's DC on a print.
+static void w32_field_paint_edge(HWND hwnd, Widget* w, HDC hdc) {
+    int sheet = w->border_set && w->border_width > 0;
+    int dark = !sheet && aether_ui_dark_mode_check();
+    if (!sheet && !dark) return;
+    RECT rc;
+    int ring;
+    GetWindowRect(hwnd, &rc);
+    OffsetRect(&rc, -rc.left, -rc.top);
+    COLORREF inner = w->bg.has_value ? w->bg.color : w32_system_ground();
+    COLORREF outer = sheet ? w->border_color
+                   : (GetFocus() == hwnd ? w32_accent_color() : RGB(0x45, 0x45, 0x45));
+    for (ring = 0; ring < 2; ring++) {
+        RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
+        COLORREF c = outer;
+        if (sheet ? (ring >= w->border_width && w->bg.has_value) : ring >= 1) c = inner;
+        FrameRect(hdc, &e, w32_ground_brush(c));
+    }
+}
+
 static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                                           UINT_PTR id, DWORD_PTR ref) {
     (void)id; (void)ref;
@@ -5055,25 +5082,17 @@ static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         Widget* w = widget_at(handle_for_hwnd(hwnd));
         LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
         if (!w) return r;
-        int sheet = w->border_set && w->border_width > 0;
-        int dark = !sheet && aether_ui_dark_mode_check();
-        if (sheet || dark) {
-            HDC hdc = GetWindowDC(hwnd);
-            RECT rc;
-            int ring;
-            GetWindowRect(hwnd, &rc);
-            OffsetRect(&rc, -rc.left, -rc.top);
-            COLORREF inner = w->bg.has_value ? w->bg.color : w32_system_ground();
-            COLORREF outer = sheet ? w->border_color
-                           : (GetFocus() == hwnd ? w32_accent_color() : RGB(0x45, 0x45, 0x45));
-            for (ring = 0; ring < 2; ring++) {
-                RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
-                COLORREF c = outer;
-                if (sheet ? (ring >= w->border_width && w->bg.has_value) : ring >= 1) c = inner;
-                FrameRect(hdc, &e, w32_ground_brush(c));
-            }
-            ReleaseDC(hwnd, hdc);
-        }
+        HDC hdc = GetWindowDC(hwnd);
+        w32_field_paint_edge(hwnd, w, hdc);
+        ReleaseDC(hwnd, hdc);
+        return r;
+    }
+    if (msg == WM_PRINT && (lp & PRF_NONCLIENT)) {
+        // A print of the frame (the driver's capture of a window that
+        // never mapped): the control's own edge into the DC, then ours.
+        Widget* w = widget_at(handle_for_hwnd(hwnd));
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        if (w) w32_field_paint_edge(hwnd, w, (HDC)wp);
         return r;
     }
     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
@@ -11297,6 +11316,17 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     w32_drv_settle_layout();
     HWND hwnd = apps[0].hwnd;
     if (!hwnd) return -1;
+    // Paints still owed are frames not yet on screen: WM_PAINT is
+    // synthesized only once the queue holds nothing else, and this request
+    // is serviced on the UI thread in the middle of whatever burst it
+    // arrived in (the banner the driver adds on its first contact moves
+    // every row and invalidates them all). Paint them now -- every child,
+    // synchronously -- so the capture is of the tree as laid out, not of
+    // the frame before it; then wait for the compositor's next frame, which
+    // is when what was painted reaches the screen and the window's
+    // redirection surface both paths read from.
+    RedrawWindow(hwnd, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
+    DwmFlush();
     RECT r;
     if (!GetClientRect(hwnd, &r)) return -1;
     int w = r.right - r.left, h = r.bottom - r.top;
@@ -11315,8 +11345,12 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     #ifndef PW_RENDERFULLCONTENT
     #define PW_RENDERFULLCONTENT 0x00000002
     #endif
-    // 1. The window's own background.
-    HBRUSH face = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+    #ifndef PW_CLIENTONLY
+    #define PW_CLIENTONLY 0x00000001
+    #endif
+    // 1. The window's own background: the system's ground, dark on a dark
+    //    system, which is what the client shows where no widget paints.
+    HBRUSH face = CreateSolidBrush(w32_system_ground());
     RECT full = { 0, 0, w, h };
     FillRect(mem, &full, face);
     DeleteObject(face);
@@ -11328,10 +11362,13 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     // contrast among neighbours at 3.1, in a fade a screen grab of the
     // same moments showed smooth). Only when every corner and the centre
     // of the client belong to this window, so another window on top does
-    // not end up in the picture; otherwise, and always when unmapped or
-    // headless, PrintWindow as before.
+    // not end up in the picture; otherwise PrintWindow. A window that is
+    // not on screen (headless, or before it is shown) has nothing for
+    // either to read -- PrintWindow "succeeds" on it and paints black --
+    // and is drawn widget by widget below, over the ground.
     int printed = 0;
-    if (IsWindowVisible(hwnd) && !aeui_is_headless() && !IsIconic(hwnd)) {
+    int on_screen = IsWindowVisible(hwnd) && !aeui_is_headless() && !IsIconic(hwnd);
+    if (on_screen) {
         // A screenshot is of the app: raise it (no activation, focus stays
         // where it is) so an editor or terminal over a corner does not
         // decide which capture this is. A window that still is not on top
@@ -11356,9 +11393,14 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
             }
         }
     }
-    if (!printed) printed = PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
-    if (!printed) {
-        BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
+    // The client only, as the screen path reads: without PW_CLIENTONLY the
+    // whole window is rendered at the origin, and a capture that took this
+    // path had the title bar across its top and lost its bottom rows -- a
+    // spec sampling a pixel got a different answer depending on whether
+    // some other window covered a corner.
+    if (on_screen && !printed) printed = PrintWindow(hwnd, mem, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
+    if (on_screen && !printed) {
+        printed = BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY) ? 1 : 0;
     }
     // 2. Ask each REGISTERED widget to render itself at its own position.
     //    PrintWindow on the toplevel misses children that live under the
@@ -11375,12 +11417,21 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     //    (PrintWindow of the same window at the same moment was clean).
     //    A dead registry slot is skipped too: Windows reuses HWND values,
     //    so IsWindow can be true of a handle that now belongs to some other
-    //    control.
-    int mapped = printed && IsWindowVisible(hwnd) && !aeui_is_headless();
+    //    control. Which widgets show is decided by their own WS_VISIBLE
+    //    bit and their ancestors' up to the app window (a widget on the
+    //    hidden page of a tab view is not drawn), not by IsWindowVisible,
+    //    which is false of everything under a top-level that is not shown
+    //    -- every widget, headless -- and drew nothing.
+    int mapped = printed && on_screen;
     for (int wi = 1; wi <= widget_count && !mapped; wi++) {
         Widget* cw = widget_at(wi);
         if (!cw || cw->dead || !cw->hwnd || !IsWindow(cw->hwnd)) continue;
-        if (!IsWindowVisible(cw->hwnd) && !cw->owner_drawn) continue;
+        int shown = 1;
+        for (HWND a = cw->hwnd; a && a != hwnd; a = GetAncestor(a, GA_PARENT)) {
+            if (!w32_own_visible(a)) { shown = 0; break; }
+            if (!GetAncestor(a, GA_PARENT)) shown = 0;   // not under the app window
+        }
+        if (!shown) continue;
         RECT cr;
         if (!GetWindowRect(cw->hwnd, &cr)) continue;
         POINT tl = { cr.left, cr.top };
@@ -11390,7 +11441,12 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
         SaveDC(mem);
         SetViewportOrgEx(mem, tl.x, tl.y, NULL);
         IntersectClipRect(mem, 0, 0, cwid, chgt);
-        SendMessageW(cw->hwnd, WM_PRINTCLIENT, (WPARAM)mem,
+        // WM_PRINT, not WM_PRINTCLIENT: the flags are WM_PRINT's, which
+        // DefWindowProc turns into the erase (a stack's ground, a spacer's),
+        // the frame (a field's edge) and then WM_PRINTCLIENT for the
+        // content. Sent as WM_PRINTCLIENT the flags meant nothing, and a
+        // capture of an unmapped window had no grounds and no rules.
+        SendMessageW(cw->hwnd, WM_PRINT, (WPARAM)mem,
                      PRF_CLIENT | PRF_ERASEBKGND | PRF_NONCLIENT);
         RestoreDC(mem, -1);
     }

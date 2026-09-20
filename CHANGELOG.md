@@ -30,6 +30,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   room in its window, as a dialog does: the row after a picker sat 180px
   lower than it should. The box and its list wear the dark theme on a
   dark system; the picker was the one control left light.
+- **win32: the driver's screenshot is the tree as laid out, on screen or
+  not.** The capture paints what is still owed (`WM_PAINT` comes only once
+  the queue holds nothing else, and the request lands in the middle of
+  whatever burst it arrived in) and waits for the compositor's frame
+  before reading the screen, so a capture taken right after a change no
+  longer shows the frame before it. The `PrintWindow` path renders the
+  client only, as the screen path reads: it rendered the whole window at
+  the origin, and a capture that took it had the title bar across its top
+  and lost its bottom rows -- which path a capture took depended on
+  whether some other window covered a corner. A window that is not on
+  screen (headless, every CI run) is drawn widget by widget over the
+  system's ground: it was black, because `IsWindowVisible` is false of
+  everything under a top-level that is not shown and `PrintWindow`
+  "succeeds" on such a window and paints black. The print goes as
+  `WM_PRINT`, so the erase, the frame and the content all reach the DC;
+  a rule prints, and a field's edge prints as it paints on screen. A
+  headless capture and an on-screen one of the same app are now pixel
+  for pixel the same.
 
 - **win32: a skin reaches everything.** A container whose ground changed
   repaints with everything in it that paints the ground behind itself (a
