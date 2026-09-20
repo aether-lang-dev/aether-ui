@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented white backdrop, which the colour probes classify against.
   The canvas also answers `WM_PRINTCLIENT`, so the driver's off-screen
   capture shows it (every canvas was blank in a headless capture).
+- **win32: a paragraph wraps, and an anchored label is anchored.** A
+  wrapping label measured as one line whatever its width, so a paragraph
+  was cut after its first line; it is as tall as its lines at the width
+  it wraps at (the one it was given, else the one it has, with the stack
+  going round again once it has one). A label anchored middle or end kept
+  its natural width, and at its natural width a centred label has nothing
+  to be centred in -- it read as left; it takes the stack's width, as
+  GTK4's box gives a label its width and `xalign` places the text in it.
 
 ### Fixed
 

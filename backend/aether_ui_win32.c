@@ -833,7 +833,19 @@ typedef struct {
     int flex_size;       // resolved primary size for weighted children
     int margin_t, margin_r, margin_b, margin_l;
     int kind;            // WidgetKind — containers fill the cross axis
+    int spans_cross;     // a leaf that fills the cross axis too (an anchored
+                         // or wrapping label: see w32_text_spans_cross)
 } MeasuredChild;
+
+// A label anchored middle/end, or one that wraps at whatever width it is
+// given, takes the stack's full cross extent, as GTK4's box gives a label
+// its width and xalign places the text within it: at its natural width
+// a centred label has nothing to be centred in, and it read as left.
+static int w32_text_spans_cross(const Widget* w) {
+    if (!w || w->kind != WK_TEXT) return 0;
+    if (w->text_anchor != 0) return 1;
+    return w->text_wrap && w->pref_width <= 0;
+}
 
 // Containers/greedy widgets fill the CROSS axis of their parent stack (a
 // nested row spans its column's width, as on GTK) — only leaf widgets
@@ -1078,12 +1090,27 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
             int tlen = GetWindowTextW(w->hwnd, text, 1024);
             SIZE sz;
             GetTextExtentPoint32W(hdc, text, tlen, &sz);
-            if (old) SelectObject(hdc, old);
-            ReleaseDC(w->hwnd, hdc);
             int pad_x = w32_px(dh, w->kind == WK_BUTTON ? 24 : 4);
             int pad_y = w32_px(dh, w->kind == WK_BUTTON ? 10 : 4);
             *out_w = sz.cx + pad_x;
             *out_h = sz.cy + pad_y;
+            // A wrapping label is as tall as its lines at the width it
+            // wraps at: the one it was given, else the one it has (0 before
+            // the first layout, when it measures as one line and the stack
+            // goes round again once it has a width). It measured as one
+            // line whatever its width, and a paragraph was cut after its
+            // first line.
+            if (w->kind == WK_TEXT && w->text_wrap) {
+                int wrap_w = w->pref_width > 0 ? w->pref_width : cur_w;
+                if (wrap_w > pad_x) {
+                    RECT rc = { 0, 0, wrap_w - pad_x, 0 };
+                    DrawTextW(hdc, text, tlen, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                    *out_w = wrap_w;
+                    *out_h = rc.bottom + pad_y;
+                }
+            }
+            if (old) SelectObject(hdc, old);
+            ReleaseDC(w->hwnd, hdc);
             if (w->pref_width > 0) *out_w = w->pref_width;
             if (w->pref_height > 0) *out_h = w->pref_height;
             return;
@@ -1589,6 +1616,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             mc[i].margin_l = cw->margin_left;
             mc[i].weight = cw->weight;
             mc[i].kind = (int)cw->kind;
+            mc[i].spans_cross = w32_text_spans_cross(cw);
             // Greedy children expand along the primary axis by default —
             // splitview/scrolled (GTK's paned/scrolled semantics), unpinned
             // canvases (GTK's hexpand/vexpand=true), AND any container with
@@ -1715,6 +1743,7 @@ static void stack_do_layout(HWND stack_hwnd) {
         _cw ? ((vstack_) ? _cw->pref_width > 0 : _cw->pref_height > 0) : 0; })
     int client_w = client.right - client.left;
     int cur = (orientation == 1) ? sl->padding_top : sl->padding_left;
+    int wrap_again = 0;
     for (int i = 0; i < nchildren; i++) {
         int x, y, w, h;
         if (orientation == 1) { // VStack
@@ -1724,7 +1753,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             h = ch_size;
             w = avail_w - mc[i].margin_l - mc[i].margin_r;
             if (mc[i].measured_w > 0 && mc[i].measured_w < w
-                && !mc[i].is_spacer && mc[i].weight == 0
+                && !mc[i].is_spacer && mc[i].weight == 0 && !mc[i].spans_cross
                 && (!w32_fills_cross(mc[i].kind) || W32_CROSS_PINNED(i, 1))) {
                 if (sl->alignment == 1)
                     x = sl->padding_left + mc[i].margin_l + (w - mc[i].measured_w) / 2;
@@ -1773,7 +1802,20 @@ static void stack_do_layout(HWND stack_hwnd) {
         SetWindowPos(children[i], NULL, x, y, w, wh,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         w32_note_layout(children[i], w, h);
+        // Height for width: a label that wraps at the width it is given
+        // was measured at the width it had before this pass. If its lines
+        // at this width need another height, the stack goes round again,
+        // and the measure then agrees with the layout.
+        if (mc[i].kind == WK_TEXT) {
+            Widget* tw = widget_at(handle_for_hwnd(children[i]));
+            if (tw && tw->text_wrap && tw->pref_width <= 0 && tw->pref_height <= 0) {
+                int mw2, mh2;
+                measure_widget(tw, &mw2, &mh2);
+                if (mh2 != h) wrap_again = 1;
+            }
+        }
     }
+    if (wrap_again) w32_request_layout(stack_hwnd);
 
     free(mc);
     free(children);
