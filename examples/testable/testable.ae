@@ -94,6 +94,8 @@ main() {
         }
         ui.seal_widget(danger)
     }
+    // The standard window gutter: content not flush against the frame.
+    _ci = ui.content_inset(root)
     ui.margin_of(root, 12, 12, 12, 12)
 
     // Enable test server on port 9222 — injects "Under Remote Control" banner

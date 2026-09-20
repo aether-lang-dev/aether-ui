@@ -6,7 +6,7 @@
 //   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, add_css_class,
+import ui (content_inset, window, vstack, hstack, text, btn, divider, add_css_class,
     create_styles, st_color, st_bg, st_font_size, st_opacity,
     ui_states, add_state, set_state, current_state, transition,
     states, on_state, bg, color, font_size_of, opacity_of,
@@ -38,7 +38,7 @@ expanded_sheet() -> ptr {
 
 main() {
     window("QML-alike States on AeCS", 460, 320) {
-        vstack(10) {
+        root = vstack(10) {
             status = text("st: none")
             divider()
             card = vstack(6) {
@@ -85,6 +85,8 @@ main() {
                 }
             }
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }

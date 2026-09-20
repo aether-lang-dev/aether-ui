@@ -84,6 +84,8 @@ main() {
             ui.style_enabled(disabled_btn, 0)
         }
     }
+    // The standard window gutter: content not flush against the frame.
+    _ci = ui.content_inset(root)
 
     ui.margin_of(root, 0, 12, 12, 12)
     }

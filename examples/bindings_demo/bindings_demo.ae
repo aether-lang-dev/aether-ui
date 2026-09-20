@@ -6,7 +6,7 @@
 // ordered: 1=float 2=int 3=bool 4=string (the driver spec uses these).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, textfield_bound,
+import ui (content_inset, window, vstack, hstack, text, btn, divider, textfield_bound,
     ui_state, ui_set, ui_get, ui_state_i, ui_set_i, ui_get_i,
     ui_state_b, ui_set_b, ui_get_b, ui_state_s, ui_set_s,
     bind_text, bind_text_fmt, bind_enabled, bind_hidden,
@@ -21,7 +21,7 @@ main() {
     status = ui_state_s("idle")  // state 4: string
 
     window("bindings demo", 480, 360) {
-        vstack(8) {
+        root = vstack(8) {
             t1 = text("")
             bind_text_fmt(t1, temp, 1)
             t2 = text("")
@@ -55,6 +55,8 @@ main() {
                 _f = ui_set(temp, ui_get(temp) + 0.7)
             }
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }

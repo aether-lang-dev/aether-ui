@@ -28,6 +28,8 @@ main() {
         ui.divider()
         ui.text_bound(selected, "Selected index: ", "")
     }
+    // The standard window gutter: content not flush against the frame.
+    _ci = ui.content_inset(root)
     // AetherUIDriver: the picker spec drives this under both the native and
     // the drawn ($AETHER_UI_PICKER=drawn) surfaces — set_value selects,
     // "selected" reads back — to prove ABI parity across surfaces.

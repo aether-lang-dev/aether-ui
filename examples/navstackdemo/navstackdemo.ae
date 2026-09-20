@@ -14,7 +14,7 @@
 //   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, navstack,
+import ui (content_inset, window, vstack, hstack, text, btn, divider, navstack,
     nav_push, nav_pop, nav_depth, nav_page, spacer, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -29,7 +29,7 @@ main() {
     depth = 1
 
     window("navstack demo", 520, 420) {
-        vstack(8) {
+        root = vstack(8) {
             crumb = text("Home")
             status = text("depth: 1")
             // The BACKEND's own count, via nav_depth. Reported separately from
@@ -78,6 +78,8 @@ main() {
                 spacer()
             }
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }

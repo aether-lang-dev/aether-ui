@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The showcase examples wear the window gutter.** `content_inset(root)`
+  -- the standard 12px inset, opt-in by design because a container's
+  geometry is a contract apps read -- was called by none of the 88
+  examples, so every one of them showed its first label's pixels touching
+  the window's frame, and a newcomer copying an example shipped that
+  look. The app-like examples (form, picker, styled, testable, the list,
+  table, tree, tabs, navstack, states, bindings, undo and disclosure
+  demos) call it, the README's first example shows the line and says why
+  it is a line rather than a default. Unchanged: the canvas demos, the
+  calculator (which already carries a `margin`), and split_demo, whose
+  spec reads the root's `on_layout` geometry -- the very contract the
+  inset is opt-in for (GTK4 reports a widget's size without its CSS
+  padding, so the root reported 616 for a 640 window). (#183)
+
+### Changed
+
 - **A tree indents by a margin, 16px a level, rather than a run of
   spaces.** Spaces measure differently in every face (a serif skin
   indented less than a monospace one, a proportional one unevenly); the

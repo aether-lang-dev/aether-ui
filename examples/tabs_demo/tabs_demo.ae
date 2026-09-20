@@ -7,7 +7,7 @@
 // driver route POST /widget/{id}/tab_select?i=N switches programmatically.
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, tabs, tab,
+import ui (content_inset, window, vstack, hstack, text, btn, divider, tabs, tab,
     on_tab_change, tab_select, tab_selected, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -18,7 +18,7 @@ main() {
     status = 0
     tv = 0
     window("tabs demo", 460, 320) {
-        vstack(8) {
+        root = vstack(8) {
             status = text("active: 0")
             divider()
             tv = tabs() {
@@ -48,6 +48,8 @@ main() {
                 _b2 = btn("Go Library") callback { tab_select(tv, 2) }
             }
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }
