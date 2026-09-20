@@ -3366,6 +3366,20 @@ void aether_ui_set_font_bold_ctx(void* ctx, int bold) {
 void aether_ui_set_corner_radius_ctx(void* ctx, double radius) {
     aether_ui_set_corner_radius((int)(intptr_t)ctx, radius);
 }
+
+// A flat button is an unbordered NSButton with the recessed-under-pointer
+// look a toolbar item has: no bezel, the title on the ground, a highlight
+// while pressed.
+void aether_ui_button_set_flat(int handle, int on) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSButton class]]) return;
+    NSButton* b = (NSButton*)v;
+    [b setBordered:on ? NO : YES];
+    if (on) [b setShowsBorderOnlyWhileMouseInside:YES];
+}
+void aether_ui_button_set_flat_ctx(void* ctx, int on) {
+    aether_ui_button_set_flat((int)(intptr_t)ctx, on);
+}
 void aether_ui_set_opacity_ctx(void* ctx, double opacity) {
     aether_ui_set_opacity((int)(intptr_t)ctx, opacity);
 }

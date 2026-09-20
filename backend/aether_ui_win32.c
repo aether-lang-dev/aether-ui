@@ -204,6 +204,7 @@ typedef struct {
     int border_set;            // 1 = explicitly set (readback)
     COLORREF border_color;
     int owner_drawn;           // styled painter installed (see styled_btn_proc)
+    int flat;                  // button: no frame, no face until hovered (styled_btn_proc)
     int scroll_y;              // scrollview: how far its document is scrolled up
     int hover_set;             // interaction states (0=hover, 1=active)
     COLORREF hover_bg;
@@ -4775,6 +4776,17 @@ const char* aether_ui_styled_weight_impl(int handle) {
     return w->font_bold ? "bold" : "normal";
 }
 
+void aether_ui_button_set_flat(int handle, int on) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_BUTTON) return;
+    w->flat = on ? 1 : 0;
+    w32_ensure_owner_draw(w);
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+void aether_ui_button_set_flat_ctx(void* ctx, int on) {
+    aether_ui_button_set_flat((int)(intptr_t)ctx, on);
+}
+
 void aether_ui_set_corner_radius(int handle, double radius) {
     Widget* w = widget_at(handle);
     if (!w) return;
@@ -4807,7 +4819,7 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
 static int w32_needs_owner_draw(Widget* w) {
     if (!w) return 0;
     if (w->kind != WK_BUTTON && w->kind != WK_TOGGLE) return 0;
-    return w->border_set || w->hover_set || w->active_set || w->bg.has_value;
+    return w->border_set || w->hover_set || w->active_set || w->bg.has_value || w->flat;
 }
 
 // A field is a native EDIT with the system's sunken client edge: two pixels
@@ -4931,11 +4943,29 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             RECT rc;
             GetClientRect(hwnd, &rc);
 
-            // State → background. active beats hover beats the base bg.
+            // State -> background. active beats hover beats the base bg.
+            // The base face is the system's button face on a light system
+            // and the dark theme's on a dark one (the themed button this
+            // replaces wore that), not the light face on a dark ground.
             int pressed = (SendMessageW(hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) != 0;
-            COLORREF bg = w->bg.has_value ? w->bg.color : GetSysColor(COLOR_BTNFACE);
+            int dark = aether_ui_dark_mode_check();
+            COLORREF bg = w->bg.has_value ? w->bg.color
+                        : (dark ? RGB(0x33, 0x33, 0x33) : GetSysColor(COLOR_BTNFACE));
             if (w->hover_set && w->is_hovered) bg = w->hover_bg;
             if (w->active_set && pressed) bg = w->active_bg;
+            // A flat button has no face of its own: the ground behind it,
+            // tinted a step toward the text while the pointer is over it
+            // and two while pressed, as a toolbar item is.
+            int flat_rest = w->flat && !(w->hover_set && w->is_hovered) && !(w->active_set && pressed);
+            if (flat_rest) {
+                COLORREF ground;
+                if (!w32_ground_behind(hwnd, &ground)) ground = w32_system_ground();
+                int k = pressed ? 22 : (w->is_hovered ? 12 : 0);
+                COLORREF ink = w32_legible_text(ground);
+                bg = RGB((GetRValue(ground) * (100 - k) + GetRValue(ink) * k) / 100,
+                         (GetGValue(ground) * (100 - k) + GetGValue(ink) * k) / 100,
+                         (GetBValue(ground) * (100 - k) + GetBValue(ink) * k) / 100);
+            }
 
             HBRUSH br = CreateSolidBrush(bg);
             HPEN pen = w->border_set && w->border_width > 0
@@ -4969,8 +4999,9 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
                              : (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
                 HFONT oldf = font ? (HFONT)SelectObject(hdc, font) : NULL;
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, w->fg.has_value ? w->fg.color
-                                                  : GetSysColor(COLOR_BTNTEXT));
+                // Legible on whatever the face is: white on a green Submit,
+                // dark on a light chip, light on the dark theme's face.
+                SetTextColor(hdc, w->fg.has_value ? w->fg.color : w32_legible_text(bg));
                 DrawTextW(hdc, text, tlen, &rc,
                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 if (oldf) SelectObject(hdc, oldf);

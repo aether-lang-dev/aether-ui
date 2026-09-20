@@ -118,6 +118,11 @@ title.style_font_size(20).style_font_bold().style_text_color(1.0, 1.0, 1.0)
 submit.style_bg_color(0.2, 0.6, 0.3, 1.0)
       .style_corner_radius(8)
       .style_tooltip("Click to submit the form")
+
+// A flat button: no frame and no face of its own until the pointer is over
+// it -- toolbar icons, a tree's disclosure chevron, an inline action.
+more = btn("…") callback { open_menu() }
+more.style_flat()                 // or, in a block: button("…") { flat() }
 ```
 
 Both forms still work — UFCS is a *last-resort* fallback (it only fires when a
