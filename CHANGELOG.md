@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **GTK4: a container's geometry includes its edge insets, as on the
+  other backends.** GTK reports a widget's size as its content box, which
+  excludes the CSS padding `edge_insets` becomes, so a 640-wide window's
+  root with the standard gutter read 616 through `on_layout`, `width()`
+  and the driver, and 640 on win32 and AppKit -- an app mapping pointer
+  coordinates through that box got a different box per platform. The
+  insets are added back in every read; split_demo carries the gutter and
+  its spec (root's `on_layout` equals the window's width) is the guard.
+  (#185)
+
 ### Changed
 
 - **The showcase examples wear the window gutter.** `content_inset(root)`
