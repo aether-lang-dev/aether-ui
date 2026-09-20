@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open a step toward the text), the way Notepad, Notepad++ and Explorer++
   paint theirs, with the light line under the bar covered after each
   non-client paint. Light systems keep the system's own bar and menus.
+- **win32 modals and toasts are visible.** The compositor draws a layered
+  child above every non-layered sibling whatever the Z order says, and the
+  app's root stack repaints over a plain sibling whenever it repaints: a
+  modal's card under the layered scrim was dimmed out of sight with the
+  rest of the app, and a toast, a plain label over the root stack, was
+  painted over by it -- on screen, not only in captures. Every overlay's
+  content is a layered window at full alpha now (layered siblings compose
+  in Z order), owed until the window shows like any other alpha.
+- **win32 modal cards and toasts look like cards.** What GTK4's
+  `.aui-overlay-card` and `.aui-toast` give them: a ground lifted a step
+  from the window's, a hairline frame, rounded corners (`SetWindowRgn`),
+  and padding (20px for a card, 10/18 for a toast). `measure_subtree`
+  counts a stack's own padding, so a padded card is measured at its size
+  rather than squeezing its label into wrapping.
 
 ### Added
 
