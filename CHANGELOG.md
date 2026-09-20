@@ -56,6 +56,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   halfway between the ground and the ink -- the grey the cue banner on a
   field wears -- as GTK4 (an overlay label) and AppKit (`drawRect:`)
   already did; it prints into the driver's capture too.
+- **win32: a split view shows its sash, and a wrap is as tall as its
+  rows.** The band between a split view's panes was laid out and could
+  be dragged but was never painted and never changed the cursor: nothing
+  told the user there was a sash. It shows as a hairline down the middle
+  of the band, a shade off the ground (GTK4's paned separator, AppKit's
+  thin divider), and the pointer over it -- or dragging it -- is the
+  resize cursor. A wrap measured as its current rect, 0 tall until laid
+  out, and nothing ever gave it a height: its chips were placed and
+  clipped away, and a Windows user saw none of them. It measures as its
+  flow at the width it has (height for width), one row before it has a
+  width, and a flow that needs another height than it was given sends
+  its parent round once more. The driver's off-screen capture clips a
+  widget to its ancestors, as the screen does.
 
 - **win32: a skin reaches everything.** A container whose ground changed
   repaints with everything in it that paints the ground behind itself (a

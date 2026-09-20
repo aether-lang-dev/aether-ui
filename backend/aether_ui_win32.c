@@ -437,6 +437,8 @@ static void widget_hash_insert(HWND h, int handle) {
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
 static HWND w32_primary_app_hwnd(void);
+static void w32_split_paint_sash(HWND hwnd, const Widget* w, HDC hdc, COLORREF ground);
+static RECT w32_split_band(HWND hwnd, const Widget* w);
 static HFONT w32_ui_font(HWND hwnd);
 static HBRUSH w32_ground_brush(COLORREF c);
 static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
@@ -932,6 +934,36 @@ static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
     }
 }
 
+// A wrap's flow at `width`: children left to right at their natural
+// sizes, a new row where the next would overflow, as the layout places
+// them (the WK_WRAP branch of stack_do_layout). Its natural size is that
+// flow's extent -- height for width, as GTK4's flow box and a SwiftUI
+// flow lay out. With no width yet (0, before the first layout) every
+// child sits on one row, which is the widest the wrap ever wants to be.
+static void w32_wrap_flow(Widget* sw, int width, int* out_w, int* out_h) {
+    StackLayout* sl = &sw->stack;
+    int inner_w = width - sl->padding_left - sl->padding_right;
+    int cx = 0, cy = 0, row_h = 0, widest = 0;
+    int any = 0;
+    for (HWND c = GetWindow(sw->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        Widget* cw = widget_at(handle_for_hwnd(c));
+        if (!cw || cw->dead || !w32_own_visible(c)) continue;
+        int mw = 100, mh = 24;
+        measure_widget(cw, &mw, &mh);
+        if (width > 0 && cx > 0 && cx + mw > inner_w) {
+            cy += row_h + sl->spacing;
+            cx = 0;
+            row_h = 0;
+        }
+        cx += mw + sl->spacing;
+        if (cx - sl->spacing > widest) widest = cx - sl->spacing;
+        if (mh > row_h) row_h = mh;
+        any = 1;
+    }
+    *out_w = (any ? widest : 0) + sl->padding_left + sl->padding_right;
+    *out_h = (any ? cy + row_h : 0) + sl->padding_top + sl->padding_bottom;
+}
+
 static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w->pref_width > 0 && w->pref_height > 0) {
         *out_w = w->pref_width;
@@ -953,6 +985,18 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w32_is_stack(w->kind)
         || w->kind == WK_TABS || w->kind == WK_SPLITVIEW) {
         measure_stack_natural(w, out_w, out_h);
+        if (w->pref_width > 0) *out_w = w->pref_width;
+        if (w->pref_height > 0) *out_h = w->pref_height;
+        return;
+    }
+    // A wrap is as tall as its flow at the width it has: it measured as
+    // its current rect, 0 tall until laid out, and nothing ever gave it a
+    // height -- its chips were placed and clipped away, and a Windows
+    // user saw none of them.
+    if (w->kind == WK_WRAP) {
+        RECT wr;
+        int width = GetClientRect(w->hwnd, &wr) ? wr.right - wr.left : 0;
+        w32_wrap_flow(w, width, out_w, out_h);
         if (w->pref_width > 0) *out_w = w->pref_width;
         if (w->pref_height > 0) *out_h = w->pref_height;
         return;
@@ -1415,6 +1459,20 @@ static void stack_do_layout(HWND stack_hwnd) {
             if (mh > row_h) row_h = mh;
         }
         free(children);
+        // Height for width: the parent measured this wrap at the width it
+        // had before this pass. If the flow at the width it has now needs
+        // another height, the parent goes round again, and its measure --
+        // the flow at this width -- then agrees with the layout, so the
+        // second pass is the last.
+        {
+            int need_w, need_h;
+            w32_wrap_flow(sw, client.right - client.left, &need_w, &need_h);
+            if (need_h != client.bottom - client.top && sw->pref_height <= 0) {
+                HWND parent = GetAncestor(stack_hwnd, GA_PARENT);
+                Widget* pw = widget_at(handle_for_hwnd(parent));
+                if (pw && w32_is_stack(pw->kind)) w32_request_layout(parent);
+            }
+        }
         return;
     }
 
@@ -2015,8 +2073,13 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             if (w3 && w3->kind == WK_SPLITVIEW && GetCapture() == hwnd) {
                 int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
                 int p = (w3->stack.orientation == 1) ? my : mx;
+                RECT was = w32_split_band(hwnd, w3);
                 w3->split_pos_enc = (p > 0 ? p : 0) + 1;
                 stack_do_layout(hwnd);
+                // The sash moved: the band it left and the one it is in.
+                RECT now = w32_split_band(hwnd, w3);
+                InvalidateRect(hwnd, &was, TRUE);
+                InvalidateRect(hwnd, &now, TRUE);
                 return 0;
             }
             /* Container hover: st_hover on a row was stored but invisible
@@ -2122,8 +2185,27 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                         FrameRect(hdc, &e, edge);
                     }
                 }
+                // The split view's sash, in the band between its panes.
+                if (w && w->kind == WK_SPLITVIEW) w32_split_paint_sash(hwnd, w, hdc, bg);
                 return 1;
             }
+        }
+
+        case WM_SETCURSOR: {
+            // Over the sash (or dragging it): the resize cursor, so the
+            // band reads as something to take hold of.
+            Widget* w = widget_at(handle_for_hwnd(hwnd));
+            if (w && w->kind == WK_SPLITVIEW && (HWND)wp == hwnd) {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd, &pt);
+                RECT band = w32_split_band(hwnd, w);
+                if (GetCapture() == hwnd || PtInRect(&band, pt)) {
+                    SetCursor(LoadCursorW(NULL, w->stack.orientation == 1 ? IDC_SIZENS : IDC_SIZEWE));
+                    return TRUE;
+                }
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
         }
 
 
@@ -2311,6 +2393,48 @@ static void ensure_gdiplus(void) {
     if (GdiplusStartup(&gdiplus_token, &in, NULL) == 0) gdiplus_started = 1;
 }
 
+// A rule's colour on a ground: a shade off it, light on a dark panel and
+// dark on a light one, never white on white or a pale grey cut across a
+// dark theme. The divider's line and the split view's sash.
+static COLORREF w32_rule_color(COLORREF ground) {
+    int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
+    int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
+    if (luma < 128) return RGB(min(255, r8 + 28), min(255, g8 + 28), min(255, b8 + 28));
+    return RGB(max(0, r8 - 40), max(0, g8 - 40), max(0, b8 - 40));
+}
+
+// The split view's sash: the band between the panes is AEUI_SPLIT_DIV
+// wide for the pointer, and shows as a hairline down its middle, as
+// GTK4's paned separator and AppKit's thin divider do.
+static void w32_split_paint_sash(HWND hwnd, const Widget* w, HDC hdc, COLORREF ground) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    int at = w->split_eff + AEUI_SPLIT_DIV / 2;
+    RECT line;
+    if (w->stack.orientation == 1) {
+        line.left = r.left; line.right = r.right;
+        line.top = w->stack.padding_top + at; line.bottom = line.top + 1;
+    } else {
+        line.top = r.top; line.bottom = r.bottom;
+        line.left = w->stack.padding_left + at; line.right = line.left + 1;
+    }
+    FillRect(hdc, &line, w32_ground_brush(w32_rule_color(ground)));
+}
+
+// The band, in client coordinates: where the sash is grabbed.
+static RECT w32_split_band(HWND hwnd, const Widget* w) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    if (w->stack.orientation == 1) {
+        r.top = w->stack.padding_top + w->split_eff;
+        r.bottom = r.top + AEUI_SPLIT_DIV;
+    } else {
+        r.left = w->stack.padding_left + w->split_eff;
+        r.right = r.left + AEUI_SPLIT_DIV;
+    }
+    return r;
+}
+
 static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
         // WM_PRINTCLIENT hands the DC to draw into (the driver's capture
@@ -2327,12 +2451,7 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         Widget* dw = widget_at(handle_for_hwnd(hwnd));
         COLORREF ground, line;
         w32_erase_ground(hwnd, hdc, &ground);
-        {
-            int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
-            int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
-            if (luma < 128) line = RGB(min(255, r8 + 28), min(255, g8 + 28), min(255, b8 + 28));
-            else            line = RGB(max(0, r8 - 40), max(0, g8 - 40), max(0, b8 - 40));
-        }
+        line = w32_rule_color(ground);
         if (dw && dw->fg.has_value) line = dw->fg.color;
         HPEN pen = CreatePen(PS_SOLID, 1, line);
         HPEN old = (HPEN)SelectObject(hdc, pen);
@@ -11481,9 +11600,24 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
         ScreenToClient(hwnd, &tl);
         int cwid = cr.right - cr.left, chgt = cr.bottom - cr.top;
         if (cwid <= 0 || chgt <= 0) continue;
+        // Clipped to every ancestor's client, as the screen clips a child
+        // window: what a parent cuts off (a row scrolled out of a
+        // scrollview's viewport, the overflow of a container) is not in
+        // the capture either.
+        RECT vis = cr;
+        for (HWND a = GetAncestor(cw->hwnd, GA_PARENT); a && a != hwnd; a = GetAncestor(a, GA_PARENT)) {
+            RECT ar;
+            POINT ao = { 0, 0 };
+            GetClientRect(a, &ar);
+            ClientToScreen(a, &ao);
+            OffsetRect(&ar, ao.x, ao.y);
+            IntersectRect(&vis, &vis, &ar);
+        }
+        if (vis.right <= vis.left || vis.bottom <= vis.top) continue;
         SaveDC(mem);
         SetViewportOrgEx(mem, tl.x, tl.y, NULL);
-        IntersectClipRect(mem, 0, 0, cwid, chgt);
+        IntersectClipRect(mem, vis.left - cr.left, vis.top - cr.top,
+                          vis.right - cr.left, vis.bottom - cr.top);
         // WM_PRINT, not WM_PRINTCLIENT: the flags are WM_PRINT's, which
         // DefWindowProc turns into the erase (a stack's ground, a spacer's),
         // the frame (a field's edge) and then WM_PRINTCLIENT for the
