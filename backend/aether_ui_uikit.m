@@ -4035,13 +4035,19 @@ int aether_ui_form_create(void) {
     f.translatesAutoresizingMaskIntoConstraints = NO;
     return register_widget_typed((__bridge void*)f, AUI_FORM);
 }
+// The DSL's section() returns handle + 1 as the box its children go into
+// (the inner container GTK4 and AppKit register right after the frame), so
+// the inner stack is registered before the title: it used to be the title,
+// and a section's fields were added to a UILabel.
 int aether_ui_form_section_create(const char* title) {
     int section = aether_ui_vstack_create(8);
+    int inner = aether_ui_vstack_create(8);          // handle + 1: the children's box
     if (title && title[0]) {
         int header = aether_ui_text_create(title);   // real text widget the driver sees
         aether_ui_set_font_bold(header, 1);
         aether_ui_widget_add_child_ctx((void*)(intptr_t)section, header);
     }
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)section, inner);
     // Mark it a form section for the driver's kind reporting.
     if (section >= 1 && section <= widget_count) widget_types[section - 1] = AUI_FORM;
     return section;

@@ -430,6 +430,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static HBRUSH w32_ground_brush(COLORREF c);
 static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
 static void w32_picker_cache_selection(Widget* w);
 static COLORREF w32_accent_color(void);
@@ -848,8 +849,20 @@ static void measure_widget(Widget* w, int* out_w, int* out_h) {
 
 static int w32_subtree_greedy(Widget* w, int orientation);  // fwd
 
-static int w32_fills_cross(int kind) {
+// A stack: one of this backend's own stack windows (create_stack), laid out
+// by stack_do_layout and measured bottom-up. The form, the form section and
+// the navstack are stacks with a kind of their own for the driver; every
+// test that meant "is this a stack" listed the three plain kinds and left
+// those out, so a form measured as nothing (its parent read a 0x0 window),
+// requested no layout and was absent from the screen -- the styled example
+// showed its title and its buttons and nothing between.
+static int w32_is_stack(int kind) {
     return kind == WK_VSTACK || kind == WK_HSTACK || kind == WK_ZSTACK
+        || kind == WK_FORM || kind == WK_FORM_SECTION || kind == WK_NAVSTACK;
+}
+
+static int w32_fills_cross(int kind) {
+    return w32_is_stack(kind)
         || kind == WK_TABS || kind == WK_SPLITVIEW || kind == WK_SCROLLVIEW
         || kind == WK_CANVAS || kind == WK_DIVIDER || kind == WK_WRAP;
 }
@@ -929,7 +942,7 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
             return;
         }
     }
-    if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK
+    if (w32_is_stack(w->kind)
         || w->kind == WK_TABS || w->kind == WK_SPLITVIEW) {
         measure_stack_natural(w, out_w, out_h);
         if (w->pref_width > 0) *out_w = w->pref_width;
@@ -1050,7 +1063,7 @@ static int w32_subtree_greedy(Widget* w, int orientation) {
                                           // regardless of their initial dims
                                           // (gp creates its treemap WITH dims
                                           // and still grows on resize there)
-    if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK
+    if (w32_is_stack(w->kind)
         || w->kind == WK_TABS || w->kind == WK_WRAP) {
         for (HWND c = GetWindow(w->hwnd, GW_CHILD); c;
              c = GetWindow(c, GW_HWNDNEXT)) {
@@ -1184,7 +1197,7 @@ static void w32_request_layout(HWND stack_hwnd) {
     while (h) {
         Widget* sw = widget_at(handle_for_hwnd(h));
         if (!sw) break;
-        if (!(sw->kind == WK_VSTACK || sw->kind == WK_HSTACK || sw->kind == WK_ZSTACK
+        if (!(w32_is_stack(sw->kind)
               || sw->kind == WK_SCROLLVIEW)) break;
         if (!w32_queue_layout(sw, h)) break;
         if (sw->kind == WK_SCROLLVIEW || sw->pref_height > 0) break;
@@ -1436,11 +1449,45 @@ static void stack_do_layout(HWND stack_hwnd) {
 
     // ZStack: overlay every child filling the client area.
     if (orientation == 2) {
+        // Every child fills the stack, inside its own margins: a label laid
+        // over a panel with margin_of(16, ...) is inset by 16, as on GTK4's
+        // overlay, rather than flush with the panel's edge.
+        //
+        // And the LAST child is on top, as in GTK4's overlay and AppKit's
+        // subview order: add_child pushes every new child to the bottom of
+        // the Z order so that enumeration reads in creation order, which is
+        // right for a row or a column and upside down for a zstack, where
+        // the label added after the panel was under it, and the two painted
+        // over each other in whichever order Windows chose. Children are
+        // raised in creation (handle) order, so the newest ends on top, and
+        // clip their lower siblings, so the panel never paints over the
+        // label again. Handles are monotonic, so this is stable across
+        // layouts however the enumeration reads afterwards.
+        for (int i = 1; i < nchildren; i++) {
+            HWND hv = children[i]; int j = i - 1;
+            while (j >= 0 && handle_for_hwnd(children[j]) > handle_for_hwnd(hv)) {
+                children[j + 1] = children[j]; j--;
+            }
+            children[j + 1] = hv;
+        }
         for (int i = 0; i < nchildren; i++) {
+            LONG_PTR st = GetWindowLongPtrW(children[i], GWL_STYLE);
+            if (!(st & WS_CLIPSIBLINGS))
+                SetWindowLongPtrW(children[i], GWL_STYLE, st | WS_CLIPSIBLINGS);
+            SetWindowPos(children[i], HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        for (int i = 0; i < nchildren; i++) {
+            Widget* cw = widget_at(handle_for_hwnd(children[i]));
+            int ml = cw ? cw->margin_left : 0, mt = cw ? cw->margin_top : 0;
+            int mr = cw ? cw->margin_right : 0, mb = cw ? cw->margin_bottom : 0;
+            int cwid = avail_w - ml - mr, chgt = avail_h - mt - mb;
+            if (cwid < 0) cwid = 0;
+            if (chgt < 0) chgt = 0;
             SetWindowPos(children[i], NULL,
-                         sl->padding_left, sl->padding_top,
-                         avail_w, avail_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
-            w32_note_layout(children[i], avail_w, avail_h);
+                         sl->padding_left + ml, sl->padding_top + mt,
+                         cwid, chgt, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+            w32_note_layout(children[i], cwid, chgt);
         }
         free(children);
         return;
@@ -1715,11 +1762,101 @@ static int w32_own_ground(const Widget* w, COLORREF* out) {
     return 0;
 }
 
-static int w32_ground_behind(HWND hwnd, COLORREF* out) {
-    while (hwnd) {
-        if (w32_own_ground(widget_at(handle_for_hwnd(hwnd)), out)) return 1;
-        hwnd = GetAncestor(hwnd, GA_PARENT);
+// The window whose ground shows behind `hwnd`: itself, else, in a zstack,
+// the nearest sibling under it (a zstack's children overlap, and a label
+// laid over a coloured panel sits on the panel, not on the zstack's own
+// ground), else the nearest ancestor. NULL when nothing has a ground and
+// the system's shows. `own` says whether it is hwnd itself.
+static HWND w32_ground_owner(HWND hwnd) {
+    HWND h = hwnd;
+    while (h) {
+        COLORREF c;
+        Widget* w = widget_at(handle_for_hwnd(h));
+        if (w32_own_ground(w, &c) || (w && w->gradient_enabled)) return h;
+        HWND parent = GetAncestor(h, GA_PARENT);
+        Widget* pw = widget_at(handle_for_hwnd(parent));
+        if (pw && pw->kind == WK_ZSTACK) {
+            for (HWND sib = GetWindow(h, GW_HWNDNEXT); sib; sib = GetWindow(sib, GW_HWNDNEXT)) {
+                Widget* sw = widget_at(handle_for_hwnd(sib));
+                if (sw && !sw->dead && w32_own_visible(sib)
+                    && (w32_own_ground(sw, &c) || sw->gradient_enabled)) return sib;
+            }
+        }
+        h = parent;
     }
+    return NULL;
+}
+
+static int w32_ground_behind(HWND hwnd, COLORREF* out) {
+    HWND owner = w32_ground_owner(hwnd);
+    if (!owner) return 0;
+    Widget* w = widget_at(handle_for_hwnd(owner));
+    if (w32_own_ground(w, out)) return 1;
+    // A gradient: its midpoint, for the callers that need one colour (the
+    // text's legibility, a control that can only take a brush).
+    if (w && w->gradient_enabled) {
+        *out = RGB((GetRValue(w->grad_a) + GetRValue(w->grad_b)) / 2,
+                   (GetGValue(w->grad_a) + GetGValue(w->grad_b)) / 2,
+                   (GetBValue(w->grad_a) + GetBValue(w->grad_b)) / 2);
+        return 1;
+    }
+    return 0;
+}
+
+// Paint a widget's gradient across `r` (client coordinates of the DC's
+// window), where the gradient's owner is `owner` and the DC belongs to a
+// window offset by (dx, dy) from the owner's client origin: a child's
+// WM_CTLCOLOR paints the slice of the parent's gradient under itself, so
+// a caption on a gradient header reads as text over the header rather
+// than a box of one colour. GDI's GradientFill (msimg32).
+static void w32_paint_gradient(HDC hdc, const RECT* r, const Widget* owner,
+                               int dx, int dy, int owner_w, int owner_h) {
+    if (!owner || owner_w <= 0 || owner_h <= 0) return;
+    // The whole gradient, positioned so that the visible part is the slice.
+    TRIVERTEX v[2];
+    v[0].x = -dx; v[0].y = -dy;
+    v[0].Red = (COLOR16)(GetRValue(owner->grad_a) << 8);
+    v[0].Green = (COLOR16)(GetGValue(owner->grad_a) << 8);
+    v[0].Blue = (COLOR16)(GetBValue(owner->grad_a) << 8);
+    v[0].Alpha = 0;
+    v[1].x = -dx + owner_w; v[1].y = -dy + owner_h;
+    v[1].Red = (COLOR16)(GetRValue(owner->grad_b) << 8);
+    v[1].Green = (COLOR16)(GetGValue(owner->grad_b) << 8);
+    v[1].Blue = (COLOR16)(GetBValue(owner->grad_b) << 8);
+    v[1].Alpha = 0;
+    GRADIENT_RECT g = { 0, 1 };
+    SaveDC(hdc);
+    IntersectClipRect(hdc, r->left, r->top, r->right, r->bottom);
+    GradientFill(hdc, v, 2, &g, 1,
+                 owner->grad_vertical ? GRADIENT_FILL_RECT_V : GRADIENT_FILL_RECT_H);
+    RestoreDC(hdc, -1);
+}
+
+// Paint the ground behind `hwnd` over its client area: the slice of a
+// gradient when the ground's owner has one, the solid ground otherwise,
+// the system's when nothing above has any. What every container, spacer
+// and rule erases with, so a spacer in a gradient header is the header's
+// gradient continuing, not a box of the midpoint colour. Returns 1 when
+// a gradient was painted (the caller then has no solid colour to draw on).
+static int w32_erase_ground(HWND hwnd, HDC hdc, COLORREF* solid_out) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    HWND owner = w32_ground_owner(hwnd);
+    Widget* ow = owner ? widget_at(handle_for_hwnd(owner)) : NULL;
+    COLORREF solid;
+    if (ow && ow->gradient_enabled && !w32_own_ground(ow, &solid)) {
+        RECT orc;
+        POINT o = { 0, 0 };
+        GetClientRect(owner, &orc);
+        MapWindowPoints(hwnd, owner, &o, 1);
+        w32_paint_gradient(hdc, &r, ow, o.x, o.y,
+                           orc.right - orc.left, orc.bottom - orc.top);
+        w32_ground_behind(hwnd, solid_out);   // the midpoint, for anything drawn on it
+        return 1;
+    }
+    if (!w32_ground_behind(hwnd, &solid)) solid = w32_system_ground();
+    FillRect(hdc, &r, w32_ground_brush(solid));
+    *solid_out = solid;
     return 0;
 }
 
@@ -1914,12 +2051,16 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                gap hoverpaint finally specs): a hovered row kept its base.
                A container with no ground of its own shows its ancestor's. */
             COLORREF bg;
-            if (w32_ground_behind(hwnd, &bg)) {
+            {
+                // The ground: its own, the one behind it, or the system's;
+                // a gradient's slice where the owner has one (a plain
+                // container inside a gradient header shows the header's
+                // gradient continuing under itself).
                 HDC hdc = (HDC)wp;
                 RECT r;
                 Widget* w = widget_at(handle_for_hwnd(hwnd));
                 GetClientRect(hwnd, &r);
-                FillRect(hdc, &r, w32_ground_brush(bg));
+                w32_erase_ground(hwnd, hdc, &bg);
                 // The sheet's border, where the container has one: drawn
                 // inside the edge, one ring a pixel of width, which is
                 // what the insets a bordered panel carries leave room for.
@@ -1932,13 +2073,6 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                         FrameRect(hdc, &e, edge);
                     }
                 }
-                return 1;
-            }
-            {
-                HDC hdc = (HDC)wp;
-                RECT r;
-                GetClientRect(hwnd, &r);
-                FillRect(hdc, &r, w32_ground_brush(w32_system_ground()));
                 return 1;
             }
         }
@@ -2042,6 +2176,28 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             int ch = handle_for_hwnd(child);
             Widget* cw = widget_at(ch);
             COLORREF ground;
+            {
+                // On a gradient (its own, or the header's it sits in): the
+                // slice of it under the control painted here, into the
+                // control's DC, and no brush -- the text is drawn over it.
+                HWND owner = w32_ground_owner(child);
+                Widget* ow = owner ? widget_at(handle_for_hwnd(owner)) : NULL;
+                COLORREF solid;
+                if (ow && ow->gradient_enabled && !w32_own_ground(ow, &solid)) {
+                    RECT r, orc;
+                    POINT o = { 0, 0 };
+                    GetClientRect(child, &r);
+                    GetClientRect(owner, &orc);
+                    MapWindowPoints(child, owner, &o, 1);
+                    w32_paint_gradient(hdc, &r, ow, o.x, o.y,
+                                       orc.right - orc.left, orc.bottom - orc.top);
+                    w32_ground_behind(child, &ground);   // the midpoint, for the text
+                    SetTextColor(hdc, (cw && cw->fg.has_value) ? cw->fg.color
+                                                               : w32_legible_text(ground));
+                    SetBkMode(hdc, TRANSPARENT);
+                    return (LRESULT)GetStockObject(NULL_BRUSH);
+                }
+            }
             if (w32_ground_behind(child, &ground)) {
                 // The control's own ground, or the one behind it: painted
                 // opaque under the text, so ClearType has a ground to blend
@@ -2118,8 +2274,7 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         // or a pale grey cut across a dark theme.
         Widget* dw = widget_at(handle_for_hwnd(hwnd));
         COLORREF ground, line;
-        if (!w32_ground_behind(hwnd, &ground)) ground = w32_system_ground();
-        FillRect(hdc, &r, w32_ground_brush(ground));
+        w32_erase_ground(hwnd, hdc, &ground);
         {
             int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
             int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
@@ -2154,11 +2309,7 @@ static LRESULT CALLBACK spacer_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         // A spacer is the ground behind it, painted: left unerased it kept
         // whatever the window last showed there.
         COLORREF bg;
-        if (w32_ground_behind(hwnd, &bg)) {
-            RECT r;
-            GetClientRect(hwnd, &r);
-            FillRect((HDC)wp, &r, w32_ground_brush(bg));
-        }
+        w32_erase_ground(hwnd, (HDC)wp, &bg);
         return 1;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -2229,8 +2380,7 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 int ch = handle_for_hwnd(c);
                 Widget* cw = widget_at(ch);
                 if (!cw) continue;
-                if (cw->kind == WK_VSTACK || cw->kind == WK_HSTACK
-                    || cw->kind == WK_ZSTACK || cw->kind == WK_TABS
+                if (w32_is_stack(cw->kind) || cw->kind == WK_TABS
                     || cw->kind == WK_SPLITVIEW || cw->kind == WK_WRAP
                     || cw->kind == WK_SCRIM) {
                     SetWindowPos(c, NULL, 0, 0,
@@ -2944,7 +3094,7 @@ static void w32_refit_text(Widget* w) {
         (nat_w != r.right - r.left || nat_h != r.bottom - r.top)) {
         HWND parent = GetAncestor(w->hwnd, GA_PARENT);
         Widget* pw = widget_at(handle_for_hwnd(parent));
-        if (pw && (pw->kind == WK_VSTACK || pw->kind == WK_HSTACK || pw->kind == WK_ZSTACK)) {
+        if (pw && (w32_is_stack(pw->kind))) {
             stack_do_layout(parent);
         }
     }
@@ -3663,7 +3813,7 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     // Push each new child to the BOTTOM so enumeration matches creation order.
     SetWindowPos(c->hwnd, HWND_BOTTOM, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    if (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK) {
+    if (w32_is_stack(p->kind)) {
         w32_request_layout(p->hwnd);   // once per rebuild, not once per child
     }
 }
@@ -4110,7 +4260,7 @@ void aether_ui_widget_weight_impl(int handle, int n) {
 
 void aether_ui_set_rtl(int handle, int on) {
     Widget* w = widget_at(handle);
-    if (w && (w->kind == WK_HSTACK || w->kind == WK_VSTACK || w->kind == WK_ZSTACK)) {
+    if (w && (w32_is_stack(w->kind))) {
         w->stack.rtl = on ? 1 : 0;
         if (w->hwnd) stack_do_layout(w->hwnd);
     }
@@ -4359,10 +4509,21 @@ int aether_ui_form_create(void) {
     return handle;
 }
 
+// The DSL's section() returns handle + 1 as the box its children go into,
+// the inner container GTK4 and AppKit register right after the frame. This
+// backend registered the TITLE right after the section, so every child of
+// a section was parented to a STATIC label: nothing measured, nothing
+// placed, a form's fields and toggles simply absent from the window (the
+// styled example showed its title and its buttons and nothing between).
+// The inner box is registered first now, then the title; visually the
+// title comes first.
 int aether_ui_form_section_create(const char* title) {
     int handle = create_stack(1, 6);
     Widget* w = widget_at(handle);
     if (w) w->kind = WK_FORM_SECTION;
+    int inner = create_stack(1, 8);                 // handle + 1: the children's box
+    Widget* iw = widget_at(inner);
+    if (iw) iw->stack.padding_left = iw->stack.padding_right = 8;
     if (title && *title) {
         int th = aether_ui_text_create(title);
         Widget* tw = widget_at(th);
@@ -4378,6 +4539,7 @@ int aether_ui_form_section_create(const char* title) {
         }
         aether_ui_widget_add_child_ctx((void*)(intptr_t)handle, th);
     }
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)handle, inner);
     return handle;
 }
 
@@ -4569,7 +4731,7 @@ static void w32_refont_tree(HWND top, UINT dpi) {
         if (GetAncestor(w->hwnd, GA_ROOT) != top) continue;
         if (w->font_size > 0 || w->font_bold || w->font_family) apply_font(w);
         else SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)font, TRUE);
-        if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK)
+        if (w32_is_stack(w->kind))
             w32_request_layout(w->hwnd);
     }
 }
@@ -4888,7 +5050,7 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
     w->stack.padding_right = (int)right;
     w->stack.padding_bottom = (int)bottom;
     w->stack.padding_left = (int)left;
-    if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK) {
+    if (w32_is_stack(w->kind)) {
         stack_do_layout(w->hwnd);
     }
 }
@@ -4965,7 +5127,9 @@ void aether_ui_set_tooltip(int handle, const char* text) {
             NULL, NULL, GetModuleHandleW(NULL), NULL);
     }
     if (w->tooltip) free(w->tooltip);
-    if (w->text_cache) { free(w->text_cache); w->text_cache = NULL; }
+    // The widget's own text stays cached: a tooltip is not the caption, and
+    // dropping the cache here left every button with a tooltip reporting
+    // "" to the driver (and to the a11y name fallback).
     w->tooltip = _wcsdup(utf8_to_wide(text));
     TOOLINFOW ti;
     memset(&ti, 0, sizeof(ti));
@@ -5564,26 +5728,28 @@ static void measure_subtree(HWND hwnd, int* out_w, int* out_h) {
     int handle = handle_for_hwnd(hwnd);
     Widget* w = handle ? widget_at(handle) : NULL;
     if (!w) { *out_w = 0; *out_h = 0; return; }
-    if (w->kind == WK_VSTACK || w->kind == WK_HSTACK || w->kind == WK_ZSTACK) {
+    if (w32_is_stack(w->kind)) {
         int total_w = 0, total_h = 0, n = 0;
         for (HWND c = GetWindow(hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
             int cw = 0, ch = 0;
             measure_subtree(c, &cw, &ch);
-            if (w->kind == WK_VSTACK) {
+            // By orientation, not kind: a form, a section and a navstack are
+            // vertical stacks too.
+            if (w->kind == WK_ZSTACK) {
+                if (cw > total_w) total_w = cw;
+                if (ch > total_h) total_h = ch;
+            } else if (w->stack.orientation == 1) {
                 if (cw > total_w) total_w = cw;
                 total_h += ch;
-            } else if (w->kind == WK_HSTACK) {
-                total_w += cw;
-                if (ch > total_h) total_h = ch;
             } else {
-                if (cw > total_w) total_w = cw;
+                total_w += cw;
                 if (ch > total_h) total_h = ch;
             }
             n++;
         }
         int sp = (n > 1) ? (n - 1) * w->stack.spacing : 0;
-        if (w->kind == WK_VSTACK) total_h += sp;
-        if (w->kind == WK_HSTACK) total_w += sp;
+        if (w->kind != WK_ZSTACK && w->stack.orientation == 1) total_h += sp;
+        if (w->kind != WK_ZSTACK && w->stack.orientation != 1) total_w += sp;
         // Stack margins apply during parent layout; include our own padding.
         *out_w = total_w + w->margin_left + w->margin_right + 16;
         *out_h = total_h + w->margin_top + w->margin_bottom + 16;
@@ -9935,7 +10101,7 @@ void aether_ui_remove_child_impl(int parent_handle, int child_handle) {
         mark_subtree_dead(c->hwnd);
         DestroyWindow(c->hwnd);
     }
-    if (p && (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK)) {
+    if (p && (w32_is_stack(p->kind))) {
         w32_request_layout(p->hwnd);
     }
 }
@@ -10073,7 +10239,7 @@ void aether_ui_clear_children_impl(int handle) {
         DestroyWindow(c);
         c = next;
     }
-    if (p->kind == WK_VSTACK || p->kind == WK_HSTACK || p->kind == WK_ZSTACK) {
+    if (w32_is_stack(p->kind)) {
         w32_request_layout(p->hwnd);
     }
 }

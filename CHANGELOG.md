@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A form section's children go into the section, on win32 and UIKit.**
+  The DSL's `section()` returns handle + 1 as the box its children go
+  into, the inner container GTK4 and AppKit register right after the
+  frame; those two backends registered the TITLE right after the section,
+  so every field and toggle of a section was parented to a label and
+  absent from the window. The inner box is registered first now.
+- **win32 treats forms, sections and navstacks as the stacks they are.**
+  Every "is this a stack" test named the three plain kinds, so a form
+  measured as nothing (its parent read a 0x0 window), requested no layout
+  and did not show. One predicate, `w32_is_stack`, at every site;
+  `measure_subtree` goes by orientation rather than kind.
+- **win32 paints `style_bg_gradient`.** The gradient was stored and never
+  drawn. A container's erase paints it (`GradientFill`), and a label, a
+  spacer or a rule inside paints the slice of it under itself
+  (`w32_erase_ground`, `WM_CTLCOLOR` with a hollow brush), so a caption on
+  a gradient header reads as text over the header.
+- **win32 zstack: the last child is on top, and margins hold.** add_child
+  pushes every new child to the bottom of the Z order (right for a row or
+  a column), so in a zstack the label added after the panel was under it
+  and the two painted over each other in whichever order Windows chose.
+  Children are raised in creation order and clip their lower siblings; a
+  child's margins inset it (`margin_of` over a panel), as on GTK4's
+  overlay. A label over a coloured panel takes the panel's ground
+  (`w32_ground_owner` looks through a zstack's lower siblings), not the
+  zstack's.
+- **win32 `style_tooltip` no longer wipes the widget's text.** It freed
+  the text cache, so every button with a tooltip reported `""` to the
+  driver and to the a11y name fallback.
 - **win32: a canvas grows with its window, and `on_resize` fires.**
   `canvas_create`'s width and height are the canvas's natural size on
   every backend (GTK4 expands the drawing area past its content size,
