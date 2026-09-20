@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **win32 tabs look like tabs.** The strip's buttons were push buttons,
+  the selected one bold; they are flat captions now, the selected one
+  bold with a two-pixel accent underline, as a tab strip reads on every
+  desktop. A driver click on a strip button selects its tab (it used to
+  invoke an `on_click` the button never had), as its `BN_CLICKED` does.
 - **`flat()` / `style_flat(handle)`: a button with no frame and no face of
   its own until the pointer is over it** -- a toolbar's icon buttons, a
   tree's disclosure chevron, an inline action next to a field. One ABI

@@ -205,6 +205,7 @@ typedef struct {
     COLORREF border_color;
     int owner_drawn;           // styled painter installed (see styled_btn_proc)
     int flat;                  // button: no frame, no face until hovered (styled_btn_proc)
+    int tab_active;            // a tab strip's selected button: bold, accent underline
     int scroll_y;              // scrollview: how far its document is scrolled up
     int hover_set;             // interaction states (0=hover, 1=active)
     COLORREF hover_bg;
@@ -4356,10 +4357,13 @@ static void tabs_do_select(TabsState* ts, int index, int fire) {
     for (int p = 0; p < ts->page_count; p++) {
         Widget* pg = widget_at(ts->page_handles[p]);
         if (pg) ShowWindow(pg->hwnd, p == index ? SW_SHOW : SW_HIDE);
-        // Active strip button gets a bold font as the visible selection cue.
+        // The selected strip button reads as the selected tab: bold, and an
+        // accent underline (styled_btn_proc); the others are flat captions.
         Widget* bw = widget_at(ts->btn_handles[p]);
         if (bw && bw->hwnd) {
             HFONT base = w32_ui_font(bw->hwnd);
+            bw->tab_active = (p == index);
+            InvalidateRect(bw->hwnd, NULL, TRUE);
             if (p == index) {
                 LOGFONTW lf; GetObjectW(base, sizeof(lf), &lf);
                 lf.lfWeight = FW_BOLD;
@@ -4417,6 +4421,7 @@ int aether_ui_tab_add(int tabs_handle, const char* title) {
 
     // Strip button for this tab (click → select this index; wired in WM_COMMAND).
     int btn = aether_ui_button_create_plain(title ? title : "");
+    aether_ui_button_set_flat(btn, 1);    // a tab is a caption, not a push button
     aether_ui_widget_add_child_ctx((void*)(intptr_t)ts->header_handle, btn);
 
     // Page body is a vstack, so the tab's block children attach as in any vstack.
@@ -5005,6 +5010,12 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
                 DrawTextW(hdc, text, tlen, &rc,
                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 if (oldf) SelectObject(hdc, oldf);
+            }
+            if (w->tab_active) {
+                // The selected tab's underline, two pixels of accent along
+                // the bottom, what a tab strip draws on every desktop.
+                RECT u = { rc.left + w32_px(hwnd, 6), rc.bottom - w32_px(hwnd, 2), rc.right - w32_px(hwnd, 6), rc.bottom };
+                FillRect(hdc, &u, w32_ground_brush(w32_accent_color()));
             }
             if (!printing) EndPaint(hwnd, &ps);
             return 0;
@@ -10850,6 +10861,17 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     }
                     ctx->retval = 1;
                     break;
+                }
+                // A tab strip's button selects its tab, as its BN_CLICKED
+                // does: it carries no on_click of its own.
+                if (w->kind == WK_BUTTON) {
+                    int tab_idx = -1;
+                    TabsState* ts = tabs_state_for_button(ctx->handle, &tab_idx);
+                    if (ts) {
+                        if (!w->sealed) tabs_do_select(ts, tab_idx, 1);
+                        ctx->retval = 1;
+                        break;
+                    }
                 }
                 // Buttons and ANY widget with an on_click handler (listbox
                 // rows are plain containers) — mirrors the GTK4 server's
