@@ -436,6 +436,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static HWND w32_primary_app_hwnd(void);
 static HFONT w32_ui_font(HWND hwnd);
 static HBRUSH w32_ground_brush(COLORREF c);
 static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
@@ -1211,9 +1212,17 @@ static void w32_request_layout(HWND stack_hwnd) {
         h = GetAncestor(h, GA_PARENT);
     }
     // Wake the run loop so the flush is not left waiting on the next event:
-    // a rebuild from a timer with nothing else queued must still land.
+    // a rebuild from a timer with nothing else queued must still land, and
+    // a held stack (w32_hold_redraw) paints nothing and so raises no
+    // WM_PAINT to wake the loop with: without this wake an app left alone
+    // after a change sat unpainted until the pointer crossed it. The
+    // message goes to a window whose proc flushes -- the app's, once there
+    // is one; the holder, a stack window, before that (its proc flushes
+    // too) -- and the flag that keeps this to one post per flush is reset
+    // by the flush itself.
     if (!w32_layout_flush_posted) {
-        HWND top = GetAncestor(stack_hwnd, GA_ROOT);
+        HWND top = w32_primary_app_hwnd();
+        if (!top) top = GetAncestor(stack_hwnd, GA_ROOT);
         if (top && PostMessageW(top, AE_WM_FLUSH_LAYOUT, 0, 0)) {
             w32_layout_flush_posted = 1;
         }
@@ -1694,7 +1703,16 @@ static void stack_do_layout(HWND stack_hwnd) {
             cur = x + w + mc[i].margin_r + sl->spacing;
             if (rtl) x = client_w - x - w;   // mirror within the row
         }
-        SetWindowPos(children[i], NULL, x, y, w, h,
+        // A combo box's window height is the height of its OPEN list: the
+        // closed control sizes itself to its font, and the rest of the
+        // window is where the list drops down. So the picker takes its
+        // closed height in the flow (what was measured) and is given a
+        // window eight rows taller, as a dialog does. It used to be given
+        // the list height as its layout height, and the row after a picker
+        // sat 180px lower than it should.
+        int wh = h;
+        if (mc[i].kind == WK_PICKER) wh = h + w32_px(children[i], 176);
+        SetWindowPos(children[i], NULL, x, y, w, wh,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         w32_note_layout(children[i], w, h);
     }
@@ -1947,6 +1965,11 @@ static Widget* w32_scrollview_under(POINT screen) {
 
 static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case AE_WM_FLUSH_LAYOUT:
+            // The wake w32_request_layout posts reaches the holder (a stack
+            // window) while no app window exists yet.
+            w32_flush_layout();
+            return 0;
         case WM_SIZE:
             stack_do_layout(hwnd);
             w32_note_layout(hwnd, LOWORD(lp), HIWORD(lp));
@@ -2826,6 +2849,7 @@ typedef struct {
 
 static AppEntry* apps = NULL;
 static int app_count = 0;
+static HWND w32_primary_app_hwnd(void) { return (app_count > 0) ? apps[0].hwnd : NULL; }
 static int app_capacity = 0;
 
 int aether_ui_app_create(const char* title, int width, int height) {
@@ -4167,9 +4191,20 @@ int aether_ui_picker_create(void* boxed_closure) {
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
+    // The dark system's combo box: the common file dialog's theme for the
+    // box (as for a field), Explorer's for the list that drops down, which
+    // is a window of its own (COMBOBOXINFO). A light box on a dark form
+    // was the one control left in the light theme.
+    if (aether_ui_dark_mode_check()) {
+        w32_system_dark_edit(h);
+        COMBOBOXINFO cbi;
+        memset(&cbi, 0, sizeof(cbi));
+        cbi.cbSize = sizeof(cbi);
+        if (GetComboBoxInfo(h, &cbi) && cbi.hwndList) w32_system_dark_control(cbi.hwndList);
+    }
     int handle = register_widget_typed(h, WK_PICKER);
     Widget* w = widget_at(handle);
-    if (w) { w->on_change = (AeClosure*)boxed_closure; w->pref_height = 200; }
+    if (w) w->on_change = (AeClosure*)boxed_closure;   // closed height: the measure's 26
     return handle;
 }
 
@@ -11256,6 +11291,10 @@ static int hook_widget_pressed(int handle) {
 
 static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     if (app_count == 0) return -1;
+    // A layout still owed is a tree not yet placed, and a held stack is one
+    // not yet painted: settle first, as every geometry read does, so the
+    // capture is of the tree as it will be seen.
+    w32_drv_settle_layout();
     HWND hwnd = apps[0].hwnd;
     if (!hwnd) return -1;
     RECT r;

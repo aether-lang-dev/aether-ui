@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a held stack paints without being prodded, and the picker is
+  one row tall.** A stack under a redraw hold (a layout still owed) raises
+  no `WM_PAINT`, so the wake that lands the flush was the only thing that
+  made it paint -- and that wake was posted to the stack's own root, which
+  before the app window exists is the widget holder, whose proc dropped
+  it: an app left alone after a rebuild sat unpainted until the pointer
+  crossed it, and the driver captured a blank window. The wake goes to
+  the app window (the holder flushes too, for a tree built before there
+  is one) and a screenshot settles the layout first, as every geometry
+  read does. A combo box's window height is the height of its OPEN list,
+  so the picker takes its closed height in the flow and is given the list
+  room in its window, as a dialog does: the row after a picker sat 180px
+  lower than it should. The box and its list wear the dark theme on a
+  dark system; the picker was the one control left light.
+
 - **win32: a skin reaches everything.** A container whose ground changed
   repaints with everything in it that paints the ground behind itself (a
   caption, a spacer, a rule, a flat button): a skin switched from dark to
