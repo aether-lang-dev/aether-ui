@@ -338,6 +338,10 @@ typedef struct {
     // The one class with a look of its own: a selected list row paints the
     // selection ground (w32_selection_ground) over whatever ground it has.
     int row_selected;
+    // A modal overlay's card: the lifted ground, the hairline frame and the
+    // rounded corners GTK4's .aui-overlay-card gives it (w32_own_ground,
+    // the stack's erase, aether_ui_overlay_open_impl).
+    int overlay_card;
 } Widget;
 
 static Widget** widgets = NULL;
@@ -1740,6 +1744,12 @@ static void w32_set_text(Widget* w, const char* text) {
 // ancestor's; only with no ancestor painted at all does the class brush
 // stand.
 // ---------------------------------------------------------------------------
+// The ground of a modal card: lifted a step from the window's, as a card
+// is on every desktop (a shade lighter on a dark system, white on a light).
+static COLORREF w32_card_ground(void) {
+    return aether_ui_dark_mode_check() ? RGB(0x2b, 0x2b, 0x2b) : RGB(0xff, 0xff, 0xff);
+}
+
 // The ground of a selected list row: the user's accent, as a tint the row's
 // text stays legible on -- a quarter of it over white on a light system, a
 // good third over the dark ground on a dark one, the weights Windows' own
@@ -1761,6 +1771,7 @@ static int w32_own_ground(const Widget* w, COLORREF* out) {
     if (w->hover_set && w->is_hovered)  { *out = w->hover_bg;  return 1; }
     if (w->row_selected)                { *out = w32_selection_ground(); return 1; }
     if (w->bg.has_value)                { *out = w->bg.color;  return 1; }
+    if (w->overlay_card)                { *out = w32_card_ground(); return 1; }
     return 0;
 }
 
@@ -2063,6 +2074,18 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 Widget* w = widget_at(handle_for_hwnd(hwnd));
                 GetClientRect(hwnd, &r);
                 w32_erase_ground(hwnd, hdc, &bg);
+                // A modal card's hairline, a fifth of the way from its
+                // ground to its text, inside the rounded edge.
+                if (w && w->overlay_card && !(w->border_set && w->border_width > 0)) {
+                    COLORREF ink = w32_legible_text(bg);
+                    COLORREF line = RGB((GetRValue(bg) * 80 + GetRValue(ink) * 20) / 100,
+                                        (GetGValue(bg) * 80 + GetGValue(ink) * 20) / 100,
+                                        (GetBValue(bg) * 80 + GetBValue(ink) * 20) / 100);
+                    HRGN rgn = CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1,
+                                                  w32_px(hwnd, 20), w32_px(hwnd, 20));
+                    FrameRgn(hdc, rgn, w32_ground_brush(line), 1, 1);
+                    DeleteObject(rgn);
+                }
                 // The sheet's border, where the container has one: drawn
                 // inside the edge, one ring a pixel of width, which is
                 // what the insets a bordered panel carries leave room for.
@@ -5792,9 +5815,13 @@ static void measure_subtree(HWND hwnd, int* out_w, int* out_h) {
         int sp = (n > 1) ? (n - 1) * w->stack.spacing : 0;
         if (w->kind != WK_ZSTACK && w->stack.orientation == 1) total_h += sp;
         if (w->kind != WK_ZSTACK && w->stack.orientation != 1) total_w += sp;
-        // Stack margins apply during parent layout; include our own padding.
-        *out_w = total_w + w->margin_left + w->margin_right + 16;
-        *out_h = total_h + w->margin_top + w->margin_bottom + 16;
+        // Stack margins apply during parent layout; include our own padding,
+        // the stack's own where it has any (a modal card's 20px), else the
+        // 16 a detached card has always been given.
+        int pw = w->stack.padding_left + w->stack.padding_right;
+        int ph = w->stack.padding_top + w->stack.padding_bottom;
+        *out_w = total_w + w->margin_left + w->margin_right + (pw > 0 ? pw : 16);
+        *out_h = total_h + w->margin_top + w->margin_bottom + (ph > 0 ? ph : 16);
         return;
     }
     measure_widget(w, out_w, out_h);
@@ -5990,6 +6017,20 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
     // anchor. anchor packs halign in bits 0-1 (0=start 1=center 2=end) and
     // valign in bits 2-3: code = h + v*4; dx/dy are SIGNED insets (positive
     // from start/top, negative from end/bottom).
+    // A modal's content is a card: GTK4 gives it .aui-overlay-card (the
+    // theme's ground, a hairline border, 10px corners, 20px of padding).
+    // The same here, before the measure so the padding is in the size.
+    // A toast is one too (aether_ui_toast_impl marks it).
+    if (modal || content->overlay_card) {
+        content->overlay_card = 1;
+        if (w32_is_stack(content->kind)) {
+            int pad = w32_px(content->hwnd, 20);
+            if (content->stack.padding_left == 0)   content->stack.padding_left = pad;
+            if (content->stack.padding_right == 0)  content->stack.padding_right = pad;
+            if (content->stack.padding_top == 0)    content->stack.padding_top = pad;
+            if (content->stack.padding_bottom == 0) content->stack.padding_bottom = pad;
+        }
+    }
     int cw = 0, ch = 0;
     measure_subtree(content->hwnd, &cw, &ch);
     if (cw < 40) cw = 40;
@@ -6016,6 +6057,21 @@ int aether_ui_overlay_open_impl(int win_handle, int content_handle,
     SetParent(content->hwnd, host);
     SetWindowPos(content->hwnd, HWND_TOP, x, y, cw, ch,
                  was_visible ? SWP_SHOWWINDOW : SWP_NOACTIVATE);
+    // Overlay content is a layered window, at full alpha. The compositor
+    // draws a layered child above every non-layered sibling whatever the Z
+    // order says, and the app's root stack repaints over a plain sibling
+    // whenever it repaints: a plain card under the layered scrim was dimmed
+    // out of sight with the rest of the app, and a toast, a plain label
+    // over the root stack, was painted over by it -- on screen and in
+    // every capture, however hard HWND_TOP tried. Layered siblings compose
+    // in Z order. Owed until the window shows, like any other alpha
+    // (w32_present_opacity).
+    w32_present_opacity(content, 1.0);
+    if (content->overlay_card) {
+        HRGN rgn = CreateRoundRectRgn(0, 0, cw + 1, ch + 1,
+                                      w32_px(content->hwnd, 20), w32_px(content->hwnd, 20));
+        SetWindowRgn(content->hwnd, rgn, TRUE);   // the window owns rgn now
+    }
     e->content = content->hwnd;
     w32_overlay_count++;
     return handle;
@@ -6138,10 +6194,20 @@ static void CALLBACK toast_timer_proc(HWND hwnd, UINT msg, UINT_PTR id, DWORD no
 }
 
 int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
-    // A real registered text widget, opened bottom-center, non-modal,
-    // lifted 24px off the edge (anchor 9 = h:1 center, v:2 bottom).
+    // A real registered text widget in a card (the lifted ground, the
+    // hairline, the rounded corners GTK4's .aui-toast has), opened
+    // bottom-center, non-modal, lifted 24px off the edge (anchor 9 = h:1
+    // center, v:2 bottom).
+    int card = create_stack(1, 0);
+    Widget* cardw = widget_at(card);
+    if (cardw) {
+        cardw->overlay_card = 1;
+        cardw->stack.padding_top = cardw->stack.padding_bottom = w32_px(cardw->hwnd, 10);
+        cardw->stack.padding_left = cardw->stack.padding_right = w32_px(cardw->hwnd, 18);
+    }
     int content = aether_ui_text_create(text ? text : "");
-    int handle = aether_ui_overlay_open_impl(win_handle, content, 9, 0, -24, 0);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)card, content);
+    int handle = aether_ui_overlay_open_impl(win_handle, card, 9, 0, -24, 0);
     if (handle > 0 && ms > 0) {
         UINT_PTR sid = SetTimer(NULL, 0, (UINT)ms, toast_timer_proc);
         for (int i = 0; i < 16; i++) {
