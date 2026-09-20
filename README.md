@@ -140,7 +140,7 @@ main() {
     counter = ui.ui_state(0)
 
     ui.window("My App", 400, 200) {
-        ui.vstack(10) {
+        root = ui.vstack(10) {
             ui.text("Hello World")
             ui.text_bound(counter, "Count: ", "")
             ui.hstack(5) {
@@ -152,6 +152,7 @@ main() {
                 }
             }
         }
+        _ci = ui.content_inset(root)   // the standard 12px window gutter
     }
 }
 ```
@@ -159,6 +160,9 @@ main() {
 The `window(…) { … }` block builds the tree, then — because it's a `builder`
 function whose body runs *after* the block — opens the window and runs the
 event loop. No trailing `app_run(root)`: the surface *is* the entry point.
+`content_inset(root)` is the one line that keeps the content off the window's
+frame; it is opt-in, because a container's geometry is a contract apps read
+(`on_layout`, pointer mapping), so nothing insets a window behind your back.
 
 ## Surfaces (window / render_to / record)
 

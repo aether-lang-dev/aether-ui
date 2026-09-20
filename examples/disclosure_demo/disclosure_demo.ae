@@ -13,7 +13,7 @@
 //
 // Run: DISPLAY=:0 ./target/build/examples/disclosure_demo/bin/disclosure_demo
 
-import ui (
+import ui (content_inset,
     window, vstack, hstack, text, btn, textfield, enable_test_server,
     edge_insets, style_corner_radius, style_border, style_bg_color,
     style_text_color, style_hover
@@ -33,7 +33,7 @@ main() {
     app = malloc(sizeof(App)) as *App
 
     window("Disclosure — collapsible sections", 480, 420) {
-        vstack(6) {
+        root = vstack(6) {
             text("Click a header to expand or collapse its section:")
 
             app.filters = disclosure("Filters", 1) callback |body: int| {
@@ -67,6 +67,8 @@ main() {
             text("Collapsed bodies report visible=false and h=0 — the space")
             text("really is reclaimed, so the rows below rise.")
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }

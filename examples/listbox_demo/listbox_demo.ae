@@ -9,7 +9,7 @@
 //   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, scrollview,
+import ui (content_inset, window, vstack, hstack, text, btn, divider, scrollview,
     listbox, listbox_update, listbox_select, listbox_selected, listbox_count,
     on_select, enable_test_server, fill_height)
 import std.os (os_getenv)
@@ -33,7 +33,7 @@ main() {
     next_n = 0
 
     window("listbox demo", 520, 480) {
-        vstack(8) {
+        root = vstack(8) {
             status = text("status: idle")
             counter = text("rows: 0")
             divider()
@@ -82,6 +82,8 @@ main() {
                 }
             }
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }

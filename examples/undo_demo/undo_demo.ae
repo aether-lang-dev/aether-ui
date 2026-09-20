@@ -6,7 +6,7 @@
 //   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider,
+import ui (content_inset, window, vstack, hstack, text, btn, divider,
     undoable, undo, redo, enable_undo_shortcuts, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -20,7 +20,7 @@ struct Cnt { v: int }
 
 main() {
     window("Undo manager", 440, 300) {
-        vstack(10) {
+        root = vstack(10) {
             total = text("total: 0")
             name = text("name: Ellen")
             divider()
@@ -51,6 +51,8 @@ main() {
             divider()
             text("Ctrl+Z / Ctrl+Shift+Z work too.")
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         enable_undo_shortcuts()
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

@@ -7,7 +7,7 @@
 //   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
 
 import ui
-import ui (window, vstack, hstack, text, btn, divider, textfield,
+import ui (content_inset, window, vstack, hstack, text, btn, divider, textfield,
     table_cols, table_col, table, table_update, table_selected, table_count,
     table_on_select, on_sort, table_sorter, table_sort_by, table_sort_col,
     columns, col,
@@ -77,7 +77,7 @@ main() {
     _ = list.add(sitems, mk_p("wu", 100))
 
     window("table demo", 520, 620) {
-        vstack(8) {
+        root = vstack(8) {
             status = text("status: idle")
             divider()
 
@@ -154,6 +154,8 @@ main() {
                     "showing ${table_count(st)} of ${list.size(sitems)}")
             }
         }
+        // The standard window gutter: content not flush against the frame.
+        _ci = content_inset(root)
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }
