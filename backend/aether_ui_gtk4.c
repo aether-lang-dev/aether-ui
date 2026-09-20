@@ -1237,6 +1237,22 @@ static void aeui_flex_layout_measure(GtkLayoutManager* lm, GtkWidget* widget,
     if (natural_baseline) *natural_baseline = -1;
 }
 
+// The edge insets a widget was given (aether_ui_set_edge_insets), 0 where
+// none. A widget's geometry -- what get_width/get_height, on_layout and
+// the driver report -- is its FRAME: the box the parent gave it, insets
+// included, as the win32 and AppKit backends report and as an app maps
+// pointer coordinates through. GTK's gtk_widget_get_width() and a layout
+// manager's allocation are the content box, the frame less the CSS
+// padding the insets became, so a 640-wide window's root with the
+// standard gutter read 616 here and 640 elsewhere (#185). The readers
+// add the insets back.
+static void aeui_frame_insets(GtkWidget* w, int* t, int* r, int* b, int* l) {
+    *t = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-inset-t"));
+    *r = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-inset-r"));
+    *b = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-inset-b"));
+    *l = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-inset-l"));
+}
+
 // on_layout fire, deferred to idle (no widget mutation inside allocate).
 typedef struct { AeClosure* cl; int w; int h; } AeuiLayoutFire;
 static gboolean aeui_layout_fire_idle(gpointer data) {
@@ -1344,15 +1360,19 @@ static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
     AeClosure* oc = (AeClosure*)g_object_get_data(G_OBJECT(widget),
                                                   "aeui-onlayout-closure");
     if (oc) {
+        // The frame, insets included (see aeui_frame_insets).
+        int it, ir, ib, il;
+        aeui_frame_insets(widget, &it, &ir, &ib, &il);
+        int fw = width + il + ir, fh = height + it + ib;
         int lw = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "aeui-onlayout-w"));
         int lh = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "aeui-onlayout-h"));
-        if (lw != width || lh != height) {
-            g_object_set_data(G_OBJECT(widget), "aeui-onlayout-w", GINT_TO_POINTER(width));
-            g_object_set_data(G_OBJECT(widget), "aeui-onlayout-h", GINT_TO_POINTER(height));
+        if (lw != fw || lh != fh) {
+            g_object_set_data(G_OBJECT(widget), "aeui-onlayout-w", GINT_TO_POINTER(fw));
+            g_object_set_data(G_OBJECT(widget), "aeui-onlayout-h", GINT_TO_POINTER(fh));
             AeuiLayoutFire* lf = g_new0(AeuiLayoutFire, 1);
             lf->cl = oc;
-            lf->w = width;
-            lf->h = height;
+            lf->w = fw;
+            lf->h = fh;
             g_idle_add(aeui_layout_fire_idle, lf);
         }
     }
@@ -1526,12 +1546,18 @@ int aether_ui_get_min_height_impl(int handle) {
 
 int aether_ui_get_width_impl(int handle) {
     GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
-    return w ? gtk_widget_get_width(w) : 0;
+    if (!w) return 0;
+    int t, r, b, l;
+    aeui_frame_insets(w, &t, &r, &b, &l);
+    return gtk_widget_get_width(w) + l + r;
 }
 
 int aether_ui_get_height_impl(int handle) {
     GtkWidget* w = (GtkWidget*)aether_ui_get_widget(handle);
-    return w ? gtk_widget_get_height(w) : 0;
+    if (!w) return 0;
+    int t, r, b, l;
+    aeui_frame_insets(w, &t, &r, &b, &l);
+    return gtk_widget_get_height(w) + t + b;
 }
 
 void aether_ui_split_set_position_impl(int handle, int px) {
@@ -2625,6 +2651,12 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
     snprintf(prop, sizeof(prop), "padding: %dpx %dpx %dpx %dpx;",
         (int)top, (int)right, (int)bottom, (int)left);
     aether_ui_apply_css(handle, w, prop);
+    // Kept for the geometry reads (aeui_frame_insets): GTK reports a
+    // widget's size as its content box, which excludes this padding.
+    g_object_set_data(G_OBJECT(w), "aeui-inset-t", GINT_TO_POINTER((int)top));
+    g_object_set_data(G_OBJECT(w), "aeui-inset-r", GINT_TO_POINTER((int)right));
+    g_object_set_data(G_OBJECT(w), "aeui-inset-b", GINT_TO_POINTER((int)bottom));
+    g_object_set_data(G_OBJECT(w), "aeui-inset-l", GINT_TO_POINTER((int)left));
 }
 
 
@@ -7311,8 +7343,11 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
 
     // Current allocation (0x0 until mapped). Tests use a canvas's real size
     // to compute the viewBox→pixel mapping after a /window/resize.
+    // The frame, insets included (see aeui_frame_insets).
+    int it, ir, ib, il;
+    aeui_frame_insets(w, &it, &ir, &ib, &il);
     n += snprintf(buf + n, bufsize - n, ",\"w\":%d,\"h\":%d",
-                  gtk_widget_get_width(w), gtk_widget_get_height(w));
+                  gtk_widget_get_width(w) + il + ir, gtk_widget_get_height(w) + it + ib);
 
     // Window-local position (x,y) of the widget's top-left, for /window/pick
     // based tests. 0,0 until mapped or if the root isn't a window.
@@ -7322,7 +7357,7 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         if (root && GTK_IS_WIDGET(root) &&
             gtk_widget_compute_bounds(w, GTK_WIDGET(root), &r)) {
             n += snprintf(buf + n, bufsize - n, ",\"x\":%d,\"y\":%d",
-                          (int)r.origin.x, (int)r.origin.y);
+                          (int)r.origin.x - il, (int)r.origin.y - it);
         } else {
             n += snprintf(buf + n, bufsize - n, ",\"x\":0,\"y\":0");
         }
@@ -8106,11 +8141,14 @@ static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
     graphene_rect_t r;
     GtkWidget* root = GTK_WIDGET(gtk_widget_get_root(wd));
     if (!root || !gtk_widget_compute_bounds(wd, root, &r)) return 1;
-    int x0 = aeui_round_edge(r.origin.x);
-    int y0 = aeui_round_edge(r.origin.y);
+    // The frame, insets included (see aeui_frame_insets).
+    int it, ir, ib, il;
+    aeui_frame_insets(wd, &it, &ir, &ib, &il);
+    int x0 = aeui_round_edge(r.origin.x) - il;
+    int y0 = aeui_round_edge(r.origin.y) - it;
     *x = x0; *y = y0;
-    *w   = aeui_round_edge(r.origin.x + r.size.width)  - x0;
-    *hgt = aeui_round_edge(r.origin.y + r.size.height) - y0;
+    *w   = aeui_round_edge(r.origin.x + r.size.width)  + ir - x0;
+    *hgt = aeui_round_edge(r.origin.y + r.size.height) + ib - y0;
     return 0;
 }
 
