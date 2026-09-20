@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **win32 menus are dark on a dark system.** A dark app popped light
+  menus: the drop-downs and context menus the theme draws only render
+  dark for an app that has told uxtheme it allows dark mode
+  (`SetPreferredAppMode(AllowDark)` + `FlushMenuThemes`, what every Win32
+  app with a dark mode calls, looked up by ordinal and skipped where the
+  export is missing), and the menu bar is painted by the window manager
+  in the classic light colours whatever the app says -- it is painted here
+  now, on the `WM_UAHDRAWMENU` / `WM_UAHDRAWMENUITEM` messages the manager
+  sends before it draws the bar and each item (the ground, the item hot or
+  open a step toward the text), the way Notepad, Notepad++ and Explorer++
+  paint theirs, with the light line under the bar covered after each
+  non-client paint. Light systems keep the system's own bar and menus.
+
 ### Added
 
 - **win32 tabs look like tabs.** The strip's buttons were push buttons,

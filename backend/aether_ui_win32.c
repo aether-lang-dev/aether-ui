@@ -432,6 +432,7 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static HFONT w32_ui_font(HWND hwnd);
 static HBRUSH w32_ground_brush(COLORREF c);
 static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
 static void w32_picker_cache_selection(Widget* w);
@@ -2329,7 +2330,105 @@ static int menu_dispatch_command(UINT id);
 // register_window_classes() alongside STACK / DIVIDER / SPACER / CANVAS.
 static const wchar_t* GRID_CLASS = L"AetherUIGrid";
 
+// The menu bar, dark. SetPreferredAppMode darkens the drop-downs, which
+// are windows the theme draws; the bar is painted by the window manager
+// in the non-client area, in the classic light colours, and the only way
+// to paint it otherwise is the one every dark-mode Win32 app takes (Notepad
+// did, Notepad++ and Explorer++ do): the WM_UAHDRAWMENU / WM_UAHDRAWMENUITEM
+// messages the manager sends before it draws the bar and each item, with
+// the structures below, unchanged since Vista. Handled only on a dark
+// system; on a light one the bar is the system's own. After an NC paint
+// the manager draws a light line under the bar, painted over here too.
+#define WM_UAHDRAWMENU     0x0091
+#define WM_UAHDRAWMENUITEM 0x0092
+typedef struct {
+    HMENU hmenu;
+    HDC   hdc;
+    DWORD dwFlags;
+} UAHMENU;
+typedef struct {
+    int   iPosition;
+    UINT  uItemState;   // ODS_* plus the UAH bits
+    UINT  uRoleBits;
+} UAHMENUITEMMETRICS_STATE;
+typedef struct {
+    DRAWITEMSTRUCT dis;
+    UAHMENU um;
+    UAHMENUITEMMETRICS_STATE umi;
+} UAHDRAWMENUITEM;
+
+static int w32_dark_menubar_draw(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (!aether_ui_dark_mode_check()) return 0;
+    if (msg == WM_UAHDRAWMENU) {
+        UAHMENU* um = (UAHMENU*)lp;
+        MENUBARINFO mbi = { sizeof(mbi) };
+        if (!GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) return 0;
+        RECT wr;
+        GetWindowRect(hwnd, &wr);
+        RECT bar = mbi.rcBar;
+        OffsetRect(&bar, -wr.left, -wr.top);
+        FillRect(um->hdc, &bar, w32_ground_brush(w32_system_ground()));
+        return 1;
+    }
+    if (msg == WM_UAHDRAWMENUITEM) {
+        UAHDRAWMENUITEM* it = (UAHDRAWMENUITEM*)lp;
+        wchar_t text[256] = L"";
+        MENUITEMINFOW mii;
+        memset(&mii, 0, sizeof(mii));
+        mii.cbSize = sizeof(mii);
+        mii.fMask = MIIM_STRING;
+        mii.dwTypeData = text;
+        mii.cch = 255;
+        GetMenuItemInfoW(it->um.hmenu, (UINT)it->umi.iPosition, TRUE, &mii);
+        COLORREF ground = w32_system_ground();
+        // Hot or open: a step toward the text, as the drop-down's own items.
+        int lit = (it->dis.itemState & (ODS_HOTLIGHT | ODS_SELECTED)) != 0;
+        COLORREF ink = w32_legible_text(ground);
+        COLORREF face = lit ? RGB((GetRValue(ground) * 85 + GetRValue(ink) * 15) / 100,
+                                  (GetGValue(ground) * 85 + GetGValue(ink) * 15) / 100,
+                                  (GetBValue(ground) * 85 + GetBValue(ink) * 15) / 100)
+                            : ground;
+        FillRect(it->um.hdc, &it->dis.rcItem, w32_ground_brush(face));
+        HFONT old = (HFONT)SelectObject(it->um.hdc, w32_ui_font(hwnd));
+        SetBkMode(it->um.hdc, TRANSPARENT);
+        SetTextColor(it->um.hdc, (it->dis.itemState & ODS_GRAYED) ? RGB(0x80, 0x80, 0x80) : ink);
+        DrawTextW(it->um.hdc, text, -1, &it->dis.rcItem,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE
+                  | ((it->dis.itemState & ODS_NOACCEL) ? DT_HIDEPREFIX : 0));
+        SelectObject(it->um.hdc, old);
+        return 1;
+    }
+    (void)wp;
+    return 0;
+}
+
+// The light line the manager draws under the bar after every NC paint.
+static void w32_dark_menubar_underline(HWND hwnd) {
+    if (!aether_ui_dark_mode_check() || !GetMenu(hwnd)) return;
+    MENUBARINFO mbi = { sizeof(mbi) };
+    if (!GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) return;
+    RECT wr, cr;
+    GetWindowRect(hwnd, &wr);
+    GetClientRect(hwnd, &cr);
+    MapWindowPoints(hwnd, NULL, (POINT*)&cr, 2);
+    RECT line = { mbi.rcBar.left - wr.left, mbi.rcBar.bottom - wr.top,
+                  mbi.rcBar.right - wr.left, cr.top - wr.top };
+    if (line.bottom <= line.top) return;
+    HDC hdc = GetWindowDC(hwnd);
+    FillRect(hdc, &line, w32_ground_brush(w32_system_ground()));
+    ReleaseDC(hwnd, hdc);
+}
+
 static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_UAHDRAWMENU || msg == WM_UAHDRAWMENUITEM) {
+        if (w32_dark_menubar_draw(hwnd, msg, wp, lp)) return 0;
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    if (msg == WM_NCPAINT || msg == WM_NCACTIVATE) {
+        LRESULT r = DefWindowProcW(hwnd, msg, wp, lp);
+        w32_dark_menubar_underline(hwnd);
+        return r;
+    }
     switch (msg) {
         case WM_ERASEBKGND: {
             // What shows where no container does: the system ground, dark
@@ -2648,11 +2747,34 @@ static void w32_enable_visual_styles(void) {
     // thread for the life of the process.
 }
 
+// The dark look for what the system draws for an app that opts in: its
+// popup menus (context menus, the menu bar's drop-downs) and the parts of
+// the dark control themes that only render dark for an app that has said
+// so. The switch is uxtheme's SetPreferredAppMode (ordinal 135, Windows 10
+// 1809+; AllowDark = 1) followed by FlushMenuThemes (ordinal 136), what
+// every Win32 app with a dark mode calls -- Explorer, Notepad, the
+// settings dialogs -- and which has kept its shape since it appeared.
+// Looked up by ordinal and simply not called where the export is missing,
+// so an older Windows draws what it drew before. Without it a dark app
+// popped light menus.
+static void w32_allow_dark_app_mode(void) {
+    if (!aether_ui_dark_mode_check()) return;
+    HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+    if (!ux) return;
+    typedef int (WINAPI *SetPreferredAppModeFn)(int);
+    typedef void (WINAPI *FlushMenuThemesFn)(void);
+    FARPROC mode = GetProcAddress(ux, MAKEINTRESOURCEA(135));
+    FARPROC flush = GetProcAddress(ux, MAKEINTRESOURCEA(136));
+    if (mode) ((SetPreferredAppModeFn)(void(*)(void))mode)(1 /* AllowDark */);
+    if (mode && flush) ((FlushMenuThemesFn)(void(*)(void))flush)();
+}
+
 static void ensure_win_init(void) {
     if (init_done) return;
     init_done = 1;
     init_dpi_awareness();
     w32_enable_visual_styles();
+    w32_allow_dark_app_mode();
     INITCOMMONCONTROLSEX icc = { sizeof(icc),
         ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS
             | ICC_DATE_CLASSES | ICC_UPDOWN_CLASS };
