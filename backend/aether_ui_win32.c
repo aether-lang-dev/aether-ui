@@ -436,6 +436,9 @@ static void widget_hash_insert(HWND h, int handle) {
 
 static void mark_subtree_dead(HWND hwnd);
 static void w32_drain_graveyard(void);
+static HWND w32_primary_app_hwnd(void);
+static void w32_split_paint_sash(HWND hwnd, const Widget* w, HDC hdc, COLORREF ground);
+static RECT w32_split_band(HWND hwnd, const Widget* w);
 static HFONT w32_ui_font(HWND hwnd);
 static HBRUSH w32_ground_brush(COLORREF c);
 static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
@@ -931,6 +934,36 @@ static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
     }
 }
 
+// A wrap's flow at `width`: children left to right at their natural
+// sizes, a new row where the next would overflow, as the layout places
+// them (the WK_WRAP branch of stack_do_layout). Its natural size is that
+// flow's extent -- height for width, as GTK4's flow box and a SwiftUI
+// flow lay out. With no width yet (0, before the first layout) every
+// child sits on one row, which is the widest the wrap ever wants to be.
+static void w32_wrap_flow(Widget* sw, int width, int* out_w, int* out_h) {
+    StackLayout* sl = &sw->stack;
+    int inner_w = width - sl->padding_left - sl->padding_right;
+    int cx = 0, cy = 0, row_h = 0, widest = 0;
+    int any = 0;
+    for (HWND c = GetWindow(sw->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        Widget* cw = widget_at(handle_for_hwnd(c));
+        if (!cw || cw->dead || !w32_own_visible(c)) continue;
+        int mw = 100, mh = 24;
+        measure_widget(cw, &mw, &mh);
+        if (width > 0 && cx > 0 && cx + mw > inner_w) {
+            cy += row_h + sl->spacing;
+            cx = 0;
+            row_h = 0;
+        }
+        cx += mw + sl->spacing;
+        if (cx - sl->spacing > widest) widest = cx - sl->spacing;
+        if (mh > row_h) row_h = mh;
+        any = 1;
+    }
+    *out_w = (any ? widest : 0) + sl->padding_left + sl->padding_right;
+    *out_h = (any ? cy + row_h : 0) + sl->padding_top + sl->padding_bottom;
+}
+
 static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w->pref_width > 0 && w->pref_height > 0) {
         *out_w = w->pref_width;
@@ -952,6 +985,18 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     if (w32_is_stack(w->kind)
         || w->kind == WK_TABS || w->kind == WK_SPLITVIEW) {
         measure_stack_natural(w, out_w, out_h);
+        if (w->pref_width > 0) *out_w = w->pref_width;
+        if (w->pref_height > 0) *out_h = w->pref_height;
+        return;
+    }
+    // A wrap is as tall as its flow at the width it has: it measured as
+    // its current rect, 0 tall until laid out, and nothing ever gave it a
+    // height -- its chips were placed and clipped away, and a Windows
+    // user saw none of them.
+    if (w->kind == WK_WRAP) {
+        RECT wr;
+        int width = GetClientRect(w->hwnd, &wr) ? wr.right - wr.left : 0;
+        w32_wrap_flow(w, width, out_w, out_h);
         if (w->pref_width > 0) *out_w = w->pref_width;
         if (w->pref_height > 0) *out_h = w->pref_height;
         return;
@@ -1211,9 +1256,17 @@ static void w32_request_layout(HWND stack_hwnd) {
         h = GetAncestor(h, GA_PARENT);
     }
     // Wake the run loop so the flush is not left waiting on the next event:
-    // a rebuild from a timer with nothing else queued must still land.
+    // a rebuild from a timer with nothing else queued must still land, and
+    // a held stack (w32_hold_redraw) paints nothing and so raises no
+    // WM_PAINT to wake the loop with: without this wake an app left alone
+    // after a change sat unpainted until the pointer crossed it. The
+    // message goes to a window whose proc flushes -- the app's, once there
+    // is one; the holder, a stack window, before that (its proc flushes
+    // too) -- and the flag that keeps this to one post per flush is reset
+    // by the flush itself.
     if (!w32_layout_flush_posted) {
-        HWND top = GetAncestor(stack_hwnd, GA_ROOT);
+        HWND top = w32_primary_app_hwnd();
+        if (!top) top = GetAncestor(stack_hwnd, GA_ROOT);
         if (top && PostMessageW(top, AE_WM_FLUSH_LAYOUT, 0, 0)) {
             w32_layout_flush_posted = 1;
         }
@@ -1406,6 +1459,20 @@ static void stack_do_layout(HWND stack_hwnd) {
             if (mh > row_h) row_h = mh;
         }
         free(children);
+        // Height for width: the parent measured this wrap at the width it
+        // had before this pass. If the flow at the width it has now needs
+        // another height, the parent goes round again, and its measure --
+        // the flow at this width -- then agrees with the layout, so the
+        // second pass is the last.
+        {
+            int need_w, need_h;
+            w32_wrap_flow(sw, client.right - client.left, &need_w, &need_h);
+            if (need_h != client.bottom - client.top && sw->pref_height <= 0) {
+                HWND parent = GetAncestor(stack_hwnd, GA_PARENT);
+                Widget* pw = widget_at(handle_for_hwnd(parent));
+                if (pw && w32_is_stack(pw->kind)) w32_request_layout(parent);
+            }
+        }
         return;
     }
 
@@ -1694,7 +1761,16 @@ static void stack_do_layout(HWND stack_hwnd) {
             cur = x + w + mc[i].margin_r + sl->spacing;
             if (rtl) x = client_w - x - w;   // mirror within the row
         }
-        SetWindowPos(children[i], NULL, x, y, w, h,
+        // A combo box's window height is the height of its OPEN list: the
+        // closed control sizes itself to its font, and the rest of the
+        // window is where the list drops down. So the picker takes its
+        // closed height in the flow (what was measured) and is given a
+        // window eight rows taller, as a dialog does. It used to be given
+        // the list height as its layout height, and the row after a picker
+        // sat 180px lower than it should.
+        int wh = h;
+        if (mc[i].kind == WK_PICKER) wh = h + w32_px(children[i], 176);
+        SetWindowPos(children[i], NULL, x, y, w, wh,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         w32_note_layout(children[i], w, h);
     }
@@ -1947,6 +2023,11 @@ static Widget* w32_scrollview_under(POINT screen) {
 
 static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case AE_WM_FLUSH_LAYOUT:
+            // The wake w32_request_layout posts reaches the holder (a stack
+            // window) while no app window exists yet.
+            w32_flush_layout();
+            return 0;
         case WM_SIZE:
             stack_do_layout(hwnd);
             w32_note_layout(hwnd, LOWORD(lp), HIWORD(lp));
@@ -1992,8 +2073,13 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             if (w3 && w3->kind == WK_SPLITVIEW && GetCapture() == hwnd) {
                 int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
                 int p = (w3->stack.orientation == 1) ? my : mx;
+                RECT was = w32_split_band(hwnd, w3);
                 w3->split_pos_enc = (p > 0 ? p : 0) + 1;
                 stack_do_layout(hwnd);
+                // The sash moved: the band it left and the one it is in.
+                RECT now = w32_split_band(hwnd, w3);
+                InvalidateRect(hwnd, &was, TRUE);
+                InvalidateRect(hwnd, &now, TRUE);
                 return 0;
             }
             /* Container hover: st_hover on a row was stored but invisible
@@ -2099,8 +2185,27 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                         FrameRect(hdc, &e, edge);
                     }
                 }
+                // The split view's sash, in the band between its panes.
+                if (w && w->kind == WK_SPLITVIEW) w32_split_paint_sash(hwnd, w, hdc, bg);
                 return 1;
             }
+        }
+
+        case WM_SETCURSOR: {
+            // Over the sash (or dragging it): the resize cursor, so the
+            // band reads as something to take hold of.
+            Widget* w = widget_at(handle_for_hwnd(hwnd));
+            if (w && w->kind == WK_SPLITVIEW && (HWND)wp == hwnd) {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd, &pt);
+                RECT band = w32_split_band(hwnd, w);
+                if (GetCapture() == hwnd || PtInRect(&band, pt)) {
+                    SetCursor(LoadCursorW(NULL, w->stack.orientation == 1 ? IDC_SIZENS : IDC_SIZEWE));
+                    return TRUE;
+                }
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
         }
 
 
@@ -2288,10 +2393,55 @@ static void ensure_gdiplus(void) {
     if (GdiplusStartup(&gdiplus_token, &in, NULL) == 0) gdiplus_started = 1;
 }
 
+// A rule's colour on a ground: a shade off it, light on a dark panel and
+// dark on a light one, never white on white or a pale grey cut across a
+// dark theme. The divider's line and the split view's sash.
+static COLORREF w32_rule_color(COLORREF ground) {
+    int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
+    int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
+    if (luma < 128) return RGB(min(255, r8 + 28), min(255, g8 + 28), min(255, b8 + 28));
+    return RGB(max(0, r8 - 40), max(0, g8 - 40), max(0, b8 - 40));
+}
+
+// The split view's sash: the band between the panes is AEUI_SPLIT_DIV
+// wide for the pointer, and shows as a hairline down its middle, as
+// GTK4's paned separator and AppKit's thin divider do.
+static void w32_split_paint_sash(HWND hwnd, const Widget* w, HDC hdc, COLORREF ground) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    int at = w->split_eff + AEUI_SPLIT_DIV / 2;
+    RECT line;
+    if (w->stack.orientation == 1) {
+        line.left = r.left; line.right = r.right;
+        line.top = w->stack.padding_top + at; line.bottom = line.top + 1;
+    } else {
+        line.top = r.top; line.bottom = r.bottom;
+        line.left = w->stack.padding_left + at; line.right = line.left + 1;
+    }
+    FillRect(hdc, &line, w32_ground_brush(w32_rule_color(ground)));
+}
+
+// The band, in client coordinates: where the sash is grabbed.
+static RECT w32_split_band(HWND hwnd, const Widget* w) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    if (w->stack.orientation == 1) {
+        r.top = w->stack.padding_top + w->split_eff;
+        r.bottom = r.top + AEUI_SPLIT_DIV;
+    } else {
+        r.left = w->stack.padding_left + w->split_eff;
+        r.right = r.left + AEUI_SPLIT_DIV;
+    }
+    return r;
+}
+
 static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_PAINT) {
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+        // WM_PRINTCLIENT hands the DC to draw into (the driver's capture
+        // of a window that never mapped); WM_PAINT gets one from BeginPaint.
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        int printing = (msg == WM_PRINTCLIENT);
+        HDC hdc = printing ? (HDC)wp : BeginPaint(hwnd, &ps);
         RECT r;
         GetClientRect(hwnd, &r);
         // The rule takes the divider's own colour where the sheet gave it
@@ -2301,12 +2451,7 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         Widget* dw = widget_at(handle_for_hwnd(hwnd));
         COLORREF ground, line;
         w32_erase_ground(hwnd, hdc, &ground);
-        {
-            int luma = (GetRValue(ground) * 299 + GetGValue(ground) * 587 + GetBValue(ground) * 114) / 1000;
-            int r8 = GetRValue(ground), g8 = GetGValue(ground), b8 = GetBValue(ground);
-            if (luma < 128) line = RGB(min(255, r8 + 28), min(255, g8 + 28), min(255, b8 + 28));
-            else            line = RGB(max(0, r8 - 40), max(0, g8 - 40), max(0, b8 - 40));
-        }
+        line = w32_rule_color(ground);
         if (dw && dw->fg.has_value) line = dw->fg.color;
         HPEN pen = CreatePen(PS_SOLID, 1, line);
         HPEN old = (HPEN)SelectObject(hdc, pen);
@@ -2323,7 +2468,7 @@ static LRESULT CALLBACK divider_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         }
         SelectObject(hdc, old);
         DeleteObject(pen);
-        EndPaint(hwnd, &ps);
+        if (!printing) EndPaint(hwnd, &ps);
         return 0;
     }
     if (msg == WM_ERASEBKGND) return 1;
@@ -2826,6 +2971,7 @@ typedef struct {
 
 static AppEntry* apps = NULL;
 static int app_count = 0;
+static HWND w32_primary_app_hwnd(void) { return (app_count > 0) ? apps[0].hwnd : NULL; }
 static int app_capacity = 0;
 
 int aether_ui_app_create(const char* title, int width, int height) {
@@ -4167,9 +4313,20 @@ int aether_ui_picker_create(void* boxed_closure) {
         0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
     if (!h) return 0;
     SendMessageW(h, WM_SETFONT, (WPARAM)w32_ui_font(h), TRUE);
+    // The dark system's combo box: the common file dialog's theme for the
+    // box (as for a field), Explorer's for the list that drops down, which
+    // is a window of its own (COMBOBOXINFO). A light box on a dark form
+    // was the one control left in the light theme.
+    if (aether_ui_dark_mode_check()) {
+        w32_system_dark_edit(h);
+        COMBOBOXINFO cbi;
+        memset(&cbi, 0, sizeof(cbi));
+        cbi.cbSize = sizeof(cbi);
+        if (GetComboBoxInfo(h, &cbi) && cbi.hwndList) w32_system_dark_control(cbi.hwndList);
+    }
     int handle = register_widget_typed(h, WK_PICKER);
     Widget* w = widget_at(handle);
-    if (w) { w->on_change = (AeClosure*)boxed_closure; w->pref_height = 200; }
+    if (w) w->on_change = (AeClosure*)boxed_closure;   // closed height: the measure's 26
     return handle;
 }
 
@@ -4241,9 +4398,9 @@ int aether_ui_textarea_create(const char* placeholder, void* boxed_closure) {
     // the client edge, which neither theme touches: w32_field_frame does.
     w32_system_dark_control(h);
     w32_field_frame(h);
-    if (placeholder && *placeholder) {
-        SendMessageW(h, 0x1501, TRUE, (LPARAM)utf8_to_wide(placeholder));
-    }
+    // No cue banner: EM_SETCUEBANNER is single-line only. The hint is
+    // drawn by the field painter while the text is empty
+    // (w32_textarea_paint_hint), from placeholder_u8.
     int handle = register_widget_typed(h, WK_TEXTAREA);
     if (placeholder && *placeholder) {
         Widget* pw = widget_at(handle);
@@ -5013,32 +5170,91 @@ static int w32_needs_owner_draw(Widget* w) {
 //   - otherwise nothing: the light theme's edge is the system's own.
 // The inner ring of the two is the field's own ground, so a one-pixel
 // frame reads as one pixel.
+// The field's edge, over the frame the control drew: the sheet's border
+// where it gave one, else on a dark system a hairline a step off the
+// ground (the accent while focused) inside the control's own light edge.
+// Into `hdc`, whose origin is the window's top-left corner: the window DC
+// on a frame paint, the driver's DC on a print.
+static void w32_field_paint_edge(HWND hwnd, Widget* w, HDC hdc) {
+    int sheet = w->border_set && w->border_width > 0;
+    int dark = !sheet && aether_ui_dark_mode_check();
+    if (!sheet && !dark) return;
+    RECT rc;
+    int ring;
+    GetWindowRect(hwnd, &rc);
+    OffsetRect(&rc, -rc.left, -rc.top);
+    COLORREF inner = w->bg.has_value ? w->bg.color : w32_system_ground();
+    COLORREF outer = sheet ? w->border_color
+                   : (GetFocus() == hwnd ? w32_accent_color() : RGB(0x45, 0x45, 0x45));
+    for (ring = 0; ring < 2; ring++) {
+        RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
+        COLORREF c = outer;
+        if (sheet ? (ring >= w->border_width && w->bg.has_value) : ring >= 1) c = inner;
+        FrameRect(hdc, &e, w32_ground_brush(c));
+    }
+}
+
+// A text area's hint, drawn while it holds no text: where the first line
+// of typing will go (the control's formatting rectangle), in its font,
+// halfway between the ground and the ink -- the grey the cue banner on a
+// single-line field wears. EM_SETCUEBANNER is single-line only; on a
+// multi-line edit it is accepted and shows nothing, so the hint the other
+// backends draw themselves (GTK4 an overlay label, AppKit in drawRect:)
+// is drawn here too, after the control's own paint.
+static void w32_textarea_paint_hint(HWND hwnd, const Widget* w, HDC hdc) {
+    if (!w->placeholder_u8 || !*w->placeholder_u8) return;
+    if (GetWindowTextLengthW(hwnd) != 0) return;
+    RECT fr;
+    SendMessageW(hwnd, EM_GETRECT, 0, (LPARAM)&fr);
+    COLORREF ground;
+    if (!w32_ground_behind(hwnd, &ground)) ground = w32_system_ground();
+    if (w->bg.has_value) ground = w->bg.color;
+    COLORREF ink = w32_legible_text(ground);
+    COLORREF hint = RGB((GetRValue(ground) + GetRValue(ink)) / 2,
+                        (GetGValue(ground) + GetGValue(ink)) / 2,
+                        (GetBValue(ground) + GetBValue(ink)) / 2);
+    const wchar_t* text = utf8_to_wide(w->placeholder_u8);   // rotating static buffer
+    HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    HGDIOBJ old = SelectObject(hdc, font ? font : w32_ui_font(hwnd));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, hint);
+    DrawTextW(hdc, text, -1, &fr, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(hdc, old);
+}
+
 static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
                                           UINT_PTR id, DWORD_PTR ref) {
     (void)id; (void)ref;
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        Widget* w = widget_at(handle_for_hwnd(hwnd));
+        if (w && w->kind == WK_TEXTAREA && w->placeholder_u8
+            && GetWindowTextLengthW(hwnd) == 0) {
+            int printing = (msg == WM_PRINTCLIENT);
+            HDC hdc = printing ? (HDC)wp : GetDC(hwnd);
+            // The caret sits where the hint starts; drawn over, it would
+            // leave its inverse behind on its next blink.
+            if (!printing) HideCaret(hwnd);
+            w32_textarea_paint_hint(hwnd, w, hdc);
+            if (!printing) { ShowCaret(hwnd); ReleaseDC(hwnd, hdc); }
+        }
+        return r;
+    }
     if (msg == WM_NCPAINT) {
         Widget* w = widget_at(handle_for_hwnd(hwnd));
         LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
         if (!w) return r;
-        int sheet = w->border_set && w->border_width > 0;
-        int dark = !sheet && aether_ui_dark_mode_check();
-        if (sheet || dark) {
-            HDC hdc = GetWindowDC(hwnd);
-            RECT rc;
-            int ring;
-            GetWindowRect(hwnd, &rc);
-            OffsetRect(&rc, -rc.left, -rc.top);
-            COLORREF inner = w->bg.has_value ? w->bg.color : w32_system_ground();
-            COLORREF outer = sheet ? w->border_color
-                           : (GetFocus() == hwnd ? w32_accent_color() : RGB(0x45, 0x45, 0x45));
-            for (ring = 0; ring < 2; ring++) {
-                RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
-                COLORREF c = outer;
-                if (sheet ? (ring >= w->border_width && w->bg.has_value) : ring >= 1) c = inner;
-                FrameRect(hdc, &e, w32_ground_brush(c));
-            }
-            ReleaseDC(hwnd, hdc);
-        }
+        HDC hdc = GetWindowDC(hwnd);
+        w32_field_paint_edge(hwnd, w, hdc);
+        ReleaseDC(hwnd, hdc);
+        return r;
+    }
+    if (msg == WM_PRINT && (lp & PRF_NONCLIENT)) {
+        // A print of the frame (the driver's capture of a window that
+        // never mapped): the control's own edge into the DC, then ours.
+        Widget* w = widget_at(handle_for_hwnd(hwnd));
+        LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+        if (w) w32_field_paint_edge(hwnd, w, (HDC)wp);
         return r;
     }
     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
@@ -11256,8 +11472,23 @@ static int hook_widget_pressed(int handle) {
 
 static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     if (app_count == 0) return -1;
+    // A layout still owed is a tree not yet placed, and a held stack is one
+    // not yet painted: settle first, as every geometry read does, so the
+    // capture is of the tree as it will be seen.
+    w32_drv_settle_layout();
     HWND hwnd = apps[0].hwnd;
     if (!hwnd) return -1;
+    // Paints still owed are frames not yet on screen: WM_PAINT is
+    // synthesized only once the queue holds nothing else, and this request
+    // is serviced on the UI thread in the middle of whatever burst it
+    // arrived in (the banner the driver adds on its first contact moves
+    // every row and invalidates them all). Paint them now -- every child,
+    // synchronously -- so the capture is of the tree as laid out, not of
+    // the frame before it; then wait for the compositor's next frame, which
+    // is when what was painted reaches the screen and the window's
+    // redirection surface both paths read from.
+    RedrawWindow(hwnd, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
+    DwmFlush();
     RECT r;
     if (!GetClientRect(hwnd, &r)) return -1;
     int w = r.right - r.left, h = r.bottom - r.top;
@@ -11276,8 +11507,12 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     #ifndef PW_RENDERFULLCONTENT
     #define PW_RENDERFULLCONTENT 0x00000002
     #endif
-    // 1. The window's own background.
-    HBRUSH face = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+    #ifndef PW_CLIENTONLY
+    #define PW_CLIENTONLY 0x00000001
+    #endif
+    // 1. The window's own background: the system's ground, dark on a dark
+    //    system, which is what the client shows where no widget paints.
+    HBRUSH face = CreateSolidBrush(w32_system_ground());
     RECT full = { 0, 0, w, h };
     FillRect(mem, &full, face);
     DeleteObject(face);
@@ -11289,10 +11524,13 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     // contrast among neighbours at 3.1, in a fade a screen grab of the
     // same moments showed smooth). Only when every corner and the centre
     // of the client belong to this window, so another window on top does
-    // not end up in the picture; otherwise, and always when unmapped or
-    // headless, PrintWindow as before.
+    // not end up in the picture; otherwise PrintWindow. A window that is
+    // not on screen (headless, or before it is shown) has nothing for
+    // either to read -- PrintWindow "succeeds" on it and paints black --
+    // and is drawn widget by widget below, over the ground.
     int printed = 0;
-    if (IsWindowVisible(hwnd) && !aeui_is_headless() && !IsIconic(hwnd)) {
+    int on_screen = IsWindowVisible(hwnd) && !aeui_is_headless() && !IsIconic(hwnd);
+    if (on_screen) {
         // A screenshot is of the app: raise it (no activation, focus stays
         // where it is) so an editor or terminal over a corner does not
         // decide which capture this is. A window that still is not on top
@@ -11317,9 +11555,14 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
             }
         }
     }
-    if (!printed) printed = PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
-    if (!printed) {
-        BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
+    // The client only, as the screen path reads: without PW_CLIENTONLY the
+    // whole window is rendered at the origin, and a capture that took this
+    // path had the title bar across its top and lost its bottom rows -- a
+    // spec sampling a pixel got a different answer depending on whether
+    // some other window covered a corner.
+    if (on_screen && !printed) printed = PrintWindow(hwnd, mem, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
+    if (on_screen && !printed) {
+        printed = BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY) ? 1 : 0;
     }
     // 2. Ask each REGISTERED widget to render itself at its own position.
     //    PrintWindow on the toplevel misses children that live under the
@@ -11336,22 +11579,51 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     //    (PrintWindow of the same window at the same moment was clean).
     //    A dead registry slot is skipped too: Windows reuses HWND values,
     //    so IsWindow can be true of a handle that now belongs to some other
-    //    control.
-    int mapped = printed && IsWindowVisible(hwnd) && !aeui_is_headless();
+    //    control. Which widgets show is decided by their own WS_VISIBLE
+    //    bit and their ancestors' up to the app window (a widget on the
+    //    hidden page of a tab view is not drawn), not by IsWindowVisible,
+    //    which is false of everything under a top-level that is not shown
+    //    -- every widget, headless -- and drew nothing.
+    int mapped = printed && on_screen;
     for (int wi = 1; wi <= widget_count && !mapped; wi++) {
         Widget* cw = widget_at(wi);
         if (!cw || cw->dead || !cw->hwnd || !IsWindow(cw->hwnd)) continue;
-        if (!IsWindowVisible(cw->hwnd) && !cw->owner_drawn) continue;
+        int shown = 1;
+        for (HWND a = cw->hwnd; a && a != hwnd; a = GetAncestor(a, GA_PARENT)) {
+            if (!w32_own_visible(a)) { shown = 0; break; }
+            if (!GetAncestor(a, GA_PARENT)) shown = 0;   // not under the app window
+        }
+        if (!shown) continue;
         RECT cr;
         if (!GetWindowRect(cw->hwnd, &cr)) continue;
         POINT tl = { cr.left, cr.top };
         ScreenToClient(hwnd, &tl);
         int cwid = cr.right - cr.left, chgt = cr.bottom - cr.top;
         if (cwid <= 0 || chgt <= 0) continue;
+        // Clipped to every ancestor's client, as the screen clips a child
+        // window: what a parent cuts off (a row scrolled out of a
+        // scrollview's viewport, the overflow of a container) is not in
+        // the capture either.
+        RECT vis = cr;
+        for (HWND a = GetAncestor(cw->hwnd, GA_PARENT); a && a != hwnd; a = GetAncestor(a, GA_PARENT)) {
+            RECT ar;
+            POINT ao = { 0, 0 };
+            GetClientRect(a, &ar);
+            ClientToScreen(a, &ao);
+            OffsetRect(&ar, ao.x, ao.y);
+            IntersectRect(&vis, &vis, &ar);
+        }
+        if (vis.right <= vis.left || vis.bottom <= vis.top) continue;
         SaveDC(mem);
         SetViewportOrgEx(mem, tl.x, tl.y, NULL);
-        IntersectClipRect(mem, 0, 0, cwid, chgt);
-        SendMessageW(cw->hwnd, WM_PRINTCLIENT, (WPARAM)mem,
+        IntersectClipRect(mem, vis.left - cr.left, vis.top - cr.top,
+                          vis.right - cr.left, vis.bottom - cr.top);
+        // WM_PRINT, not WM_PRINTCLIENT: the flags are WM_PRINT's, which
+        // DefWindowProc turns into the erase (a stack's ground, a spacer's),
+        // the frame (a field's edge) and then WM_PRINTCLIENT for the
+        // content. Sent as WM_PRINTCLIENT the flags meant nothing, and a
+        // capture of an unmapped window had no grounds and no rules.
+        SendMessageW(cw->hwnd, WM_PRINT, (WPARAM)mem,
                      PRF_CLIENT | PRF_ERASEBKGND | PRF_NONCLIENT);
         RestoreDC(mem, -1);
     }

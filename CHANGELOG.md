@@ -16,6 +16,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a held stack paints without being prodded, and the picker is
+  one row tall.** A stack under a redraw hold (a layout still owed) raises
+  no `WM_PAINT`, so the wake that lands the flush was the only thing that
+  made it paint -- and that wake was posted to the stack's own root, which
+  before the app window exists is the widget holder, whose proc dropped
+  it: an app left alone after a rebuild sat unpainted until the pointer
+  crossed it, and the driver captured a blank window. The wake goes to
+  the app window (the holder flushes too, for a tree built before there
+  is one) and a screenshot settles the layout first, as every geometry
+  read does. A combo box's window height is the height of its OPEN list,
+  so the picker takes its closed height in the flow and is given the list
+  room in its window, as a dialog does: the row after a picker sat 180px
+  lower than it should. The box and its list wear the dark theme on a
+  dark system; the picker was the one control left light.
+- **win32: the driver's screenshot is the tree as laid out, on screen or
+  not.** The capture paints what is still owed (`WM_PAINT` comes only once
+  the queue holds nothing else, and the request lands in the middle of
+  whatever burst it arrived in) and waits for the compositor's frame
+  before reading the screen, so a capture taken right after a change no
+  longer shows the frame before it. The `PrintWindow` path renders the
+  client only, as the screen path reads: it rendered the whole window at
+  the origin, and a capture that took it had the title bar across its top
+  and lost its bottom rows -- which path a capture took depended on
+  whether some other window covered a corner. A window that is not on
+  screen (headless, every CI run) is drawn widget by widget over the
+  system's ground: it was black, because `IsWindowVisible` is false of
+  everything under a top-level that is not shown and `PrintWindow`
+  "succeeds" on such a window and paints black. The print goes as
+  `WM_PRINT`, so the erase, the frame and the content all reach the DC;
+  a rule prints, and a field's edge prints as it paints on screen. A
+  headless capture and an on-screen one of the same app are now pixel
+  for pixel the same.
+- **win32: a text area shows its hint.** `textarea("Type your notes
+  here...")` showed nothing on Windows: the cue banner it was given is
+  single-line only (`EM_SETCUEBANNER` accepts it on a multi-line edit and
+  draws nothing). The hint is drawn by the field painter while the text
+  is empty, where the first line of typing goes, in the control's font,
+  halfway between the ground and the ink -- the grey the cue banner on a
+  field wears -- as GTK4 (an overlay label) and AppKit (`drawRect:`)
+  already did; it prints into the driver's capture too.
+- **win32: a split view shows its sash, and a wrap is as tall as its
+  rows.** The band between a split view's panes was laid out and could
+  be dragged but was never painted and never changed the cursor: nothing
+  told the user there was a sash. It shows as a hairline down the middle
+  of the band, a shade off the ground (GTK4's paned separator, AppKit's
+  thin divider), and the pointer over it -- or dragging it -- is the
+  resize cursor. A wrap measured as its current rect, 0 tall until laid
+  out, and nothing ever gave it a height: its chips were placed and
+  clipped away, and a Windows user saw none of them. It measures as its
+  flow at the width it has (height for width), one row before it has a
+  width, and a flow that needs another height than it was given sends
+  its parent round once more. The driver's off-screen capture clips a
+  widget to its ancestors, as the screen does.
+
 - **win32: a skin reaches everything.** A container whose ground changed
   repaints with everything in it that paints the ground behind itself (a
   caption, a spacer, a rule, a flat button): a skin switched from dark to
