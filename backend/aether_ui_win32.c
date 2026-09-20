@@ -8238,7 +8238,7 @@ __declspec(dllimport) int __stdcall GdipSaveImageToFile(
 /* Both declared further down (the renderer seam, and the screenshot hook's
    GDI+ bindings); forward-declared here because this function sits above
    them and C has no forward reference. */
-static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height);
+static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop);
 __declspec(dllimport) int __stdcall GdipCreateBitmapFromHBITMAP(
     HBITMAP hbm, HPALETTE pal, void** bitmap);
 
@@ -8261,7 +8261,7 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
     }
     HGDIOBJ old = SelectObject(mem, bmp);
 
-    canvas_replay_to_dc(cv, mem, width, height);
+    canvas_replay_to_dc(cv, mem, width, height, RGB(255, 255, 255));
 
     int ok = 0;
     void* gbmp = NULL;
@@ -8357,27 +8357,28 @@ static COLOR16 w32_stop_color16(double v) {
     return (COLOR16)s;
 }
 
-static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height);
-static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height);
+static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop);
+static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop);
 
-static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height) {
-    if (win32_use_gdiplus()) canvas_replay_to_dc_gdiplus(cv, mem, width, height);
-    else                     canvas_replay_to_dc_gdi(cv, mem, width, height);
+static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop) {
+    if (win32_use_gdiplus()) canvas_replay_to_dc_gdiplus(cv, mem, width, height, backdrop);
+    else                     canvas_replay_to_dc_gdi(cv, mem, width, height, backdrop);
 }
 
 // The GDI replay core — shared by the on-screen paint and the headless
 // pixel readback below (canvas_read_pixel replays into its own memory DC,
 // exactly like the GTK4 backend replays into a cairo image surface).
-static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height) {
+static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop) {
     // Plain GDI replay — GDI+ bindings from C are clunky; for a first
     // pass this delivers lines + filled rects with correct pixels.
     /* Start each replay from NO clip. The read_pixel path reuses one cached
        DC across calls (rp_dc), so a clip left behind by the previous replay
        would intersect with this one and shrink the visible area every frame. */
     SelectClipRgn(mem, NULL);
-    // White background
+    // The backdrop: white for a pixel read or a PNG (documented, the
+    // probes classify against it), the ground behind the canvas on screen.
     RECT full = { 0, 0, width, height };
-    HBRUSH white = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    HBRUSH white = w32_ground_brush(backdrop);
     FillRect(mem, &full, white);
 
     HPEN cur_pen = NULL;
@@ -9005,12 +9006,12 @@ static GpFontFamily* gdip_resolve_family(const char* stack) {
     return NULL;
 }
 
-static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height) {
+static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop) {
     if (!cv) return;
     ensure_gdiplus();
     GpGraphics* g = NULL;
     if (GdipCreateFromHDC(mem, &g) != 0 || !g) {
-        canvas_replay_to_dc_gdi(cv, mem, width, height);
+        canvas_replay_to_dc_gdi(cv, mem, width, height, backdrop);
         return;
     }
     /* Match GDI's opening white wash so a partially-ported renderer differs
@@ -9024,7 +9025,9 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
        24 of 24 samples, while row 1 matched legacy. Fill opaque, then
        enable AA for the drawing that follows. */
     GpBrush* wash = NULL;
-    if (GdipCreateSolidFill(0xFFFFFFFF, &wash) == 0) {
+    unsigned int wash_argb = 0xFF000000u | ((unsigned)GetRValue(backdrop) << 16)
+                           | ((unsigned)GetGValue(backdrop) << 8) | (unsigned)GetBValue(backdrop);
+    if (GdipCreateSolidFill(wash_argb, &wash) == 0) {
         GdipFillRectangleI(g, (GpBrush*)wash, 0, 0, width, height);
         GdipDeleteBrush((GpBrush*)wash);
     }
@@ -9119,7 +9122,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                 break;
             case CV_CLEAR: {
                 GpBrush* br = NULL;
-                if (GdipCreateSolidFill(0xFFFFFFFF, &br) == 0) {
+                if (GdipCreateSolidFill(wash_argb, &br) == 0) {
                     GdipFillRectangleI(g, (GpBrush*)br, 0, 0, width, height);
                     GdipDeleteBrush((GpBrush*)br);
                 }
@@ -10312,7 +10315,17 @@ static void canvas_paint(HWND hwnd, HDC hdc, int width, int height) {
         SelectClipRgn(mem, clip);
         SelectClipRgn(hdc, clip);
     }
-    canvas_replay_to_dc(cv, mem, width, height);
+    // The backdrop is the ground the canvas sits on -- its own where the
+    // sheet gave it one, else the one behind it -- as GTK4's drawing area
+    // is transparent to its parent. It was white, and on a dark theme
+    // every icon and every plot was a white box.
+    COLORREF backdrop;
+    {
+        Widget* cw = widget_at(handle_for_hwnd(hwnd));
+        if (!(cw && w32_own_ground(cw, &backdrop)) && !w32_ground_behind(hwnd, &backdrop))
+            backdrop = w32_system_ground();
+    }
+    canvas_replay_to_dc(cv, mem, width, height, backdrop);
     BitBlt(hdc, 0, 0, width, height, mem, 0, 0, SRCCOPY);
     if (clip) {
         SelectClipRgn(mem, NULL);
@@ -10371,7 +10384,7 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
             return -1;
         }
         cv->rp_old_bmp = (HBITMAP)SelectObject(mem, bmp);
-        canvas_replay_to_dc(cv, mem, width, height);
+        canvas_replay_to_dc(cv, mem, width, height, RGB(255, 255, 255));
         cv->rp_dc = mem;
         cv->rp_bmp = bmp;
         cv->rp_cache_gen = cv->rp_gen;
@@ -10438,13 +10451,18 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             }
             return 0;
         }
+        case WM_PRINTCLIENT:
         case WM_PAINT: {
+            // WM_PRINTCLIENT hands the DC to draw into (the driver's capture
+            // of a window that never mapped); WM_PAINT gets one from
+            // BeginPaint. The same replay either way.
             PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
+            int printing = (msg == WM_PRINTCLIENT);
+            HDC hdc = printing ? (HDC)wp : BeginPaint(hwnd, &ps);
             RECT r;
             GetClientRect(hwnd, &r);
             canvas_paint(hwnd, hdc, r.right - r.left, r.bottom - r.top);
-            EndPaint(hwnd, &ps);
+            if (!printing) EndPaint(hwnd, &ps);
             return 0;
         }
         case WM_ERASEBKGND:

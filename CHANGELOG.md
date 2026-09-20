@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a canvas sits on the ground, not in a white box.** The canvas
+  washed white before replaying its commands, so on a dark theme every
+  icon, every plot and every drawing was a white rectangle on the dark
+  panel -- where GTK4's drawing area is transparent to its parent. The
+  wash is now the ground the canvas sits on: its own where the sheet gave
+  it one, else the one behind it. A pixel read and a PNG keep their
+  documented white backdrop, which the colour probes classify against.
+  The canvas also answers `WM_PRINTCLIENT`, so the driver's off-screen
+  capture shows it (every canvas was blank in a headless capture).
+
+### Fixed
+
 - **GTK4: a container's geometry includes its edge insets, as on the
   other backends.** GTK reports a widget's size as its content box, which
   excludes the CSS padding `edge_insets` becomes, so a 640-wide window's
