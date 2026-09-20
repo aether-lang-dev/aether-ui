@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a skin reaches everything.** A container whose ground changed
+  repaints with everything in it that paints the ground behind itself (a
+  caption, a spacer, a rule, a flat button): a skin switched from dark to
+  light left every divider a dark band across the new ground. A button
+  with no face of its own wears the skin rather than the system theme --
+  a chip a step off the ground it sits on, with a hairline -- and a text
+  colour on a button is honoured (the themed button ignored
+  `WM_CTLCOLORBTN`'s, so a skin's button colour reached nothing). The CSS
+  generic families a sheet names (`serif`, `sans-serif`, `monospace`,
+  `cursive`, `system-ui`) are the faces Windows has for them; GDI, asked
+  for a face called "serif", fell back to the default sans.
+
+### Fixed
+
 - **win32 modals and toasts are visible.** The compositor draws a layered
   child above every non-layered sibling whatever the Z order says, and the
   app's root stack repaints over a plain sibling whenever it repaints: a

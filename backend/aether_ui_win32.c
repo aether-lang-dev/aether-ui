@@ -4692,6 +4692,16 @@ static inline COLORREF rgb_from_doubles(double r, double g, double b) {
     return RGB(ri, gi, bi);
 }
 
+// A container's ground changed: it repaints, and so does everything in it
+// that paints the ground behind itself -- a label's caption (WM_CTLCOLOR),
+// a spacer, a rule, a flat button. Invalidating the container alone left
+// them as they were: a skin switched from dark to light left every divider
+// a dark band across the new ground until something else repainted it.
+static void w32_repaint_with_children(Widget* w) {
+    if (w && IsWindow(w->hwnd))
+        RedrawWindow(w->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
 void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) {
     (void)a; // Solid colors only; alpha requires layered-window composition.
     Widget* w = widget_at(handle);
@@ -4699,7 +4709,7 @@ void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) 
     w->bg.has_value = 1;
     w->bg.color = rgb_from_doubles(r, g, b);
     w32_ensure_owner_draw(w);
-    InvalidateRect(w->hwnd, NULL, TRUE);
+    w32_repaint_with_children(w);
 }
 
 void aether_ui_set_bg_gradient(int handle,
@@ -4711,7 +4721,7 @@ void aether_ui_set_bg_gradient(int handle,
     w->grad_a = rgb_from_doubles(r1, g1, b1);
     w->grad_b = rgb_from_doubles(r2, g2, b2);
     w->grad_vertical = vertical;
-    InvalidateRect(w->hwnd, NULL, TRUE);
+    w32_repaint_with_children(w);
 }
 
 void aether_ui_set_text_color(int handle, double r, double g, double b) {
@@ -4719,6 +4729,7 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
     if (!w) return;
     w->fg.has_value = 1;
     w->fg.color = rgb_from_doubles(r, g, b);
+    w32_ensure_owner_draw(w);
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
@@ -4783,12 +4794,26 @@ void aether_ui_set_font_bold(int handle, int bold) {
 // Widget-level font family (AeCS v1.1). Passed verbatim into LOGFONT's face
 // name — prefer real Windows face names ("Consolas", "Segoe UI"); generic
 // CSS families fall through the font mapper's default matching.
+// The CSS generic families, as the faces Windows has for them: what a
+// sheet asks for by "serif" is what the vg text layer already answers
+// (Times New Roman / Arial / Consolas), and GDI, asked for a face called
+// "serif", quietly fell back to the default sans -- a skin's serif title
+// was set in Segoe UI. The readback keeps the name the sheet gave.
+static const char* w32_concrete_family(const char* family) {
+    if (_stricmp(family, "serif") == 0)      return "Times New Roman";
+    if (_stricmp(family, "sans-serif") == 0) return "Segoe UI";
+    if (_stricmp(family, "monospace") == 0)  return "Consolas";
+    if (_stricmp(family, "cursive") == 0)    return "Segoe Script";
+    if (_stricmp(family, "system-ui") == 0)  return "Segoe UI";
+    return family;
+}
+
 void aether_ui_set_font_family(int handle, const char* family) {
     Widget* w = widget_at(handle);
     if (!w || !family || !family[0]) return;
     free(w->font_family);
     free(w->font_family_u8);
-    w->font_family = _wcsdup(utf8_to_wide(family));
+    w->font_family = _wcsdup(utf8_to_wide(w32_concrete_family(family)));
     w->font_family_u8 = _strdup(family);
     apply_font(w);
 }
@@ -4847,7 +4872,11 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
 static int w32_needs_owner_draw(Widget* w) {
     if (!w) return 0;
     if (w->kind != WK_BUTTON && w->kind != WK_TOGGLE) return 0;
-    return w->border_set || w->hover_set || w->active_set || w->bg.has_value || w->flat;
+    // A text colour too: the themed button draws its caption in the
+    // theme's colour and ignores WM_CTLCOLORBTN's, so a skin's button
+    // colour reached nothing.
+    return w->border_set || w->hover_set || w->active_set || w->bg.has_value || w->flat
+        || (w->kind == WK_BUTTON && w->fg.has_value);
 }
 
 // A field is a native EDIT with the system's sunken client edge: two pixels
@@ -4972,13 +5001,28 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             GetClientRect(hwnd, &rc);
 
             // State -> background. active beats hover beats the base bg.
-            // The base face is the system's button face on a light system
-            // and the dark theme's on a dark one (the themed button this
-            // replaces wore that), not the light face on a dark ground.
+            // The base face follows the ground the button sits on, a step
+            // toward its text (a chip a shade off the panel), with a
+            // hairline a step further: a skinned app's buttons wear the
+            // skin, not the system theme's face -- a light Zen skin used to
+            // keep the dark theme's buttons. The system's own face where
+            // nothing above the button has a ground of its own.
             int pressed = (SendMessageW(hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) != 0;
             int dark = aether_ui_dark_mode_check();
-            COLORREF bg = w->bg.has_value ? w->bg.color
-                        : (dark ? RGB(0x33, 0x33, 0x33) : GetSysColor(COLOR_BTNFACE));
+            COLORREF behind;
+            int on_ground = w32_ground_behind(hwnd, &behind);
+            COLORREF face_default = dark ? RGB(0x33, 0x33, 0x33) : GetSysColor(COLOR_BTNFACE);
+            COLORREF chip_edge = 0;
+            if (on_ground) {
+                COLORREF ink = w32_legible_text(behind);
+                face_default = RGB((GetRValue(behind) * 92 + GetRValue(ink) * 8) / 100,
+                                   (GetGValue(behind) * 92 + GetGValue(ink) * 8) / 100,
+                                   (GetBValue(behind) * 92 + GetBValue(ink) * 8) / 100);
+                chip_edge = RGB((GetRValue(behind) * 70 + GetRValue(ink) * 30) / 100,
+                                (GetGValue(behind) * 70 + GetGValue(ink) * 30) / 100,
+                                (GetBValue(behind) * 70 + GetBValue(ink) * 30) / 100);
+            }
+            COLORREF bg = w->bg.has_value ? w->bg.color : face_default;
             if (w->hover_set && w->is_hovered) bg = w->hover_bg;
             if (w->active_set && pressed) bg = w->active_bg;
             // A flat button has no face of its own: the ground behind it,
@@ -4996,9 +5040,14 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             }
 
             HBRUSH br = CreateSolidBrush(bg);
+            // The sheet's border where it gave one; else the chip's hairline
+            // on a ground of the app's own; else none.
+            int chip = on_ground && !w->bg.has_value && !w->flat
+                       && !(w->border_set && w->border_width > 0);
             HPEN pen = w->border_set && w->border_width > 0
                        ? CreatePen(PS_SOLID, w->border_width, w->border_color)
-                       : (HPEN)GetStockObject(NULL_PEN);
+                       : chip ? CreatePen(PS_SOLID, 1, chip_edge)
+                              : (HPEN)GetStockObject(NULL_PEN);
             HBRUSH oldbr = (HBRUSH)SelectObject(hdc, br);
             HPEN oldpen = (HPEN)SelectObject(hdc, pen);
 
@@ -5017,7 +5066,7 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             SelectObject(hdc, oldbr);
             SelectObject(hdc, oldpen);
             DeleteObject(br);
-            if (w->border_set && w->border_width > 0) DeleteObject(pen);
+            if ((w->border_set && w->border_width > 0) || chip) DeleteObject(pen);
 
             // Label, in the widget's font and foreground colour.
             wchar_t text[512];
