@@ -10,7 +10,7 @@
 // /widget/{id}/split_position?px=).
 
 import ui
-import ui (content_inset, window, vstack, hstack, text, btn, divider, splitview,
+import ui (window, vstack, hstack, text, btn, divider, splitview,
     split_position, split_set_position, on_layout, weight, wrap,
     enable_test_server)
 import std.os (os_getenv)
@@ -63,8 +63,6 @@ main() {
                 split_set_position(sv, 320)
             }
         }
-        // The standard window gutter: content not flush against the frame.
-        _ci = content_inset(root)
         // The GeometryReader: root reports its size whenever it changes
         // (window resizes included). D2's driver spec resizes the window
         // and reads this label.

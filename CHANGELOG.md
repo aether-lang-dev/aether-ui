@@ -15,11 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   examples, so every one of them showed its first label's pixels touching
   the window's frame, and a newcomer copying an example shipped that
   look. The app-like examples (form, picker, styled, testable, the list,
-  table, tree, tabs, navstack, split, states, bindings, undo and
-  disclosure demos) call it, the README's first example shows the line
-  and says why it is a line rather than a default. Fixtures whose specs
-  read absolute coordinates, canvas demos and the calculator (which
-  already carries a `margin`) are unchanged. (#183)
+  table, tree, tabs, navstack, states, bindings, undo and disclosure
+  demos) call it, the README's first example shows the line and says why
+  it is a line rather than a default. Unchanged: the canvas demos, the
+  calculator (which already carries a `margin`), and split_demo, whose
+  spec reads the root's `on_layout` geometry -- the very contract the
+  inset is opt-in for (GTK4 reports a widget's size without its CSS
+  padding, so the root reported 616 for a 640 window). (#183)
 
 ### Changed
 
