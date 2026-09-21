@@ -191,46 +191,29 @@ jobs:
           # and root-caused with gdb; 0.684.0 carries aether#2070 (any
           # string-typed return site makes the closure a string closure).
           AETHER_REF: ${{ vars.AETHER_REF || 'v0.684.0' }}
+          # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
+          # verified building the whole fan-out under it (full matrix green).
+          # Strict forward move from v0.296. aeb is not implicated in any of the
+          # aether-side history below — the fan-out just orchestrates aetherc.
           #
           # History: v0.283 was the first release carrying aeb's `bldr` module
           # (9c84d786 converted all build nodes to Shape A `bldr.build() {}`;
           # v0.282 had no `bldr`, so every node failed with
           # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
           # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
-          # links).
+          # links). v0.297 carries all of that, so this is a strict move forward.
           #
-          # 9bfd8e88 (2026-09-18, main after aeb#15) was the prior pin — a SHA,
-          # not a tag — carrying the fix this tree needed: the fan-out
-          # orchestrator is one generated main file, and aetherc lexes a main
-          # file into a fixed 50,000-token array. The old generator spent ~360
-          # tokens per node, so 137 nodes sat at 49,412 and the 138th (#140,
-          # tests/min_size) failed the whole fan-out with "source file exceeds
-          # maximum token limit". The generator now emits the per-node
-          # bookkeeping once: 7,227 tokens. aether#2059 asks for the
+          # 9bfd8e88 (2026-09-18, main after aeb#15; becomes the next tag
+          # when one is cut — install.sh takes a SHA). Carries the fix this
+          # tree needed: the fan-out orchestrator is one generated main
+          # file, and aetherc lexes a main file into a fixed 50,000-token
+          # array. The old generator spent ~360 tokens per node, so 137
+          # nodes sat at 49,412 and the 138th (#140, tests/min_size) failed
+          # the whole fan-out with "source file exceeds maximum token limit"
+          # naming no file. The generator now emits the per-node bookkeeping
+          # once: the same tree is 7,227 tokens. aether#2059 asks for the
           # compiler-side cap to go too.
-          #
-          # v0.321 (2026-09-21) is the first TAG past 9bfd8e88 (aeb v0.315-2),
-          # so it carries that orchestrator fix AND returns the pin to a tag.
-          # It also ships strip_unused() (aeb 3651206) — an opt-in
-          # `aether.program()` setter adding -ffunction-sections -fdata-sections
-          # + -Wl,--gc-sections to the app link, dead-stripping the ~471-of-531
-          # extern backend/runtime functions an app declares but never calls
-          # (calculator 290KB->161KB; ~18% on real apps). Not wired into
-          # build_support/aetherui yet — this bump makes the setter available;
-          # opting our apps in is a follow-up (aether-ui #192).
-          #
-          # Verified locally under v0.321 + the pinned ae v0.684.0: the whole
-          # fan-out BUILDS clean and every unit + driver suite passes, EXCEPT
-          # three framebuffer-readout specs (transitions_demo ease_out and
-          # spring curves, vlist_demo native-scroll row realization). Those are
-          # outside this pin's remit — they assert pure ae/vg runtime behaviour
-          # that the build orchestrator does not touch, and they read an
-          # animation/scroll frame out of the framebuffer at a fixed time, so
-          # they flake under box load (same class as panelsize_demo, which also
-          # flaked in the same run). The real CI runner is idle and pins the
-          # same ae; if any of the three is a true 0.684 regression rather than
-          # a load flake, it belongs to that toolchain, not this aeb bump.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.321' }}
+          AEB_REF: ${{ vars.AEB_REF || '9bfd8e88952cce71456fcb8329363cf872a20cc9' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
