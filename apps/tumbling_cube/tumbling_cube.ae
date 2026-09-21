@@ -404,6 +404,11 @@ step(st: *Spin, t: float) {
         if sp < 0.0001 { st.vx = 0.18; st.vy = 0.28 }
         else { st.vx = st.vx * (0.3 / sp); st.vy = st.vy * (0.3 / sp) }
     }
+    // The idle tumble moves ax/ay every frame, so the yaw/pitch readout has
+    // to track it too — otherwise the cube spins while the label sits frozen
+    // at its last drag value. The scene is already repainting each frame here
+    // (scene_set_refreshing), so this bound-state write rides that cadence.
+    refresh_label(st)
 }
 
 // ─── Gesture layer ───────────────────────────────────────────────────────────
