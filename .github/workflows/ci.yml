@@ -203,17 +203,38 @@ jobs:
           # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
           # links). v0.297 carries all of that, so this is a strict move forward.
           #
-          # 9bfd8e88 (2026-09-18, main after aeb#15; becomes the next tag
-          # when one is cut — install.sh takes a SHA). Carries the fix this
-          # tree needed: the fan-out orchestrator is one generated main
-          # file, and aetherc lexes a main file into a fixed 50,000-token
-          # array. The old generator spent ~360 tokens per node, so 137
-          # nodes sat at 49,412 and the 138th (#140, tests/min_size) failed
-          # the whole fan-out with "source file exceeds maximum token limit"
-          # naming no file. The generator now emits the per-node bookkeeping
-          # once: the same tree is 7,227 tokens. aether#2059 asks for the
-          # compiler-side cap to go too.
-          AEB_REF: ${{ vars.AEB_REF || '9bfd8e88952cce71456fcb8329363cf872a20cc9' }}
+          # 9bfd8e88 (2026-09-18, main after aeb#15) was the prior pin — a SHA,
+          # not a tag — carrying the fan-out orchestrator token-limit fix: the
+          # orchestrator is one generated main file that aetherc lexes into a
+          # fixed 50,000-token array; the old generator spent ~360 tokens/node,
+          # so #140 (tests/min_size) tipped the tree over with "source file
+          # exceeds maximum token limit" naming no file. The generator now emits
+          # the per-node bookkeeping once (7,227 tokens). aether#2059 asks for
+          # the compiler-side cap to go too.
+          #
+          # v0.322 (2026-09-21) is a tag past 9bfd8e88, so it keeps that
+          # orchestrator fix AND returns the pin to a tag. It is a strict
+          # superset of the reverted v0.321 and carries three things this tree
+          # wants:
+          #  (a) -fno-ipa-bit-cp gated on REAL gcc (aeb a3d5fb7). v0.321 added
+          #      that gcc-16 workaround UNCONDITIONALLY to the literal-`gcc`
+          #      link; on macOS `gcc` is Apple clang, which rejects it
+          #      ("unknown argument: '-fno-ipa-bit-cp'"), so v0.321 turned the
+          #      AppKit leg red at every link. v0.322 probes `gcc --version`
+          #      (FSF banner = real gcc, "clang"/"Apple" = shim), memoized, and
+          #      adds the flag only for real gcc — verified on real macOS by the
+          #      aeb line (Apple clang 17, link clean, flag absent). This is why
+          #      v0.321 was reverted and why the re-pin lands as v0.322.
+          #      (asks were aeb-side: fno-ipa-bit-cp-is-gcc-only-breaks-clang.)
+          #  (b) strip_unused() (aeb 3651206, v0.321) — opt-in gc-sections
+          #      dead-strip, 18-45% smaller binaries (aether-ui #192). Available
+          #      here now; wiring our apps in is a follow-up.
+          #  (c) a clear diagnostic for the retired `build` grammar (aeb #16).
+          # aeb-link now enforces an Aether 0.681 floor on the LINKED
+          # libaether.a; a stale ~/.local/lib/aether/libaether.a gets a legible
+          # "archive older than 0.681" error, cleared by a clean toolchain
+          # reinstall (matters on boxes with an old shadow install, not CI).
+          AEB_REF: ${{ vars.AEB_REF || 'v0.322' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
