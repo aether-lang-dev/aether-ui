@@ -1091,6 +1091,30 @@ void aether_ui_button_set_flat_ctx(void* ctx, int on) {
     aether_ui_button_set_flat((int)(intptr_t)ctx, on);
 }
 
+// The disclosure: GTK's own pan-end/pan-down symbolic icon, which is what
+// GtkTreeExpander and every list row in the platform show, recoloured by the
+// theme with the label. The caption the button had is kept on the widget
+// (aeui-text-override) because the icon replaces the label and the driver
+// and the accessibility tree read that text.
+void aether_ui_button_set_disclosure(int handle, int expanded) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_BUTTON(w)) return;
+    const char* label = gtk_button_get_label(GTK_BUTTON(w));
+    if (label && !g_object_get_data(G_OBJECT(w), "aeui-text-override"))
+        g_object_set_data_full(G_OBJECT(w), "aeui-text-override",
+                               g_strdup(label), g_free);
+    GtkWidget* icon = gtk_image_new_from_icon_name(
+        expanded ? "pan-down-symbolic" : "pan-end-symbolic");
+    gtk_button_set_child(GTK_BUTTON(w), icon);
+    const char* kept = (const char*)g_object_get_data(G_OBJECT(w), "aeui-text-override");
+    gtk_widget_set_tooltip_text(w, NULL);
+    gtk_accessible_update_property(GTK_ACCESSIBLE(w), GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   kept ? kept : "", -1);
+}
+void aether_ui_button_set_disclosure_ctx(void* ctx, int expanded) {
+    aether_ui_button_set_disclosure((int)(intptr_t)ctx, expanded);
+}
+
 void aether_ui_set_opacity_ctx(void* ctx, double opacity) {
     aether_ui_set_opacity((int)(intptr_t)ctx, opacity);
 }
@@ -7255,6 +7279,12 @@ static const char* widget_text_content(GtkWidget* w) {
        drawn-vs-native indistinguishable, the phase-2 parity contract. */
     const char* face = (const char*)g_object_get_data(G_OBJECT(w), "aeui-face-label");
     if (face) return face;
+    // A caption the display replaced (a disclosure's icon) is still the
+    // widget's text for the driver and the accessibility tree.
+    {
+        const char* ov = (const char*)g_object_get_data(G_OBJECT(w), "aeui-text-override");
+        if (ov) return ov;
+    }
     if (GTK_IS_LABEL(w)) return gtk_label_get_text(GTK_LABEL(w));
     if (GTK_IS_ENTRY(w)) {
         GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));

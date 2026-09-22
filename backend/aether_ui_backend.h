@@ -232,6 +232,16 @@ void aether_ui_set_corner_radius(int handle, double radius);
 // system button is flat already. 0 puts the frame back.
 void aether_ui_button_set_flat(int handle, int on);
 void aether_ui_button_set_flat_ctx(void* ctx, int on);
+// A disclosure: the triangle at the head of a tree row, pointing right when
+// the node is collapsed and down when it is expanded. Each backend draws the
+// platform's own -- GTK4 the pan-end/pan-down symbolic icon, AppKit and UIKit
+// the chevron symbol, Win32 a chevron in the row's ink -- because a text
+// glyph in the caption renders at whatever size the face gives it (Segoe UI
+// draws U+25B8 as a speck) and takes emoji presentation on Apple platforms.
+// The caption STAYS what it was: it is what the driver and a screen reader
+// read, and the backends that cover it keep it for them.
+void aether_ui_button_set_disclosure(int handle, int expanded);
+void aether_ui_button_set_disclosure_ctx(void* ctx, int expanded);
 void aether_ui_set_edge_insets(int handle, double top, double right,
                                double bottom, double left);
 void aether_ui_set_width(int handle, int width);
