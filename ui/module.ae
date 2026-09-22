@@ -4096,6 +4096,7 @@ _listbox_apply_standard(lb: *ListBox, i: int) {
             j = j + 1
         }
         lb.selected = i
+        _listbox_rove_tabstop(lb, i)
         return
     }
     if (m & 2) == 2 || (m & 8) == 8 {
@@ -4129,6 +4130,7 @@ _listbox_apply_selection(lb: *ListBox, i: int) {
         _listbox_write_flag(lb, i, newv)
         lb.selected = i   // last-touched, for single-select callers
         lb.anchor = i
+        _listbox_rove_tabstop(lb, i)
         return
     }
     if lb.selected >= 0 {
@@ -4140,6 +4142,7 @@ _listbox_apply_selection(lb: *ListBox, i: int) {
         newh = intarr_get_raw(lb.rows, i)
         if newh > 0 { aether_ui_widget_add_css_class_impl(newh, "aui-row-selected") }
     }
+    _listbox_rove_tabstop(lb, _listbox_stop_row(lb))
 }
 
 // Is the keyboard focus inside this listbox? Asked of the row handles rather
@@ -4183,6 +4186,32 @@ _listbox_key(lbp: ptr, k: string, m: int) {
     if next == cur { return }
     _listbox_row_clicked(lbp, next)
     _listbox_focus_row(lb, next)
+}
+
+// A list is ONE tab stop, and the arrows move within it -- what a list view
+// does on every desktop, and what the ARIA pattern calls a roving tabindex.
+// Every row was a tab stop of its own, so a keyboard user leaving a list of
+// 200 rows pressed Tab 200 times. The stop rides the selection (row 0 until
+// there is one), so Tab always lands where the user left off.
+_listbox_rove_tabstop(lb: *ListBox, to: int) {
+    if lb.rows == null { return }
+    n = listbox_count(lb as ptr)
+    i = 0
+    while i < n {
+        h = intarr_get_raw(lb.rows, i)
+        if h > 0 {
+            on = 0
+            if i == to { on = 1 }
+            set_focusable(h, on)
+        }
+        i = i + 1
+    }
+}
+
+// Which row carries the stop: the selected one, else the first.
+_listbox_stop_row(lb: *ListBox) -> int {
+    if lb.selected >= 0 { return lb.selected }
+    return 0
 }
 
 // Keep focus on the selected row, so the next arrow key is delivered to a row
@@ -4243,8 +4272,11 @@ _listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
         // ...and REACHABLE, which the role alone does not make it. A plain
         // container accepts no focus on any of the three backends, so before
         // this a listbox announced itself as a list to an AT and then could
-        // not be moved through without a mouse.
-        set_focusable(row, 1)
+        // not be moved through without a mouse. ONE row carries the tab stop
+        // (see _listbox_rove_tabstop); the arrows move within the list.
+        on = 0
+        if i == _listbox_stop_row(lb) { on = 1 }
+        set_focusable(row, on)
     }
     _agl = a11y_role(each_parent(lb.group), "list")
     // ONE key handler for the whole listbox, not one per row. window_on_key
