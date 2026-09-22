@@ -451,6 +451,16 @@ static COLORREF w32_accent_color(void);
 static COLORREF w32_system_ground(void);
 static void w32_field_frame(HWND hwnd);
 static void w32_draw_chevron(HDC hdc, const RECT* rc, COLORREF ink, int expanded);
+// Focus cues: Windows shows the focus ring only once someone has navigated by
+// keyboard (the dialog manager clears UISF_HIDEFOCUS on the first Tab or
+// arrow). The rule is right and we keep it, but tracked here rather than read
+// back from the controls: WM_CHANGEUISTATE's broadcast does not reach a
+// control nested under this backend's own container windows -- measured, a
+// focused button still answered WM_QUERYUISTATE with UISF_HIDEFOCUS after the
+// app window had cleared it -- so an owner-drawn button would never show a
+// ring at all.
+static int w32_focus_cues = 0;
+static void w32_show_focus_cues(void);
 static int  w32_px(HWND hwnd, int at96);
 static void w32_refont_tree(HWND top, UINT dpi);
 static void w32_make_layered(HWND h);
@@ -3267,6 +3277,13 @@ void aether_ui_app_run_raw(int app_handle) {
             aeui_hwnd_is_key_canvas(msg.hwnd);
         // Only the top-level app window participates in dialog nav; child
         // popups created via aether_ui_window_create are independent.
+        if (msg.message == WM_KEYDOWN
+            && (msg.wParam == VK_TAB || msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT
+                || msg.wParam == VK_UP || msg.wParam == VK_DOWN)) {
+            // Someone reached for the keyboard: the focus ring shows from
+            // here, which is the rule Windows itself follows.
+            w32_show_focus_cues();
+        }
         if (canvas_has_focus || !IsDialogMessageW(e->hwnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -5342,6 +5359,15 @@ static LRESULT CALLBACK styled_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
 
 // Every field and text area gets the edge painter at creation (see
 // styled_field_proc); a sheet border later only changes what it paints.
+// The first keyboard navigation in the app: from now on the focus ring shows,
+// and whatever holds focus repaints to put one on.
+static void w32_show_focus_cues(void) {
+    if (w32_focus_cues) return;
+    w32_focus_cues = 1;
+    HWND f = GetFocus();
+    if (f) InvalidateRect(f, NULL, TRUE);
+}
+
 static void w32_field_frame(HWND hwnd) {
     if (hwnd) SetWindowSubclass(hwnd, styled_field_proc, 1, 0);
 }
@@ -5390,6 +5416,23 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             }
             break;
         }
+        case WM_SETFOCUS:
+        case WM_KILLFOCUS:
+        case WM_UPDATEUISTATE:
+            // The ring appears, moves away, or starts showing because the
+            // user reached for the keyboard: repaint either way.
+            InvalidateRect(hwnd, NULL, TRUE);
+            break;
+        case WM_KEYDOWN:
+            // A navigation key the control sees itself counts as keyboard
+            // navigation too -- the message loop is not the only way one
+            // arrives (a control that claims Tab through WM_GETDLGCODE
+            // never reaches IsDialogMessage).
+            if (wp == VK_TAB || wp == VK_LEFT || wp == VK_RIGHT
+                || wp == VK_UP || wp == VK_DOWN) {
+                w32_show_focus_cues();
+            }
+            break;
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
             if (w) InvalidateRect(hwnd, NULL, TRUE);
@@ -5486,12 +5529,10 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
                 w32_draw_chevron(hdc, &rc,
                                  w->fg.has_value ? w->fg.color : w32_legible_text(bg),
                                  w->disclosure == 2);
-                if (!printing) EndPaint(hwnd, &ps);
-                return 0;
             }
             // Label, in the widget's font and foreground colour.
             wchar_t text[512];
-            int tlen = GetWindowTextW(hwnd, text, 512);
+            int tlen = w->disclosure ? 0 : GetWindowTextW(hwnd, text, 512);
             if (tlen > 0) {
                 HFONT font = w->custom_font ? w->custom_font
                              : (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
@@ -5509,6 +5550,20 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
                 // the bottom, what a tab strip draws on every desktop.
                 RECT u = { rc.left + w32_px(hwnd, 6), rc.bottom - w32_px(hwnd, 2), rc.right - w32_px(hwnd, 6), rc.bottom };
                 FillRect(hdc, &u, w32_ground_brush(w32_accent_color()));
+            }
+            // The keyboard focus, where the system says focus cues are
+            // showing (WM_QUERYUISTATE: Windows hides them until someone
+            // navigates by keyboard, and the themed button this replaces
+            // asked the same question). An owner-drawn button painted face
+            // and caption and nothing else, so a keyboard user tabbing
+            // through a skinned app -- or a tree's disclosures, which are
+            // flat buttons -- could not see where they were. A ring of the
+            // system accent inside the edge, as the focused field wears.
+            if (GetFocus() == hwnd && w32_focus_cues) {
+                RECT fr = rc;
+                InflateRect(&fr, -w32_px(hwnd, 2), -w32_px(hwnd, 2));
+                if (fr.right > fr.left && fr.bottom > fr.top)
+                    FrameRect(hdc, &fr, w32_ground_brush(w32_accent_color()));
             }
             if (!printing) EndPaint(hwnd, &ps);
             return 0;
@@ -11380,6 +11435,10 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 // because AppKit's key-view loop depends on an OS setting).
                 // Real keyboard Tab keeps Windows dialog order; this is the
                 // HEADLESS route's contract, same as the other backends'.
+                // A real Tab makes the focus ring show; the driver's has to
+                // do the same, or a spec -- and a screenshot -- could never
+                // see what a keyboard user sees.
+                w32_show_focus_cues();
                 int back = (ctx->sval[0] == 'S');
                 int cur = handle_for_hwnd(GetFocus());
                 int n = widget_count;
