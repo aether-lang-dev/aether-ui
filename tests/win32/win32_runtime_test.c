@@ -367,6 +367,73 @@ static void text_reads_are_the_callers_to_free(void) {
               "textfield_get_text: the heap is whole after freeing the reads");
 }
 
+// The keyboard focus ring on an owner-drawn button. A styled or flat button
+// is painted by this backend rather than by the theme, and it drew face and
+// caption and nothing else: a keyboard user tabbing through a skinned app --
+// or through a tree's disclosures, which are flat buttons -- could not see
+// where they were. The ring follows the platform's rule (nothing until
+// someone navigates by keyboard), so this drives that too.
+//
+// Rendered through WM_PRINTCLIENT into a memory DC, which is how the driver
+// captures an unmapped window, so the assertion is about pixels rather than
+// about a flag.
+static int ring_pixels_in_print(HWND h, int w, int hgt) {
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, w, hgt);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    RECT all = { 0, 0, w, hgt };
+    FillRect(mem, &all, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    SendMessageW(h, WM_PRINT, (WPARAM)mem, PRF_CLIENT | PRF_ERASEBKGND | PRF_NONCLIENT);
+    // The ring is the only thing a FLAT button paints that is neither the
+    // ground behind it nor its caption's ink, so "a colour that is neither"
+    // identifies it without this harness having to know the accent.
+    COLORREF ground = GetPixel(mem, w / 2, hgt / 2);
+    int n = 0;
+    for (int y = 0; y < hgt; y++) {
+        for (int x = 0; x < w; x++) {
+            COLORREF c = GetPixel(mem, x, y);
+            if (c != ground && c != RGB(0, 0, 0)) n++;
+        }
+    }
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    return n;
+}
+
+static void focus_ring_shows_after_keyboard_navigation(void) {
+    int stack = aether_ui_vstack_create(0);
+    int btn = aether_ui_button_create("", NULL);   // no caption: only the ring inks
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, btn);
+    // Flat: no frame of its own, so anything accent-coloured in the print is
+    // the ring and nothing else.
+    aether_ui_button_set_flat(btn, 1);
+    HWND h = (HWND)aether_ui_get_widget(btn);
+    SetWindowPos(h, NULL, 0, 0, 90, 30, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    SetFocus(h);
+    expect_eq((unsigned)(ring_pixels_in_print(h, 90, 30) == 0), 1u,
+              "focus ring: nothing until someone navigates by keyboard");
+
+    // A Tab, as the control itself sees one.
+    SendMessageW(h, WM_KEYDOWN, VK_TAB, 0);
+
+    SetFocus(h);
+    expect_eq((unsigned)(ring_pixels_in_print(h, 90, 30) > 0), 1u,
+              "focus ring: an owner-drawn button shows one once cues are on");
+
+    // And it belongs to the focused button alone.
+    int other = aether_ui_button_create("", NULL);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, other);
+    aether_ui_button_set_flat(other, 1);
+    HWND oh = (HWND)aether_ui_get_widget(other);
+    SetWindowPos(oh, NULL, 0, 0, 90, 30, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    expect_eq((unsigned)(ring_pixels_in_print(oh, 90, 30) == 0), 1u,
+              "focus ring: a button without focus has none");
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -383,6 +450,7 @@ int main(void) {
     redraw_hold_is_invisible_to_the_app();
     child_opacity_is_owed_until_the_window_shows();
     text_reads_are_the_callers_to_free();
+    focus_ring_shows_after_keyboard_navigation();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);

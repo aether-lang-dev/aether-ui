@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Fixed
+
+- **win32: a keyboard user can see where they are.** A styled or flat
+  button is painted by this backend rather than by the theme, and it drew
+  its face and its caption and nothing else -- so tabbing through a
+  skinned app, or through a tree's disclosures (flat buttons), moved a
+  focus nobody could see. Such a button now wears a ring of the system
+  accent inside its edge, as a focused field does, and follows the
+  platform's rule: nothing until someone navigates by keyboard. That rule
+  is tracked here rather than read back from the control, because
+  `WM_CHANGEUISTATE`'s broadcast does not reach a control nested under
+  this backend's own container windows -- measured: a focused button
+  still answered `WM_QUERYUISTATE` with `UISF_HIDEFOCUS` after its window
+  had cleared it, so the ring would never have shown at all. The driver's
+  Tab raises the cues as a real Tab does, or a spec could never see what
+  a keyboard user sees.
+
 ### Added
 
 - **A native view: an engine presents into a panel.** `native_view(w, h)`
