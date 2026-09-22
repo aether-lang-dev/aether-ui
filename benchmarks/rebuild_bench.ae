@@ -10,7 +10,7 @@
 // The remaining cost is Win32's own CreateWindowExW + DestroyWindow, roughly
 // 0.2ms + 0.1ms per control, and the SetParent of each into the tree.
 //
-// Build the way ci.sh builds a probe (see LLM.md), then:
+// Build the way ci.sh builds a probe (see AGENTS.md), then:
 //   AETHER_UI_HEADLESS=1 ./rebuild_bench      # no window
 //   ./rebuild_bench                           # window on screen
 import ui
