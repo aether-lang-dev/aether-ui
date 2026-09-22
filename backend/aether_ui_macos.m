@@ -5739,6 +5739,29 @@ static void gpu_fire_wh(void* boxed, int w, int h) {
 }
 @end
 
+/* --- Native view (#193) --------------------------------------------------
+ * Not here yet: an NSView already IS the handle a Metal or MoltenVK layer attaches to,
+ * so this is a small step: hand back the view and let the app set its
+ * layer. Left for a Mac to write and check.
+ * The contract is to say so (available = 0) rather than fail to link, so an
+ * app asks first and keeps its software path. #193 has the shape a real one
+ * takes on this backend.
+ */
+int   aether_ui_native_view_available_impl(void) { return 0; }
+int   aether_ui_native_view_kind_impl(void) { return 0; }
+int   aether_ui_native_view_create_impl(int width, int height) {
+    (void)width; (void)height;
+    return 0;
+}
+int   aether_ui_native_view_get_widget(int view_id) { (void)view_id; return 0; }
+void* aether_ui_native_view_handle_impl(int view_id) { (void)view_id; return NULL; }
+void  aether_ui_native_view_on_realize_impl(int view_id, void* boxed_closure) {
+    (void)view_id; (void)boxed_closure;
+}
+void  aether_ui_native_view_on_resize_impl(int view_id, void* boxed_closure) {
+    (void)view_id; (void)boxed_closure;
+}
+
 int aether_ui_gpuview_available_impl(void) {
     return 1;
 }

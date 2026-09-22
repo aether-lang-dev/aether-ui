@@ -1,0 +1,96 @@
+// Aether UI native view (#193): a panel the toolkit lays out and never paints
+// into, whose platform handle the app is given.
+//
+// This is the seat an engine takes. gpuview hands back a GL context the
+// toolkit owns and presents for you; a native view hands back the WINDOW and
+// gets out of the way, which is what an engine holding its own device, queue
+// and swapchain needs — ae3d's editor was rendering to a framebuffer of its
+// own, reading it back and blitting it into a canvas, 41 fps for a scene its
+// own window runs at 140.
+//
+// There is no engine here. The demo reports what the toolkit promises one:
+// what kind of handle this is, the size in PIXELS the panel is now, and —
+// when you press Attach — that the handle is real. The labels and the button
+// around it are ordinary native controls, which is the whole point.
+//
+// Watch the panel when you press Attach. Until the handle is taken the panel
+// wears the app's ground, because nobody is presenting into it and an
+// unpainted child window would otherwise show whatever the compositor last
+// had there. From the moment it is taken the toolkit stops touching those
+// pixels: an engine presenting every frame does not want our ground in
+// between, and a demo with no engine behind it therefore goes dark. That is
+// the contract, not a bug.
+//
+// native_view_available() is asked FIRST: win32 answers 1, the other backends
+// answer 0 today (#193 records what a real one takes on each), so an app
+// keeps its software path there rather than showing an empty rectangle.
+import ui
+import ui (window, vstack, hstack, text, btn, divider, native_view,
+    native_view_widget, native_view_available, native_view_handle,
+    native_view_kind, on_native_view_realize, on_native_view_resize,
+    set_text, fill_width, fill_height, content_inset, enable_test_server,
+    a11y_label, ui_state, ui_set, ui_get)
+import std.os (os_getenv)
+
+main() {
+    window("native view demo", 520, 400) {
+        root = vstack(8) {
+            _title = text("An engine presents into the panel; this chrome is native")
+            status = text("kind: —  handle: —  size: —")
+            _divider = divider()
+
+            if native_view_available() == 1 {
+                view = native_view(360, 220)
+                fill_width(native_view_widget(view))
+                fill_height(native_view_widget(view))
+                _a = a11y_label(native_view_widget(view), "engine viewport")
+
+                // The size the panel is now, kept so the Attach button can
+                // report it alongside the handle.
+                seen_w = ui_state(0)
+                seen_h = ui_state(0)
+
+                // The handle is real and the panel has a size: this is the
+                // moment a Vulkan surface (VK_KHR_win32_surface) or a D3D
+                // swap chain is made. Doing it right after native_view()
+                // would be too early — there is no window to present into
+                // until the layout has placed one.
+                on_native_view_realize(view) callback |w: int, h: int| {
+                    ui_set(seen_w, w * 1.0)
+                    ui_set(seen_h, h * 1.0)
+                    _u = set_text(status,
+                        "kind: ${native_view_kind()}  handle: —  size: ${w}x${h}")
+                }
+
+                // Every size change after that: recreate the swapchain.
+                on_native_view_resize(view) callback |w: int, h: int| {
+                    ui_set(seen_w, w * 1.0)
+                    ui_set(seen_h, h * 1.0)
+                    _u = set_text(status,
+                        "kind: ${native_view_kind()}  handle: —  size: ${w}x${h}")
+                }
+
+                _row = hstack(8) {
+                    _attach = btn("Attach") callback {
+                        // What an engine does on realize: take the handle and
+                        // build its swapchain from it.
+                        h_ptr = native_view_handle(view)
+                        got = 0
+                        if h_ptr != null { got = 1 }
+                        vw = ui_get(seen_w) as int
+                        vh = ui_get(seen_h) as int
+                        _u = set_text(status,
+                            "kind: ${native_view_kind()}  handle: ${got}  size: ${vw}x${vh}")
+                    }
+                    _hint = text("takes the handle; the panel becomes the engine's")
+                }
+            } else {
+                _none = text("no native view on this backend — software path")
+            }
+        }
+        _ci = content_inset(root)
+
+        test_port = os_getenv("AETHER_UI_TEST_PORT")
+        if test_port != null { enable_test_server(9222) }
+    }
+}

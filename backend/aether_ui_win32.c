@@ -171,6 +171,7 @@ typedef enum {
     WK_TABS,      // native tab strip over a page stack
     WK_SPLITVIEW, // two panes + draggable divider (real since 2026-07-20)
     WK_WRAP,      // flow layout — children wrap to new rows (real 2026-07-20)
+    WK_NATIVE_VIEW, // a child window an engine presents into (#193)
 } WidgetKind;
 
 typedef struct {
@@ -259,6 +260,7 @@ typedef struct {
     union {
         struct { int timer_id; } button;
         struct { int canvas_id; } canvas;
+        struct { int view_id; } native_view;
         struct { double min_v, max_v, cur_v; } slider;
         struct { double fraction; } progressbar;
     } u;
@@ -443,6 +445,7 @@ static RECT w32_split_band(HWND hwnd, const Widget* w);
 static HFONT w32_ui_font(HWND hwnd);
 static HBRUSH w32_ground_brush(COLORREF c);
 static int  w32_canvas_natural(const Widget* w, int* out_w, int* out_h);
+static int  w32_native_view_natural(const Widget* w, int* out_w, int* out_h);
 static void w32_picker_cache_selection(Widget* w);
 static COLORREF w32_accent_color(void);
 static COLORREF w32_system_ground(void);
@@ -888,7 +891,8 @@ static int w32_is_stack(int kind) {
 static int w32_fills_cross(int kind) {
     return w32_is_stack(kind)
         || kind == WK_TABS || kind == WK_SPLITVIEW || kind == WK_SCROLLVIEW
-        || kind == WK_CANVAS || kind == WK_DIVIDER || kind == WK_WRAP;
+        || kind == WK_CANVAS || kind == WK_NATIVE_VIEW
+        || kind == WK_DIVIDER || kind == WK_WRAP;
 }
 
 // Measure a single widget's intrinsic size. STATIC/BUTTON use a minimal
@@ -1077,6 +1081,13 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
         *out_h = w->pref_height > 0 ? w->pref_height : nh;
         return;
     }
+    if (w->kind == WK_NATIVE_VIEW) {
+        int nw = 0, nh = 0;
+        w32_native_view_natural(w, &nw, &nh);
+        *out_w = w->pref_width > 0 ? w->pref_width : nw;
+        *out_h = w->pref_height > 0 ? w->pref_height : nh;
+        return;
+    }
     RECT r;
     if (GetWindowRect(w->hwnd, &r)) {
         int cur_w = r.right - r.left;
@@ -1140,7 +1151,8 @@ static int w32_subtree_greedy(Widget* w, int orientation) {
     if (orientation == 1 && w->pref_height == -1) return 1;
     if (orientation != 1 && w->pref_width  == -1) return 1;
     if (w->kind == WK_SPLITVIEW || w->kind == WK_SCROLLVIEW) return 1;
-    if (w->kind == WK_CANVAS) return 1;   // GTK4 canvases hexpand/vexpand
+    if (w->kind == WK_CANVAS || w->kind == WK_NATIVE_VIEW) return 1;
+                                          // GTK4 canvases hexpand/vexpand
                                           // regardless of their initial dims
                                           // (gp creates its treemap WITH dims
                                           // and still grows on resize there)
@@ -2415,6 +2427,7 @@ static const wchar_t* SPACER_CLASS = L"AetherUISpacer";
 static const wchar_t* SCRIM_CLASS = L"AetherUIScrim";
 static LRESULT CALLBACK scrim_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 static const wchar_t* CANVAS_CLASS = L"AetherUICanvas";
+static const wchar_t* NATIVE_VIEW_CLASS = L"AetherUINativeView";
 static int win_classes_registered = 0;
 static int gdiplus_started = 0;
 static ULONG_PTR gdiplus_token = 0;
@@ -2532,6 +2545,7 @@ static LRESULT CALLBACK spacer_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
 // Canvas drawing backend lives farther down; the window proc forwards to it.
 static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+static LRESULT CALLBACK native_view_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 static LRESULT CALLBACK grid_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 static int menu_dispatch_command(UINT id);
 
@@ -2818,6 +2832,19 @@ static void register_window_classes(HINSTANCE inst) {
     wc.hInstance = inst;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.lpszClassName = CANVAS_CLASS;
+    RegisterClassExW(&wc);
+
+    // The surface panel: no class background brush and no painting of its
+    // own, because the pixels belong to whatever presents into it. A brush
+    // here would flash the system colour between the engine's frames.
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = native_view_wnd_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.hbrBackground = NULL;
+    wc.lpszClassName = NATIVE_VIEW_CLASS;
     RegisterClassExW(&wc);
 
     memset(&wc, 0, sizeof(wc));
@@ -7825,6 +7852,176 @@ static int w32_canvas_natural(const Widget* w, int* out_w, int* out_h) {
  * defined answer rather than a widget that exists and never draws. The entry
  * points exist so the ABI stays the same shape on all four backends.
  * ------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+ * Native surface (#193)
+ *
+ * A child window the toolkit lays out, clears once and never paints into:
+ * the app gets the HWND and an engine presents into it -- a Vulkan surface
+ * through VK_KHR_win32_surface, or a D3D swap chain. This is what an engine
+ * that owns its device and swapchain needs, and what ae3d's editor was
+ * missing on Windows: it rendered to its own framebuffer, read it back and
+ * blitted it into a canvas, 41 fps for a scene its own window runs at 140.
+ *
+ * The window has no background brush and validates its paints without
+ * drawing, so nothing of ours ever touches those pixels: between an engine's
+ * frames the panel shows the engine's last frame, not a flash of the system
+ * colour. WS_CLIPCHILDREN keeps our chrome over it (a gizmo canvas, an
+ * overlay) out of the engine's way, and WS_CLIPSIBLINGS keeps the engine out
+ * of theirs.
+ * ------------------------------------------------------------------------- */
+
+typedef struct {
+    HWND       hwnd;
+    int        width, height;      // last size handed to the app, in pixels
+    int        realized;           // the realize hook has fired
+    int        handed_out;         // the app has taken the handle (see WM_PAINT)
+    AeClosure* on_realize;
+    AeClosure* on_resize;
+} NativeViewPanel;
+
+static NativeViewPanel* native_views = NULL;
+static int native_view_count = 0;
+static int native_view_cap = 0;
+
+static NativeViewPanel* native_view_at(int view_id) {
+    if (view_id < 1 || view_id > native_view_count) return NULL;
+    return &native_views[view_id - 1];
+}
+
+static int native_view_id_for_hwnd(HWND h) {
+    for (int i = 0; i < native_view_count; i++)
+        if (native_views[i].hwnd == h) return i + 1;
+    return 0;
+}
+
+// The size the app asked for at create, held loosely: the panel grows with
+// its pane unless surface_size() pins it, exactly as a canvas does.
+static int w32_native_view_natural(const Widget* w, int* out_w, int* out_h) {
+    if (!w || w->kind != WK_NATIVE_VIEW) return 0;
+    NativeViewPanel* sp = native_view_at(w->u.native_view.view_id);
+    if (!sp) return 0;
+    *out_w = sp->width;
+    *out_h = sp->height;
+    return 1;
+}
+
+static inline void invoke_closure_wh(AeClosure* c, int w, int h) {
+    if (c && c->fn) ((void (*)(void*, intptr_t, intptr_t))c->fn)(c->env,
+                                                                 (intptr_t)w, (intptr_t)h);
+}
+
+static LRESULT CALLBACK native_view_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_ERASEBKGND:
+            // The pixels are the engine's once it has the handle; erasing
+            // then is the flash between its frames. Until then they are
+            // nobody's, and an unpainted child window shows whatever the
+            // compositor last had there -- so the panel is the app's ground
+            // until an engine takes it over.
+            {
+                NativeViewPanel* sp = native_view_at(native_view_id_for_hwnd(hwnd));
+                if (sp && !sp->handed_out) {
+                    HDC hdc = (HDC)wp;
+                    RECT r;
+                    COLORREF bg;
+                    GetClientRect(hwnd, &r);
+                    if (!w32_ground_behind(hwnd, &bg)) bg = w32_system_ground();
+                    FillRect(hdc, &r, w32_ground_brush(bg));
+                }
+            }
+            return 1;
+        case WM_PAINT: {
+            // Validate without drawing: Windows stops asking, and whatever
+            // was presented stays on screen. (The erase above has already
+            // laid down the ground while the panel is still ours.)
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_SIZE: {
+            NativeViewPanel* sp = native_view_at(native_view_id_for_hwnd(hwnd));
+            if (sp) {
+                int w = LOWORD(lp), h = HIWORD(lp);
+                if (w > 0 && h > 0) {
+                    sp->width = w;
+                    sp->height = h;
+                    if (!sp->realized) {
+                        // The handle is real and the panel has a size: this
+                        // is the moment a swapchain can be made.
+                        sp->realized = 1;
+                        invoke_closure_wh(sp->on_realize, w, h);
+                    } else {
+                        invoke_closure_wh(sp->on_resize, w, h);
+                    }
+                }
+            }
+            return 0;
+        }
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+int aether_ui_native_view_available_impl(void) { return 1; }
+
+int aether_ui_native_view_kind_impl(void) { return 1; }   // a Win32 HWND
+
+int aether_ui_native_view_create_impl(int width, int height) {
+    ensure_win_init();
+    if (width  <= 0) width  = 1;
+    if (height <= 0) height = 1;
+    HWND h = CreateWindowExW(0, NATIVE_VIEW_CLASS, L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+        0, 0, width, height, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
+    if (!h) return 0;
+    if (native_view_count >= native_view_cap) {
+        native_view_cap = native_view_cap == 0 ? 4 : native_view_cap * 2;
+        native_views = (NativeViewPanel*)realloc(native_views,
+                                                 sizeof(NativeViewPanel) * native_view_cap);
+    }
+    NativeViewPanel* sp = &native_views[native_view_count++];
+    memset(sp, 0, sizeof(*sp));
+    sp->hwnd = h;
+    sp->width = width;
+    sp->height = height;
+    int handle = register_widget_typed(h, WK_NATIVE_VIEW);
+    Widget* w = widget_at(handle);
+    if (w) w->u.native_view.view_id = native_view_count;
+    return native_view_count;
+}
+
+int aether_ui_native_view_get_widget(int view_id) {
+    NativeViewPanel* sp = native_view_at(view_id);
+    return sp ? handle_for_hwnd(sp->hwnd) : 0;
+}
+
+void* aether_ui_native_view_handle_impl(int view_id) {
+    NativeViewPanel* sp = native_view_at(view_id);
+    if (!sp) return NULL;
+    // From here the pixels are the caller's: we stop laying down the ground
+    // under them (see WM_ERASEBKGND), because an engine that presents every
+    // frame does not want ours in between.
+    sp->handed_out = 1;
+    return (void*)sp->hwnd;
+}
+
+void aether_ui_native_view_on_realize_impl(int view_id, void* boxed_closure) {
+    NativeViewPanel* sp = native_view_at(view_id);
+    if (!sp) return;
+    sp->on_realize = (AeClosure*)boxed_closure;
+    // A panel already sized when the hook arrives (the app wired it after
+    // the first layout) fires now rather than never.
+    if (sp->realized && sp->width > 0 && sp->height > 0)
+        invoke_closure_wh(sp->on_realize, sp->width, sp->height);
+}
+
+void aether_ui_native_view_on_resize_impl(int view_id, void* boxed_closure) {
+    NativeViewPanel* sp = native_view_at(view_id);
+    if (sp) sp->on_resize = (AeClosure*)boxed_closure;
+}
+
 int aether_ui_gpuview_available_impl(void) { return 0; }
 
 int aether_ui_gpuview_create_impl(int width, int height) {
@@ -10924,6 +11121,7 @@ static const char* widget_kind_name(WidgetKind k) {
         case WK_TABS: return "tabs";
         case WK_SPLITVIEW: return "splitview";
         case WK_WRAP: return "wrap";
+        case WK_NATIVE_VIEW: return "native_view";
         default: return "widget";
     }
 }

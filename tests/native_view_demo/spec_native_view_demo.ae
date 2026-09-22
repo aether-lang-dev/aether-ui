@@ -1,0 +1,76 @@
+// spec_native_view_demo.ae — the native view (#193) over the AetherUIDriver.
+//
+// What an engine needs from this widget is three facts: the handle is real,
+// it says what kind of handle it is, and the panel reports its size in
+// pixels when it is realized and again whenever it changes. The demo writes
+// all three into a label, so the spec reads them without knowing anything
+// about Vulkan.
+//
+// On a backend that has no native view (everything but win32 today) the demo
+// takes the software path and says so — asserted here too, because "the app
+// asked first" is the contract that keeps the others honest.
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "native view over AetherUIDriver") {
+        spec.it("either hosts a native view or says it cannot") callback {
+            body = uidriver.get_body("/widgets")
+            has_view = string.contains(body, "\"native_view\"")
+            said_no = string.contains(body, "software path")
+            spec.assert_true(has_view == 1 || said_no == 1,
+                "the app either got a view or took its software path")
+        }
+
+        spec.it("a realized view reports a real handle, its kind and a size") callback {
+            body = uidriver.get_body("/widgets")
+            if string.contains(body, "software path") == 1 {
+                // No view on this backend: nothing further to assert, and
+                // the demo already proved it asked before drawing.
+                spec.assert_true(1 == 1, "no native view on this backend")
+            } else {
+                // The demo takes the handle when Attach is pressed, which
+                // is what an engine does on realize.
+                aid = uidriver.widget_id_of("button", "Attach")
+                spec.assert_gt(aid, 0, "the Attach button is there")
+                uidriver.click_widget(aid)
+                ok = uidriver.wait_body_contains("/widgets", "handle: 1", 30)
+                spec.assert_true(ok, "the handle the app was given is not null")
+                body2 = uidriver.get_body("/widgets")
+                // 1 = a Win32 HWND. 0 would mean the backend handed out a
+                // handle it cannot name, which no engine can use.
+                spec.assert_false(string.contains(body2, "kind: 0"),
+                    "the backend names the kind of handle it gave")
+                spec.assert_false(string.contains(body2, "size: —"),
+                    "the view reported its size when it was realized")
+                spec.assert_false(string.contains(body2, "size: 0x"),
+                    "a realized view has a real size")
+            }
+        }
+
+        spec.it("the view fills its pane and tracks a resize") callback {
+            body = uidriver.get_body("/widgets")
+            if string.contains(body, "software path") == 1 {
+                spec.assert_true(1 == 1, "no native view on this backend")
+            } else {
+                vid = uidriver.widget_id_of("native_view", "")
+                spec.assert_gt(vid, 0, "the view is in the widget tree")
+                w0 = uidriver.widget_int_field_by_id(vid, "w")
+                spec.assert_gt(w0, 300, "it took the width of its pane (${w0})")
+                uidriver.resize_window(680, 520)
+                ok = uidriver.wait_body_contains("/widgets", "size: ${w0 + 160}x", 30)
+                w1 = uidriver.widget_int_field_by_id(vid, "w")
+                spec.assert_gt(w1, w0,
+                    "the view grew with the window (${w0} -> ${w1})")
+                spec.assert_true(ok,
+                    "the resize hook reported the new size in pixels")
+            }
+        }
+    }
+
+    return spec.run_summary(fw)
+}
