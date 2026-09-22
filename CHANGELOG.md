@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A list is one tab stop, not one per row.** Every row was reachable by
+  Tab, so a keyboard user leaving a list of 200 rows pressed Tab 200
+  times. One row carries the stop and the arrows move within the list --
+  what a list view does on every desktop, and what the ARIA pattern calls
+  a roving tabindex. The stop rides the selection, so Tab leaves the list
+  from the row the user was on and Shift+Tab comes back to it rather than
+  to the top. The arrow, Home and End keys already moved the selection;
+  this is what makes getting in and out of the list bearable. All four
+  backends, since it is the composed listbox in the DSL (tables and
+  trees are built on it).
+
+### Fixed
+
 - **win32: a keyboard user can see where they are.** A styled or flat
   button is painted by this backend rather than by the theme, and it drew
   its face and its caption and nothing else -- so tabbing through a
