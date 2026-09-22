@@ -2769,6 +2769,31 @@ void aether_ui_button_set_flat(int handle, int on) {
 void aether_ui_button_set_flat_ctx(void* ctx, int on) {
     aether_ui_button_set_flat((int)(intptr_t)ctx, on);
 }
+
+static const char kTextOverride;   // a caption the display replaced
+
+// The disclosure: the chevron symbol a UITableView's outline rows show,
+// tinted by the theme. The title is cleared so the glyph does not sit
+// beside the chevron, and kept on the view (aeuiTextOverride) because the
+// driver and VoiceOver read it.
+void aether_ui_button_set_disclosure(int handle, int expanded) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UIButton class]]) return;
+    UIButton* b = (UIButton*)v;
+    UIImage* img = [UIImage systemImageNamed:(expanded ? @"chevron.down" : @"chevron.right")];
+    if (!img) return;   // no symbol: the caption stays what it was
+    NSString* kept = [b currentTitle];
+    if (kept) {
+        objc_setAssociatedObject(b, &kTextOverride, kept,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [b setAccessibilityLabel:kept];
+    }
+    [b setImage:img forState:UIControlStateNormal];
+    [b setTitle:@"" forState:UIControlStateNormal];
+}
+void aether_ui_button_set_disclosure_ctx(void* ctx, int expanded) {
+    aether_ui_button_set_disclosure((int)(intptr_t)ctx, expanded);
+}
 void aether_ui_set_opacity(int handle, double opacity) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v) return;
@@ -4810,9 +4835,12 @@ static void hook_widget_text_into(int handle, char* buf, int bufsize) {
     if ([v isKindOfClass:[UILabel class]]) {
         s = [(UILabel*)v text];
     } else if ([v isKindOfClass:[UIButton class]]) {
-        // A picker is a UIButton whose title tracks its selection, so this
-        // reports the chosen item, as the other backends do.
-        s = [(UIButton*)v currentTitle];
+        // A caption the display replaced (a disclosure's chevron) is still
+        // the widget's text here. Otherwise: a picker is a UIButton whose
+        // title tracks its selection, so this reports the chosen item, as
+        // the other backends do.
+        s = (NSString*)objc_getAssociatedObject(v, &kTextOverride);
+        if (!s) s = [(UIButton*)v currentTitle];
     } else if ([v isKindOfClass:[UITextField class]]) {
         s = [(UITextField*)v text];
     } else if ([v isKindOfClass:[UITextView class]]) {

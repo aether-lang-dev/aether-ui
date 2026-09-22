@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **A tree's disclosure is the platform's own chevron.** It was a button
+  captioned "▸" / "▾", and a text glyph renders at whatever size the
+  face gives it -- Segoe UI draws U+25B8 as a five-pixel speck on the
+  baseline, and on Apple platforms those characters take emoji
+  presentation. `style_disclosure(handle, expanded)` (ABI
+  `aether_ui_button_set_disclosure`) asks each backend for its own: GTK4
+  the `pan-end` / `pan-down` symbolic icon, AppKit and UIKit the
+  `chevron.right` / `chevron.down` symbol, Win32 an antialiased chevron at
+  the row's size in the row's ink. The caption is left as it was -- it is
+  what the driver and a screen reader read -- and the backends that cover
+  it (GTK4 replaces the label, UIKit the title) keep it for both. (#188)
+
 ### Fixed
 
 - **win32: a canvas sits on the ground, not in a white box.** The canvas

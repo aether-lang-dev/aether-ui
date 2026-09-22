@@ -205,6 +205,7 @@ typedef struct {
     COLORREF border_color;
     int owner_drawn;           // styled painter installed (see styled_btn_proc)
     int flat;                  // button: no frame, no face until hovered (styled_btn_proc)
+    int disclosure;            // button: 1 = a tree row's chevron, 2 = expanded
     int tab_active;            // a tab strip's selected button: bold, accent underline
     int scroll_y;              // scrollview: how far its document is scrolled up
     int hover_set;             // interaction states (0=hover, 1=active)
@@ -446,6 +447,7 @@ static void w32_picker_cache_selection(Widget* w);
 static COLORREF w32_accent_color(void);
 static COLORREF w32_system_ground(void);
 static void w32_field_frame(HWND hwnd);
+static void w32_draw_chevron(HDC hdc, const RECT* rc, COLORREF ink, int expanded);
 static int  w32_px(HWND hwnd, int at96);
 static void w32_refont_tree(HWND top, UINT dpi);
 static void w32_make_layered(HWND h);
@@ -5197,6 +5199,7 @@ static int w32_needs_owner_draw(Widget* w) {
     // theme's colour and ignores WM_CTLCOLORBTN's, so a skin's button
     // colour reached nothing.
     return w->border_set || w->hover_set || w->active_set || w->bg.has_value || w->flat
+        || w->disclosure
         || (w->kind == WK_BUTTON && w->fg.has_value);
 }
 
@@ -5448,6 +5451,17 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
             DeleteObject(br);
             if ((w->border_set && w->border_width > 0) || chip) DeleteObject(pen);
 
+            // A disclosure shows the platform's triangle, not its caption:
+            // Segoe UI draws U+25B8 as a speck on the baseline, where a row's
+            // disclosure should be a chevron the size of the text, centred.
+            // The caption stays on the window for the driver and MSAA.
+            if (w->disclosure) {
+                w32_draw_chevron(hdc, &rc,
+                                 w->fg.has_value ? w->fg.color : w32_legible_text(bg),
+                                 w->disclosure == 2);
+                if (!printing) EndPaint(hwnd, &ps);
+                return 0;
+            }
             // Label, in the widget's font and foreground colour.
             wchar_t text[512];
             int tlen = GetWindowTextW(hwnd, text, 512);
@@ -9007,6 +9021,66 @@ static ARGB gdip_argb(const CanvasCmd* c) {
    which flattered the score. Same failure mode as php.svg earlier: MAE is a
    regression tripwire, not an oracle, and a cross-platform font reference
    is one of the things it cannot judge. */
+// A disclosure's chevron: two strokes meeting at a point, right when the
+// node is collapsed and down when it is expanded -- Explorer's shape, at
+// the row's font size, in the row's ink. Antialiased through GDI+ (GDI has
+// no smoothing, and a 2px diagonal without it is a staircase); the plain
+// GDI polyline is the fallback where GDI+ will not start.
+static void w32_draw_chevron(HDC hdc, const RECT* rc, COLORREF ink, int expanded) {
+    int cx = (rc->left + rc->right) / 2, cy = (rc->top + rc->bottom) / 2;
+    int box = (rc->right - rc->left) < (rc->bottom - rc->top)
+            ? (rc->right - rc->left) : (rc->bottom - rc->top);
+    int arm = box / 5;                      // half the chevron's span
+    if (arm < 3) arm = 3;
+    if (arm > 6) arm = 6;
+    float width = (float)arm / 2.0f;
+    if (width < 1.5f) width = 1.5f;
+    POINT p[3];
+    if (expanded) {                          // v
+        p[0].x = cx - arm; p[0].y = cy - arm / 2;
+        p[1].x = cx;       p[1].y = cy + arm / 2;
+        p[2].x = cx + arm; p[2].y = cy - arm / 2;
+    } else {                                 // >
+        p[0].x = cx - arm / 2; p[0].y = cy - arm;
+        p[1].x = cx + arm / 2; p[1].y = cy;
+        p[2].x = cx - arm / 2; p[2].y = cy + arm;
+    }
+    ensure_gdiplus();
+    GpGraphics* g = NULL;
+    if (gdiplus_started && GdipCreateFromHDC(hdc, &g) == 0 && g) {
+        GpPen* pen = NULL;
+        unsigned int argb = 0xFF000000u | ((unsigned)GetRValue(ink) << 16)
+                          | ((unsigned)GetGValue(ink) << 8) | (unsigned)GetBValue(ink);
+        GdipSetSmoothingMode(g, GDIP_SMOOTHING_AA);
+        if (GdipCreatePen1(argb, width, GDIP_UNIT_PIXEL, &pen) == 0 && pen) {
+            GdipSetPenStartCap(pen, 2);      // round
+            GdipSetPenEndCap(pen, 2);
+            GdipSetPenLineJoin(pen, 2);      // round
+            GdipDrawLineI(g, pen, p[0].x, p[0].y, p[1].x, p[1].y);
+            GdipDrawLineI(g, pen, p[1].x, p[1].y, p[2].x, p[2].y);
+            GdipDeletePen(pen);
+        }
+        GdipDeleteGraphics(g);
+        return;
+    }
+    HPEN pen = CreatePen(PS_SOLID, (int)(width + 0.5f), ink);
+    HPEN old = (HPEN)SelectObject(hdc, pen);
+    Polyline(hdc, p, 3);
+    SelectObject(hdc, old);
+    DeleteObject(pen);
+}
+
+void aether_ui_button_set_disclosure(int handle, int expanded) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_BUTTON) return;
+    w->disclosure = expanded ? 2 : 1;
+    w32_ensure_owner_draw(w);
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+void aether_ui_button_set_disclosure_ctx(void* ctx, int expanded) {
+    aether_ui_button_set_disclosure((int)(intptr_t)ctx, expanded);
+}
+
 static GpFontFamily* gdip_resolve_family(const char* stack) {
     GpFontFamily* fam = NULL;
     if (stack && stack[0]) {

@@ -3380,6 +3380,29 @@ void aether_ui_button_set_flat(int handle, int on) {
 void aether_ui_button_set_flat_ctx(void* ctx, int on) {
     aether_ui_button_set_flat((int)(intptr_t)ctx, on);
 }
+
+// The disclosure: the chevron symbol AppKit's own outline rows use, sized
+// with the row's font and tinted by the theme. The title is kept (image
+// only hides it from the display, [b title] still answers it), so the
+// driver and VoiceOver read what they always did.
+void aether_ui_button_set_disclosure(int handle, int expanded) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSButton class]]) return;
+    NSButton* b = (NSButton*)v;
+    NSString* name = expanded ? @"chevron.down" : @"chevron.right";
+    NSImage* img = nil;
+    if (@available(macOS 11.0, *)) {
+        img = [NSImage imageWithSystemSymbolName:name
+                     accessibilityDescription:[b title]];
+    }
+    if (!img) return;   // older systems keep the caption they had
+    [b setImage:img];
+    [b setImagePosition:NSImageOnly];
+    [b setBordered:NO];
+}
+void aether_ui_button_set_disclosure_ctx(void* ctx, int expanded) {
+    aether_ui_button_set_disclosure((int)(intptr_t)ctx, expanded);
+}
 void aether_ui_set_opacity_ctx(void* ctx, double opacity) {
     aether_ui_set_opacity((int)(intptr_t)ctx, opacity);
 }
