@@ -221,6 +221,7 @@ a live window has "a life of its own" that ends on an external event, so only
 | Grid        | `ui.root_grid(cols, rspace, cspace)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
 | Menu bar    | `ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
 | GPU view    | `ui.gpuview_create(w, h)` (#92)                | GtkGLArea          | NSOpenGLView            | not yet (reports 0)        |
+| Native view | `ui.native_view(w, h)` (#193)                  | not yet (reports 0) | not yet (reports 0)    | child HWND, handle handed to the app |
 | Tabs        | `ui.tabs() { tab("title") { … } }`             | GtkStackSwitcher + GtkStack | NSTabView      | button strip over a page zstack |
 | SplitView   | `ui.splitview("h") { pane1 pane2 }`            | GtkPaned           | NSSplitView             | own divider band, mouse-capture drag |
 | ListBox     | `ui.listbox(spacing) callback \|item, i, row\|` | composed from a stack of rows, identical on all backends |||
@@ -228,6 +229,45 @@ a live window has "a life of its own" that ends on an external event, so only
 | Tree        | `ui.tree(roots)`                               | composed on a ListBox, identical on all backends |||
 | VList       | `ui.vlist("v", rows, \|item, i, parent\| { })`  | GtkListView        | NSTableView             | composed window (no native list) |
 
+
+### Native view — an engine presents into a panel
+
+`gpuview` hands back a GL context the toolkit owns and presents for you.
+A **native view** hands back the window and gets out of the way, which is what
+an engine holding its own device, queue and swapchain needs: the panel's
+platform handle goes to the app, which makes a Vulkan surface
+(`VK_KHR_win32_surface`) or a D3D swap chain from it and presents straight
+into the panel, with the toolkit's own menus, inspectors and gizmo canvas
+around and over it.
+
+```aether
+if ui.native_view_available() == 1 {
+    view = ui.native_view(880, 620)
+    ui.on_native_view_realize(view) callback |w: int, h: int| {
+        engine_attach(ui.native_view_handle(view), w, h)   // make the swapchain
+    }
+    ui.on_native_view_resize(view) callback |w: int, h: int| {
+        engine_resize(w, h)                                // remake it
+    }
+}
+```
+
+**Ask `native_view_available()` first**, as with `gpuview`: win32 answers 1
+today and the others answer 0, and an app that checks keeps its software path
+instead of showing a rectangle nobody presents into. `native_view_kind()` says
+what the handle is (1 = Win32 `HWND`), because an engine has to know what to
+pass to its platform surface call.
+
+**Take the handle in the realize hook, not after `native_view()`.** There is
+no window to present into until the layout has placed one; realize fires on
+the UI thread the moment there is, with the size in PIXELS.
+
+**The panel is the app's ground until you take the handle, and yours after.**
+Nothing of the toolkit's touches those pixels once an engine owns them — a
+frame of ours between the engine's would be a flash — so a view whose owner
+never presents stays as it was. ae3d's editor on Windows was rendering to a
+framebuffer of its own, reading it back and blitting it into a canvas: 41 fps
+for a scene its own window runs at 140 (#193, ae3d#374).
 
 ### GPU viewport
 

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A native view: an engine presents into a panel.** `native_view(w, h)`
+  is a panel the toolkit lays out and never paints into, whose platform
+  handle the app is given -- a child `HWND` on win32 today, for a Vulkan
+  surface (`VK_KHR_win32_surface`) or a D3D swap chain, with the
+  toolkit's own menus, inspectors and gizmo canvas around and over it.
+  Where `gpuview` hands back a GL context the toolkit owns and presents
+  for you, this hands back the window and gets out of the way, which is
+  what an engine holding its own device, queue and swapchain needs:
+  ae3d's editor on Windows was rendering into a framebuffer of its own,
+  reading it back and blitting it into a canvas -- 41 fps for a scene its
+  own window runs at 140. `native_view_available()` is asked first as
+  `gpuview_available()` is (win32 answers 1, the others 0 and say in
+  #193 what a real one takes there), `native_view_kind()` names the
+  handle, and the realize hook is where a swapchain is made -- there is
+  no window to present into until the layout has placed one. The panel
+  wears the app's ground until the handle is taken and is untouched
+  after: a frame of ours between an engine's would be a flash. Called a
+  view, not a surface, because "surface" is already this toolkit's word
+  for a scope an app opens (window / render_to / record). (#193)
+
+### Added
+
 - **A tree's disclosure is the platform's own chevron.** It was a button
   captioned "▸" / "▾", and a text glyph renders at whatever size the
   face gives it -- Segoe UI draws U+25B8 as a five-pixel speck on the

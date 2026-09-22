@@ -2042,6 +2042,28 @@ int aether_ui_canvas_create_impl(int width, int height) {
  * and takes its software path, which is a defined answer rather than a
  * viewport that exists and never draws.
  * ------------------------------------------------------------------------- */
+/* --- Native view (#193) --------------------------------------------------
+ * Not here yet: a UIView backs a CAMetalLayer the same way, and an iOS app that wants
+ * one is not a case anybody has asked for yet.
+ * The contract is to say so (available = 0) rather than fail to link, so an
+ * app asks first and keeps its software path. #193 has the shape a real one
+ * takes on this backend.
+ */
+int   aether_ui_native_view_available_impl(void) { return 0; }
+int   aether_ui_native_view_kind_impl(void) { return 0; }
+int   aether_ui_native_view_create_impl(int width, int height) {
+    (void)width; (void)height;
+    return 0;
+}
+int   aether_ui_native_view_get_widget(int view_id) { (void)view_id; return 0; }
+void* aether_ui_native_view_handle_impl(int view_id) { (void)view_id; return NULL; }
+void  aether_ui_native_view_on_realize_impl(int view_id, void* boxed_closure) {
+    (void)view_id; (void)boxed_closure;
+}
+void  aether_ui_native_view_on_resize_impl(int view_id, void* boxed_closure) {
+    (void)view_id; (void)boxed_closure;
+}
+
 int aether_ui_gpuview_available_impl(void) { return 0; }
 
 int aether_ui_gpuview_create_impl(int width, int height) {

@@ -5691,6 +5691,30 @@ static gboolean gpu_on_render_cb(GtkGLArea* area, GdkGLContext* ctx, gpointer us
     return TRUE;
 }
 
+/* --- Native view (#193) --------------------------------------------------
+ * Not here yet: a GtkWidget has no window of its own, so the handle would be the
+ * GdkSurface's X11 window or wl_surface plus the widget's offset within
+ * it -- a subsurface (Wayland) or a child X window is what an engine can
+ * present into, and neither exists here yet.
+ * The contract is to say so (available = 0) rather than fail to link, so an
+ * app asks first and keeps its software path. #193 has the shape a real one
+ * takes on this backend.
+ */
+int   aether_ui_native_view_available_impl(void) { return 0; }
+int   aether_ui_native_view_kind_impl(void) { return 0; }
+int   aether_ui_native_view_create_impl(int width, int height) {
+    (void)width; (void)height;
+    return 0;
+}
+int   aether_ui_native_view_get_widget(int view_id) { (void)view_id; return 0; }
+void* aether_ui_native_view_handle_impl(int view_id) { (void)view_id; return NULL; }
+void  aether_ui_native_view_on_realize_impl(int view_id, void* boxed_closure) {
+    (void)view_id; (void)boxed_closure;
+}
+void  aether_ui_native_view_on_resize_impl(int view_id, void* boxed_closure) {
+    (void)view_id; (void)boxed_closure;
+}
+
 int aether_ui_gpuview_available_impl(void) {
     /* A display we can actually get a GL context from. gdk_display_prepare_gl
      * is the question GTK itself asks before using GL, and it answers false on

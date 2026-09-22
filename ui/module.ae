@@ -111,6 +111,8 @@ exports (
     image, image_from_bytes, image_size, image_fill, image_tint, image_untint,
     file_icon, set_file_icon,
     canvas_widget, canvas_create, canvas_size,
+    native_view, native_view_widget, native_view_available, native_view_handle, native_view_kind,
+    on_native_view_realize, on_native_view_resize,
     gpuview_create, gpuview_widget, gpuview_size, gpuview_available,
     gpuview_on_realize, gpuview_on_render, gpuview_on_resize,
     gpuview_request_render, gpuview_read_pixel, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -480,6 +482,13 @@ extern aether_ui_gpuview_on_render_impl(gpu_id: int, closure: ptr)
 extern aether_ui_gpuview_on_resize_impl(gpu_id: int, closure: ptr)
 extern aether_ui_gpuview_request_render_impl(gpu_id: int)
 extern aether_ui_gpuview_read_pixel_impl(gpu_id: int, px: int, py: int) -> int
+extern aether_ui_native_view_available_impl() -> int
+extern aether_ui_native_view_create_impl(width: int, height: int) -> int
+extern aether_ui_native_view_get_widget(view_id: int) -> int
+extern aether_ui_native_view_handle_impl(view_id: int) -> ptr
+extern aether_ui_native_view_kind_impl() -> int
+extern aether_ui_native_view_on_realize_impl(view_id: int, closure: ptr)
+extern aether_ui_native_view_on_resize_impl(view_id: int, closure: ptr)
 
 // canvas_widget(canvas_id) -> widget handle. Canvas IDs and widget handles
 // are SEPARATE namespaces; anything that styles or sizes a canvas (width,
@@ -510,6 +519,70 @@ canvas_widget(canvas_id: int) -> int {
 // showing an empty rectangle.
 gpuview_available() -> int {
     return aether_ui_gpuview_available_impl()
+}
+
+// native_view(w, h) -- a panel the toolkit lays out and never paints into,
+// whose platform handle the app is given: an engine makes a Vulkan surface
+// or a D3D swap chain from it and presents straight into the panel, with
+// menus, inspectors and a gizmo canvas around and over it (#193).
+//
+// gpuview hands back a GL context the toolkit owns and presents for you.
+// This hands back the window and gets out of the way, which is what an
+// engine holding its own device, queue and swapchain needs.
+//
+//     if native_view_available() == 1 {
+//         vid = native_view(880, 620)
+//         on_native_view_realize(vid) callback |w: int, h: int| {
+//             engine_attach(native_view_handle(vid), w, h)
+//         }
+//         on_native_view_resize(vid) callback |w: int, h: int| {
+//             engine_resize(w, h)
+//         }
+//     }
+//
+// ASK native_view_available() FIRST: a backend that cannot hand out a usable
+// handle answers 0, and the app keeps its software path.
+native_view_available() -> int {
+    return aether_ui_native_view_available_impl()
+}
+
+// What native_view_handle() points at here: 0 none, 1 Win32 HWND, 2 NSView,
+// 3 X11 Window, 4 wl_surface.
+native_view_kind() -> int {
+    return aether_ui_native_view_kind_impl()
+}
+
+native_view(_ctx: ptr, width: int, height: int) -> int {
+    vid = aether_ui_native_view_create_impl(width, height)
+    if vid == 0 { return 0 }
+    wh = aether_ui_native_view_get_widget(vid)
+    if _ctx != 0 && wh != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, wh)
+    }
+    return vid
+}
+
+// The widget handle under a native-view ID, for layout, styling and a11y --
+// the whole of the boundary between the two numbering spaces.
+native_view_widget(view_id: int) -> int {
+    return aether_ui_native_view_get_widget(view_id)
+}
+
+// The platform handle. 0 until the panel is realized, so an engine attaches
+// from on_native_view_realize rather than straight after surface().
+native_view_handle(view_id: int) -> ptr {
+    return aether_ui_native_view_handle_impl(view_id)
+}
+
+// Fired once, on the UI thread, when the handle is real and the panel has a
+// size: make the swapchain here. The closure takes (w, h) in PIXELS.
+on_native_view_realize(view_id: int, cb: fn) {
+    aether_ui_native_view_on_realize_impl(view_id, box_closure(cb))
+}
+
+// Every size change after that, in PIXELS: recreate the swapchain.
+on_native_view_resize(view_id: int, cb: fn) {
+    aether_ui_native_view_on_resize_impl(view_id, box_closure(cb))
 }
 
 gpuview_create(_ctx: ptr, width: int, height: int) -> int {

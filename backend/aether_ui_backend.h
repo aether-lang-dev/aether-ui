@@ -412,6 +412,47 @@ void aether_ui_gpuview_request_render_impl(int gpu_id);
  * what lets a spec assert the GPU actually drew what was asked rather than
  * only that the widget exists. -1 when unavailable. */
 int  aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py);
+
+/* --- Native view ------------------------------------------------------
+ *
+ * A panel the toolkit lays out and never paints into, whose platform handle
+ * the app is given: an engine creates a Vulkan surface or a D3D swap chain
+ * from it and presents straight into the panel, with the toolkit's own
+ * chrome -- menus, inspectors, a gizmo canvas over the top -- around it.
+ *
+ * Where gpuview hands back a GL context the backend owns and presents for
+ * the app, this hands back the window and gets out of the way. That is what
+ * an engine with its own device, queue and swapchain needs: ae3d's editor on
+ * Windows was rendering to its own framebuffer, reading it back and blitting
+ * it into a canvas -- 41 fps for a scene its own window runs at 140.
+ *
+ * It is called a VIEW, not a surface: "surface" is already this toolkit's
+ * word for a scope an app opens (window / render_to / record), and a panel
+ * inside a window is not one of those.
+ *
+ * Same numbering contract as canvas and gpuview: create returns an ID in its
+ * own space and _get_widget converts it to a widget handle for layout.
+ *
+ * ASK aether_ui_native_view_available_impl FIRST, as with gpuview: a backend
+ * that cannot hand out a usable handle answers 0 rather than failing to
+ * link, and the app takes its software path.
+ */
+int   aether_ui_native_view_available_impl(void);
+int   aether_ui_native_view_create_impl(int width, int height);
+int   aether_ui_native_view_get_widget(int view_id);
+/* The platform handle, for VK_KHR_win32_surface / a D3D swap chain / an
+ * NSView-backed layer. NULL before the panel is realized -- wait for the
+ * realize hook. What it points at is said by _kind_impl. */
+void* aether_ui_native_view_handle_impl(int view_id);
+/* What _native_handle_impl returns on this backend: 0 none, 1 Win32 HWND,
+ * 2 NSView*, 3 X11 Window (as an intptr), 4 wl_surface*. */
+int   aether_ui_native_view_kind_impl(void);
+/* Fired once, on the UI thread, when the handle is real and the panel has a
+ * size: create the swapchain here. Closure takes (w: int, h: int) in PIXELS. */
+void  aether_ui_native_view_on_realize_impl(int surface_id, void* boxed_closure);
+/* Every size change after that, in PIXELS: recreate the swapchain. Closure
+ * takes (w: int, h: int). */
+void  aether_ui_native_view_on_resize_impl(int surface_id, void* boxed_closure);
 int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text,
                                    double cx, double cy);
 void aether_ui_vg_tooltip_hide_impl(void);
