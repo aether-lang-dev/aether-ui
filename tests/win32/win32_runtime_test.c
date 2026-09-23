@@ -434,6 +434,45 @@ static void focus_ring_shows_after_keyboard_navigation(void) {
               "focus ring: a button without focus has none");
 }
 
+// A tab strip is ONE tab stop, on the selected tab, and the arrows walk it
+// -- what the Windows tab control does. Each strip button was a stop of its
+// own and the arrows did nothing, so a keyboard user tabbed along the strip
+// instead of from the strip into the page, and could only change tabs with
+// Space on each one in turn.
+static void tab_strip_is_one_stop_walked_by_arrows(void) {
+    int tabs = aether_ui_tabs_create(NULL);
+    aether_ui_tab_add(tabs, "One");
+    aether_ui_tab_add(tabs, "Two");
+    aether_ui_tab_add(tabs, "Three");
+    HWND b0 = GetWindow(GetWindow((HWND)aether_ui_get_widget(tabs), GW_CHILD), GW_CHILD);
+    HWND b1 = GetWindow(b0, GW_HWNDNEXT);
+    HWND b2 = GetWindow(b1, GW_HWNDNEXT);
+    #define STOP(h) ((GetWindowLongPtrW((h), GWL_STYLE) & WS_TABSTOP) ? 1u : 0u)
+
+    expect_eq(STOP(b0) + STOP(b1) + STOP(b2), 1u, "tab strip: one tab stop, not one per tab");
+    expect_eq(STOP(b0), 1u, "tab strip: the stop is on the selected tab");
+
+    SendMessageW(b0, WM_KEYDOWN, VK_RIGHT, 0);
+    expect_eq((unsigned)aether_ui_tabs_selected(tabs), 1u, "tab strip: Right selects the next tab");
+    expect_eq(STOP(b1), 1u, "tab strip: the stop moves with the selection");
+    expect_eq(STOP(b0) + STOP(b1) + STOP(b2), 1u, "tab strip: still one stop after moving");
+
+    SendMessageW(b1, WM_KEYDOWN, VK_END, 0);
+    expect_eq((unsigned)aether_ui_tabs_selected(tabs), 2u, "tab strip: End selects the last tab");
+    SendMessageW(b2, WM_KEYDOWN, VK_RIGHT, 0);
+    expect_eq((unsigned)aether_ui_tabs_selected(tabs), 0u, "tab strip: Right from the last wraps to the first");
+    SendMessageW(b0, WM_KEYDOWN, VK_LEFT, 0);
+    expect_eq((unsigned)aether_ui_tabs_selected(tabs), 2u, "tab strip: Left from the first wraps to the last");
+    SendMessageW(b2, WM_KEYDOWN, VK_HOME, 0);
+    expect_eq((unsigned)aether_ui_tabs_selected(tabs), 0u, "tab strip: Home selects the first tab");
+
+    // The dialog manager has to hand the arrows to the strip, or none of
+    // the above happens under a real keyboard.
+    expect_eq((unsigned)((SendMessageW(b0, WM_GETDLGCODE, VK_RIGHT, 0) & DLGC_WANTARROWS) != 0), 1u,
+              "tab strip: a strip button asks for the arrows");
+    #undef STOP
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -451,6 +490,7 @@ int main(void) {
     child_opacity_is_owed_until_the_window_shows();
     text_reads_are_the_callers_to_free();
     focus_ring_shows_after_keyboard_navigation();
+    tab_strip_is_one_stop_walked_by_arrows();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);

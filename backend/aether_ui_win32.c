@@ -4765,6 +4765,15 @@ static void tabs_do_select(TabsState* ts, int index, int fire) {
                 if (bw->custom_font) { DeleteObject(bw->custom_font); bw->custom_font = NULL; }
                 SendMessageW(bw->hwnd, WM_SETFONT, (WPARAM)base, TRUE);
             }
+            // A tab strip is ONE tab stop, on the selected tab, and the
+            // arrows move along it -- what the Windows tab control does, and
+            // what every other tab strip does with it. Each button was its
+            // own stop, so Tab walked the strip instead of going from the
+            // strip into the page.
+            LONG_PTR st = GetWindowLongPtrW(bw->hwnd, GWL_STYLE);
+            SetWindowLongPtrW(bw->hwnd, GWL_STYLE,
+                              p == index ? (st | WS_TABSTOP)
+                                         : (st & ~(LONG_PTR)WS_TABSTOP));
         }
     }
     int changed = (ts->selected != index);
@@ -4826,6 +4835,16 @@ int aether_ui_tab_add(int tabs_handle, const char* title) {
     Widget* pg = widget_at(page);
     if (pg) ShowWindow(pg->hwnd, idx == 0 ? SW_SHOW : SW_HIDE);
     if (idx == 0) tabs_do_select(ts, 0, 0);  // bold the first strip button
+    else {
+        // A later tab is not the selected one: it is no tab stop of its
+        // own (the strip is one stop, on the selected tab -- see
+        // tabs_do_select), and a button is created with one.
+        Widget* bw = widget_at(btn);
+        if (bw && bw->hwnd) {
+            LONG_PTR st = GetWindowLongPtrW(bw->hwnd, GWL_STYLE);
+            SetWindowLongPtrW(bw->hwnd, GWL_STYLE, st & ~(LONG_PTR)WS_TABSTOP);
+        }
+    }
     return page;
 }
 
@@ -5432,6 +5451,32 @@ static LRESULT CALLBACK styled_btn_proc(HWND hwnd, UINT msg, WPARAM wp,
                 || wp == VK_UP || wp == VK_DOWN) {
                 w32_show_focus_cues();
             }
+            // On a tab strip's button, the arrows move along the strip and
+            // select as they go, as the Windows tab control does. Home and
+            // End go to the ends.
+            if (wp == VK_LEFT || wp == VK_RIGHT || wp == VK_HOME || wp == VK_END) {
+                int idx = -1;
+                TabsState* ts = tabs_state_for_button(handle, &idx);
+                if (ts && idx >= 0 && ts->page_count > 0) {
+                    int to = idx;
+                    if (wp == VK_LEFT)       to = idx > 0 ? idx - 1 : ts->page_count - 1;
+                    else if (wp == VK_RIGHT) to = idx + 1 < ts->page_count ? idx + 1 : 0;
+                    else if (wp == VK_HOME)  to = 0;
+                    else                     to = ts->page_count - 1;
+                    if (to != idx) {
+                        tabs_do_select(ts, to, 1);
+                        Widget* nb = widget_at(ts->btn_handles[to]);
+                        if (nb && nb->hwnd) SetFocus(nb->hwnd);
+                    }
+                    return 0;
+                }
+            }
+            break;
+        case WM_GETDLGCODE:
+            // A strip button wants the arrows (the walk above). Everything
+            // else, including Tab, stays with the dialog manager.
+            if (tabs_state_for_button(handle, NULL))
+                return DefSubclassProc(hwnd, msg, wp, lp) | DLGC_WANTARROWS;
             break;
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
@@ -11415,6 +11460,28 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                         else break;
                     }
                     ctx->retval = aether_ui_window_key_deliver(rest, kmods);
+                    // Then on to the focused control, as a real key goes on
+                    // through IsDialogMessage: an arrow reaches a control
+                    // that asks for arrows (WM_GETDLGCODE) -- a tab strip
+                    // walks with them, an edit moves its caret. The driver
+                    // stopped at the window handler, so it could not drive
+                    // anything a control does with the keyboard itself.
+                    int vk = 0;
+                    if      (strcmp(rest, "Left")  == 0) vk = VK_LEFT;
+                    else if (strcmp(rest, "Right") == 0) vk = VK_RIGHT;
+                    else if (strcmp(rest, "Up")    == 0) vk = VK_UP;
+                    else if (strcmp(rest, "Down")  == 0) vk = VK_DOWN;
+                    else if (strcmp(rest, "Home")  == 0) vk = VK_HOME;
+                    else if (strcmp(rest, "End")   == 0) vk = VK_END;
+                    HWND f = GetFocus();
+                    if (vk && kmods == 0 && f) {
+                        if (vk != VK_HOME && vk != VK_END) w32_show_focus_cues();
+                        LRESULT code = SendMessageW(f, WM_GETDLGCODE, (WPARAM)vk, 0);
+                        if (code & (DLGC_WANTARROWS | DLGC_WANTALLKEYS)) {
+                            SendMessageW(f, WM_KEYDOWN, (WPARAM)vk, 0);
+                            ctx->retval = 1;
+                        }
+                    }
                 }
                 ctx->result = 0;
                 ctx->done = 1;
