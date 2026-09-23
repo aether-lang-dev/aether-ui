@@ -7575,8 +7575,10 @@ void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
 // Grid layout.
 //
 // A 2D container where children claim (row, col) cells with optional row
-// and column spans. Columns are equal-width by default; rows size to their
-// tallest child. Matches GtkGrid / NSGridView semantics.
+// and column spans. Each column is as wide as its widest child and each row
+// as tall as its tallest, as GtkGrid (non-homogeneous) and NSGridView size
+// them; a child fills its column's width and sits at its own height, centred
+// in its row. See w32_grid_tracks.
 // ---------------------------------------------------------------------------
 
 typedef struct {
@@ -7602,36 +7604,83 @@ static GridEntry* grid_for_hwnd(HWND hwnd) {
     return NULL;
 }
 
+#define W32_GRID_MAX_TRACKS 64
+
+// The grid's column widths and row heights, from its children's natural
+// sizes: a single-cell child widens its column and heightens its row, then a
+// spanning child that still does not fit the tracks it spans widens (or
+// heightens) the last of them by the difference. The layout and the natural
+// measure both come from here, so a grid is laid out at the size it reports.
+//
+// The layout used to deal the window out evenly -- every column the same
+// width, every row the same height, every child stretched to its cell -- so a
+// login form in a 220px window had 50px-tall single-line fields and a
+// half-window label column, where GTK and AppKit size the tracks to content.
+static void w32_grid_tracks(GridEntry* ge, int* colw, int* rowh,
+                            int* out_cols, int* out_rows) {
+    int ncols = 0, nrows = 0;
+    for (int t = 0; t < W32_GRID_MAX_TRACKS; t++) { colw[t] = 0; rowh[t] = 0; }
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < ge->item_count; i++) {
+            Widget* cw = widget_at(handle_for_hwnd(ge->items[i].hwnd));
+            if (!cw || cw->dead || !w32_own_visible(ge->items[i].hwnd)) continue;
+            int r = ge->items[i].row, c = ge->items[i].col;
+            int rs = ge->items[i].row_span < 1 ? 1 : ge->items[i].row_span;
+            int cs = ge->items[i].col_span < 1 ? 1 : ge->items[i].col_span;
+            if (r < 0 || c < 0 || r + rs > W32_GRID_MAX_TRACKS
+                || c + cs > W32_GRID_MAX_TRACKS) continue;
+            if (r + rs > nrows) nrows = r + rs;
+            if (c + cs > ncols) ncols = c + cs;
+            int spanning = (rs > 1 || cs > 1);
+            if ((pass == 0) == spanning) continue;   // singles first, then spans
+            int mw = 0, mh = 0;
+            measure_widget(cw, &mw, &mh);
+            int have_w = ge->col_spacing * (cs - 1), have_h = ge->row_spacing * (rs - 1);
+            for (int k = 0; k < cs; k++) have_w += colw[c + k];
+            for (int k = 0; k < rs; k++) have_h += rowh[r + k];
+            if (mw > have_w) colw[c + cs - 1] += mw - have_w;
+            if (mh > have_h) rowh[r + rs - 1] += mh - have_h;
+        }
+    }
+    *out_cols = ncols;
+    *out_rows = nrows;
+}
+
 static void grid_do_layout(HWND hwnd) {
     GridEntry* g = grid_for_hwnd(hwnd);
     if (!g || g->item_count == 0) return;
 
-    RECT client;
-    GetClientRect(hwnd, &client);
-    int total_w = client.right - client.left;
-    int total_h = client.bottom - client.top;
-
-    // Determine row count from max row index.
-    int rows = 0;
-    for (int i = 0; i < g->item_count; i++) {
-        int r = g->items[i].row + g->items[i].row_span;
-        if (r > rows) rows = r;
-    }
-    if (rows == 0) return;
-
-    int col_w = (total_w - g->col_spacing * (g->cols - 1)) / g->cols;
-    int row_h = (total_h - g->row_spacing * (rows - 1)) / rows;
-    if (col_w < 0) col_w = 0;
-    if (row_h < 0) row_h = 0;
+    int colw[W32_GRID_MAX_TRACKS], rowh[W32_GRID_MAX_TRACKS];
+    int ncols = 0, nrows = 0;
+    w32_grid_tracks(g, colw, rowh, &ncols, &nrows);
+    if (ncols == 0 || nrows == 0) return;
+    int colx[W32_GRID_MAX_TRACKS], rowy[W32_GRID_MAX_TRACKS];
+    int at = 0;
+    for (int c = 0; c < ncols; c++) { colx[c] = at; at += colw[c] + g->col_spacing; }
+    at = 0;
+    for (int r = 0; r < nrows; r++) { rowy[r] = at; at += rowh[r] + g->row_spacing; }
 
     for (int i = 0; i < g->item_count; i++) {
-        int x = g->items[i].col * (col_w + g->col_spacing);
-        int y = g->items[i].row * (row_h + g->row_spacing);
-        int w = col_w * g->items[i].col_span
-                + g->col_spacing * (g->items[i].col_span - 1);
-        int h = row_h * g->items[i].row_span
-                + g->row_spacing * (g->items[i].row_span - 1);
-        SetWindowPos(g->items[i].hwnd, NULL, x, y, w, h,
+        int r = g->items[i].row, c = g->items[i].col;
+        int rs = g->items[i].row_span < 1 ? 1 : g->items[i].row_span;
+        int cs = g->items[i].col_span < 1 ? 1 : g->items[i].col_span;
+        if (r < 0 || c < 0 || r + rs > nrows || c + cs > ncols) continue;
+        int cell_w = g->col_spacing * (cs - 1), cell_h = g->row_spacing * (rs - 1);
+        for (int k = 0; k < cs; k++) cell_w += colw[c + k];
+        for (int k = 0; k < rs; k++) cell_h += rowh[r + k];
+        // Across: the column's width, as GtkGrid fills a child horizontally.
+        // Down: the child's own height, centred in its row -- a label beside
+        // a taller field lines up with the field's text rather than sitting
+        // on the row's top edge, and a single-line field is never stretched.
+        int h = cell_h;
+        Widget* cw = widget_at(handle_for_hwnd(g->items[i].hwnd));
+        if (cw) {
+            int mw = 0, mh = 0;
+            measure_widget(cw, &mw, &mh);
+            if (mh > 0 && mh < cell_h) h = mh;
+        }
+        int y = rowy[r] + (cell_h - h) / 2;
+        SetWindowPos(g->items[i].hwnd, NULL, colx[c], y, cell_w, h,
                      SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }
@@ -7700,25 +7749,16 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
 static int w32_measure_grid_natural(HWND grid_hwnd, int* out_w, int* out_h) {
     GridEntry* ge = grid_for_hwnd(grid_hwnd);
     if (!ge) return 0;
-    int colw[64] = {0}, rowh[64] = {0};
-    int maxr = 0, maxc = 0;
-    for (int i = 0; i < ge->item_count; i++) {
-        Widget* cw = widget_at(handle_for_hwnd(ge->items[i].hwnd));
-        if (!cw || cw->dead) continue;
-        int mw = 0, mh = 0;
-        measure_widget(cw, &mw, &mh);
-        int r = ge->items[i].row, c = ge->items[i].col;
-        if (r < 0 || r >= 64 || c < 0 || c >= 64) continue;
-        if (mw > colw[c]) colw[c] = mw;
-        if (mh > rowh[r]) rowh[r] = mh;
-        if (r > maxr) maxr = r;
-        if (c > maxc) maxc = c;
-    }
+    // The tracks the layout uses (w32_grid_tracks), so the size a grid
+    // reports is the size it lays itself out at.
+    int colw[W32_GRID_MAX_TRACKS], rowh[W32_GRID_MAX_TRACKS];
+    int ncols = 0, nrows = 0;
+    w32_grid_tracks(ge, colw, rowh, &ncols, &nrows);
     int tw = 0, th = 0;
-    for (int c = 0; c <= maxc; c++) tw += colw[c];
-    for (int r = 0; r <= maxr; r++) th += rowh[r];
-    if (maxc > 0) tw += ge->col_spacing * maxc;
-    if (maxr > 0) th += ge->row_spacing * maxr;
+    for (int c = 0; c < ncols; c++) tw += colw[c];
+    for (int r = 0; r < nrows; r++) th += rowh[r];
+    if (ncols > 1) tw += ge->col_spacing * (ncols - 1);
+    if (nrows > 1) th += ge->row_spacing * (nrows - 1);
     *out_w = tw;
     *out_h = th;
     return 1;

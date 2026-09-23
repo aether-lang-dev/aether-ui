@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a grid sizes its rows and columns to what is in them.** The
+  grid dealt the window out evenly -- every column the same width, every
+  row the same height, every child stretched to its cell -- so the grid
+  example's login form in a 220px window had 50px-tall single-line
+  fields and a label column half the window wide, and scrollbg_demo's
+  "content smaller than the viewport" filled it. Each column is now as
+  wide as its widest child and each row as tall as its tallest, as
+  GtkGrid and NSGridView size them; a spanning child that does not fit
+  widens the last track it spans. A child fills its column's width and
+  sits at its own height, centred in its row, so a label lines up with
+  the field beside it. The layout and the grid's natural size come from
+  one computation, so a grid is laid out at the size it reports. The
+  grid's own header comment already said rows sized to their tallest
+  child; the code now does.
+
 - **Enter opens the selected row.** In a listbox (and the tables and trees
   built on it) the arrows moved the selection, but a keyboard user could
   not then act on it: the row's activation -- `on_row_double_click` --
