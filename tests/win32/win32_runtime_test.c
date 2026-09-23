@@ -475,6 +475,21 @@ static void tab_strip_is_one_stop_walked_by_arrows(void) {
     #undef STOP
 }
 
+// A live light/dark switch re-themes every native control the backend
+// themed (w32_retheme_tree), which it can only do if each one says which
+// theme family it takes. Themed only at creation, a button kept its dark
+// theme when the system went light -- a dark chip on a white window.
+static void native_controls_remember_their_theme_family(void) {
+    int btn = aether_ui_button_create("x", NULL);
+    int field = aether_ui_textfield_create("", NULL);
+    HWND bh = (HWND)aether_ui_get_widget(btn);
+    HWND fh = (HWND)aether_ui_get_widget(field);
+    expect_eq((unsigned)(intptr_t)GetPropW(bh, L"AeuiThemeFamily"), 1u,
+              "retheme: a button records Explorer's theme family");
+    expect_eq((unsigned)(intptr_t)GetPropW(fh, L"AeuiThemeFamily"), 2u,
+              "retheme: a field records the edit theme family");
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -493,6 +508,7 @@ int main(void) {
     text_reads_are_the_callers_to_free();
     focus_ring_shows_after_keyboard_navigation();
     tab_strip_is_one_stop_walked_by_arrows();
+    native_controls_remember_their_theme_family();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);

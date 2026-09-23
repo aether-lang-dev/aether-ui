@@ -451,6 +451,11 @@ static COLORREF w32_accent_color(void);
 static COLORREF w32_system_ground(void);
 static void w32_field_frame(HWND hwnd);
 static void w32_draw_chevron(HDC hdc, const RECT* rc, COLORREF ink, int expanded);
+static void w32_retheme_tree(HWND top);
+static void w32_apply_theme_family(HWND hwnd, int family, int dark);
+// The window property naming a native control's theme family (see
+// w32_apply_theme_family).
+#define W32_THEME_PROP L"AeuiThemeFamily"
 // Focus cues: Windows shows the focus ring only once someone has navigated by
 // keyboard (the dialog manager clears UISF_HIDEFOCUS on the first Tab or
 // arrow). The rule is right and we keep it, but tracked here rather than read
@@ -1205,6 +1210,7 @@ static int w32_subtree_greedy(Widget* w, int orientation) {
 // The paths a resize takes (WM_SIZE, set_width, scroll) stay synchronous:
 // they run once per event, not once per child.
 #define AE_WM_FLUSH_LAYOUT (WM_USER + 0x43)
+#define AE_WM_RETHEME      (WM_USER + 0x44)   // driver appearance switch
 
 static void stack_do_layout(HWND stack_hwnd);
 
@@ -2697,12 +2703,18 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 w32_forget_system_dark();
                 aether_ui_appearance_invoke(aether_ui_dark_mode_check());
                 // Every default ground in the tree just changed colour,
-                // and every field's edge with it (RDW_FRAME).
-                RedrawWindow(hwnd, NULL, NULL,
-                             RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+                // every field's edge with it, and every native control's
+                // theme (w32_retheme_tree).
+                w32_retheme_tree(hwnd);
             }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
+        case AE_WM_RETHEME:
+            // The driver's appearance switch, marshalled here so it runs on
+            // the UI thread and takes the very path an OS flip takes.
+            aether_ui_appearance_invoke(aether_ui_dark_mode_check());
+            w32_retheme_tree(hwnd);
+            return 0;
         case WM_SIZE: {
             // Resize EVERY root-level container (and any modal scrim) to the
             // new client area — not just GetWindow(GW_CHILD): that's the
@@ -3006,16 +3018,51 @@ static void w32_enable_visual_styles(void) {
 // Looked up by ordinal and simply not called where the export is missing,
 // so an older Windows draws what it drew before. Without it a dark app
 // popped light menus.
+static int w32_app_mode_set = 0;   // SetPreferredAppMode has been called
+
 static void w32_allow_dark_app_mode(void) {
-    if (!aether_ui_dark_mode_check()) return;
+    int dark = aether_ui_dark_mode_check();
+    // Nothing to undo on a light start; a live switch back to light has to
+    // say so (mode 0, Default), or the menus stay dark.
+    if (!dark && !w32_app_mode_set) return;
     HMODULE ux = LoadLibraryW(L"uxtheme.dll");
     if (!ux) return;
     typedef int (WINAPI *SetPreferredAppModeFn)(int);
     typedef void (WINAPI *FlushMenuThemesFn)(void);
     FARPROC mode = GetProcAddress(ux, MAKEINTRESOURCEA(135));
     FARPROC flush = GetProcAddress(ux, MAKEINTRESOURCEA(136));
-    if (mode) ((SetPreferredAppModeFn)(void(*)(void))mode)(1 /* AllowDark */);
+    if (mode) {
+        ((SetPreferredAppModeFn)(void(*)(void))mode)(dark ? 1 /* AllowDark */ : 0 /* Default */);
+        w32_app_mode_set = 1;
+    }
     if (mode && flush) ((FlushMenuThemesFn)(void(*)(void))flush)();
+}
+
+// A live light/dark switch: every native control the backend themed takes
+// the new appearance's theme (the combo box's drop-down list is a popup of
+// its own, reached through the combo), the menus follow, and the whole
+// window repaints -- grounds, text colours, field edges (RDW_FRAME).
+static BOOL CALLBACK w32_retheme_child(HWND h, LPARAM lp) {
+    int dark = (int)lp;
+    int family = (int)(intptr_t)GetPropW(h, W32_THEME_PROP);
+    if (family) {
+        w32_apply_theme_family(h, family, dark);
+        COMBOBOXINFO cbi;
+        memset(&cbi, 0, sizeof(cbi));
+        cbi.cbSize = sizeof(cbi);
+        if (GetComboBoxInfo(h, &cbi) && cbi.hwndList)
+            w32_apply_theme_family(cbi.hwndList, 1, dark);
+    }
+    return TRUE;
+}
+
+static void w32_retheme_tree(HWND top) {
+    int dark = aether_ui_dark_mode_check();
+    w32_allow_dark_app_mode();
+    if (!top) return;
+    EnumChildWindows(top, w32_retheme_child, (LPARAM)dark);
+    RedrawWindow(top, NULL, NULL,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
 static void ensure_win_init(void) {
@@ -3085,10 +3132,26 @@ static void w32_forget_system_dark(void);
 // dark mode, the way the title bar already follows it. The theme class is
 // the one Explorer's own windows use; a light system leaves the control
 // as it is.
-static void w32_system_dark_control(HWND hwnd) {
-    if (hwnd && aether_ui_dark_mode_check()) {
-        SetWindowTheme(hwnd, L"DarkMode_Explorer", NULL);
+// Which theme family a native control takes, remembered on the window so a
+// live light/dark switch can re-theme it (w32_retheme_tree): 1 = Explorer's
+// (buttons, check boxes, lists, sliders, scrollbars), 2 = the common file
+// dialog's (edits). A control themed only at creation kept its dark theme
+// when the system went light -- dark push buttons on a white window.
+
+static void w32_apply_theme_family(HWND hwnd, int family, int dark) {
+    if (!hwnd) return;
+    if (dark) {
+        SetWindowTheme(hwnd, family == 2 ? L"DarkMode_CFD" : L"DarkMode_Explorer", NULL);
+    } else {
+        // NULL, NULL: back to the class's own theme, which is the light one.
+        SetWindowTheme(hwnd, NULL, NULL);
     }
+}
+
+static void w32_system_dark_control(HWND hwnd) {
+    if (!hwnd) return;
+    SetPropW(hwnd, W32_THEME_PROP, (HANDLE)(intptr_t)1);
+    if (aether_ui_dark_mode_check()) w32_apply_theme_family(hwnd, 1, 1);
 }
 
 // The same for an EDIT, whose dark theme class is the common file dialog's
@@ -3097,9 +3160,9 @@ static void w32_system_dark_control(HWND hwnd) {
 // system's, and stays a white line on a dark ground -- w32_field_frame
 // paints that edge (WM_NCPAINT) in the dark frame colour instead.
 static void w32_system_dark_edit(HWND hwnd) {
-    if (hwnd && aether_ui_dark_mode_check()) {
-        SetWindowTheme(hwnd, L"DarkMode_CFD", NULL);
-    }
+    if (!hwnd) return;
+    SetPropW(hwnd, W32_THEME_PROP, (HANDLE)(intptr_t)2);
+    if (aether_ui_dark_mode_check()) w32_apply_theme_family(hwnd, 2, 1);
 }
 
 // The user's accent colour, what the system draws a focused field's edge,
@@ -5272,28 +5335,32 @@ static int w32_needs_owner_draw(Widget* w) {
 // theme class leaves as it was. Every field and text area is subclassed at
 // creation, and its edge is painted here, over the system's:
 //   - a border the sheet gave it, at the width and colour asked for;
-//   - otherwise, on a dark system, the dark frame Explorer's fields wear,
-//     and the accent colour while the field has the focus, which is what a
-//     Windows 11 text box does;
-//   - otherwise nothing: the light theme's edge is the system's own.
+//   - otherwise a hairline a step off the ground -- the dark frame
+//     Explorer's fields wear on a dark system, a light grey one on a light
+//     system -- and the accent colour while the field has the focus, which
+//     is what a Windows 11 text box does in either theme.
+// The light theme used to be left to the system's own client edge. It did
+// not survive a live switch from dark (the field came back with no edge at
+// all), it was the one field state without an accent focus, and the
+// driver's capture could not see it; so both themes are painted here.
 // The inner ring of the two is the field's own ground, so a one-pixel
 // frame reads as one pixel.
 // The field's edge, over the frame the control drew: the sheet's border
-// where it gave one, else on a dark system a hairline a step off the
-// ground (the accent while focused) inside the control's own light edge.
+// where it gave one, else a hairline a step off the ground (the accent
+// while focused).
 // Into `hdc`, whose origin is the window's top-left corner: the window DC
 // on a frame paint, the driver's DC on a print.
 static void w32_field_paint_edge(HWND hwnd, Widget* w, HDC hdc) {
     int sheet = w->border_set && w->border_width > 0;
-    int dark = !sheet && aether_ui_dark_mode_check();
-    if (!sheet && !dark) return;
+    int dark = aether_ui_dark_mode_check();
     RECT rc;
     int ring;
     GetWindowRect(hwnd, &rc);
     OffsetRect(&rc, -rc.left, -rc.top);
     COLORREF inner = w->bg.has_value ? w->bg.color : w32_system_ground();
     COLORREF outer = sheet ? w->border_color
-                   : (GetFocus() == hwnd ? w32_accent_color() : RGB(0x45, 0x45, 0x45));
+                   : GetFocus() == hwnd ? w32_accent_color()
+                   : dark ? RGB(0x45, 0x45, 0x45) : RGB(0xC4, 0xC4, 0xC4);
     for (ring = 0; ring < 2; ring++) {
         RECT e = { rc.left + ring, rc.top + ring, rc.right - ring, rc.bottom - ring };
         COLORREF c = outer;
@@ -6932,9 +6999,16 @@ int aether_ui_fire_redo(void) { return aether_ui_redo_step_impl(); }
 
 int aether_ui_fire_appearance(int dark) {
     aether_ui_appearance_override_set(dark ? 1 : 0);
-    // Direct invoke from the HTTP thread — same threading posture as the
-    // /drop fire path, which cross-thread SendMessages tolerate.
-    return aether_ui_appearance_invoke(dark ? 1 : 0);
+    // Onto the UI thread, through the path an OS light/dark flip takes
+    // (AE_WM_RETHEME in app_wnd_proc): the app's appearance callback, then
+    // every native control re-themed and the tree repainted. It used to
+    // invoke only the callback, from the HTTP thread, so a spec that flipped
+    // the appearance saw native controls keep the old theme -- which is
+    // also what a user saw, the OS path lacking the re-theme as well.
+    HWND top = (app_count > 0) ? apps[0].hwnd : NULL;
+    if (!top) return aether_ui_appearance_invoke(dark ? 1 : 0);
+    SendMessageW(top, AE_WM_RETHEME, 0, 0);
+    return 1;
 }
 // A class is a name the driver reads back, and on GTK4 a stylesheet's
 // hook. One of them has a look here as well: .aui-row-selected, the listbox's
