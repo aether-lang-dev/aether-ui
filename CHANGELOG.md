@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The toolkit links against Aether 0.708 and later.** All four backends
+  read a gradient's stops through `floatarr_get_unchecked`, declared
+  `extern` here; Aether 0.708 made it `static inline`
+  (`aether_arr_inline.h`, aether#2169) and stopped exporting it, so every
+  program that links the toolkit failed with `undefined reference to
+  floatarr_get_unchecked` -- ae3d's editor on Windows among them. The
+  stops are read with `floatarr_get_raw`, the checked accessor the same
+  backends already use for paint clip rects, which std.floatarr exports
+  on every release: a gradient has a handful of stops, the bounds check
+  costs nothing, and the toolkit links against old and new runtimes
+  alike without depending on where the inline header sits on the include
+  path. The win32 runtime harness no longer stubs the unchecked
+  accessor, so a backend that calls it again fails to link the harness
+  first. (#198)
+
 - **win32: a tab strip is one tab stop, and the arrows walk it.** Each
   strip button was a tab stop of its own and the arrows did nothing, so a
   keyboard user tabbed along the strip instead of from the strip into the

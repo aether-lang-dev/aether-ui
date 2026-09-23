@@ -28,16 +28,18 @@
 #include "aether_ui_backend.h"
 
 // aether_ui_win32.c reads canvas gradient stops and paint clip rects out of a
-// std.floatarr. The DSL side is not linked here, so these read the plain
+// std.floatarr. The DSL side is not linked here, so this reads the plain
 // double buffer this harness passes, which is the layout the backend expects.
+//
+// Only floatarr_get_raw, deliberately. floatarr_get_unchecked is `static
+// inline` from Aether 0.708 and no longer exported, and the backend calling
+// it stopped every program that links the toolkit from linking (#198). With
+// no stub for it here, a backend that starts calling it again fails to link
+// THIS harness first -- the undefined-symbol check described above.
 double floatarr_get_raw(void* arr, int index);
-double floatarr_get_unchecked(void* arr, int index);
 
 double floatarr_get_raw(void* arr, int index) {
     return arr ? ((const double*)arr)[index] : 0.0;
-}
-double floatarr_get_unchecked(void* arr, int index) {
-    return floatarr_get_raw(arr, index);
 }
 
 // The undo/redo edit store reclaims a dropped edit's boxed closures through
