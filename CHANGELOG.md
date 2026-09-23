@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a live light/dark switch reaches every control.** When Windows
+  switched between light and dark with an app open, the grounds and the
+  text followed but every native control kept the theme it was given at
+  creation -- dark push buttons, check boxes, sliders and scrollbars on a
+  white window. Each themed control now records its theme family, and
+  the switch re-themes all of them (the combo box's drop-down list with
+  its combo), sets the menus' app mode both ways, and repaints the tree.
+  The driver's `POST /appearance` takes the same path on the UI thread;
+  it used to run only the app's callback, from the HTTP thread, so a spec
+  could not see what a user saw. A light field is now framed by the same
+  painter as a dark one -- a light hairline, the accent while focused --
+  where it relied on the system's client edge, which did not survive the
+  switch (the fields came back with no edge) and had no accent focus.
+
 - **win32: a grid sizes its rows and columns to what is in them.** The
   grid dealt the window out evenly -- every column the same width, every
   row the same height, every child stretched to its cell -- so the grid
