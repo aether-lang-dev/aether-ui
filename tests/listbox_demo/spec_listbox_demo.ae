@@ -171,6 +171,16 @@ main() {
             uidriver.window_key("Up")
             spec.assert_eq(selected_row(), first, "Up at the start stays put")
         }
+
+        // Enter opens the selected row -- the same action a double-click
+        // takes. Moving a selection you cannot then act on is half a list.
+        spec.it("Enter activates the selected row, as a double-click does") callback {
+            r2 = row_of("person 2")
+            uidriver.post_ok("/widget/${r2}/click", "click row 2")
+            uidriver.window_key("Return")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "opened index 1", 20),
+                             "Enter fired the row's activation with its index")
+        }
     }
     return spec.run_summary(fw)
 }

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Enter opens the selected row.** In a listbox (and the tables and trees
+  built on it) the arrows moved the selection, but a keyboard user could
+  not then act on it: the row's activation -- `on_row_double_click` --
+  took a double-click. Enter (and keypad Enter) on the list now fires it
+  with the selected row's index, as Enter does in a list view on every
+  desktop. Only while the focus is in the list, so an Enter elsewhere is
+  untouched. listbox_demo shows the activation and its spec drives it.
+
 - **The toolkit links against Aether 0.708 and later.** All four backends
   read a gradient's stops through `floatarr_get_unchecked`, declared
   `extern` here; Aether 0.708 made it `static inline`
