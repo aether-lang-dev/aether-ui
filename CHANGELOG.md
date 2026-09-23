@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: a tab strip is one tab stop, and the arrows walk it.** Each
+  strip button was a tab stop of its own and the arrows did nothing, so a
+  keyboard user tabbed along the strip instead of from the strip into the
+  page, and changed tabs by landing on each one. The strip is one stop, on
+  the selected tab; Left and Right move along it and select as they go
+  (wrapping at the ends), Home and End go to the ends -- what the Windows
+  tab control does. GTK4 and AppKit already had it from their native tab
+  widgets. The driver's arrow keys now go on to the focused control after
+  the window's key handler, as a real key goes on through the dialog
+  manager: they stopped at the window handler, so nothing a control does
+  with the keyboard itself could be driven.
+
 - **A list is one tab stop, not one per row.** Every row was reachable by
   Tab, so a keyboard user leaving a list of 200 rows pressed Tab 200
   times. One row carries the stop and the arrows move within the list --
