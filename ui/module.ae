@@ -4180,6 +4180,13 @@ _listbox_key(lbp: ptr, k: string, m: int) {
         next = 0
     } else if string.equals(k, "End") == 1 {
         next = n - 1
+    } else if string.equals(k, "Return") == 1 || string.equals(k, "KP_Enter") == 1 {
+        // Enter activates the selected row -- the double-click action, what
+        // Enter does in a list view on every desktop. The arrows could move
+        // the selection, but a keyboard user could not open what they had
+        // selected.
+        if cur >= 0 { _listbox_row_double(lbp, cur) }
+        return
     } else {
         return
     }

@@ -11,7 +11,7 @@
 import ui
 import ui (content_inset, window, vstack, hstack, text, btn, divider, scrollview,
     listbox, listbox_update, listbox_select, listbox_selected, listbox_count,
-    on_select, enable_test_server, fill_height)
+    on_select, on_row_double_click, enable_test_server, fill_height)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -46,6 +46,11 @@ main() {
             on_select(people) callback |i: int| {
                 aether_ui_text_set_string(status,
                     string.concat("selected index ", string.from_int(i)))
+            }
+            // Activation: a double-click, or Enter on the selected row.
+            on_row_double_click(people) callback |i: int| {
+                aether_ui_text_set_string(status,
+                    string.concat("opened index ", string.from_int(i)))
             }
             divider()
 
