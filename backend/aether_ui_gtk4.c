@@ -6270,7 +6270,14 @@ void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y,
 
 // std.collections FloatArray accessor (libaether) — read gradient
 // stop arrays handed over as opaque FloatArray* from Aether.
-extern double floatarr_get_unchecked(void* arr, int i);
+/* The stops are read with floatarr_get_raw, the checked accessor, which
+   std.floatarr exports on every release. floatarr_get_unchecked is
+   `static inline` from Aether 0.708 (aether_arr_inline.h, aether#2169) and
+   no longer exported, so declaring it extern here stopped every program
+   that links the toolkit from linking (#198). A gradient has a handful of
+   stops; the bounds check costs nothing here, and this links against old
+   and new runtimes alike without depending on where the inline header
+   sits on the include path. */
 extern int floatarr_size(void* arr);
 
 // Copy n_stops offsets + n_stops*4 rgba comps out of the Aether
@@ -6281,11 +6288,11 @@ static void canvas_copy_stops(CanvasCmd* c, int n_stops,
     c->stop_off = (double*)malloc(sizeof(double) * (n_stops > 0 ? n_stops : 1));
     c->stop_rgba = (double*)malloc(sizeof(double) * (n_stops > 0 ? n_stops*4 : 1));
     for (int i = 0; i < n_stops; i++) {
-        c->stop_off[i] = floatarr_get_unchecked(offsets, i);
-        c->stop_rgba[i*4+0] = floatarr_get_unchecked(rgba, i*4+0);
-        c->stop_rgba[i*4+1] = floatarr_get_unchecked(rgba, i*4+1);
-        c->stop_rgba[i*4+2] = floatarr_get_unchecked(rgba, i*4+2);
-        c->stop_rgba[i*4+3] = floatarr_get_unchecked(rgba, i*4+3);
+        c->stop_off[i] = floatarr_get_raw(offsets, i);
+        c->stop_rgba[i*4+0] = floatarr_get_raw(rgba, i*4+0);
+        c->stop_rgba[i*4+1] = floatarr_get_raw(rgba, i*4+1);
+        c->stop_rgba[i*4+2] = floatarr_get_raw(rgba, i*4+2);
+        c->stop_rgba[i*4+3] = floatarr_get_raw(rgba, i*4+3);
     }
 }
 
