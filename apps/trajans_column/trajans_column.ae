@@ -23,7 +23,7 @@
 // the same block again deselects. State is a heap *Col carrying the active id.
 
 import ui
-import ui (window, vstack, text, enable_test_server, aether_ui_text_set_string)
+import ui (window, vstack, text, enable_test_server, set_text)
 import vg.live (vg)
 import vg
 import vg (view_box, circle, rect, line, path, text_sized, g, fill, stroke, opacity,
@@ -76,11 +76,11 @@ block_name(id: int) -> string {
 click_block(c: *Col, id: int) {
     if c.active == id {
         c.active = 0
-        if c.status != 0 { aether_ui_text_set_string(c.status, "Click a block to explore") }
+        if c.status != 0 { set_text(c.status, "Click a block to explore") }
     } else {
         c.active = id
         if c.status != 0 {
-            aether_ui_text_set_string(c.status, string.concat("Exploring ", block_name(id)))
+            set_text(c.status, string.concat("Exploring ", block_name(id)))
         }
     }
 }
