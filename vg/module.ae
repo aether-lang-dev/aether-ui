@@ -448,7 +448,8 @@ path(_ctx: ptr, d: string) -> ptr {
 // The font is process-wide (a C-side holder — Aether has no module
 // globals): use_font(path) sets it explicitly; otherwise the first
 // text-path call lazy-loads the vendored default ($AEVG_FONT override,
-// then fonts/DejaVuSans-Bold.ttf, then system DejaVu paths).
+// then fonts/DejaVuSans-Bold.ttf, then DejaVu, macOS and Windows system
+// faces — see _tp_font_candidate).
 extern aether_ui_vgfont_get() -> ptr
 extern aether_ui_vgfont_set(f: ptr)
 
@@ -469,14 +470,32 @@ _tp_font() -> ptr {
     if envp != null {
         if use_font(envp) == 1 { return aether_ui_vgfont_get() }
     }
-    if use_font("fonts/DejaVuSans-Bold.ttf") == 1 { return aether_ui_vgfont_get() }
-    if use_font("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf") == 1 {
-        return aether_ui_vgfont_get()
-    }
-    if use_font("/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf") == 1 {
-        return aether_ui_vgfont_get()
+    // The vendored face first (when run from the repo), then each OS's own:
+    // DejaVu where distros put it, then the macOS and Windows stock faces,
+    // so an app launched from anywhere on any desktop still gets outlines.
+    n = _tp_font_candidate_count()
+    i = 0
+    while i < n {
+        if use_font(_tp_font_candidate(i)) == 1 { return aether_ui_vgfont_get() }
+        i = i + 1
     }
     return null
+}
+
+_tp_font_candidate_count() -> int { return 11 }
+
+_tp_font_candidate(i: int) -> string {
+    if i == 0 { return "fonts/DejaVuSans-Bold.ttf" }
+    if i == 1 { return "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" }  // Debian, Ubuntu
+    if i == 2 { return "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf" }           // Fedora
+    if i == 3 { return "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" }              // Arch
+    if i == 4 { return "/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf" }     // FreeBSD
+    if i == 5 { return "/System/Library/Fonts/Supplemental/Arial Bold.ttf" }     // macOS
+    if i == 6 { return "/System/Library/Fonts/Supplemental/Arial.ttf" }
+    if i == 7 { return "/System/Library/Fonts/Helvetica.ttc" }
+    if i == 8 { return "/Library/Fonts/Arial.ttf" }
+    if i == 9 { return "C:/Windows/Fonts/arialbd.ttf" }                          // Windows
+    return "C:/Windows/Fonts/arial.ttf"
 }
 
 // The current outline font's full face name ("DejaVu Sans Bold"), or ""
