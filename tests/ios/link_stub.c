@@ -41,6 +41,19 @@ void aether_closure_env_free(void* env) {
     free(env);
 }
 
+// aether_ui_uikit.m installs std.worker's main-thread poster at app_create
+// (aether_ui_worker_poster_install_impl) and delivers posted jobs from the
+// main dispatch queue. Both live in libaether; the poster struct is the
+// compiler's _AeClosure ({fn, env}) by value, mirrored in
+// aether_ui_backend.h as AetherUiWorkerClosure. The gate runs no job, so
+// these record nothing -- a backend that starts calling a THIRD worker
+// symbol fails to link here first.
+typedef struct { void (*fn)(void); void* env; } AeWorkerClosureStub;
+void aether_worker_set_main_poster(AeWorkerClosureStub poster);
+void aether_worker_set_main_poster(AeWorkerClosureStub poster) { (void)poster; }
+void aether_worker_deliver(void* job);
+void aether_worker_deliver(void* job) { (void)job; }
+
 // UIApplicationMain is never called by the gate (it runs nothing), but a
 // hosted executable needs an entry point to link.
 int main(int argc, char** argv) { (void)argc; (void)argv; return 0; }

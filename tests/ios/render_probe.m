@@ -37,6 +37,14 @@ void aether_closure_env_free(void* env) {
     free(env);
 }
 
+// aether_ui_uikit.m installs std.worker's main-thread poster at app_create
+// and delivers posted jobs from the main dispatch queue; both symbols live in
+// libaether, which this probe does not link. It never runs a job (the poster
+// is installed and nothing is posted), so these record nothing. The struct is
+// aether_ui_backend.h's mirror of the compiler's _AeClosure.
+void aether_worker_set_main_poster(AetherUiWorkerClosure poster) { (void)poster; }
+void aether_worker_deliver(void* job) { (void)job; }
+
 static int failures = 0;
 
 // read_pixel packs the sample as (A<<24)|(R<<16)|(G<<8)|B. An opaque pixel has
