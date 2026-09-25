@@ -1,0 +1,86 @@
+// spec_background_demo.ae — drives the background_demo example over the
+// AetherUIDriver.
+//
+// ui.background(work) callback |result| promises three things, and each is
+// asserted from OUTSIDE the process, where a lie would show:
+//
+//   1. The work is off the UI thread: the click returns while the status
+//      still says "working" (the work sleeps 400 ms before it sums), and the
+//      30 ms tick label keeps counting while the work runs. Work run inline
+//      would freeze the ticks and finish before the click returned.
+//   2. The completion is ON the UI thread: the finished status carries
+//      done_ui=1, from on_ui_thread() asked inside the callback.
+//   3. The work was not: work_ui=0, asked inside the work closure.
+//
+// A second run proves the poster is reusable and the run counter, assigned
+// inside the callback, is captured by reference and reaches 2.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/background_demo &
+//   UI_SPEC=background_demo/spec_background_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+// The text of the first label starting with `prefix`, pulled out of /widgets.
+label_text(prefix: string) -> string {
+    b = uidriver.get_body("/widgets")
+    key = string.concat("\"text\":\"", prefix)
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + string.length(key) - string.length(prefix), string.length(b))
+    j = string.string_index_of(rest, "\"")
+    if j < 0 { return "" }
+    return string.string_substring(rest, 0, j)
+}
+
+// The N of "ticks: N", or -1.
+ticks() -> int {
+    t = label_text("ticks: ")
+    if string.length(t) <= 7 { return 0 - 1 }
+    v, err = string.to_int(string.string_substring(t, 7, string.length(t)))
+    if string.length(err) > 0 { return 0 - 1 }
+    return v
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "background work over AetherUIDriver") {
+        spec.it("starts idle with a ticking clock") callback {
+            spec.assert_str_eq(label_text("status: "), "status: idle", "status idle")
+            t0 = ticks()
+            sleep(200)
+            spec.assert_true(ticks() > t0, "the tick label is counting (${t0} then ${ticks()})")
+        }
+
+        spec.it("the work runs off the UI thread and completes on it") callback {
+            s = uidriver.widget_id_by_text("start")
+            spec.assert_gt(s, 0, "start button found")
+            t_click = ticks()
+            uidriver.post_ok("/widget/${s}/click", "start the work")
+            // The click has returned; the work is asleep on its pool thread.
+            spec.assert_str_eq(label_text("status: "), "status: working",
+                "the click returned before the work finished (asynchronous)")
+            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"status: done ", 30)
+            spec.assert_true(ok, "the completion arrived")
+            spec.assert_str_eq(label_text("status: "),
+                "status: done 4950 work_ui=0 done_ui=1 run=1",
+                "the work ran on a pool thread and the callback on the UI thread")
+            spec.assert_true(ticks() > t_click + 3,
+                "the UI kept ticking while the work ran (${t_click} then ${ticks()})")
+        }
+
+        spec.it("a second run goes the same way") callback {
+            s = uidriver.widget_id_by_text("start")
+            uidriver.post_ok("/widget/${s}/click", "start again")
+            ok = uidriver.wait_body_contains("/widgets", "run=2", 30)
+            spec.assert_true(ok, "the second completion arrived")
+            spec.assert_str_eq(label_text("status: "),
+                "status: done 4950 work_ui=0 done_ui=1 run=2",
+                "same threads, second time")
+        }
+    }
+    return spec.run_summary(fw)
+}

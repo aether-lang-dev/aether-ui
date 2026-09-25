@@ -3102,8 +3102,64 @@ static int app_count = 0;
 static HWND w32_primary_app_hwnd(void) { return (app_count > 0) ? apps[0].hwnd : NULL; }
 static int app_capacity = 0;
 
+// ── Background work: std.worker's main-thread poster ───────────────────
+// A message-only window (HWND_MESSAGE) created on the UI thread at install
+// time; a finished job is PostMessage'd to it from the pool thread and its
+// window procedure delivers on the UI thread. AE_WM_WORKER_DELIVER sits in
+// the WM_USER range beside the driver's (+0x42), flush-layout (+0x43) and
+// retheme (+0x44) messages. Not installed under AETHER_UI_HEADLESS: that run
+// parks without a message loop. See the header for the contract.
+#define AE_WM_WORKER_DELIVER (WM_USER + 0x45)
+static HWND  aeui_worker_hwnd = NULL;
+static DWORD aeui_ui_thread_id = 0;
+
+static LRESULT CALLBACK aeui_worker_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == AE_WM_WORKER_DELIVER) {
+        aether_worker_deliver((void*)lp);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void aeui_worker_post(void* env, void* job) {
+    (void)env;
+    // On the pool thread. If the post cannot be queued (the window is gone at
+    // shutdown, or the queue is full) the job is dropped rather than run
+    // here: a completion on the wrong thread is the race this exists to
+    // prevent, and a leaked job at exit is not.
+    if (aeui_worker_hwnd) PostMessageW(aeui_worker_hwnd, AE_WM_WORKER_DELIVER, 0, (LPARAM)job);
+}
+
+void aether_ui_worker_poster_install_impl(void) {
+    if (!aeui_ui_thread_id) aeui_ui_thread_id = GetCurrentThreadId();
+    if (aeui_worker_hwnd || aeui_is_headless()) return;
+    static int registered = 0;
+    if (!registered) {
+        WNDCLASSW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = aeui_worker_wnd_proc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.lpszClassName = L"AetherUIWorkerPost";
+        RegisterClassW(&wc);
+        registered = 1;
+    }
+    aeui_worker_hwnd = CreateWindowExW(0, L"AetherUIWorkerPost", L"", 0, 0, 0, 0, 0,
+                                       HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+    if (!aeui_worker_hwnd) return;
+    AetherUiWorkerClosure poster;
+    poster.fn = (void (*)(void))aeui_worker_post;
+    poster.env = NULL;
+    aether_worker_set_main_poster(poster);
+}
+
+int aether_ui_on_ui_thread_impl(void) {
+    if (!aeui_ui_thread_id) return 1;
+    return GetCurrentThreadId() == aeui_ui_thread_id ? 1 : 0;
+}
+
 int aether_ui_app_create(const char* title, int width, int height) {
     ensure_win_init();
+    aether_ui_worker_poster_install_impl();   // std.worker completions reach the UI thread
     if (app_count >= app_capacity) {
         app_capacity = app_capacity == 0 ? 4 : app_capacity * 2;
         apps = (AppEntry*)realloc(apps, sizeof(AppEntry) * app_capacity);

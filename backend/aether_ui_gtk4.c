@@ -589,7 +589,42 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
     }
 }
 
+/* ── Background work: std.worker's main-thread poster ─────────────────
+   A finished job arrives here on the POOL thread; g_idle_add is thread-safe
+   and runs the idle on the default main context, which is the UI thread.
+   Not installed under AETHER_UI_HEADLESS: that run parks without a loop, so
+   the job would sit in the idle queue forever -- left on the drain queue
+   instead. See the header for the contract. */
+static GThread* aeui_ui_thread = NULL;
+static int      aeui_worker_poster_installed = 0;
+
+static gboolean aeui_worker_deliver_idle(gpointer job) {
+    aether_worker_deliver(job);
+    return G_SOURCE_REMOVE;
+}
+
+static void aeui_worker_post(void* env, void* job) {
+    (void)env;
+    g_idle_add(aeui_worker_deliver_idle, job);
+}
+
+void aether_ui_worker_poster_install_impl(void) {
+    if (!aeui_ui_thread) aeui_ui_thread = g_thread_self();
+    if (aeui_worker_poster_installed || aeui_is_headless()) return;
+    AetherUiWorkerClosure poster;
+    poster.fn = (void (*)(void))aeui_worker_post;
+    poster.env = NULL;
+    aether_worker_set_main_poster(poster);
+    aeui_worker_poster_installed = 1;
+}
+
+int aether_ui_on_ui_thread_impl(void) {
+    if (!aeui_ui_thread) return 1;   /* nothing else has been recorded yet */
+    return g_thread_self() == aeui_ui_thread ? 1 : 0;
+}
+
 int aether_ui_app_create(const char* title, int width, int height) {
+    aether_ui_worker_poster_install_impl();   /* std.worker completions reach the UI thread */
     if (app_count >= app_capacity) {
         app_capacity = app_capacity == 0 ? 4 : app_capacity * 2;
         apps = realloc(apps, sizeof(AppEntry) * app_capacity);

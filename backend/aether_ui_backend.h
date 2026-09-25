@@ -285,6 +285,38 @@ void aether_ui_clipboard_write_impl(const char* text);
 char* aether_ui_clipboard_read_impl(void);
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure);
 void aether_ui_timer_cancel_impl(int timer_id);
+
+/* --- Background work (std.worker) --------------------------------------
+ *
+ * Aether's std.worker runs a closure on a pool thread and hands its result
+ * to a completion closure. It does not know how to reach the UI thread; its
+ * header says the host installs a "poster" that marshals a finished job onto
+ * the loop thread and calls aether_worker_deliver(job) there. Until now no
+ * backend did, so worker completions queued for a drain nobody called and
+ * the port's only way to scan off the UI thread was 15 ms timer slices.
+ *
+ * Each backend installs its own poster (g_idle_add / PostMessage to a
+ * message-only window / dispatch_async to the main queue) at app_create and
+ * again, idempotently, from ui.background(). Under AETHER_UI_HEADLESS the
+ * GTK4, Win32 and AppKit backends do NOT install one: their headless run
+ * parks the process with no loop, so a posted job would never land; the
+ * completions stay on std.worker's drain queue for worker.drain(). UIKit's
+ * headless run spins a CFRunLoop that services the main queue, so it installs
+ * either way.
+ *
+ * The two std.worker symbols are declared here rather than by including its
+ * header: the struct is the compiler's _AeClosure ({fn, env}) by value, and
+ * both live in libaether, which every program linking the toolkit links. The
+ * Win32 runtime harness stubs them the way it stubs floatarr_get_raw. */
+typedef struct { void (*fn)(void); void* env; } AetherUiWorkerClosure;
+void aether_worker_set_main_poster(AetherUiWorkerClosure poster);
+void aether_worker_deliver(void* job);
+/* Install this backend's poster once. Safe to call repeatedly and from the
+ * UI thread only (app_create, ui.background). */
+void aether_ui_worker_poster_install_impl(void);
+/* 1 when the caller is on the thread that owns the UI, else 0. What lets a
+ * spec prove the contract from the outside: `work` reports 0, `done` 1. */
+int  aether_ui_on_ui_thread_impl(void);
 void aether_ui_open_url_impl(const char* url);
 int aether_ui_dark_mode_check(void);
 

@@ -113,6 +113,7 @@ exports (
     canvas_widget, canvas_create, canvas_size,
     native_view, native_view_widget, native_view_available, native_view_handle, native_view_kind,
     on_native_view_realize, on_native_view_resize,
+    background, background_detached, on_ui_thread,
     gpuview_create, gpuview_widget, gpuview_size, gpuview_available,
     gpuview_on_realize, gpuview_on_render, gpuview_on_resize,
     gpuview_request_render, gpuview_read_pixel, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -167,6 +168,7 @@ _chrome_invoke_toggle(cb: fn, label: string, user_boxed: ptr) -> int {
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 import std.fs      // load_styles (AeCS theme files)
+import std.worker  // background(): work off the UI thread, completion back on it
 
 extern malloc(size: int) -> ptr   // EachGroup allocation (house pattern, vg/module.ae:84)
 extern free(p: ptr)               // derived-view rows the toolkit mints per rebuild
@@ -400,6 +402,8 @@ extern aether_ui_dark_mode_check() -> int
 extern aether_ui_backend_name_impl() -> string
 extern aether_ui_timer_create_impl(interval_ms: int, boxed_closure: ptr) -> int
 extern aether_ui_timer_cancel_impl(timer_id: int)
+extern aether_ui_worker_poster_install_impl()
+extern aether_ui_on_ui_thread_impl() -> int
 
 extern aether_ui_window_create_impl(title: string, width: int, height: int) -> int
 extern aether_ui_window_set_body_impl(win_handle: int, root_handle: int)
@@ -517,6 +521,46 @@ canvas_widget(canvas_id: int) -> int {
 // UIKit answer 0 today, and a display with no GL device answers 0 even on a
 // backend that can, so an app that checks takes its software path instead of
 // showing an empty rectangle.
+// ── Background work ─────────────────────────────────────────────────
+// background(work, done): run `work` on a pool thread and hand its `ptr`
+// result to `done` on the UI thread -- the idiom every toolkit has
+// (SwingWorker, QThread + signal, g_thread + g_idle_add) and the one a port
+// scanning a disk in 15 ms timer slices on the UI thread was missing.
+//
+//     _ok = background(|| {
+//         r = malloc(sizeof(Scan)) as *Scan
+//         ...block freely: read the disk, burn CPU...
+//         return r as ptr
+//     }) callback |result: ptr| {
+//         sc = result as *Scan          // on the UI thread: touch widgets
+//         set_text(status, "${sc.files} files")
+//         free(result)                  // the result is done's to reclaim
+//     }
+//
+// `work` must not touch widgets or state the UI thread reads; treat what it
+// reaches as its own. `done` may. Returns 1 if the work was queued, 0 if no
+// thread could be had (neither closure runs then). The completion reaches the
+// UI thread through the backend's poster (installed here, idempotently, and
+// at app_create); under AETHER_UI_HEADLESS on GTK4/Win32/AppKit there is no
+// loop to reach, so completions wait on std.worker's drain queue instead.
+background(work: fn, done: fn) -> int {
+    aether_ui_worker_poster_install_impl()
+    if worker.run(work, done) { return 1 }
+    return 0
+}
+
+// Fire-and-forget: `work` runs off the UI thread and its result is dropped.
+background_detached(work: fn) -> int {
+    if worker.run_detached(work) { return 1 }
+    return 0
+}
+
+// 1 on the thread that owns the UI, 0 elsewhere. Lets a `work` closure (or a
+// spec) prove where it ran rather than assume.
+on_ui_thread() -> int {
+    return aether_ui_on_ui_thread_impl()
+}
+
 gpuview_available() -> int {
     return aether_ui_gpuview_available_impl()
 }

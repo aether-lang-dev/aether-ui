@@ -371,7 +371,35 @@ API_AVAILABLE(ios(13.0))
 }
 @end
 
+// ── Background work: std.worker's main-thread poster ───────────────────
+// Same as AppKit: the pool thread hands the job to the main queue. Installed
+// under headless too -- this backend's headless run spins a CFRunLoop that
+// services the main queue (see aether_ui_app_run_raw), so a posted job does
+// land. See the header for the contract.
+static int aeui_worker_poster_installed = 0;
+
+static void aeui_worker_post(void* env, void* job) {
+    (void)env;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        aether_worker_deliver(job);
+    });
+}
+
+void aether_ui_worker_poster_install_impl(void) {
+    if (aeui_worker_poster_installed) return;
+    AetherUiWorkerClosure poster;
+    poster.fn = (void (*)(void))aeui_worker_post;
+    poster.env = NULL;
+    aether_worker_set_main_poster(poster);
+    aeui_worker_poster_installed = 1;
+}
+
+int aether_ui_on_ui_thread_impl(void) {
+    return [NSThread isMainThread] ? 1 : 0;
+}
+
 int aether_ui_app_create(const char* title, int width, int height) {
+    aether_ui_worker_poster_install_impl();   // std.worker completions reach the UI thread
     (void)title;  // iOS has no window title chrome
     g_want_w = width;
     g_want_h = height;

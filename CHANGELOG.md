@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **`ui.background(work) callback |result| { ... }`: work off the UI thread,
+  completion back on it.** Aether's `std.worker` runs a closure on a pool
+  thread and hands its result to a completion, but leaves reaching the UI
+  thread to its host, and no backend had installed that poster: a
+  completion queued for a drain nobody called, so the OpenDisk port scanned
+  a disk on the UI thread in 15 ms timer slices. Each backend now installs
+  its poster at `app_create` (GTK4 `g_idle_add`, Win32 a `PostMessage` to a
+  message-only window, AppKit and UIKit `dispatch_async` to the main queue),
+  `ui.background` wraps `worker.run` on top of it, `ui.background_detached`
+  drops the result, and `ui.on_ui_thread()` says where the caller is. The
+  spec (background_demo) proves each half from outside: the click returns
+  before the work is done, the timer label keeps ticking while it runs, and
+  the finished label reads `work_ui=0 done_ui=1`. Under `AETHER_UI_HEADLESS`
+  on GTK4, Win32 and AppKit there is no loop to post to, so completions
+  stay on `worker.drain()`; UIKit's headless run services the main queue and
+  installs either way.
+
 ### Fixed
 
 - **win32: a live light/dark switch reaches every control.** When Windows

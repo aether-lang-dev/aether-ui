@@ -70,7 +70,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -1264,6 +1264,19 @@ if [ "$SPEC_OK" -eq 1 ]; then
     run_server_test "$(EX_BIN timer_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" timer_demo || FAIL=$((FAIL + 1))
     unset G_DEBUG
+fi
+
+echo "=== Phase 5e11b: AetherUIDriver background-work spec (std.worker completions land on the UI thread) ==="
+# ui.background(work) callback |result| runs work on a pool thread and the
+# completion on the UI thread through the backend's std.worker poster. The
+# spec asserts all three halves from outside: the click returns before the
+# work is done (it is off the UI thread), the timer label keeps ticking while
+# it runs (the UI thread was not blocked), and the finished label carries
+# work_ui=0 done_ui=1 (each half ran on the thread the contract names).
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=background_demo/spec_background_demo \
+    run_server_test "$(EX_BIN background_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" background_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

@@ -406,6 +406,29 @@ ui.ui_set(counter, 42)                // triggers re-render
 val = ui.ui_get(counter)              // read current value
 ```
 
+## Background work
+
+```aether
+_ok = ui.background(|| {
+    r = malloc(sizeof(Scan)) as *Scan     // on a pool thread: block freely
+    scan_disk(r)
+    return r as ptr
+}) callback |result: ptr| {
+    sc = result as *Scan                  // on the UI thread: touch widgets
+    ui.set_text(status, "${sc.files} files")
+    free(result)
+}
+```
+
+`work` runs on one of Aether's `std.worker` pool threads; its `ptr` result is
+handed to the completion **on the UI thread**, so the completion may set text,
+rebuild lists and read state without a race. The backend installs the poster
+(`g_idle_add`, a `PostMessage` to a message-only window, `dispatch_async` to the
+main queue) that `std.worker` leaves to its host. `ui.on_ui_thread()` says
+which thread the caller is on; `ui.background_detached(work)` drops the result.
+Under `AETHER_UI_HEADLESS` there is no loop to post to on GTK4, Win32 and
+AppKit, so completions wait on `worker.drain()`.
+
 ## Widget accessors
 
 ```aether

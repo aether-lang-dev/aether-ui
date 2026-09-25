@@ -42,6 +42,14 @@ double floatarr_get_raw(void* arr, int index) {
     return arr ? ((const double*)arr)[index] : 0.0;
 }
 
+// aether_ui_win32.c installs std.worker's main-thread poster at app_create
+// (aether_ui_worker_poster_install_impl) and delivers posted jobs from its
+// message-only window. Both live in libaether, which is not linked here.
+// The stubs record nothing: this harness never runs a job, and a backend
+// that starts calling a THIRD worker symbol fails to link here first.
+void aether_worker_set_main_poster(AetherUiWorkerClosure poster) { (void)poster; }
+void aether_worker_deliver(void* job) { (void)job; }
+
 // The undo/redo edit store reclaims a dropped edit's boxed closures through
 // the env's own destructor (aether_ui_system_extras.c: undo_edit_release).
 // That is the runtime's aether_closure_env_free; the real thing runs the

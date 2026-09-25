@@ -97,6 +97,7 @@ SUITES=(
   "svgimage|examples/svgimage_demo|svgimage_demo/spec_svgimage_demo|"
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
   "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
+  "background|examples/background_demo|background_demo/spec_background_demo|"
   "canvasscroll|examples/canvasscroll_demo|canvasscroll_demo/spec_canvasscroll_demo|"
   "canvasclip|examples/canvasclip_demo|canvasclip_demo/spec_canvasclip_demo|"
   "groupalpha|examples/groupalpha_demo|groupalpha_demo/spec_groupalpha_demo|"

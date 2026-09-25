@@ -1,0 +1,80 @@
+// Aether UI background-work example: background() and on_ui_thread().
+//
+// A scan, a fetch, a long sum: work that would freeze the window if it ran
+// where the button click lands. background(work) callback |result| runs the
+// work on one of std.worker's pool threads and hands its result to the
+// callback ON the UI thread, so the callback can set text without a race.
+//
+// The window shows three things the spec reads from outside:
+//   status: idle | working | done <sum> work_ui=<0|1> done_ui=<0|1> run=<n>
+//   ticks: N   -- a 30 ms timer; it keeps counting while the work runs,
+//                 which is what "off the UI thread" means from the outside.
+//
+// The work sleeps 400 ms first, so the click returns while status still
+// says "working": the proof that the button handler did not run the work
+// inline. The Job crosses the thread hop as a heap struct: the work owns it
+// until it returns, the callback owns it after, and frees it.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (root_vstack, text, btn, timer, set_text, background, on_ui_thread,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct Job {
+    sum: int,
+    work_on_ui: int
+}
+
+main() {
+    ticks = 0
+    runs = 0
+    status = 0
+    ticks_label = 0
+
+    main_root = root_vstack(10) {
+        text("Background demo")
+        status = text("status: idle")
+        ticks_label = text("ticks: 0")
+    }
+
+    _t = timer(30) callback {
+        ticks = ticks + 1
+        set_text(ticks_label, "ticks: ${ticks}")
+    }
+
+    _start = btn(main_root, "start") callback {
+        set_text(status, "status: working")
+        _ok = background(|| {
+            // On a pool thread. Nothing here touches a widget.
+            j = malloc(sizeof(Job)) as *Job
+            j.work_on_ui = on_ui_thread()
+            sleep(400)
+            s = 0
+            i = 0
+            while i < 100 {
+                s = s + i
+                i = i + 1
+            }
+            j.sum = s
+            return j as ptr
+        }) callback |result: ptr| {
+            // On the UI thread: widgets are ours to touch.
+            j = result as *Job
+            runs = runs + 1
+            here = on_ui_thread()
+            set_text(status, "status: done ${j.sum} work_ui=${j.work_on_ui} done_ui=${here} run=${runs}")
+            free(result)
+        }
+    }
+
+    app = ui.app_create("Background demo", 360, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}
