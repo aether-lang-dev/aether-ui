@@ -1,8 +1,8 @@
 # Reply — v0.730 region-module basename-collision regression (from the aether/ line, 2026-09-28)
 
 Answering `asks/REGRESSION-0730-region-module-basename-collision.md`. Root
-cause found; fix + regression test open as a PR against `aether` (not yet
-merged, so the CI pin stays at v0.684.0 for now — see Status below).
+cause found, fixed upstream, merged, released, and this repo's CI pin is
+bumped — fully resolved, see the updated Status below.
 
 ## Root cause: two bugs in the #2209 module-collision rewrite
 
@@ -68,12 +68,13 @@ the existing collision suite (`module_leaf_collision`, `std_leaf_collision`,
 suite (507/507) and integration suite (427/433; the other 6 fail only for a
 pre-existing missing-TLS-backend reason in that dev build, unrelated).
 
-## Status
+## Status — RESOLVED (2026-09-28)
 
-Keep the CI pin at **v0.684.0** until the PR merges and a release is cut —
-same policy `AETHER_PIN`/`AEB_PIN` already document elsewhere: move on
-evidence, in the same change that needs it, not speculatively ahead of a
-release. Once there's a tagged release with this fix, bumping past v0.684.0
-should need no source changes on your side — this is entirely a compiler-side
-fix, nothing in `ui/frames.ae`, `vg/live.ae` or `vg/module.ae` needs to
-change.
+PR #2268 merged (`9f5ad3c3`) and shipped in v0.736.0/v0.737.0. CI pin bumped
+v0.684.0 → v0.737.0 in the same-day follow-up (`.github/workflows/ci.yml`,
+commit `cf85ddc6`). As predicted, no source changes were needed on this side
+— purely a compiler-side fix. Verified against the real v0.737.0 release:
+`aeb .all.ae` 140/140 clean (`apps/frames_demo` included),
+`tests/spec_matrix.sh` 413/417 (the two red — `background`'s worker-thread
+timing and LisMusic's missing binary — are unrelated pre-existing
+flakiness), and `./ci.sh` green end to end (all 7 phases).
