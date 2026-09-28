@@ -190,7 +190,31 @@ jobs:
           # free()d. Reproduced natively on Windows (STATUS_HEAP_CORRUPTION)
           # and root-caused with gdb; 0.684.0 carries aether#2070 (any
           # string-typed return site makes the closure a string closure).
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.684.0' }}
+          #
+          # v0.737.0 (2026-09-28). A REAL floor move, not a drive-by bump:
+          # v0.684.0 could not build apps/frames_demo at all. `ui/frames.ae`
+          # imports both `vg.geom.region` (selectively) and `vg.region`
+          # (whole module) — two local modules sharing the last segment
+          # "region" — and the v0.730-0.734 basename-collision rework (see
+          # asks/REGRESSION-0730-region-module-basename-collision.md and its
+          # REPLY) let whichever import's rewrite ran first claim every
+          # `region.name` in the file, including the other's, so
+          # `region.region_set_rect` etc. resolved against a module that
+          # never defined them. `vg/live.ae`'s same-named forwarding
+          # wrappers (`region_set_animated(region: ptr, on: int) {
+          # region.region_set_animated(region, on) }`) hit a second bug in
+          # the same rework: the shadow guard skipped rewriting the call
+          # entirely because `region` was also the parameter name. Both
+          # fixed upstream in aether PR #2268 (merged, released in
+          # v0.736.0/v0.737.0) with a new regression test
+          # (tests/integration/region_basename_collision_shadow) — this repo
+          # did not change to accommodate it; the fix is entirely
+          # compiler-side. Verified against the real v0.737.0 build: `aeb
+          # .all.ae` is 140/140 clean (frames_demo included), and
+          # tests/spec_matrix.sh is 413/417 (the two red — `background`'s
+          # worker-thread timing and LisMusic's missing binary — are
+          # unrelated pre-existing flakiness, not this move).
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.737.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
