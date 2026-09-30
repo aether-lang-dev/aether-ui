@@ -28,6 +28,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: an editor-sized app takes real mouse input the way GTK4 does.**
+  Driven with physical clicks and the wheel (not the driver), the ae3d
+  editor was close to unusable on Windows; each of these was measured:
+  - *Clicks on containers.* A click on a clickable row (a stack with
+    `on_click`) reached the label under the pointer and stopped there, so
+    choosing an object in a hierarchy did nothing. A press now goes to the
+    nearest ancestor that takes clicks (stopping at a scroll view), fires
+    on release over the same target, and a double click reaches
+    `on_double_click`.
+  - *Rounded buttons missed clicks.* A corner radius set before the first
+    layout cut the button's region to its 0x0 size of the moment (Rotate's
+    region was `[0,0,66,10]`), and the region was never recut, so most of a
+    rounded button ignored the mouse. The region is now recut on every
+    resize.
+  - *Values arrived empty.* Toggle, slider and picker closures were called
+    with no argument (`|on: int|`, `|value: float|`, `|index: int|` read a
+    stale register), so unticking "visible" left the object drawn and a
+    dragged slider could report a value it never had. They now receive the
+    state, value and index, as on GTK4, from real input and the driver.
+  - *The wheel changed values and went to the wrong place.* A trackbar or a
+    closed combo box under the pointer took the wheel as a new value, so
+    scrolling a panel moved its sliders; the wheel now passes them to the
+    panel. And the wheel went to the focused window, so after a click in a
+    3D view every notch over the inspector zoomed the view: it is now
+    routed to the window under the pointer before dispatch.
+  - *Scroll views asked for their current height.* A scroll view measured
+    as its rect, so once laid out as tall as its document it kept asking
+    for that height and its column overflowed the window, the last rows
+    unreachable. It now measures as its document's width and no height of
+    its own, as GTK4's scrolled window does.
+  - *Timers ran at 32 Hz.* `SetTimer` rounds to the 15.6 ms system tick, so
+    a 16 ms frame timer fired every 31 ms and the editor drew at 30 fps.
+    Timers now run on a high-resolution waitable timer thread that posts to
+    the UI thread; the editor draws at 62 fps.
+
 - **win32: a live light/dark switch reaches every control.** When Windows
   switched between light and dark with an app open, the grounds and the
   text followed but every native control kept the theme it was given at
