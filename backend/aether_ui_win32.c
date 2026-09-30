@@ -865,6 +865,7 @@ static const wchar_t* STACK_CLASS = L"AetherUIStack";
  * never heard it: its on_click was reached only by the test driver, which
  * calls the closure directly. 0 when nothing above answers. */
 static int w32_click_target(HWND hwnd);
+static int w32_click_target_at(HWND hwnd, LPARAM lp);
 static int g_press_target = 0;   // what the last press on a container was for
 
 typedef struct {
@@ -2180,7 +2181,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 w2->is_pressed = 1;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
-            g_press_target = w32_click_target(hwnd);
+            g_press_target = w32_click_target_at(hwnd, lp);
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_LBUTTONDBLCLK: {
@@ -2188,7 +2189,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             // after it finds no press to answer, so the row is not also
             // clicked a second time.
             g_press_target = 0;
-            int target = w32_click_target(hwnd);
+            int target = w32_click_target_at(hwnd, lp);
             Widget* t = widget_at(target);
             if (t && t->on_double_click && t->on_double_click->fn) {
                 invoke_closure(t->on_double_click);
@@ -2245,7 +2246,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 // A click is a press and a release on the same target, as
                 // a button's is. The closure may rebuild what holds this
                 // window (a list's rows), so nothing touches hwnd after it.
-                int target = w32_click_target(hwnd);
+                int target = w32_click_target_at(hwnd, lp);
                 int pressed = g_press_target;
                 g_press_target = 0;
                 Widget* t = widget_at(target);
@@ -6228,6 +6229,23 @@ void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
 // ---------------------------------------------------------------------------
 // Events (hover, double-click, click-on-arbitrary-widget).
 // ---------------------------------------------------------------------------
+// The target of a press at client point `lp` of `hwnd`: searched from the
+// deepest visible window under the point. A label is transparent to the
+// mouse (a static control answers HTTRANSPARENT), so its press is delivered
+// to the stack it sits in; searched from the stack, a label's own on_click
+// -- a panel's fold caret -- was never found and the click did nothing.
+static int w32_click_target_at(HWND hwnd, LPARAM lp) {
+    POINT at = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+    HWND deepest = hwnd;
+    for (;;) {
+        HWND child = ChildWindowFromPointEx(deepest, at, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+        if (!child || child == deepest) break;
+        MapWindowPoints(deepest, child, &at, 1);
+        deepest = child;
+    }
+    return w32_click_target(deepest);
+}
+
 static int w32_click_target(HWND hwnd) {
     HWND h = hwnd;
     while (h) {

@@ -36,7 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     choosing an object in a hierarchy did nothing. A press now goes to the
     nearest ancestor that takes clicks (stopping at a scroll view), fires
     on release over the same target, and a double click reaches
-    `on_double_click`.
+    `on_double_click`. The search starts at the deepest window under the
+    pointer, so a label's own `on_click` (a panel's fold caret) is found
+    too: a label is transparent to the mouse and its press arrives at its
+    parent.
   - *Rounded buttons missed clicks.* A corner radius set before the first
     layout cut the button's region to its 0x0 size of the moment (Rotate's
     region was `[0,0,66,10]`), and the region was never recut, so most of a
