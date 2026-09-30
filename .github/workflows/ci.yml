@@ -258,7 +258,13 @@ jobs:
           # libaether.a; a stale ~/.local/lib/aether/libaether.a gets a legible
           # "archive older than 0.681" error, cleared by a clean toolchain
           # reinstall (matters on boxes with an old shadow install, not CI).
-          AEB_REF: ${{ vars.AEB_REF || 'v0.322' }}
+          # aeb main at 1abdb31 (2026-09-30), by commit because no tag has it
+          # yet: v0.322's tools/aeb-link.ae calls file.mtime, which Aether
+          # 0.713 moved to fs.file_mtime, so `make install` of v0.322 failed
+          # against the 0.737 pinned above and both legs were red from that
+          # bump on. aeb 3faaf02 is the fix; ebdfb22 keeps macOS's keg-only
+          # -L directories.
+          AEB_REF: ${{ vars.AEB_REF || '1abdb316808bc2e0f0704c0fec45aa24cb7a35f1' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh

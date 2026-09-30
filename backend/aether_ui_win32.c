@@ -71,6 +71,17 @@ static inline void invoke_closure(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
 }
 
+// Toggle and picker closures take the new state / index (|on: int|,
+// |i: int|) and slider closures the new value (|v: float|) -- GTK4 passes
+// them (on_toggle_changed, on_picker_changed, on_slider_changed), so win32
+// must too or the callback reads whatever sits in the argument register.
+static inline void invoke_closure_int(AeClosure* c, intptr_t v) {
+    if (c && c->fn) ((void (*)(void*, intptr_t))c->fn)(c->env, v);
+}
+static inline void invoke_closure_double(AeClosure* c, double v) {
+    if (c && c->fn) ((void (*)(void*, double))c->fn)(c->env, v);
+}
+
 // Text-entry closures take the CURRENT TEXT (|s: string|) — GTK4 passes it
 // (on_entry_changed → c->fn(env, text)), so win32 must too or the callback
 // reads an uninitialised argument. Used by every EN_CHANGE path and by the
@@ -201,6 +212,7 @@ typedef struct {
     COLORREF grad_a, grad_b;
     int grad_vertical;
     int corner_radius;
+    int corner_tracked;        // its region follows its size (corner_region_proc)
     int border_width;          // 0 = none
     int border_set;            // 1 = explicitly set (readback)
     COLORREF border_color;
@@ -467,6 +479,7 @@ static void w32_apply_theme_family(HWND hwnd, int family, int dark);
 static int w32_focus_cues = 0;
 static void w32_show_focus_cues(void);
 static int  w32_px(HWND hwnd, int at96);
+static UINT w32_dpi_for(HWND hwnd);
 static void w32_refont_tree(HWND top, UINT dpi);
 static void w32_make_layered(HWND h);
 static void w32_settle_owed_opacity(HWND top);
@@ -844,6 +857,17 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
 // ---------------------------------------------------------------------------
 static const wchar_t* STACK_CLASS = L"AetherUIStack";
 
+/* The widget a press on a container is for: the container, or the nearest
+ * one above it that answers a click (on_click / on_double_click). A list's
+ * row is a stack of stacks and labels, and a real press lands on whichever
+ * is under the pointer -- a label hands it to its stack (a STATIC is
+ * transparent to the hit test), and nothing handed it further up, so a row
+ * never heard it: its on_click was reached only by the test driver, which
+ * calls the closure directly. 0 when nothing above answers. */
+static int w32_click_target(HWND hwnd);
+static int w32_click_target_at(HWND hwnd, LPARAM lp);
+static int g_press_target = 0;   // what the last press on a container was for
+
 typedef struct {
     int measured_w;
     int measured_h;
@@ -1038,6 +1062,26 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
     // sizes a dialog would (heights fit the system font's rows), at the
     // window's DPI (w32_px).
     HWND dh = w->hwnd;
+    // A scrollview is as tall as it is given, not as its document: that is
+    // what it scrolls. It measured as its current rect, so once a layout
+    // made it as tall as its document it asked for that height from then
+    // on, and a column of panels in a window shorter than them was laid out
+    // past the window's bottom, its last rows unreachable by any scroll.
+    // GTK4's scrolled window does not propagate its child's natural height
+    // either. Across, it is its document's width plus the bar: it scrolls
+    // only vertically.
+    if (w->kind == WK_SCROLLVIEW) {
+        int dw = 0, dh_doc = 0;
+        Widget* doc = widget_at(handle_for_hwnd(GetWindow(w->hwnd, GW_CHILD)));
+        if (doc && !doc->dead) measure_widget(doc, &dw, &dh_doc);
+        StackLayout* sl = &w->stack;
+        *out_w = w->pref_width > 0 ? w->pref_width
+               : dw + sl->padding_left + sl->padding_right
+                 + GetSystemMetricsForDpi(SM_CXVSCROLL, w32_dpi_for(dh));
+        *out_h = w->pref_height > 0 ? w->pref_height
+               : sl->padding_top + sl->padding_bottom;
+        return;
+    }
     if (w->kind == WK_TEXTFIELD || w->kind == WK_SECUREFIELD
         || w->kind == WK_PICKER) {
         *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 140);
@@ -2137,6 +2181,20 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 w2->is_pressed = 1;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
+            g_press_target = w32_click_target_at(hwnd, lp);
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
+        case WM_LBUTTONDBLCLK: {
+            // The second press of a double click: a row opens. The release
+            // after it finds no press to answer, so the row is not also
+            // clicked a second time.
+            g_press_target = 0;
+            int target = w32_click_target_at(hwnd, lp);
+            Widget* t = widget_at(target);
+            if (t && t->on_double_click && t->on_double_click->fn) {
+                invoke_closure(t->on_double_click);
+                return 0;
+            }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_MOUSEMOVE: {
@@ -2182,6 +2240,19 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 if (w3 && w3->is_pressed) {
                     w3->is_pressed = 0;
                     InvalidateRect(hwnd, NULL, TRUE);
+                }
+            }
+            {
+                // A click is a press and a release on the same target, as
+                // a button's is. The closure may rebuild what holds this
+                // window (a list's rows), so nothing touches hwnd after it.
+                int target = w32_click_target_at(hwnd, lp);
+                int pressed = g_press_target;
+                g_press_target = 0;
+                Widget* t = widget_at(target);
+                if (target != 0 && target == pressed && t && t->on_click && t->on_click->fn && !t->sealed) {
+                    invoke_closure(t->on_click);
+                    return 0;
                 }
             }
             return DefWindowProcW(hwnd, msg, wp, lp);
@@ -2298,9 +2369,9 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     } else if (!cw->sealed) invoke_closure(cw->on_click);
                 } else if (cw->kind == WK_TOGGLE && code == BN_CLICKED) {
                     if (!cw->sealed) {
-                        if (aether_ui_toggle_get_active(ch))
-                            w32_radio_enforce(ch);
-                        invoke_closure(cw->on_change);
+                        int on = aether_ui_toggle_get_active(ch);
+                        if (on) w32_radio_enforce(ch);
+                        invoke_closure_int(cw->on_change, on);
                     }
                 } else if ((cw->kind == WK_TEXTFIELD || cw->kind == WK_SECUREFIELD
                             || cw->kind == WK_TEXTAREA) && code == EN_CHANGE) {
@@ -2322,7 +2393,9 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     }
                 } else if (cw->kind == WK_PICKER && code == CBN_SELCHANGE) {
                     w32_picker_cache_selection(cw);
-                    if (!cw->sealed) invoke_closure(cw->on_change);
+                    if (!cw->sealed)
+                        invoke_closure_int(cw->on_change,
+                            aether_ui_picker_get_selected(ch));
                 }
             }
             return 0;
@@ -2366,7 +2439,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 double max_v = cw->u.slider.max_v;
                 double val = min_v + (max_v - min_v) * (pos / 1000.0);
                 cw->u.slider.cur_v = val;
-                if (!cw->sealed) invoke_closure(cw->on_change);
+                if (!cw->sealed) invoke_closure_double(cw->on_change, val);
             }
             return 0;
         }
@@ -3364,6 +3437,18 @@ void aether_ui_app_run_raw(int app_handle) {
         // marked, once each, before anything paints.
         w32_drain_graveyard();
         w32_flush_layout();
+        // The wheel turns what is under the pointer, as on GTK and AppKit.
+        // Windows posts it to the focused window instead, so after a click
+        // in a 3D view every notch over the inspector beside it zoomed the
+        // view, and a panel scrolled only once something in it had focus.
+        // Retargeted here, before anything handles it; a child that does
+        // not want it passes it up its own parents (DefWindowProc).
+        if (msg.message == WM_MOUSEWHEEL || msg.message == WM_MOUSEHWHEEL) {
+            POINT at = { GET_X_LPARAM(msg.lParam), GET_Y_LPARAM(msg.lParam) };
+            HWND under = WindowFromPoint(at);
+            if (under && GetWindowThreadProcessId(under, NULL) == GetCurrentThreadId())
+                msg.hwnd = under;
+        }
         // When a key-registered canvas has focus, route keystrokes straight
         // to it — IsDialogMessage would otherwise eat Return (default button)
         // and Escape (cancel) before the canvas's WM_KEYDOWN sees them, and
@@ -4474,6 +4559,23 @@ static void w32_radio_enforce(int active_handle) {
     }
 }
 
+/* The wheel over a slider or a closed picker scrolls the panel it is in, as
+ * it does in every editor and on GTK: a trackbar or a combo box left to
+ * itself takes the wheel as a change of value, so scrolling an inspector
+ * moved whatever slider or picker passed under the pointer. DefWindowProc
+ * hands the wheel to the parent, and on up to the scroll view. The arrows
+ * still move a focused control, and an open picker's list (a window of its
+ * own) still scrolls. */
+static LRESULT CALLBACK wheel_to_parent_proc(HWND hwnd, UINT msg, WPARAM wp,
+                                             LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    if ((msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL)
+        && !(ref == WK_PICKER && SendMessageW(hwnd, CB_GETDROPPEDSTATE, 0, 0))) {
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, wheel_to_parent_proc, id);
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
 int aether_ui_slider_create(double min_val, double max_val,
                             double initial, void* boxed_closure) {
     ensure_win_init();
@@ -4485,6 +4587,7 @@ int aether_ui_slider_create(double min_val, double max_val,
     double frac = (max_val > min_val) ? (initial - min_val) / (max_val - min_val) : 0;
     SendMessageW(h, TBM_SETPOS, TRUE, (LPARAM)(int)(frac * 1000));
     w32_system_dark_control(h);
+    SetWindowSubclass(h, wheel_to_parent_proc, 8, WK_SLIDER);
     int handle = register_widget_typed(h, WK_SLIDER);
     Widget* w = widget_at(handle);
     if (w) {
@@ -4531,6 +4634,7 @@ int aether_ui_picker_create(void* boxed_closure) {
         cbi.cbSize = sizeof(cbi);
         if (GetComboBoxInfo(h, &cbi) && cbi.hwndList) w32_system_dark_control(cbi.hwndList);
     }
+    SetWindowSubclass(h, wheel_to_parent_proc, 8, WK_PICKER);
     int handle = register_widget_typed(h, WK_PICKER);
     Widget* w = widget_at(handle);
     if (w) w->on_change = (AeClosure*)boxed_closure;   // closed height: the measure's 26
@@ -4578,7 +4682,8 @@ void aether_ui_picker_set_selected(int handle, int index) {
     LRESULT was = SendMessageW(w->hwnd, CB_GETCURSEL, 0, 0);
     SendMessageW(w->hwnd, CB_SETCURSEL, (WPARAM)index, 0);
     w32_picker_cache_selection(w);
-    if (was != (LRESULT)index && !w->sealed) invoke_closure(w->on_change);
+    if (was != (LRESULT)index && !w->sealed)
+        invoke_closure_int(w->on_change, index);
 }
 
 int aether_ui_picker_get_selected(int handle) {
@@ -5345,16 +5450,47 @@ void aether_ui_button_set_flat_ctx(void* ctx, int on) {
     aether_ui_button_set_flat((int)(intptr_t)ctx, on);
 }
 
+/* A rounded widget's window region, at the size it has now. The region is
+ * what Windows hit-tests as well as what it paints: made once when the
+ * widget was styled, it kept the size the widget had then -- before layout
+ * -- and a button laid out taller took clicks only in its top rows, the
+ * rest falling through to its parent (a 66x22 button with a 66x10 region). */
+static void w32_apply_corner_region(Widget* w) {
+    if (!w || !w->hwnd) return;
+    RECT r;
+    GetClientRect(w->hwnd, &r);
+    if (w->corner_radius <= 0 || r.right <= 0 || r.bottom <= 0) {
+        SetWindowRgn(w->hwnd, NULL, TRUE);
+        return;
+    }
+    HRGN rgn = CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1,
+                                   w->corner_radius * 2, w->corner_radius * 2);
+    SetWindowRgn(w->hwnd, rgn, TRUE);   // the window owns rgn now
+}
+
+static LRESULT CALLBACK corner_region_proc(HWND hwnd, UINT msg, WPARAM wp,
+                                           LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    (void)ref;
+    if (msg == WM_SIZE) {
+        w32_apply_corner_region(widget_at(handle_for_hwnd(hwnd)));
+    } else if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, corner_region_proc, id);
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
 void aether_ui_set_corner_radius(int handle, double radius) {
     Widget* w = widget_at(handle);
     if (!w) return;
     w->corner_radius = (int)radius;
     w32_ensure_owner_draw(w);
-    RECT r;
-    GetClientRect(w->hwnd, &r);
-    HRGN rgn = CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1,
-                                   (int)radius * 2, (int)radius * 2);
-    SetWindowRgn(w->hwnd, rgn, TRUE);
+    // Every size the widget is given from now on, whichever layout gives
+    // it, reshapes the region: one subclass on the widget rather than a
+    // call at each place a stack moves a child.
+    if (!w->corner_tracked && SetWindowSubclass(w->hwnd, corner_region_proc, 7, 0)) {
+        w->corner_tracked = 1;
+    }
+    w32_apply_corner_region(w);
 }
 
 
@@ -6093,6 +6229,40 @@ void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
 // ---------------------------------------------------------------------------
 // Events (hover, double-click, click-on-arbitrary-widget).
 // ---------------------------------------------------------------------------
+// The target of a press at client point `lp` of `hwnd`: searched from the
+// deepest visible window under the point. A label is transparent to the
+// mouse (a static control answers HTTRANSPARENT), so its press is delivered
+// to the stack it sits in; searched from the stack, a label's own on_click
+// -- a panel's fold caret -- was never found and the click did nothing.
+static int w32_click_target_at(HWND hwnd, LPARAM lp) {
+    POINT at = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+    HWND deepest = hwnd;
+    for (;;) {
+        HWND child = ChildWindowFromPointEx(deepest, at, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+        if (!child || child == deepest) break;
+        MapWindowPoints(deepest, child, &at, 1);
+        deepest = child;
+    }
+    return w32_click_target(deepest);
+}
+
+static int w32_click_target(HWND hwnd) {
+    HWND h = hwnd;
+    while (h) {
+        int handle = handle_for_hwnd(h);
+        Widget* w = widget_at(handle);
+        if (!w) return 0;
+        if ((w->on_click && w->on_click->fn) || (w->on_double_click && w->on_double_click->fn)) {
+            return handle;
+        }
+        // A press in a scrolled panel is the panel's content's, never the
+        // panel's own parents'.
+        if (w->kind == WK_SCROLLVIEW) return 0;
+        h = GetAncestor(h, GA_PARENT);
+    }
+    return 0;
+}
+
 void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     Widget* w = widget_at(handle);
     if (w) w->on_click = (AeClosure*)boxed_closure;
@@ -6270,61 +6440,161 @@ char* aether_ui_clipboard_read_impl(void) {
     return out ? out : _strdup("");
 }
 
-// Timer: each user timer is keyed by (hwnd, id). We use the first live app
-// window as the timer host — but ui.timer is usually called INSIDE the
-// window block, BEFORE app_run creates the hwnd. SetTimer(NULL, id, …)
-// then runs as a THREAD timer and Windows IGNORES the passed id,
-// assigning its own — so a callback matching on our id never fires (gp's
-// whole 30Hz heartbeat was dead on win32). Track the SYSTEM id + host.
+/* ui.timer on a high-resolution clock.
+ *
+ * SetTimer fires on the system tick, 15.6 ms: a 16 ms timer came every
+ * other tick, 31 ms, so an app redrawing on one ran at 32 fps whatever it
+ * drew (timeBeginPeriod did not move it), and WM_TIMER is the lowest
+ * priority message there is, dropped behind input. Instead one thread
+ * sleeps on a high-resolution waitable timer until the next timer is due
+ * and posts a message to a sink window the UI thread owns, which runs the
+ * closure: on the UI thread as before, and through modal loops too (a
+ * window being sized dispatches a window's messages, not a thread's). A
+ * timer has one tick in flight at most: a UI busy past the interval gets
+ * one tick when it is free, never a backlog. */
+#define WM_AEUI_TIMER (WM_APP + 0x3A1)
 typedef struct {
     int id;
-    UINT_PTR sys_id;   // what WM_TIMER actually reports
-    HWND host;         // NULL = thread timer
+    int interval_ms;
+    LONGLONG due;          // QueryPerformanceCounter ticks
     AeClosure* closure;
     int alive;
+    int posted;            // a tick is on its way to the sink
 } TimerEntry;
 static TimerEntry* timers = NULL;
 static int timer_count = 0;
 static int timer_capacity = 0;
 static int next_timer_id = 100;
+static CRITICAL_SECTION timer_lock;
+static HANDLE timer_wake = NULL;     // the schedule changed
+static HWND timer_sink = NULL;
+static LONGLONG timer_qpc_hz = 0;
 
-static void CALLBACK timer_cb(HWND hwnd, UINT msg, UINT_PTR id, DWORD now) {
-    (void)hwnd; (void)msg; (void)now;
-    for (int i = 0; i < timer_count; i++) {
-        if (timers[i].alive && timers[i].sys_id == id) {
-            invoke_closure(timers[i].closure);
-            return;
+static LONGLONG timer_now(void) {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+
+static DWORD WINAPI timer_thread_main(void* arg) {
+    (void)arg;
+    // High resolution where Windows has it (10 1803 on); the tick otherwise.
+    HANDLE clock = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
+                                          TIMER_ALL_ACCESS);
+    if (!clock) clock = CreateWaitableTimerW(NULL, FALSE, NULL);
+    for (;;) {
+        LONGLONG now = timer_now();
+        LONGLONG next = 0;
+        int any = 0;
+        EnterCriticalSection(&timer_lock);
+        for (int i = 0; i < timer_count; i++) {
+            TimerEntry* t = &timers[i];
+            if (!t->alive) continue;
+            if (t->due <= now) {
+                if (!t->posted) {
+                    t->posted = 1;
+                    PostMessageW(timer_sink, WM_AEUI_TIMER, (WPARAM)t->id, 0);
+                }
+                LONGLONG step = (timer_qpc_hz * t->interval_ms) / 1000;
+                if (step <= 0) step = 1;
+                t->due += step;
+                if (t->due <= now) t->due = now + step;   // fell behind: no burst
+            }
+            if (!any || t->due < next) { next = t->due; any = 1; }
+        }
+        LeaveCriticalSection(&timer_lock);
+        if (!any) {
+            WaitForSingleObject(timer_wake, INFINITE);
+            continue;
+        }
+        LONGLONG wait = next - timer_now();
+        if (wait < 0) wait = 0;
+        LARGE_INTEGER rel;
+        rel.QuadPart = -((wait * 10000000) / timer_qpc_hz);   // 100 ns units, relative
+        if (rel.QuadPart == 0) rel.QuadPart = -1;
+        HANDLE both[2] = { clock, timer_wake };
+        if (clock && SetWaitableTimer(clock, &rel, 0, NULL, NULL, FALSE)) {
+            WaitForMultipleObjects(2, both, FALSE, INFINITE);
+        } else {
+            WaitForSingleObject(timer_wake, (DWORD)((wait * 1000) / timer_qpc_hz) + 1);
         }
     }
+    return 0;
+}
+
+// A tick arrived on the UI thread: the closure runs outside the lock, since
+// it may make or cancel timers of its own.
+static LRESULT CALLBACK timer_sink_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_AEUI_TIMER) {
+        AeClosure* run = NULL;
+        EnterCriticalSection(&timer_lock);
+        for (int i = 0; i < timer_count; i++) {
+            if (timers[i].id == (int)wp) {
+                timers[i].posted = 0;
+                if (timers[i].alive) run = timers[i].closure;
+                break;
+            }
+        }
+        LeaveCriticalSection(&timer_lock);
+        if (run) invoke_closure(run);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void timers_start(void) {
+    if (timer_sink) return;
+    LARGE_INTEGER hz;
+    QueryPerformanceFrequency(&hz);
+    timer_qpc_hz = hz.QuadPart;
+    InitializeCriticalSection(&timer_lock);
+    timer_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
+    WNDCLASSEXW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = timer_sink_proc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = L"AetherUITimerSink";
+    RegisterClassExW(&wc);
+    timer_sink = CreateWindowExW(0, L"AetherUITimerSink", L"", 0, 0, 0, 0, 0,
+                                 HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+    HANDLE th = CreateThread(NULL, 0, timer_thread_main, NULL, 0, NULL);
+    if (th) CloseHandle(th);
 }
 
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
+    timers_start();
+    if (interval_ms < 1) interval_ms = 1;
+    EnterCriticalSection(&timer_lock);
     if (timer_count >= timer_capacity) {
         timer_capacity = timer_capacity == 0 ? 16 : timer_capacity * 2;
         timers = (TimerEntry*)realloc(timers, sizeof(TimerEntry) * timer_capacity);
     }
     int id = next_timer_id++;
-    HWND host = (app_count > 0) ? apps[0].hwnd : NULL;
-    UINT_PTR sys_id = SetTimer(host, id, interval_ms, (TIMERPROC)timer_cb);
-    timers[timer_count].id = id;
-    // With a window host SetTimer returns the id we passed; with a NULL
-    // host it returns the system-assigned thread-timer id.
-    timers[timer_count].sys_id = host ? (UINT_PTR)id : sys_id;
-    timers[timer_count].host = host;
-    timers[timer_count].closure = (AeClosure*)boxed_closure;
-    timers[timer_count].alive = 1;
+    TimerEntry* t = &timers[timer_count];
+    t->id = id;
+    t->interval_ms = interval_ms;
+    t->due = timer_now() + (timer_qpc_hz * interval_ms) / 1000;
+    t->closure = (AeClosure*)boxed_closure;
+    t->alive = 1;
+    t->posted = 0;
     timer_count++;
+    LeaveCriticalSection(&timer_lock);
+    SetEvent(timer_wake);
     return id;
 }
 
 void aether_ui_timer_cancel_impl(int timer_id) {
+    if (!timer_sink) return;
+    EnterCriticalSection(&timer_lock);
     for (int i = 0; i < timer_count; i++) {
         if (timers[i].id == timer_id) {
             timers[i].alive = 0;
-            KillTimer(timers[i].host, timers[i].sys_id);
-            return;
+            break;
         }
     }
+    LeaveCriticalSection(&timer_lock);
+    SetEvent(timer_wake);
 }
 
 void aether_ui_open_url_impl(const char* url) {
@@ -11943,9 +12213,9 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     aether_ui_toggle_set_active(
                         ctx->handle, !aether_ui_toggle_get_active(ctx->handle));
                     if (!w->sealed) {
-                        if (aether_ui_toggle_get_active(ctx->handle))
-                            w32_radio_enforce(ctx->handle);
-                        invoke_closure(w->on_change);
+                        int on = aether_ui_toggle_get_active(ctx->handle);
+                        if (on) w32_radio_enforce(ctx->handle);
+                        invoke_closure_int(w->on_change, on);
                     }
                     ctx->retval = 1;
                     break;
@@ -11999,7 +12269,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     int cur = aether_ui_toggle_get_active(ctx->handle);
                     aether_ui_toggle_set_active(ctx->handle, !cur);
                     if (!cur) w32_radio_enforce(ctx->handle);   // now active
-                    invoke_closure(w->on_change);
+                    invoke_closure_int(w->on_change, !cur);
                 }
                 break;
             case AETHER_DRV_CTX_MENU:
@@ -12024,7 +12294,9 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     // fixed the same way. GTK4's gtk_range_set_value emits
                     // value-changed natively.
                     aether_ui_slider_set_value(ctx->handle, ctx->dval);
-                    if (!w->sealed) invoke_closure(w->on_change);
+                    if (!w->sealed)
+                        invoke_closure_double(w->on_change,
+                            aether_ui_slider_get_value(ctx->handle));
                     ctx->retval = 1;
                 }
                 else if (w->kind == WK_PROGRESSBAR)
