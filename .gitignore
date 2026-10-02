@@ -38,3 +38,6 @@ target/
 
 # aeb's generated SDK module farm — re-creatable, machine-specific, never source.
 .aeb/
+
+# Scratch screenshots
+/foo.png
