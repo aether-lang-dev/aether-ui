@@ -1,12 +1,15 @@
 # Tsyne browser mode, migrated to Aether
 
-Status: **proposal** (2026-10-02). Nothing here is built yet. No numbers are
-measured; the first spike (below) exists to produce them.
+Status: **built** (2026-10-02) as `../sae` ("Sae it ain't so"), its own repo.
+The first spike ran first; its numbers are in `../sae/docs/spike-results.md`.
+See "What happened" at the end for how each open question was settled. The
+proposal below is kept as written, except that `mquickjs-ae` is now
+`mquickjs-ae` (the repo was renamed) and Tsyne lives at `../not-ours/tsyne`.
 
 A "fat UI browser": a native app that fetches **pages** over HTTP and renders
 them as real aether-ui widgets, where a page is a small program (layout plus
 the logic behind it), not markup. This is Tsyne's browser mode
-(`../tsyne/tsyne/docs/BROWSER_MODE.md`), rebuilt on the Aether stack. Tsyne is
+(`../not-ours/tsyne/docs/BROWSER_MODE.md`), rebuilt on the Aether stack. Tsyne is
 Paul's copyright, so its design, docs and page format are free to mine; nothing
 here needs to be Tsyne-*compatible*.
 
@@ -43,13 +46,13 @@ All three live **outside** aether-ui except the host, which is an ordinary app
 that imports `ui`.
 
 ```
-  page.ts ──► [ lowerer ] ──ES5 subset──► [ mquickjs-port ] ──calls──► [ browser host ]
+  page.ts ──► [ lowerer ] ──ES5 subset──► [ mquickjs-ae ] ──calls──► [ browser host ]
               own repo                     unchanged port              apps/<name>, import ui
 ```
 
-### 1. mquickjs-port stays a port
+### 1. mquickjs-ae stays a port
 
-`../mquickjs-port` is a faithful Aether port of Bellard's MicroQuickJS. Its
+`../mquickjs-ae` is a faithful Aether port of Bellard's MicroQuickJS. Its
 value is that faithfulness: the `.tests.ae` conformance gate, with output
 byte-identical to the C build. It accepts ES5 plus `for of`. As of today its
 parser has no arrow functions, `let`/`const`, template literals, `class` or
@@ -205,7 +208,7 @@ goldens for the lowerer, and the existing conformance gate for the port.
 
 ## To mine from Tsyne
 
-From `../tsyne/tsyne/docs/`:
+From `../not-ours/tsyne/docs/`:
 
 - `BROWSER_MODE.md`: the `browserContext` API; how HTTP 200, 302 and 404 are
   handled; pages served by any backend language (filesystem-mapped
@@ -221,7 +224,7 @@ Credit lines follow the house rule: "-alike", and name the source.
 
 The point of all this is speed, so measure first.
 
-1. Link mquickjs-port into one aether-ui app. Bind about five builders
+1. Link mquickjs-ae into one aether-ui app. Bind about five builders
    (`window`, `vstack`, `hstack`, `text`, `btn`) through the context stack.
 2. Time a page from bytes in memory to widgets on screen, in two forms:
    ES5 source, and precompiled bytecode.
@@ -233,7 +236,7 @@ fetch through std's client, browser chrome, and the cache.
 
 ## Open questions
 
-- **Where the host lives.** `apps/<name>` in aether-ui, with mquickjs-port as
+- **Where the host lives.** `apps/<name>` in aether-ui, with mquickjs-ae as
   an aeb dependency, or its own repo. The lowerer and the port are outside
   either way.
 - **Lowerer language.** Write it in Aether (one toolchain, runs in the
@@ -245,3 +248,32 @@ fetch through std's client, browser chrome, and the cache.
   describes server-held state with diffs pushed to a thin client. That
   complements client-side page logic; it does not replace it. Out of scope for
   v1.
+
+## What happened (2026-10-02)
+
+- **The spike.** A page's engine time is noise next to native widget
+  creation: about 100 µs per AppKit widget against under 1 µs of JS per
+  widget. On compute-heavy page logic, though, mquickjs-ae is about 9× slower
+  than Bellard's C (117 ms against 13 ms), because `ae/vm.ae` dispatches
+  opcodes through a linear `if` chain. That is fixable in mquickjs-ae without
+  touching the browser. Tsyne itself was not measured: the machine had no Node
+  or Go.
+- **Where the host lives:** its own repo, `../sae`, reaching aether-ui and
+  mquickjs-ae through sibling symlinks. The lowerer is a package inside it
+  (`sae/lower/`), so it can still move to a repo of its own.
+- **Lowerer language:** Aether, run in-process on every page. Lowering plus
+  parsing costs 0.1 to 0.7 ms per page, so the bytecode cache is deferred.
+- **mquickjs-ae stayed a port.** Its only change for sae is a core-only
+  stdlib mode (no `load()`, no OS access) for embedders.
+- **Names:** the browser is sae, "Sae it ain't so". The dialect and the
+  lowerer are still unnamed.
+- **Built beyond the spike:** HTTP fetch, history and navigation, the
+  `browserContext` API, chrome, and the dialect (erasable TypeScript, and
+  arrows, let/const with per-iteration closures, templates, destructuring,
+  default/rest params). The page `ui` surface is `vstack`/`hstack`/`scroll`/
+  `button` blocks, `text`, `btn`, `textfield`, `margin`/`bg_color`/`onclick`
+  modifiers (throwing at top level), and `ui_state`/`text_bound`. The
+  calculator above runs as `sae/site/calculator.ts` and is driven over the
+  AetherUIDriver.
+- **Not yet:** GTK4 and Win32 build arms (macOS only so far), `class` in the
+  dialect, Tsyne's page menus.
