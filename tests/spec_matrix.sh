@@ -412,6 +412,13 @@ for row in "${SUITES[@]}"; do
             # neighbouring staleness warning could not see it because it
             # checks whichever path this line picked.
             bin="target/build/$appdir/bin/$base.exe"
+            # Under --rebuild, rebuild_app just wrote build/ (build.sh), so
+            # prefer it, as the FreeBSD branch below does. Otherwise an older
+            # aeb fan-out exe in target/build/ is measured instead of the
+            # rebuild (winbaz, 2026-10-03: Aug-31 exes against today's code).
+            if [ "$REBUILD" = "1" ] && [ -x "build/$base.exe" ]; then
+                bin="build/$base.exe"
+            fi
             # Same contrib-tree fallback as the default branch: this
             # unconditional reset used to skip it, so winbaz measured a
             # build.sh-era exe so stale it predated the /pixel route.
