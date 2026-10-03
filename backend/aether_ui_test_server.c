@@ -765,8 +765,20 @@ static void handle_request_inner(aether_sock_t client_fd,
         const char* hs = extract_query_param(path, "h");
         int px = xs ? atoi(xs) : 0;
         int py = ys ? atoi(ys) : 0;
-        int pw = ws ? atoi(ws) : 400;
-        int ph = hs ? atoi(hs) : 300;
+        // Without w/h, replay at the canvas's real size. A fixed 400x300 put
+        // the centre of a wider canvas off the surface, where the answer is
+        // -1, which reads as opaque white: OpenDisk's chart spec passed on a
+        // Mac whose canvas happened to be narrower and failed on Linux at 811
+        // wide. 400x300 stays the fallback when the size is unknown.
+        int pw = 400, ph = 300;
+        int dw = 0, dh = 0, da = 0, dc = 0;
+        if (h->canvas_debug && h->canvas_debug(id, &da, &dc, &dw, &dh) == 0
+            && dw > 0 && dh > 0) {
+            pw = dw;
+            ph = dh;
+        }
+        if (ws) pw = atoi(ws);
+        if (hs) ph = atoi(hs);
         int val = aether_ui_canvas_read_pixel_impl(id, px, py, pw, ph);
         char body[64];
         snprintf(body, sizeof(body), "{\"pixel\":%d}", val);
