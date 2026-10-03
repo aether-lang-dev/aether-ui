@@ -52,6 +52,12 @@ static void aeui_release_boxed(gpointer boxed, GClosure* unused) {
     free(boxed);
 }
 
+// The same release for a GDestroyNotify slot (g_timeout_add_full,
+// g_object_set_data_full), which passes no GClosure.
+static void aeui_release_boxed_notify(gpointer boxed) {
+    aeui_release_boxed(boxed, NULL);
+}
+
 // ---------------------------------------------------------------------------
 // GTK4 initialization — must be called before creating any widgets.
 // ---------------------------------------------------------------------------
@@ -1874,6 +1880,19 @@ typedef struct {
     int overlay_handle;    // the open list overlay, or 0
 } DrawnPicker;
 
+// The trigger owns its DrawnPicker (object data with this notify), and the
+// DrawnPicker owns the change box and the item copies. Without it a retired
+// drawn picker leaked all three. An open list's row handler points at dp, so
+// close the list first rather than leave it pointing at freed state.
+static void drawn_picker_free(gpointer data) {
+    DrawnPicker* dp = (DrawnPicker*)data;
+    if (dp->overlay_handle && aether_ui_overlay_is_live_impl(dp->overlay_handle))
+        aether_ui_overlay_close_impl(dp->overlay_handle);
+    g_ptr_array_unref(dp->items);
+    aeui_release_boxed(dp->on_change, NULL);
+    g_free(dp);
+}
+
 static DrawnPicker* drawn_picker_of(GtkWidget* w) {
     if (!w || !GTK_IS_BUTTON(w)) return NULL;
     return (DrawnPicker*)g_object_get_data(G_OBJECT(w), "aeui-drawn-picker");
@@ -1947,15 +1966,17 @@ int aether_ui_picker_create(void* boxed_closure) {
         dp->on_change = (AeClosure*)boxed_closure;
         dp->trigger = btn;
         dp->overlay_handle = 0;
-        g_object_set_data(G_OBJECT(btn), "aeui-drawn-picker", dp);
+        g_object_set_data_full(G_OBJECT(btn), "aeui-drawn-picker", dp,
+                               drawn_picker_free);
         g_signal_connect(btn, "clicked", G_CALLBACK(on_drawn_picker_clicked), dp);
         return aether_ui_register_widget(btn);
     }
     GtkStringList* model = gtk_string_list_new(NULL);
     GtkWidget* dropdown = gtk_drop_down_new(G_LIST_MODEL(model), NULL);
     if (boxed_closure) {
-        g_signal_connect(dropdown, "notify::selected",
-                         G_CALLBACK(on_picker_changed), boxed_closure);
+        g_signal_connect_data(dropdown, "notify::selected",
+                              G_CALLBACK(on_picker_changed), boxed_closure,
+                              aeui_release_boxed, 0);
     }
     return aether_ui_register_widget(dropdown);
 }
@@ -3154,7 +3175,13 @@ static int aeui_next_timer_id = 1;
 
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
     if (!boxed_closure || interval_ms <= 0) return 0;
-    guint source = g_timeout_add((guint)interval_ms, on_timer_tick, boxed_closure);
+    // The source owns the box and GLib frees it when the source goes,
+    // whether cancelled or not. A timer that cancels itself from inside its
+    // own tick is safe: GLib holds the callback data across the dispatch and
+    // runs the notify after the tick returns.
+    guint source = g_timeout_add_full(G_PRIORITY_DEFAULT, (guint)interval_ms,
+                                      on_timer_tick, boxed_closure,
+                                      aeui_release_boxed_notify);
     if (aeui_timer_count >= aeui_timer_cap) {
         aeui_timer_cap = aeui_timer_cap == 0 ? 16 : aeui_timer_cap * 2;
         aeui_timers = realloc(aeui_timers, sizeof(AeuiTimerEntry) * aeui_timer_cap);

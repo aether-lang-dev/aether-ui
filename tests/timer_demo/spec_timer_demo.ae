@@ -91,6 +91,17 @@ main() {
             body2 = uidriver.get_body("/widgets")
             spec.assert_true(body1 != body2, "b is STILL running after the double cancel")
         }
+
+        // Cancelling releases the closure box now, on every backend. A timer
+        // that cancels itself is still inside that closure, which goes on to
+        // write its label; the box must outlive the tick.
+        spec.it("a timer that cancels itself mid-tick stops cleanly") callback {
+            ok = uidriver.wait_body_contains("/widgets", "c: stopped itself at 3", 40)
+            spec.assert_true(ok, "c finished its last tick after cancelling")
+            sleep(300)
+            body = uidriver.get_body("/widgets")
+            spec.assert_contains(body, "c: stopped itself at 3", "and never ticked again")
+        }
     }
     return spec.run_summary(fw)
 }

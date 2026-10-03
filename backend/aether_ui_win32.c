@@ -6595,12 +6595,19 @@ int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure) {
     return id;
 }
 
+static void w32_release_box(AeClosure** slot);   // the graveyard, below
+
 void aether_ui_timer_cancel_impl(int timer_id) {
     if (!timer_sink) return;
     EnterCriticalSection(&timer_lock);
     for (int i = 0; i < timer_count; i++) {
         if (timers[i].id == timer_id) {
             timers[i].alive = 0;
+            // The box used to stay here forever. It goes to the graveyard
+            // rather than free(): a timer commonly cancels itself from inside
+            // its own tick, and that closure is still running. A dead entry
+            // never reads its closure again (the sink checks alive first).
+            w32_release_box(&timers[i].closure);
             break;
         }
     }

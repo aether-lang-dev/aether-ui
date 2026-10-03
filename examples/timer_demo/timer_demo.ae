@@ -29,11 +29,15 @@ main() {
     a_timer = 0
     a_label = 0
     b_label = 0
+    c_ticks = 0
+    c_timer = 0
+    c_label = 0
 
     main_root = root_vstack(10) {
         text("Timer demo")
         a_label = text("a: 0")
         b_label = text("b: 0")
+        c_label = text("c: 0")
 
     }
 
@@ -44,6 +48,20 @@ main() {
     _b = timer(90) callback {
         b_ticks = b_ticks + 1
         aether_ui_text_set_string(b_label, "b: ${b_ticks}")
+    }
+
+    // c cancels ITSELF from inside its own tick, then keeps using its captured
+    // state. A backend that frees a timer's closure box on cancel (all of them
+    // now) must not free it while that tick is still running.
+    c_timer = timer(40) callback {
+        c_ticks = c_ticks + 1
+        if c_ticks >= 3 {
+            timer_cancel(c_timer)
+            c_timer = 0   // assigned in a closure, so captured by reference
+            aether_ui_text_set_string(c_label, "c: stopped itself at ${c_ticks}")
+        } else {
+            aether_ui_text_set_string(c_label, "c: ${c_ticks}")
+        }
     }
 
     // Built AFTER the timer on purpose. A closure captures by value unless the
