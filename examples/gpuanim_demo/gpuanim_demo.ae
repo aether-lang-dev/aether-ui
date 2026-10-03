@@ -8,12 +8,19 @@
 // screen there is no display cycle to mark dirty, so a request reached
 // nothing and the viewport drew exactly one frame however many were asked
 // for. Every run of this file is that case, because CI has no display.
+//
+// Once the twelve frames have landed and the label says so, it keeps asking
+// and the colour keeps cycling, so a person looking at the window sees a
+// viewport that animates rather than a square that stopped. The label stops
+// changing at that point: the spec, and the driver's wait for the tree to
+// settle, read it.
 import ui
 import ui (window, vstack, text, set_text, gpuview_create, gpuview_widget,
     gpuview_available, gpuview_on_render, gpuview_on_resize,
     gpuview_request_render, fill_width, fill_height,
     timer, timer_cancel, app_quit, enable_test_server, a11y_label)
 import std.os (os_getenv)
+import std.math
 
 // GL takes 32-bit floats. Aether's `float` is a C double, so these must be f32
 // or the call pushes the wrong width and the clear colour comes out as zero,
@@ -37,6 +44,7 @@ const GIVE_UP_TICKS = 750
 var g_drawn = 0
 var g_ticks = 0
 var g_count_label = 0
+var g_reported = 0
 
 main() {
     window("gpuview animation", 480, 340) {
@@ -54,8 +62,9 @@ main() {
                     glViewport(0, 0, w, h)
                 }
                 // A different colour every frame, so a reader can tell one
-                // frame from the next: green while it is still going, blue
-                // once it has drawn every frame that was asked for.
+                // frame from the next: the hue turns a little each frame,
+                // round the wheel about every three and a half seconds at
+                // 60fps (three sines a third of a turn apart).
                 //
                 // Only the COUNT changes here; the label is written from the
                 // timer. With a window on screen, a set_text from inside the
@@ -68,34 +77,42 @@ main() {
                 // touch the widget tree.
                 gpuview_on_render(gpu) callback |_dt: float| {
                     g_drawn = g_drawn + 1
-                    if g_drawn >= WANTED {
-                        glClearColor(0.0, 0.0, 1.0, 1.0)
-                    } else {
-                        glClearColor(0.0, 1.0, 0.0, 1.0)
-                    }
+                    t = g_drawn * 0.03
+                    r = 0.5 + 0.5 * math.sin(t)
+                    g = 0.5 + 0.5 * math.sin(t + 2.094)
+                    b = 0.5 + 0.5 * math.sin(t + 4.189)
+                    glClearColor(r, g, b, 1.0)
                     glClear(GL_COLOR_BUFFER_BIT)
                 }
 
                 // Bounded by time as well as by frames: where a request
                 // reaches nothing this stops and says so, rather than asking
-                // for a frame forever.
+                // for a frame forever. Once it has animated it keeps asking,
+                // for the colour cycle, but the label is written once and
+                // left alone.
                 tid = 0
                 tid = timer(16) callback {
                     g_ticks = g_ticks + 1
                     gpuview_request_render(gpu)
-                    set_text(g_count_label, "frames ${g_drawn}")
-                    if g_drawn >= WANTED || g_ticks >= GIVE_UP_TICKS {
-                        timer_cancel(tid)
-                        // Says which of the two ways it stopped, so a reader
-                        // does not have to tell "12" from "1" in a label.
-                        if g_drawn >= WANTED {
-                            set_text(g_count_label, "animated ${g_drawn} frames")
-                        } else {
-                            set_text(g_count_label, "stalled at ${g_drawn} of ${g_ticks} asked")
-                        }
-                        if os_getenv("AETHER_UI_TEST_PORT") == null {
-                            println("asked ${g_ticks}, drawn ${g_drawn}")
-                            app_quit()
+                    if g_reported == 0 {
+                        set_text(g_count_label, "frames ${g_drawn}")
+                        if g_drawn >= WANTED || g_ticks >= GIVE_UP_TICKS {
+                            g_reported = 1
+                            // Says which of the two ways it stopped, so a
+                            // reader does not have to tell "12" from "1".
+                            if g_drawn >= WANTED {
+                                set_text(g_count_label, "animated ${WANTED} frames")
+                            } else {
+                                timer_cancel(tid)
+                                set_text(g_count_label, "stalled at ${g_drawn} of ${g_ticks} asked")
+                            }
+                            // A headless run with no driver is a self-check:
+                            // report and quit, as before. With a window, or a
+                            // driver, keep cycling.
+                            if os_getenv("AETHER_UI_TEST_PORT") == null && os_getenv("AETHER_UI_HEADLESS") != null {
+                                println("asked ${g_ticks}, drawn ${g_drawn}")
+                                app_quit()
+                            }
                         }
                     }
                 }
