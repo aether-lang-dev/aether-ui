@@ -214,7 +214,12 @@ jobs:
           # tests/spec_matrix.sh is 413/417 (the two red — `background`'s
           # worker-thread timing and LisMusic's missing binary — are
           # unrelated pre-existing flakiness, not this move).
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.737.0' }}
+          # v0.766.0 (2026-10-03): the family-wide floor Paul set for every
+          # Aether repo, so they all build against one known release. No
+          # aether-ui source change needed. Verified: ./ci.sh, all phases
+          # passed against 0.766.0 (macOS arm64), with the macOS closure-box
+          # and picker-driver fixes that landed the same day.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.766.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
