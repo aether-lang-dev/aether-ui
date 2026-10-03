@@ -700,6 +700,18 @@ int aether_ui_window_file_drop_deliver(const char* paths) {
     // A NULL probe (draggingEntered) asks only whether anyone is listening,
     // so the cursor can show copy-or-refuse before the mouse is released.
     if (!paths) return 1;
+    // The app's handler runs on the main thread, as a real drop's does. The
+    // driver's POST /window/filedrop arrives on the test server's thread, and
+    // a handler that rebuilds widgets there (OpenDisk's does) made AppKit
+    // abort: "Modifications to the layout engine must not be performed from
+    // a background thread".
+    if (![NSThread isMainThread]) {
+        __block int r = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            r = aether_ui_window_file_drop_deliver(paths);
+        });
+        return r;
+    }
     ((void(*)(void*, const char*))window_file_drop_closure->fn)(
         window_file_drop_closure->env, paths);
     return 1;
