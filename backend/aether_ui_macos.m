@@ -1581,6 +1581,12 @@ void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
 @end
 
 @implementation AetherButtonTarget
+- (void)dealloc {
+    // The widget owns this helper (aeui_own_helper) and the helper owns its
+    // closure box: nothing else frees it, so a retired widget leaked one box
+    // and its captured environment per handler (sae: six per page load).
+    aeui_release_boxed(self.closure);
+}
 - (void)buttonPressed:(id)sender {
     (void)sender;
     if (self.closure && self.closure->fn) {
@@ -2266,6 +2272,12 @@ int aether_ui_divider_create(void) {
 @end
 
 @implementation AetherTextFieldDelegate
+- (void)dealloc {
+    // The widget owns this helper (aeui_own_helper) and the helper owns its
+    // closure box: nothing else frees it, so a retired widget leaked one box
+    // and its captured environment per handler (sae: six per page load).
+    aeui_release_boxed(self.closure);
+}
 - (void)controlTextDidChange:(NSNotification*)n {
     NSTextField* tf = [n object];
     const char* cs = [[tf stringValue] UTF8String];
@@ -2400,6 +2412,12 @@ static void toggle_enforce_group(int handle) {
 }
 
 @implementation AetherToggleTarget
+- (void)dealloc {
+    // The widget owns this helper (aeui_own_helper) and the helper owns its
+    // closure box: nothing else frees it, so a retired widget leaked one box
+    // and its captured environment per handler (sae: six per page load).
+    aeui_release_boxed(self.closure);
+}
 - (void)toggleChanged:(id)sender {
     NSButton* btn = (NSButton*)sender;
     int active = [btn state] == NSControlStateValueOn ? 1 : 0;
@@ -2475,6 +2493,12 @@ void aether_ui_toggle_set_group(int handle, int group_with) {
 @end
 
 @implementation AetherSliderTarget
+- (void)dealloc {
+    // The widget owns this helper (aeui_own_helper) and the helper owns its
+    // closure box: nothing else frees it, so a retired widget leaked one box
+    // and its captured environment per handler (sae: six per page load).
+    aeui_release_boxed(self.closure);
+}
 - (void)sliderChanged:(id)sender {
     NSSlider* s = (NSSlider*)sender;
     double val = [s doubleValue];
@@ -2524,6 +2548,12 @@ double aether_ui_slider_get_value(int handle) {
 @end
 
 @implementation AetherPickerTarget
+- (void)dealloc {
+    // The widget owns this helper (aeui_own_helper) and the helper owns its
+    // closure box: nothing else frees it, so a retired widget leaked one box
+    // and its captured environment per handler (sae: six per page load).
+    aeui_release_boxed(self.closure);
+}
 - (void)pickerChanged:(id)sender {
     NSPopUpButton* p = (NSPopUpButton*)sender;
     intptr_t idx = [p indexOfSelectedItem];
@@ -2575,6 +2605,12 @@ int aether_ui_picker_get_selected(int handle) {
 @end
 
 @implementation AetherTextViewDelegate
+- (void)dealloc {
+    // The widget owns this helper (aeui_own_helper) and the helper owns its
+    // closure box: nothing else frees it, so a retired widget leaked one box
+    // and its captured environment per handler (sae: six per page load).
+    aeui_release_boxed(self.closure);
+}
 - (void)textDidChange:(NSNotification*)n {
     NSTextView* tv = [n object];
     if (self.closure && self.closure->fn) {
@@ -3565,6 +3601,15 @@ void aether_ui_timer_cancel_impl(int timer_id) {
     AetherTimerTarget* t = active_timers[timer_id - 1];
     [t.timer invalidate];
     t.timer = nil;
+    // Release the closure box, but not now: a timer commonly cancels itself
+    // from inside its own tick, and that closure is still running. The next
+    // main-queue turn is after the tick has returned. A cancelled timer
+    // never fires again, so nothing reads the box in between.
+    AeClosure* c = t.closure;
+    if (c) {
+        t.closure = NULL;
+        dispatch_async(dispatch_get_main_queue(), ^{ aeui_release_boxed(c); });
+    }
 }
 
 void aether_ui_open_url_impl(const char* url) {
