@@ -11,7 +11,7 @@
 
 import ui
 import ui (window, vstack, text, btn, divider, on_file_drop, draggable,
-    enable_test_server)
+    clear_children, on_ui_thread, enable_test_server)
 import std.os (os_getenv)
 import std.string
 
@@ -27,6 +27,16 @@ main() {
             count = text("drops: 0")
             first = text("first path: (none)")
             total = text("files in last drop: 0")
+            // One row per file in the last drop, thrown away and rebuilt on
+            // every drop. That is what a real collector does (OpenDisk's
+            // does), and it is what makes the handler's thread matter: a
+            // label update tolerates the wrong thread, creating and parenting
+            // native widgets does not.
+            listing = vstack(2) { }
+            // Which thread the handler ran on, so a spec can see it rather
+            // than hope a wrong-thread rebuild crashes. Win32 tolerates one
+            // in a headless run and only AppKit aborted on it.
+            thread = text("handler thread: (no drop yet)")
 
             divider()
             text("and the other direction: this row can be dragged OUT")
@@ -40,12 +50,24 @@ main() {
 
             on_file_drop(|paths: ptr, n: int| {
                 drops = drops + 1
+                if on_ui_thread() == 1 {
+                    aether_ui_text_set_string(thread, "handler thread: ui")
+                } else {
+                    aether_ui_text_set_string(thread, "handler thread: NOT the ui thread")
+                }
                 aether_ui_text_set_string(count, "drops: ${drops}")
                 aether_ui_text_set_string(total, "files in last drop: ${n}")
                 if n > 0 {
                     aether_ui_text_set_string(first,
                         string.concat("first path: ",
                                       string.string_array_get(paths, 0)))
+                }
+                clear_children(listing)
+                i = 0
+                while i < n {
+                    _row = btn(listing, string.concat("dropped: ",
+                               string.string_array_get(paths, i))) callback { }
+                    i = i + 1
                 }
             })
         }

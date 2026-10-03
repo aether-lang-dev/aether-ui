@@ -49,6 +49,28 @@ main() {
             spec.assert_contains(b, "drops: 2", "two drops so far")
         }
 
+        spec.it("the handler can rebuild widgets, as a real collector's does") callback {
+            // The handler clears a stack and adds one row per file. A real
+            // drop runs it on the UI thread; the driver's drop must too, or
+            // the toolkit is creating and parenting widgets from the HTTP
+            // thread (AppKit aborted, 3a95927). The previous drop's rows
+            // must be gone: rebuilt, not appended.
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "dropped: /tmp/one.txt", "a row per file")
+            spec.assert_contains(b, "dropped: /tmp/two.md", "for both files")
+            uidriver.post_ok("/window/filedrop?paths=/tmp/three.png", "drop three")
+            ok = uidriver.wait_body_contains("/widgets", "dropped: /tmp/three.png", 20)
+            spec.assert_true(ok, "the rebuilt row is there")
+            b2 = uidriver.get_body("/widgets")
+            spec.assert_eq(string.contains(b2, "dropped: /tmp/one.txt"), 0,
+                "and the last drop's rows were cleared")
+            spec.assert_contains(b2, "drops: 3", "three drops")
+            // The direct check: a toolkit that tolerates a wrong-thread
+            // rebuild (Win32 did, headless) would pass everything above.
+            spec.assert_contains(b2, "handler thread: ui",
+                "the handler ran on the UI thread, as a real drop's does")
+        }
+
         spec.it("a widget can be a drag SOURCE, and only if asked") callback {
             // A real drag cannot be performed on a machine with no seat, so
             // what is checkable is the registration: which widget would hand
