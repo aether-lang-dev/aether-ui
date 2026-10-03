@@ -8006,8 +8006,15 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             } else if ([v isKindOfClass:[NSProgressIndicator class]]) {
                 aether_ui_progressbar_set_fraction(ctx->handle, ctx->dval);
             } else if (get_widget_type(ctx->handle) == AUI_PICKER) {
-                // set_selected fires the change callback (GTK does the same).
+                // Choose the item, then fire the change callback, as a person
+                // choosing it would. selectItemAtIndex: sends no action on
+                // AppKit (GTK's set_selected does notify), so without the
+                // send a driven picker changed and no handler ever ran.
                 aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
+                if ([v isKindOfClass:[NSPopUpButton class]]) {
+                    [(NSPopUpButton*)v sendAction:[(NSPopUpButton*)v action]
+                                               to:[(NSPopUpButton*)v target]];
+                }
             }
             break;
         default:

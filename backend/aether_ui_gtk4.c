@@ -7678,8 +7678,19 @@ static gboolean test_action_idle(gpointer data) {
                 gtk_range_set_value(GTK_RANGE(w), ta->dval);
             } else if (GTK_IS_PROGRESS_BAR(w)) {
                 gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(w), ta->dval);
-            } else if (GTK_IS_DROP_DOWN(w) || drawn_picker_of(w)) {
-                // Picker (either surface): select index via the ABI, which
+            } else if (drawn_picker_of(w)) {
+                // Drawn picker: the ABI's set_selected only moves the
+                // selection and label, so fire the change callback here, on
+                // a real change, as a row click (on_drawn_picker_row) does.
+                DrawnPicker* dp = drawn_picker_of(w);
+                int idx = (int)ta->dval;
+                int changed = (idx != dp->selected);
+                aether_ui_picker_set_selected(ta->handle, idx);
+                if (changed && dp->on_change && dp->on_change->fn)
+                    ((void(*)(void*, intptr_t))dp->on_change->fn)(dp->on_change->env,
+                                                                  (intptr_t)idx);
+            } else if (GTK_IS_DROP_DOWN(w)) {
+                // Native dropdown: set_selected notifies "selected", which
                 // fires the change callback exactly as a user pick does.
                 aether_ui_picker_set_selected(ta->handle, (int)ta->dval);
             }

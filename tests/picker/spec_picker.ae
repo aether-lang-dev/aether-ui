@@ -37,6 +37,12 @@ main() {
             spec.assert_true(ok, "selection is 2")
             txt = uidriver.widget_text_by_id(p)
             spec.assert_str_eq(txt, "Blue", "label tracks the selection")
+            // The app's change handler ran, as it does for a person's pick:
+            // it sets the state the "Selected index:" text is bound to.
+            // (macOS's selectItemAtIndex: and GTK's drawn picker both moved
+            // the selection without calling it.)
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "Selected index: 2", 20),
+                "the change handler ran")
         }
 
         spec.it("selecting index 3 round-trips") callback {
