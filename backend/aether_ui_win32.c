@@ -4081,9 +4081,20 @@ void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
     }
 }
 
+static int w32_filedrop_to_ui_thread(const char* paths);   // driver host, below
+
 int aether_ui_window_file_drop_deliver(const char* paths) {
     if (!w32_file_drop_closure || !w32_file_drop_closure->fn) return 0;
     if (!paths) return 1;   // presence probe
+    // A real drop (WM_DROPFILES) arrives on the UI thread. The driver's POST
+    // /window/filedrop arrives on the test server's thread, and a handler
+    // that rebuilds widgets there creates and parents HWNDs from a thread
+    // with no message loop. Hop over, as the driver's other actions do; the
+    // macOS backend does the same (3a95927).
+    if (!aether_ui_on_ui_thread_impl()) {
+        int r = w32_filedrop_to_ui_thread(paths);
+        if (r >= 0) return r;
+    }
     ((void(*)(void*, const char*))w32_file_drop_closure->fn)(
         w32_file_drop_closure->env, paths);
     return 1;
@@ -11636,8 +11647,16 @@ void aether_ui_clear_children_impl(int handle) {
 #include "aether_ui_test_server.h"
 
 #define AE_WM_DRIVER (WM_USER + 0x42)
+#define AE_WM_FILEDROP (WM_USER + 0x46)   // driver file drop → UI thread
 
 static HWND driver_host_hwnd = NULL;
+
+// -1 when there is no driver host to hop through (the driver is not running,
+// so nothing off the UI thread is delivering anyway).
+static int w32_filedrop_to_ui_thread(const char* paths) {
+    if (!driver_host_hwnd) return -1;
+    return (int)SendMessageW(driver_host_hwnd, AE_WM_FILEDROP, 0, (LPARAM)paths);
+}
 
 // Widget-kind → short string (used as the "type" field in the driver JSON).
 static const char* widget_kind_name(WidgetKind k) {
@@ -11848,6 +11867,9 @@ int aether_ui_focused_widget(void) {
 // thread — SendMessageW is synchronous so no explicit wait is needed.
 static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                                          WPARAM wp, LPARAM lp) {
+    if (msg == AE_WM_FILEDROP) {
+        return aether_ui_window_file_drop_deliver((const char*)lp);
+    }
     if (msg == AE_WM_DRIVER) {
         AetherDriverActionCtx* ctx = (AetherDriverActionCtx*)lp;
         if (ctx->action == AETHER_DRV_SET_STATE) {
