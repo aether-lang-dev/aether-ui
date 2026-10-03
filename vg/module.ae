@@ -50,7 +50,7 @@ exports (
     bind_fill, bind_stroke, bind_opacity, bind_text, bind_pos,
     // Re-exported element mutators so a handler can recolor the element it
     // captured: vg.element_set_fill(el, "#0f0") inside an on_click closure.
-    element_set_fill, element_set_stroke, element_set_opacity,
+    element_set_fill, element_set_stroke, element_set_opacity, element_set_text,
     // Scene construction — backend-agnostic (recording stub, GTK adapter, …).
     scene_new, vg_root, node_element, scene_ctx, scene_backend, node_scene,
     scene_set_canvas, scene_canvas, scene_set_ctx, mk_node,
@@ -904,6 +904,11 @@ element_set_fill(el: ptr, color: string) {
     element.element_set_fill(el, color)
 }
 
+// A text shape's new text; the next flush draws it (_text_of).
+element_set_text(el: ptr, content: string) {
+    element.element_set_text(el, content)
+}
+
 // Lerp helper: start a fill animation from → to on the scene's manager.
 // Ticks write via the GRAMMAR setter (element.element_set_fill), not this
 // module wrapper — re-triggering the behavior would loop.
@@ -1497,6 +1502,17 @@ element_is_interactive(el: ptr) -> int {
     return 0
 }
 
+// A text shape's content: what element_set_text last set, once something has
+// (a clock, a counter), else what it was created with. The flush used to read
+// only the creation-time content, so a changed text never redrew.
+_text_of(pend: *VgPending) -> string {
+    lt = element.element_last_text(pend.element)
+    if lt != null {
+        if string.length(lt) > 0 { return lt }
+    }
+    return pend.content
+}
+
 // Emit one <text> at (x,y) in `fill`, reusing pend's font/anchor/content.
 _emit_text(ctx: ptr, be: ptr, pend: *VgPending, x: float, y: float, fill: string) {
     s = "<svg><text x='"
@@ -1514,7 +1530,7 @@ _emit_text(ctx: ptr, be: ptr, pend: *VgPending, x: float, y: float, fill: string
         s = string.concat(s, pend.anchor)
     }
     s = string.concat(s, "'>")
-    s = string.concat(s, pend.content)
+    s = string.concat(s, _text_of(pend))
     s = string.concat(s, "</text></svg>")
     root = parser.parse_svg(s)
     node_h = parser.node_child_at(root, 0)
@@ -1566,7 +1582,7 @@ flush_text(ctx: ptr, be: ptr, p: ptr) {
         s = string.concat(s, pend.anchor)
     }
     s = string.concat(s, "'>")
-    s = string.concat(s, pend.content)
+    s = string.concat(s, _text_of(pend))
     s = string.concat(s, "</text></svg>")
     root = parser.parse_svg(s)
     node_h = parser.node_child_at(root, 0)
