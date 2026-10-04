@@ -219,7 +219,11 @@ jobs:
           # aether-ui source change needed. Verified: ./ci.sh, all phases
           # passed against 0.766.0 (macOS arm64), with the macOS closure-box
           # and picker-driver fixes that landed the same day.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.766.0' }}
+          # v0.778.0 (2026-10-05): the family-wide floor again, moved with the
+          # whole family (bootstrap.sh's MIN_AE too); no aether-ui source
+          # change. ./ci.sh, all phases passed against the released 0.778.0
+          # toolchain (macOS arm64).
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.778.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
