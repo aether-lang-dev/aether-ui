@@ -7120,6 +7120,21 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     NSView* child = (__bridge NSView*)aether_ui_get_widget(child_handle);
     if (!parent || !child) return;
 
+    if ([parent isKindOfClass:[NSGridView class]]) {
+        // A grid's block: each child takes the next empty cell, row by row,
+        // so `grid(4, 4, 4) { ... }` reads like the rows it lays out. Cells
+        // already filled by grid_place are skipped.
+        NSGridView* g = (NSGridView*)parent;
+        NSInteger cols = g.numberOfColumns < 1 ? 1 : g.numberOfColumns;
+        for (NSInteger i = 0;; i++) {
+            NSInteger r = i / cols, c = i % cols;
+            if (r >= g.numberOfRows || [g cellAtColumnIndex:c rowIndex:r].contentView == nil) {
+                aether_ui_grid_place(parent_handle, child_handle, (int)r, (int)c, 1, 1);
+                return;
+            }
+        }
+    }
+
     if ([parent isKindOfClass:[NSSplitView class]]) {
         // Exactly two panes, in declaration order; a third is silently dropped
         // (GTK's GtkPaned does the same).
@@ -8353,6 +8368,35 @@ int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
     return aether_ui_register_widget((__bridge_retained void*)grid);
 }
 
+static const char kAeuiGridUniform;
+
+// equal_cells: size a single cell's view like the grid's first one, so with
+// Fill placement every column is one width and every row one height.
+static void aeui_grid_equalize(NSGridView* g, NSView* child) {
+    if (!objc_getAssociatedObject(g, &kAeuiGridUniform)) return;
+    NSView* first = nil;
+    for (NSInteger r = 0; r < g.numberOfRows && !first; r++)
+        for (NSInteger c = 0; c < g.numberOfColumns && !first; c++)
+            first = [g cellAtColumnIndex:c rowIndex:r].contentView;
+    if (!first || first == child) return;
+    [child.widthAnchor constraintEqualToAnchor:first.widthAnchor].active = YES;
+    [child.heightAnchor constraintEqualToAnchor:first.heightAnchor].active = YES;
+}
+
+void aether_ui_grid_set_uniform(int grid_handle, int on) {
+    NSGridView* g = (__bridge NSGridView*)aether_ui_get_widget(grid_handle);
+    if (![g isKindOfClass:[NSGridView class]]) return;
+    objc_setAssociatedObject(g, &kAeuiGridUniform, on ? @YES : nil, OBJC_ASSOCIATION_RETAIN);
+    if (!on) return;
+    g.xPlacement = NSGridCellPlacementFill;
+    g.yPlacement = NSGridCellPlacementFill;
+    for (NSInteger r = 0; r < g.numberOfRows; r++)
+        for (NSInteger c = 0; c < g.numberOfColumns; c++) {
+            NSView* v = [g cellAtColumnIndex:c rowIndex:r].contentView;
+            if (v) aeui_grid_equalize(g, v);
+        }
+}
+
 void aether_ui_grid_place(int grid_handle, int child_handle,
                           int row, int col, int row_span, int col_span) {
     NSGridView* grid = (__bridge NSGridView*)aether_ui_get_widget(grid_handle);
@@ -8366,6 +8410,8 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
     if (row_span > 1 || col_span > 1) {
         [grid mergeCellsInHorizontalRange:NSMakeRange(col, col_span)
                              verticalRange:NSMakeRange(row, row_span)];
+    } else {
+        aeui_grid_equalize(grid, child);
     }
 }
 

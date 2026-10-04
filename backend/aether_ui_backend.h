@@ -553,10 +553,15 @@ void aether_ui_menu_popup(int menu_handle, int anchor_widget);
 // Grid layout (Group 3b) — 2D layout container.
 // Children are placed with aether_ui_grid_place() at (row, col) with
 // optional row/col spans. Unlike stacks, columns align across rows so
-// labels-on-left / fields-on-right forms actually line up.
+// labels-on-left / fields-on-right forms actually line up. A child added
+// with aether_ui_widget_add_child_ctx (built inside a grid's block) takes
+// the next empty cell, row by row.
 int  aether_ui_grid_create(int cols, int row_spacing, int col_spacing);
 void aether_ui_grid_place(int grid_handle, int child_handle,
                           int row, int col, int row_span, int col_span);
+// Every column one width and every row one height, children filling their
+// cells (a keypad). Off by default: a plain grid sizes tracks to content.
+void aether_ui_grid_set_uniform(int grid_handle, int on);
 
 // Canvas drawing (Group 6)
 int aether_ui_canvas_create_impl(int width, int height);

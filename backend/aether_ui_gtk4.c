@@ -8628,6 +8628,18 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     GtkWidget* child = aether_ui_get_widget(child_handle);
     if (!parent || !child) return;
 
+    if (GTK_IS_GRID(parent)) {
+        // A grid's block: each child takes the next empty cell, row by row.
+        // Cells already filled by grid_place are skipped.
+        int cols = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(parent), "aeui-grid-cols"));
+        if (cols < 1) cols = 1;
+        for (int i = 0;; i++) {
+            if (gtk_grid_get_child_at(GTK_GRID(parent), i % cols, i / cols) == NULL) {
+                aether_ui_grid_place(parent_handle, child_handle, i / cols, i % cols, 1, 1);
+                return;
+            }
+        }
+    }
     if (GTK_IS_BOX(parent)) {
         if (aeui_box_orientation(parent) == GTK_ORIENTATION_HORIZONTAL) {
             if (gtk_widget_get_hexpand(child) && gtk_widget_get_vexpand(child)) {
@@ -8892,8 +8904,10 @@ void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
 // Grid layout (GtkGrid).
 // ---------------------------------------------------------------------------
 int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
-    (void)cols; // GtkGrid sizes to content rather than using a fixed col count.
+    // GtkGrid sizes to content rather than using a fixed column count; the
+    // count is kept for add_child_ctx, which fills a grid's block row by row.
     GtkWidget* grid = gtk_grid_new();
+    g_object_set_data(G_OBJECT(grid), "aeui-grid-cols", GINT_TO_POINTER(cols < 1 ? 1 : cols));
     gtk_grid_set_row_spacing(GTK_GRID(grid), row_spacing);
     gtk_grid_set_column_spacing(GTK_GRID(grid), col_spacing);
     return aether_ui_register_widget(grid);
@@ -8917,6 +8931,16 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
         return;
     }
     gtk_grid_attach(GTK_GRID(grid), child, col, row, col_span, row_span);
+}
+
+// equal_cells: every column one width, every row one height, children filling
+// their cells (a keypad), where a plain grid sizes each track to its content.
+void aether_ui_grid_set_uniform(int grid_handle, int on) {
+    GtkWidget* grid = aether_ui_get_widget(grid_handle);
+    if (!grid || !GTK_IS_GRID(grid)) return;
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid), on ? TRUE : FALSE);
+    gtk_grid_set_row_homogeneous(GTK_GRID(grid), on ? TRUE : FALSE);
+    if (on) { gtk_widget_set_hexpand(grid, TRUE); gtk_widget_set_vexpand(grid, TRUE); }
 }
 
 // ---------------------------------------------------------------------------

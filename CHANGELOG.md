@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`grid(cols, rs, cs) { ... }` fills itself, and `equal_cells()` makes a
+  keypad.** A grid took children only through `grid_place(row, col)`;
+  widgets built inside its block were never put in a cell. Now each child
+  added to a grid takes the next empty cell, row by row (cells already
+  `grid_place`d, spans included, are skipped), on AppKit, GTK4, Win32 and
+  UIKit. `equal_cells()`, an in-block modifier (C:
+  `aether_ui_grid_set_uniform`), makes every column one width and every row
+  one height with children filling their cells (GtkGrid homogeneous,
+  NSGridView fill placement plus equal-size constraints, Win32 the grid's
+  area dealt out evenly); a plain grid still sizes tracks to content, as a
+  label/field form wants. `examples/calculator` is now one
+  `grid(4, 4, 4) { equal_cells() ... }` instead of four `hstack` rows, and
+  its spec checks the 4x4 geometry over the driver.
+
 - **`ui.background(work) callback |result| { ... }`: work off the UI thread,
   completion back on it.** Aether's `std.worker` runs a closure on a pool
   thread and hands its result to a completion, but leaves reaching the UI

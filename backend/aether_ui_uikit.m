@@ -717,11 +717,28 @@ int aether_ui_divider_create(void) {
     return register_widget_typed((__bridge void*)v, AUI_DIVIDER);
 }
 
+static const char kGridCols;   // a grid's column count (associated object key)
+
 void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     int parent_handle = (int)(intptr_t)parent_ctx;
     UIView* parent = (__bridge UIView*)aether_ui_get_widget(parent_handle);
     UIView* child = (__bridge UIView*)aether_ui_get_widget(child_handle);
     if (!parent || !child) return;
+    if (get_widget_type(parent_handle) == AUI_GRID) {
+        // A grid's block: each child takes the next cell, row by row (after
+        // the last row's last cell; grid_place fills rows from the left).
+        NSNumber* cn = objc_getAssociatedObject(parent, &kGridCols);
+        int cols = cn ? cn.intValue : 1;
+        NSArray* rows = ((UIStackView*)parent).arrangedSubviews;
+        int row = (int)rows.count - 1, col = 0;
+        if (row < 0) row = 0;
+        else {
+            col = (int)((UIStackView*)rows[row]).arrangedSubviews.count;
+            if (col >= cols) { row++; col = 0; }
+        }
+        aether_ui_grid_place(parent_handle, child_handle, row, col, 1, 1);
+        return;
+    }
     if ([parent isKindOfClass:[UIStackView class]]) {
         [(UIStackView*)parent addArrangedSubview:child];
     } else if (get_widget_type(parent_handle) == AUI_WRAP) {
@@ -4070,7 +4087,6 @@ void aether_ui_sheet_dismiss_impl(int handle) {
 // ===========================================================================
 
 // --- Grid — a vertical stack of horizontal row-stacks ------------------------
-static const char kGridCols;
 static const char kGridColSpacing;
 
 int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
@@ -4083,6 +4099,14 @@ int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
     objc_setAssociatedObject(g, &kGridCols, @(cols > 0 ? cols : 1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(g, &kGridColSpacing, @(col_spacing), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return h;
+}
+
+// equal_cells: columns are already equal here (each row fills equally); this
+// makes the rows equal too.
+void aether_ui_grid_set_uniform(int grid_handle, int on) {
+    UIStackView* g = (__bridge UIStackView*)aether_ui_get_widget(grid_handle);
+    if (!g || ![g isKindOfClass:[UIStackView class]]) return;
+    g.distribution = on ? UIStackViewDistributionFillEqually : UIStackViewDistributionFill;
 }
 
 void aether_ui_grid_place(int grid_handle, int child_handle, int row, int col,

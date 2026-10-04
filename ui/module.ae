@@ -132,7 +132,7 @@ exports (
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
     menu_entry, menu_entry_accel, separator, menu_entry_command,
     menu_bar_add, attach_menu_bar, attach_menu_bar_to_window, menu_popup,
-    root_grid, grid, grid_place,
+    root_grid, grid, grid_place, equal_cells,
     tray_icon, tray_set_tooltip, tray_set_menu,
     tray_set_icon_for_state, tray_set_icon_template, tray_seal,
     app_run_headless,
@@ -472,6 +472,7 @@ extern aether_ui_menu_popup(menu_handle: int, anchor_widget: int)
 
 // Grid layout — 2D container with (row, col) placement.
 extern aether_ui_grid_create(cols: int, row_spacing: int, col_spacing: int) -> int
+extern aether_ui_grid_set_uniform(grid_handle: int, on: int)
 extern aether_ui_grid_place(grid_handle: int, child_handle: int,
                             row: int, col: int, row_span: int, col_span: int)
 
@@ -6303,13 +6304,24 @@ root_grid(cols: int, row_spacing: int, col_spacing: int) {
     return aether_ui_grid_create(cols, row_spacing, col_spacing)
 }
 
-// Grid container as a child of another widget (trailing-block).
+// Grid container as a child of another widget (trailing-block). Children
+// built in its block take the next empty cell, row by row.
 grid(_ctx: ptr, cols: int, row_spacing: int, col_spacing: int) {
     handle = aether_ui_grid_create(cols, row_spacing, col_spacing)
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
     return handle
+}
+
+// equal_cells — in-block modifier for a grid: every column one width and
+// every row one height, children filling their cells (a keypad). A plain
+// grid sizes each column and row to its content (a label/field form).
+//   grid(4, 4, 4) { equal_cells(); btn("7") ... }
+equal_cells(_ctx: ptr) {
+    if _ctx != 0 {
+        aether_ui_grid_set_uniform(aether_ui_ctx_to_handle_impl(_ctx), 1)
+    }
 }
 
 // Place a previously-created widget into a grid cell. row/col are

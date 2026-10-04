@@ -218,7 +218,7 @@ a live window has "a life of its own" that ends on an external event, so only
 | TextArea    | `ui.textarea("hint") callback \|val\| { }`     | GtkTextView        | NSTextView              | EDIT (ES_MULTILINE)        |
 | ProgressBar | `ui.progressbar(0.75)`                         | GtkProgressBar     | NSProgressIndicator     | PROGRESS (comctl32)        |
 | ScrollView  | `ui.scrollview() { children }`                 | GtkScrolledWindow  | NSScrollView            | AetherUIStack + WS_VSCROLL |
-| Grid        | `ui.root_grid(cols, rspace, cspace)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
+| Grid        | `grid(cols, rspace, cspace) { ... }` (children fill it row by row; `equal_cells()` for a keypad), or `ui.root_grid(...)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
 | Menu bar    | `ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
 | GPU view    | `ui.gpuview_create(w, h)` (#92)                | GtkGLArea          | NSOpenGLView            | not yet (reports 0)        |
 | Native view | `ui.native_view(w, h)` (#193)                  | not yet (reports 0) | not yet (reports 0)    | child HWND, handle handed to the app |

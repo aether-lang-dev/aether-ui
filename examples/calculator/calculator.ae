@@ -3,13 +3,13 @@
 //   - mutable captures (closures write straight to `num`, `prev`, `op`)
 //   - closure-as-operator (`op` holds a |a,b| closure; equals dispatches
 //     via `call(op, prev, num)` — no opcode ints or if/else chain)
-//   - DSL-with-Scope surface: `window(…) { vstack(…) { … } }` — the
+//   - DSL-with-Scope surface: `window(…) { vstack(…) { grid(…) { … } } }` — the
 //     window block builds the tree, then its builder body runs the loop.
 //     No `root` handle, no trailing app_run: in-block modifiers
 //     (`margin`, `enable_test_server`) act on the ambient element/surface.
 
 import ui (
-    window, vstack, hstack, btn, button,
+    window, vstack, grid, equal_cells, btn, button,
     bg_color, onclick, divider, text_bound,
     ui_state, ui_set, margin,
     enable_test_server
@@ -32,7 +32,10 @@ main() {
             margin(12, 12, 12, 12)
             text_bound(display, " ", "")
             divider()
-            hstack(4) {
+            // The keypad: a 4-column grid, filled a row at a time, every
+            // key the same size.
+            grid(4, 4, 4) {
+                equal_cells()
                 btn("7") callback { call(digit, 7) }
                 btn("8") callback { call(digit, 8) }
                 btn("9") callback { call(digit, 9) }
@@ -42,8 +45,6 @@ main() {
                         call(apply_op, |a: int, b: int| { return a + b })
                     }
                 }
-            }
-            hstack(4) {
                 btn("4") callback { call(digit, 4) }
                 btn("5") callback { call(digit, 5) }
                 btn("6") callback { call(digit, 6) }
@@ -53,8 +54,6 @@ main() {
                         call(apply_op, |a: int, b: int| { return a - b })
                     }
                 }
-            }
-            hstack(4) {
                 btn("1") callback { call(digit, 1) }
                 btn("2") callback { call(digit, 2) }
                 btn("3") callback { call(digit, 3) }
@@ -64,8 +63,6 @@ main() {
                         call(apply_op, |a: int, b: int| { return a * b })
                     }
                 }
-            }
-            hstack(4) {
                 btn("0") callback { call(digit, 0) }
                 button("C") {
                     bg_color(0.9, 0.6, 0.6, 1.0)

@@ -942,6 +942,7 @@ static int w32_fills_cross(int kind) {
 // every descendant inherited zero heights, and driver geometry (and real
 // rendering) was flat. Bottom-up natural sizing is how GTK/AppKit behave.
 static int  w32_measure_grid_natural(HWND grid_hwnd, int* out_w, int* out_h); /* fwd; grids live below */
+static int  w32_grid_next_cell(HWND grid_hwnd, int* out_row, int* out_col);     /* fwd; grids live below */
 static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
     StackLayout* sl = &sw->stack;
     int total = 0, cross = 0, n = 0;
@@ -4394,6 +4395,13 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     Widget* p = widget_at(parent_handle);
     Widget* c = widget_at(child_handle);
     if (!p || !c) return;
+    if (p->kind == WK_GRID) {
+        // A grid's block: each child takes the next empty cell, row by row.
+        int r = 0, col = 0;
+        if (w32_grid_next_cell(p->hwnd, &r, &col))
+            aether_ui_grid_place(parent_handle, child_handle, r, col, 1, 1);
+        return;
+    }
     SetParent(c->hwnd, p->hwnd);
     // Only write the style when it changes. Every control here is created
     // WS_CHILD | WS_VISIBLE already, and a Common Controls 6 progress bar
@@ -8009,6 +8017,7 @@ typedef struct {
         int  row, col, row_span, col_span;
     } items[64];
     int item_count;
+    int uniform;      // equal_cells: every column one width, every row one height
 } GridEntry;
 
 static GridEntry** grids = NULL;
@@ -8060,6 +8069,14 @@ static void w32_grid_tracks(GridEntry* ge, int* colw, int* rowh,
             if (mh > have_h) rowh[r + rs - 1] += mh - have_h;
         }
     }
+    if (ge->uniform) {
+        // equal_cells: each track as big as the biggest of its kind.
+        int mw = 0, mh = 0;
+        for (int c = 0; c < ncols; c++) if (colw[c] > mw) mw = colw[c];
+        for (int r = 0; r < nrows; r++) if (rowh[r] > mh) mh = rowh[r];
+        for (int c = 0; c < ncols; c++) colw[c] = mw;
+        for (int r = 0; r < nrows; r++) rowh[r] = mh;
+    }
     *out_cols = ncols;
     *out_rows = nrows;
 }
@@ -8072,6 +8089,16 @@ static void grid_do_layout(HWND hwnd) {
     int ncols = 0, nrows = 0;
     w32_grid_tracks(g, colw, rowh, &ncols, &nrows);
     if (ncols == 0 || nrows == 0) return;
+    if (g->uniform) {
+        // equal_cells: the grid's whole area, dealt out evenly (a keypad),
+        // never below the natural size.
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int cw = (rc.right - rc.left - g->col_spacing * (ncols - 1)) / ncols;
+        int rh = (rc.bottom - rc.top - g->row_spacing * (nrows - 1)) / nrows;
+        for (int c = 0; c < ncols; c++) if (cw > colw[c]) colw[c] = cw;
+        for (int r = 0; r < nrows; r++) if (rh > rowh[r]) rowh[r] = rh;
+    }
     int colx[W32_GRID_MAX_TRACKS], rowy[W32_GRID_MAX_TRACKS];
     int at = 0;
     for (int c = 0; c < ncols; c++) { colx[c] = at; at += colw[c] + g->col_spacing; }
@@ -8095,7 +8122,7 @@ static void grid_do_layout(HWND hwnd) {
         if (cw) {
             int mw = 0, mh = 0;
             measure_widget(cw, &mw, &mh);
-            if (mh > 0 && mh < cell_h) h = mh;
+            if (mh > 0 && mh < cell_h && !g->uniform) h = mh;
         }
         int y = rowy[r] + (cell_h - h) / 2;
         SetWindowPos(g->items[i].hwnd, NULL, colx[c], y, cell_w, h,
@@ -8161,6 +8188,33 @@ void aether_ui_grid_place(int grid_handle, int child_handle,
     ge->items[ge->item_count].row_span = row_span;
     ge->items[ge->item_count].col_span = col_span;
     ge->item_count++;
+    grid_do_layout(g->hwnd);
+}
+
+// The first cell, row by row, that no item covers (spans included): where
+// add_child_ctx puts a child built inside a grid's block.
+static int w32_grid_next_cell(HWND grid_hwnd, int* out_row, int* out_col) {
+    GridEntry* ge = grid_for_hwnd(grid_hwnd);
+    if (!ge) return 0;
+    int cols = ge->cols < 1 ? 1 : ge->cols;
+    for (int i = 0;; i++) {
+        int r = i / cols, c = i % cols, taken = 0;
+        for (int k = 0; k < ge->item_count && !taken; k++) {
+            int rs = ge->items[k].row_span < 1 ? 1 : ge->items[k].row_span;
+            int cs = ge->items[k].col_span < 1 ? 1 : ge->items[k].col_span;
+            taken = r >= ge->items[k].row && r < ge->items[k].row + rs &&
+                    c >= ge->items[k].col && c < ge->items[k].col + cs;
+        }
+        if (!taken) { *out_row = r; *out_col = c; return 1; }
+    }
+}
+
+void aether_ui_grid_set_uniform(int grid_handle, int on) {
+    Widget* g = widget_at(grid_handle);
+    if (!g || g->kind != WK_GRID) return;
+    GridEntry* ge = grid_for_hwnd(g->hwnd);
+    if (!ge) return;
+    ge->uniform = on ? 1 : 0;
     grid_do_layout(g->hwnd);
 }
 
