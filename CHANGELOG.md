@@ -56,6 +56,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GTK4: a menu item after a separator ran another item's closure.** Action
+  names were numbered per section (`aeui.m<h>.i<idx>`), so the first item
+  after a separator reused the menu's first name and one silently replaced
+  the other. Names now count per menu. The driver could not see it (it
+  activates by label), so `POST /menu/{h}/native_activate?label=` fires an
+  item through the toolkit's own binding, as a click does; `spec_menu` uses
+  it on both sides of a separator.
+- **The driver decodes query strings.** `/menu/{h}/activate?label=` and
+  `/state/{id}/set?v=` passed values through raw, so "Zoom +" or "Actual
+  Size" could not be activated; every string parameter now goes through one
+  decoder, and a key matches only after `?` or `&`.
+- **Builds on GTK 4.6 / GLib 2.72 (Ubuntu 22.04).** Three ≥4.8 APIs are
+  guarded: app flags, picture fill (below 4.8, cover and original apply and
+  report as contain) and a check button's custom child (below 4.8 it keeps
+  its native face). Nothing changes on GTK ≥4.8.
+
 - **`widget_shortcut` and `on_key` fire while a DESCENDANT has focus**, as
   they promised. They compared `focused_widget()` (the nearest registered
   widget at the focus, i.e. the child) with the scope, so a container scope

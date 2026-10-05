@@ -53,6 +53,24 @@ main() {
     }
     ui.menu_bar_add(bar, edit_menu)
 
+    // View: labels with a space and a literal '+' (the driver must decode
+    // both), and an item AFTER a separator. GTK4 used to number item actions
+    // per section, so "Actual Size" shared "Zoom +"'s GAction name and a real
+    // click on one ran the other. Each item SETS a distinct value, so a spec
+    // can tell exactly which closure ran.
+    view_menu = ui.menu("View")
+    ui.menu_item(view_menu, "Zoom +") callback {
+        ui.ui_set(counter, 500)
+    }
+    ui.menu_item(view_menu, "Zoom -") callback {
+        ui.ui_set(counter, 300)
+    }
+    ui.menu_separator(view_menu)
+    ui.menu_item(view_menu, "Actual Size") callback {
+        ui.ui_set(counter, 700)
+    }
+    ui.menu_bar_add(bar, view_menu)
+
     // The DECLARATIVE form (docs/design/declarative-consistency-audit.md):
     // the menu is the ambient scope, so items name themselves rather than
     // repeating the handle. Compare the File and Edit menus above, which use

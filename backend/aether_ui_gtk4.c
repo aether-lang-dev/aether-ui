@@ -20,6 +20,28 @@
 #endif
 
 // ---------------------------------------------------------------------------
+// Version floor: GTK 4.6 / GLib 2.72 (Ubuntu 22.04's). Three APIs used here
+// are newer than that, and each is guarded rather than shimmed under GTK's
+// own names, so a newer GTK always gets the real call with no behaviour
+// change:
+//   G_APPLICATION_DEFAULT_FLAGS (GLib 2.74) -> G_APPLICATION_FLAGS_NONE, the
+//       same value under its pre-2.74 (deprecated since) name.
+//   GtkContentFit (GTK 4.8) -> keep-aspect-ratio. Only CONTAIN (aspect kept)
+//       and FILL (stretched) are expressible on 4.6, so ORIGINAL and COVER
+//       apply as CONTAIN and image_get_fill REPORTS contain -- the effective
+//       mode, never the requested one (AGENTS.md).
+//   gtk_check_button_set_child (GTK 4.8) -> none. A 4.6 check button has no
+//       child slot, so a chrome-drawn toggle keeps its native face and label.
+// ---------------------------------------------------------------------------
+#if GLIB_CHECK_VERSION(2, 74, 0)
+#define AEUI_GAPP_DEFAULT_FLAGS G_APPLICATION_DEFAULT_FLAGS
+#else
+#define AEUI_GAPP_DEFAULT_FLAGS G_APPLICATION_FLAGS_NONE
+#endif
+#define AEUI_HAVE_CONTENT_FIT        GTK_CHECK_VERSION(4, 8, 0)
+#define AEUI_HAVE_CHECK_BUTTON_CHILD GTK_CHECK_VERSION(4, 8, 0)
+
+// ---------------------------------------------------------------------------
 // Closure struct — must match Aether codegen's _AeClosure layout.
 // box_closure() returns a malloc'd copy of this struct.
 // ---------------------------------------------------------------------------
@@ -646,7 +668,7 @@ void aether_ui_app_run_raw(int app_handle) {
         }
     }
     e->gtk_app = gtk_application_new("dev.aether.ui",
-        G_APPLICATION_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
+        AEUI_GAPP_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
     g_signal_connect(e->gtk_app, "activate", G_CALLBACK(on_activate), e);
     aeui_running_app = G_APPLICATION(e->gtk_app);
     g_application_run(G_APPLICATION(e->gtk_app), 0, NULL);
@@ -4417,6 +4439,33 @@ void aether_ui_sheet_dismiss_impl(int handle) {
     }
 }
 
+// image_fill mode (0 original, 1 contain, 2 cover, 3 stretch) <-> GtkPicture.
+// On GTK < 4.8 there is no content-fit: see the version-floor note at the top.
+static void aeui_picture_set_fill(GtkPicture* p, int mode) {
+#if AEUI_HAVE_CONTENT_FIT
+    GtkContentFit fit = GTK_CONTENT_FIT_SCALE_DOWN;
+    if (mode == 1)      fit = GTK_CONTENT_FIT_CONTAIN;
+    else if (mode == 2) fit = GTK_CONTENT_FIT_COVER;
+    else if (mode == 3) fit = GTK_CONTENT_FIT_FILL;
+    gtk_picture_set_content_fit(p, fit);
+#else
+    gtk_picture_set_keep_aspect_ratio(p, mode != 3);
+#endif
+}
+
+static int aeui_picture_get_fill(GtkPicture* p) {
+#if AEUI_HAVE_CONTENT_FIT
+    switch (gtk_picture_get_content_fit(p)) {
+        case GTK_CONTENT_FIT_CONTAIN: return 1;
+        case GTK_CONTENT_FIT_COVER:   return 2;
+        case GTK_CONTENT_FIT_FILL:    return 3;
+        default:                      return 0;
+    }
+#else
+    return gtk_picture_get_keep_aspect_ratio(p) ? 1 : 3;
+#endif
+}
+
 // Image widget
 // GtkPicture, not GtkImage, for anything that shows a PICTURE: GtkImage is an
 // icon widget and always scales down keeping aspect, so cover and stretch are
@@ -4433,7 +4482,7 @@ int aether_ui_image_create(const char* filepath) {
     }
     gtk_picture_set_can_shrink(GTK_PICTURE(img), TRUE);
     // Explicit, so both backends agree on what an untouched image does.
-    gtk_picture_set_content_fit(GTK_PICTURE(img), GTK_CONTENT_FIT_CONTAIN);
+    aeui_picture_set_fill(GTK_PICTURE(img), 1);
     return aether_ui_register_widget(img);
 }
 
@@ -4469,22 +4518,13 @@ int aether_ui_image_get_tint(int handle) {
 void aether_ui_image_set_fill(int handle, int mode) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_PICTURE(w)) return;
-    GtkContentFit fit = GTK_CONTENT_FIT_SCALE_DOWN;
-    if (mode == 1)      fit = GTK_CONTENT_FIT_CONTAIN;
-    else if (mode == 2) fit = GTK_CONTENT_FIT_COVER;
-    else if (mode == 3) fit = GTK_CONTENT_FIT_FILL;
-    gtk_picture_set_content_fit(GTK_PICTURE(w), fit);
+    aeui_picture_set_fill(GTK_PICTURE(w), mode);
 }
 
 int aether_ui_image_get_fill(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_PICTURE(w)) return 0;
-    switch (gtk_picture_get_content_fit(GTK_PICTURE(w))) {
-        case GTK_CONTENT_FIT_CONTAIN: return 1;
-        case GTK_CONTENT_FIT_COVER:   return 2;
-        case GTK_CONTENT_FIT_FILL:    return 3;
-        default:                      return 0;
-    }
+    return aeui_picture_get_fill(GTK_PICTURE(w));
 }
 
 // Decode encoded image bytes into an image widget (no temp file). GTK4's
@@ -4494,7 +4534,7 @@ int aether_ui_image_from_bytes(const char* data, int length) {
     ensure_gtk_init();
     GtkWidget* img = gtk_picture_new();
     gtk_picture_set_can_shrink(GTK_PICTURE(img), TRUE);
-    gtk_picture_set_content_fit(GTK_PICTURE(img), GTK_CONTENT_FIT_CONTAIN);
+    aeui_picture_set_fill(GTK_PICTURE(img), 1);
     if (data && length > 0) {
         GBytes* bytes = g_bytes_new(data, (gsize)length);
         GError* err = NULL;
@@ -8340,7 +8380,18 @@ static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
 // Runs on the GTK thread already (the shared server hopped there via
 // run_on_ui_thread), so this calls test_action_idle's body directly rather
 // than marshalling a second time.
+static int aeui_menu_native_activate(int menu_handle, const char* label);
+
 static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
+    /* The NATIVE menu path: activate the GAction the item's GMenuItem names,
+       exactly as GtkPopoverMenuBar does on a click -- not the label side-store
+       AETHER_DRV_MENU_ACTIVATE uses. Only this reaches a wrong action name. */
+    if (ctx->action == AETHER_DRV_MENU_NATIVE_ACTIVATE) {
+        ctx->retval = aeui_menu_native_activate(ctx->handle, ctx->sval);
+        ctx->result = 0;
+        ctx->done = 1;
+        return;
+    }
     /* #116: menu/tray activation fires app code, so it must not run on the
        HTTP thread. This backend is already on the GTK thread here (the shared
        server hopped over with run_on_ui_thread), so the invoke happens
@@ -8585,6 +8636,12 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
     GtkWidget* p = aether_ui_get_widget(parent_handle);
     GtkWidget* c = aether_ui_get_widget(child_handle);
     if (!p || !c) return;
+#if !AEUI_HAVE_CHECK_BUTTON_CHILD
+    /* GTK < 4.8: a check button has no child slot, so the drawn face cannot
+       be installed. Leave the native toggle (face and label) untouched rather
+       than stash a label for a face that never appears. */
+    if (GTK_IS_CHECK_BUTTON(p)) return;
+#endif
     GtkWidget* cur = gtk_widget_get_parent(c);
     if (cur) gtk_widget_unparent(c);
     if (GTK_IS_CHECK_BUTTON(p)) {
@@ -8595,7 +8652,9 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
         if (lbl && *lbl)
             g_object_set_data_full(G_OBJECT(p), "aeui-face-label",
                                    g_strdup(lbl), g_free);
+#if AEUI_HAVE_CHECK_BUTTON_CHILD
         gtk_check_button_set_child(GTK_CHECK_BUTTON(p), c);
+#endif
         return;
     }
     if (GTK_IS_BUTTON(p)) {
@@ -8674,7 +8733,13 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
 
 // A menu (bar or submenu) is backed by a real GMenu model. Items append to
 // the menu's current section; each carries a per-item GAction name
-// (app.aeui.m<handle>.i<idx>). The GActions can only live on the GApplication,
+// (app.aeui.m<handle>.i<n>), where n counts EVERY item ever added to that
+// menu, across sections. It used to be the item's index within its section,
+// which restarts at 0 after each separator: the first item after a separator
+// then shared its action name with the menu's first item, the later
+// registration replaced the earlier one, and clicking New ran Quit. The
+// driver's label route never saw it -- it matches by label, not by action. The
+// GActions can only live on the GApplication,
 // which doesn't exist until app_run — the DSL builds the menu first — so we
 // build the GMenu models eagerly and QUEUE the (action_name → closure) pairs,
 // then register them all on the app in on_activate (same deferral shortcuts
@@ -8685,6 +8750,7 @@ typedef struct {
     char*   label;
     GMenu*  model;      // the bar's or submenu's GMenu
     GMenu*  section;    // current section (separator starts a new one)
+    int     next_item;  // per-menu item counter -> unique action names
 } GtkMenuEntry;
 
 static GtkMenuEntry* gtk_menus = NULL;
@@ -8719,6 +8785,7 @@ static int gtk_register_menu(int is_bar, const char* label) {
     e->is_bar = is_bar;
     e->label = label ? strdup(label) : NULL;
     e->model = g_menu_new();
+    e->next_item = 0;
     // Items go into a section so separators can split without rebuilding.
     e->section = g_menu_new();
     g_menu_append_section(e->model, NULL, G_MENU_MODEL(e->section));
@@ -8753,7 +8820,8 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
 
     // Native path: append a GMenuItem bound to a unique per-item action, and
     // queue that action for registration on the app in on_activate.
-    int idx = (int)g_menu_model_get_n_items(G_MENU_MODEL(e->section));
+    // NOT the index within e->section: that restarts after every separator.
+    int idx = e->next_item++;
     char action[64];
     snprintf(action, sizeof(action), "aeui.m%d.i%d", menu_handle, idx);
     char detailed[80];
@@ -8808,6 +8876,48 @@ void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
         }
         g_object_unref(sec);
     }
+}
+
+// What a real click on the item does: read the action name its GMenuItem
+// carries ("app.aeui.m2.i4") and activate that action on the application.
+// Deliberately NOT aether_ui_menu_item_invoke, which finds the closure by
+// label in the side-store and so cannot see a mis-bound action.
+// Returns 0 fired, 2 no item with that label, 4 the item's action is not
+// registered on the app.
+static int aeui_menu_native_activate(int menu_handle, const char* label) {
+    GtkMenuEntry* e = gtk_menu_at(menu_handle);
+    if (!e || !label) return 2;
+    GtkApplication* app = (app_count > 0) ? apps[0].gtk_app : NULL;
+    int ns = g_menu_model_get_n_items(G_MENU_MODEL(e->model));
+    for (int s = 0; s < ns; s++) {
+        GMenuModel* sec = g_menu_model_get_item_link(G_MENU_MODEL(e->model), s,
+                                                     G_MENU_LINK_SECTION);
+        if (!sec) continue;
+        int ni = g_menu_model_get_n_items(sec);
+        for (int i = 0; i < ni; i++) {
+            char* have = NULL;
+            if (!g_menu_model_get_item_attribute(sec, i, G_MENU_ATTRIBUTE_LABEL,
+                                                 "s", &have)) continue;
+            int hit = strcmp(have, label) == 0;
+            g_free(have);
+            if (!hit) continue;
+            char* action = NULL;
+            g_menu_model_get_item_attribute(sec, i, G_MENU_ATTRIBUTE_ACTION,
+                                            "s", &action);
+            g_object_unref(sec);
+            int rc = 4;
+            if (action && app && strncmp(action, "app.", 4) == 0
+                && g_action_group_has_action(G_ACTION_GROUP(app), action + 4)) {
+                g_action_group_activate_action(G_ACTION_GROUP(app), action + 4,
+                                               NULL);
+                rc = 0;
+            }
+            g_free(action);
+            return rc;
+        }
+        g_object_unref(sec);
+    }
+    return 2;
 }
 
 void aether_ui_menu_add_separator(int menu_handle) {

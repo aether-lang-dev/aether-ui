@@ -156,6 +156,21 @@ main() {
             spec.assert_eq(uidriver.count_occurrences(b, "\"Copy  "), 1,
                 "exactly one Copy item on the menu")
         }
+
+        // The relabel keeps the item's NATIVE binding: on GTK4 it is a remove
+        // and re-insert of the GMenuItem carrying the same action name, so a
+        // real click on the new label must still reach the command. The
+        // label is also a decoding check (two spaces and two '+').
+        spec.it("the relabelled item still fires through its native binding") callback {
+            h = uidriver.menu_handle_with("Copy  Ctrl+Shift+Y")
+            spec.assert_gt(h, 0, "the relabelled item has a menu")
+            st = uidriver.menu_native_activate(h, "Copy  Ctrl+Shift+Y")
+            if st != 501 {
+                spec.assert_eq(st, 200, "activated natively by its new label")
+                ok = uidriver.wait_body_contains("/widgets", "copied: 3", 20)
+                spec.assert_true(ok, "the native item still runs the command")
+            }
+        }
     }
     return spec.run_summary(fw)
 }

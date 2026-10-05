@@ -137,25 +137,47 @@ static int extract_id_from_path(const char* path, const char* prefix) {
     return atoi(path + plen);
 }
 
+// The RAW (still percent-encoded) value of query parameter `key`, running to
+// the next '&' or the end of the path; NULL when absent. Matches the key only
+// at a parameter boundary (just after '?' or '&'), so "x" does not find the
+// value of "dx=" and "v" does not find "nv=". Fine for numeric parameters fed
+// to atoi/atof, which stop at the '&'. A STRING parameter must go through
+// query_param_decoded instead -- reading it raw is how a label like
+// "Save As..." (sent as Save+As...) failed to match anything.
 static const char* extract_query_param(const char* path, const char* key) {
-    char needle[64];
-    snprintf(needle, sizeof(needle), "%s=", key);
-    const char* p = strstr(path, needle);
-    if (!p) return NULL;
-    return p + strlen(needle);
+    const char* q = strchr(path, '?');
+    if (!q) return NULL;
+    size_t klen = strlen(key);
+    const char* p = q + 1;
+    while (*p) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') return p + klen + 1;
+        const char* amp = strchr(p, '&');
+        if (!amp) break;
+        p = amp + 1;
+    }
+    return NULL;
 }
 
-// URL-decode s in place (tolerant: passes through malformed escapes).
-static void url_decode(char* s) {
+static int hex_val(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// URL-decode s in place: %XX -> byte, and (when plus_is_space) '+' -> ' ',
+// the application/x-www-form-urlencoded convention every client here uses
+// for spaces. A literal '+' must then arrive as %2B. Malformed escapes pass
+// through untouched.
+static void url_decode_in_place(char* s, int plus_is_space) {
     char* out = s;
     for (char* in = s; *in; in++) {
-        if (*in == '%' && in[1] && in[2]) {
-            int hi = in[1], lo = in[2];
-            hi = hi >= 'a' ? hi - 'a' + 10 : hi >= 'A' ? hi - 'A' + 10 : hi - '0';
-            lo = lo >= 'a' ? lo - 'a' + 10 : lo >= 'A' ? lo - 'A' + 10 : lo - '0';
+        int hi, lo;
+        if (*in == '%' && (hi = hex_val((unsigned char)in[1])) >= 0
+                       && (lo = hex_val((unsigned char)in[2])) >= 0) {
             *out++ = (char)(hi * 16 + lo);
             in += 2;
-        } else if (*in == '+') {
+        } else if (*in == '+' && plus_is_space) {
             *out++ = ' ';
         } else {
             *out++ = *in;
@@ -164,24 +186,23 @@ static void url_decode(char* s) {
     *out = '\0';
 }
 
-// As url_decode, but '+' stays a literal '+' instead of becoming a space.
-// Accelerator combos are the one place where that matters: "Ctrl+B" must
-// survive the round trip, and form-style decoding would hand the backend
-// "Ctrl B" and silently never match.
-static void url_decode_keep_plus(char* s) {
-    char* out = s;
-    for (char* in = s; *in; in++) {
-        if (*in == '%' && in[1] && in[2]) {
-            int hi = in[1], lo = in[2];
-            hi = hi >= 'a' ? hi - 'a' + 10 : hi >= 'A' ? hi - 'A' + 10 : hi - '0';
-            lo = lo >= 'a' ? lo - 'a' + 10 : lo >= 'A' ? lo - 'A' + 10 : lo - '0';
-            *out++ = (char)(hi * 16 + lo);
-            in += 2;
-        } else {
-            *out++ = *in;
-        }
-    }
-    *out = '\0';
+// THE way a route reads a string query parameter: copy the value of `key`
+// (up to '&') into out and decode it. Returns 1 when the key was present.
+// plus_is_space = 0 only for parameters whose clients send '+' literally
+// (accelerator combos such as Ctrl+B, and file-drop paths); everything else
+// is form-encoded.
+static int query_param_decoded(const char* path, const char* key,
+                               char* out, size_t outsz, int plus_is_space) {
+    if (outsz == 0) return 0;
+    out[0] = '\0';
+    const char* v = extract_query_param(path, key);
+    if (!v) return 0;
+    size_t n = 0;
+    while (v[n] && v[n] != '&' && n < outsz - 1) n++;
+    memcpy(out, v, n);
+    out[n] = '\0';
+    url_decode_in_place(out, plus_is_space);
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -569,19 +590,9 @@ static void handle_request_inner(aether_sock_t client_fd,
     // GET /widgets[?type=X][&text=Y]
     if (method == 0 && strncmp(path, "/widgets", 8) == 0
         && (path[8] == '\0' || path[8] == '?')) {
-        const char* filter_type = extract_query_param(path, "type");
-        const char* filter_text = extract_query_param(path, "text");
         char ft[128] = "", fx[128] = "";
-        if (filter_type) {
-            strncpy(ft, filter_type, sizeof(ft) - 1);
-            char* amp = strchr(ft, '&'); if (amp) *amp = '\0';
-            url_decode(ft);
-        }
-        if (filter_text) {
-            strncpy(fx, filter_text, sizeof(fx) - 1);
-            char* amp = strchr(fx, '&'); if (amp) *amp = '\0';
-            url_decode(fx);
-        }
+        query_param_decoded(path, "type", ft, sizeof(ft), 1);
+        query_param_decoded(path, "text", fx, sizeof(fx), 1);
 
         int total = h->widget_count();
         // Per-widget JSON caps at ~512 bytes; allocate a generous buffer.
@@ -936,12 +947,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_SET_TEXT;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        const char* v = extract_query_param(path, "v");
-        if (v) {
-            strncpy(ctx.sval, v, sizeof(ctx.sval) - 1);
-            char* amp = strchr(ctx.sval, '&'); if (amp) *amp = '\0';
-            url_decode(ctx.sval);
-        }
+        query_param_decoded(path, "v", ctx.sval, sizeof(ctx.sval), 1);
         dispatch_and_reply(client_fd, h, &ctx, "set");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/toggle")) {
@@ -1062,13 +1068,9 @@ static void handle_request_inner(aether_sock_t client_fd,
         // combos (win32 today) — Tab/Shift+Tab focus moves are real.
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_WIN_KEY;
-        const char* combo = extract_query_param(path, "combo");
-        if (combo) {
-            strncpy(ctx.sval, combo, sizeof(ctx.sval) - 1);
-            char* amp = strchr(ctx.sval, '&');
-            if (amp) *amp = '\0';
-            url_decode_keep_plus(ctx.sval);
-        }
+        // '+' stays literal: "Ctrl+B" must survive the round trip, and
+        // form-style decoding would hand the backend "Ctrl B".
+        query_param_decoded(path, "combo", ctx.sval, sizeof(ctx.sval), 0);
         h->dispatch_action(&ctx);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}",
@@ -1104,16 +1106,10 @@ static void handle_request_inner(aether_sock_t client_fd,
         // Measured with the SAME font the canvas draws with, or centring
         // math built on it would drift from what the user sees.
         const char* sz = extract_query_param(path, "size");
-        const char* s  = extract_query_param(path, "s");
         double size = sz ? atof(sz) : 16.0;
         if (size <= 0) size = 16.0;
         char text[512] = "";
-        if (s) {
-            strncpy(text, s, sizeof(text) - 1);
-            char* amp = strchr(text, '&');
-            if (amp) *amp = '\0';
-            url_decode(text);
-        }
+        query_param_decoded(path, "s", text, sizeof(text), 1);
         char body[256];
         snprintf(body, sizeof(body),
                  "{\"width\":%.3f,\"ascent\":%.3f,\"descent\":%.3f,\"height\":%.3f}",
@@ -1130,10 +1126,8 @@ static void handle_request_inner(aether_sock_t client_fd,
         // client must encode as %0A. Without decoding, two paths arrive as
         // one literal string containing "%0A" and the drop looks like a
         // single file with a strange name.
-        const char* raw = extract_query_param(path, "paths");
         char decoded[2048];
-        snprintf(decoded, sizeof(decoded), "%s", raw ? raw : "");
-        url_decode_keep_plus(decoded);
+        query_param_decoded(path, "paths", decoded, sizeof(decoded), 0);
         int fired = aether_ui_window_file_drop_deliver(decoded);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
@@ -1198,7 +1192,6 @@ static void handle_request_inner(aether_sock_t client_fd,
         }
         const char* xs = extract_query_param(path, "x");
         const char* ys = extract_query_param(path, "y");
-        const char* nm = extract_query_param(path, "name");
         if (xs) ctx.dval  = atof(xs);
         if (ys) ctx.dval2 = atof(ys);
         // Scroll speaks dx/dy, not x/y: a wheel event carries a delta, not a
@@ -1207,12 +1200,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         const char* dys = extract_query_param(path, "dy");
         if (dxs) ctx.dval  = atof(dxs);
         if (dys) ctx.dval2 = atof(dys);
-        if (nm) {
-            strncpy(ctx.sval, nm, sizeof(ctx.sval) - 1);
-            char* amp = strchr(ctx.sval, '&');
-            if (amp) *amp = '\0';
-            url_decode(ctx.sval);
-        }
+        query_param_decoded(path, "name", ctx.sval, sizeof(ctx.sval), 1);
         h->dispatch_action(&ctx);
         if (ctx.result == 3) {
             char err[96];
@@ -1267,11 +1255,8 @@ static void handle_request_inner(aether_sock_t client_fd,
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_SET_STATE;
         ctx.handle = extract_id_from_path(path, "/state/");
-        const char* v = extract_query_param(path, "v");
-        if (v) {
-            ctx.dval = atof(v);
-            strncpy(ctx.sval, v, sizeof(ctx.sval) - 1);
-        }
+        if (query_param_decoded(path, "v", ctx.sval, sizeof(ctx.sval), 1))
+            ctx.dval = atof(ctx.sval);
         h->dispatch_action(&ctx);
         send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
 
@@ -1323,12 +1308,40 @@ static void handle_request_inner(aether_sock_t client_fd,
         send_http(client_fd, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 1 && strncmp(path, "/menu/", 6) == 0
+               && strstr(path, "/native_activate")) {
+        // POST /menu/{handle}/native_activate?label=X -- fire the item through
+        // the toolkit's own binding (GAction / NSMenuItem action / WM_COMMAND
+        // id), i.e. what a real click runs. The label route below resolves the
+        // closure from the shared side-store instead, so it stays green even
+        // when the native item is bound to the WRONG closure.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_MENU_NATIVE_ACTIVATE;
+        ctx.handle = extract_id_from_path(path, "/menu/");
+        query_param_decoded(path, "label", ctx.sval, sizeof(ctx.sval), 1);
+        if (!h->dispatch_action) ctx.result = 3;
+        else h->dispatch_action(&ctx);
+        if (ctx.result == 3)
+            send_http(client_fd, 501, "Not Implemented", "text/plain",
+                      "no native menu on this backend");
+        else if (ctx.retval == 0)
+            send_http(client_fd, 200, "OK", "application/json",
+                      "{\"ok\":true,\"native\":true}");
+        else if (ctx.retval == 4)
+            send_http(client_fd, 409, "Conflict", "text/plain",
+                      "menu item has no bound native action");
+        else send_http(client_fd, 404, "Not Found", "text/plain",
+                       "no such menu item");
+    } else if (method == 1 && strncmp(path, "/menu/", 6) == 0
                && strstr(path, "/activate")) {
         int handle = extract_id_from_path(path, "/menu/");
-        const char* label = extract_query_param(path, "label");
+        // Decoded: a label with a space ("Save As...", sent Save+As...) or a
+        // literal plus ("Zoom +", sent Zoom+%2B) used to arrive still encoded
+        // and match no item.
+        char label[512];
+        query_param_decoded(path, "label", label, sizeof(label), 1);
         int r = activate_on_ui_thread(h, AETHER_DRV_MENU_ACTIVATE,
-                                      handle, label ? label : "");
-        if (r < 0) r = aether_ui_menu_item_invoke(handle, label ? label : "");
+                                      handle, label);
+        if (r < 0) r = aether_ui_menu_item_invoke(handle, label);
         if (r == 0) send_http(client_fd, 200, "OK", "application/json",
                               "{\"ok\":true}");
         else if (r == 4) send_http(client_fd, 200, "OK", "application/json",
@@ -1397,13 +1410,8 @@ static void handle_request_inner(aether_sock_t client_fd,
     } else if (method == 1 && strncmp(path, "/tray/", 6) == 0
                && strstr(path, "/menu/activate")) {
         int id = extract_id_from_path(path, "/tray/");
-        const char* v = extract_query_param(path, "label");
         char label[256] = "";
-        if (v) {
-            strncpy(label, v, sizeof(label) - 1);
-            char* amp = strchr(label, '&'); if (amp) *amp = '\0';
-            url_decode(label);
-        }
+        query_param_decoded(path, "label", label, sizeof(label), 1);
         int r = activate_on_ui_thread(h, AETHER_DRV_TRAY_ACTIVATE, id, label);
         if (r < 0) r = aether_ui_tray_menu_activate(id, label);
         if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "activated");
@@ -1414,13 +1422,8 @@ static void handle_request_inner(aether_sock_t client_fd,
     } else if (method == 1 && strncmp(path, "/tray/", 6) == 0
                && strstr(path, "/set_tooltip")) {
         int id = extract_id_from_path(path, "/tray/");
-        const char* v = extract_query_param(path, "v");
         char text[256] = "";
-        if (v) {
-            strncpy(text, v, sizeof(text) - 1);
-            char* amp = strchr(text, '&'); if (amp) *amp = '\0';
-            url_decode(text);
-        }
+        query_param_decoded(path, "v", text, sizeof(text), 1);
         aether_ui_tray_set_tooltip_reg(id, text);
         send_http(client_fd, 200, "OK", "text/plain", "set");
 

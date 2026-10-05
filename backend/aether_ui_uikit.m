@@ -5248,6 +5248,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_MENU_ACTIVATE:
+        case AETHER_DRV_MENU_NATIVE_ACTIVATE:
         case AETHER_DRV_TRAY_ACTIVATE:
             // No menu bar and no tray on iOS; the registry these would
             // reach is the desktop's.

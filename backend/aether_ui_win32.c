@@ -7974,6 +7974,27 @@ void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
     }
 }
 
+// What a click on the item does: the menu posts WM_COMMAND carrying the
+// item's command id, which menu_dispatch_command maps to its closure.
+// Returns 0 fired, 2 no such item, 4 the id has no closure.
+static int menu_native_activate(int menu_handle, const char* label) {
+    MenuEntry* m = menu_at(menu_handle);
+    if (!m || !label) return 2;
+    wchar_t want[256];
+    MultiByteToWideChar(CP_UTF8, 0, label, -1, want, 256);
+    int n = GetMenuItemCount(m->hmenu);
+    for (int pos = 0; pos < n; pos++) {
+        wchar_t have[256];
+        if (GetMenuStringW(m->hmenu, (UINT)pos, have, 256, MF_BYPOSITION) <= 0)
+            continue;
+        if (wcscmp(have, want) != 0) continue;
+        UINT id = GetMenuItemID(m->hmenu, pos);
+        if (id == (UINT)-1) return 4;   // a submenu, not a command
+        return menu_dispatch_command(id) ? 0 : 4;
+    }
+    return 2;
+}
+
 void aether_ui_menu_add_separator(int menu_handle) {
     MenuEntry* m = menu_at(menu_handle);
     if (m) AppendMenuW(m->hmenu, MF_SEPARATOR, 0, NULL);
@@ -12238,6 +12259,13 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
            handle: that lookup would answer 404 for a menu that exists. */
         if (ctx->action == AETHER_DRV_MENU_ACTIVATE) {
             ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            ctx->done = 1;
+            return 0;
+        }
+        /* The NATIVE path: the item's own WM_COMMAND id, as a click sends. */
+        if (ctx->action == AETHER_DRV_MENU_NATIVE_ACTIVATE) {
+            ctx->retval = menu_native_activate(ctx->handle, ctx->sval);
             ctx->result = 0;
             ctx->done = 1;
             return 0;

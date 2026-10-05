@@ -68,6 +68,13 @@ typedef enum {
     // context belongs to the main thread, segfaults.
     AETHER_DRV_MENU_ACTIVATE = 23, // handle=menu, sval=item label → retval=1 if fired
     AETHER_DRV_TRAY_ACTIVATE = 24, // handle=tray id, sval=item label → retval=1 if fired
+    // Activate a menu item through the NATIVE toolkit binding (GTK4's GAction,
+    // AppKit's target/action, Win32's WM_COMMAND id) rather than the shared
+    // label side-store MENU_ACTIVATE uses. The two disagree exactly when a
+    // backend binds an item to the wrong action, which the label route
+    // cannot see. retval: 0 fired, 2 no such item, 4 not bound. A backend
+    // with no native menu sets result = 3.
+    AETHER_DRV_MENU_NATIVE_ACTIVATE = 25, // handle=menu, sval=item label
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

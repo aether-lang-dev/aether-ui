@@ -7703,6 +7703,8 @@ static int aeui_tab_move(int backward) {
 // ---------------------------------------------------------------------------
 // Mutation — marshalled to the main queue.
 // ---------------------------------------------------------------------------
+static int aeui_mac_menu_native_activate(int menu_handle, const char* label);
+
 static void driver_perform(AetherDriverActionCtx* ctx) {
     // Actions with no widget subject, handled before the registry lookup.
     switch (ctx->action) {
@@ -7839,6 +7841,13 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
            route can keep its reply shape. */
         case AETHER_DRV_MENU_ACTIVATE: {
             ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            return;
+        }
+        /* The NATIVE path: perform the NSMenuItem's own target/action, as a
+           click does, rather than looking the closure up by label. */
+        case AETHER_DRV_MENU_NATIVE_ACTIVATE: {
+            ctx->retval = aeui_mac_menu_native_activate(ctx->handle, ctx->sval);
             ctx->result = 0;
             return;
         }
@@ -8292,6 +8301,20 @@ void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
     NSMenu* m = mac_menus[menu_handle - 1].menu;
     NSMenuItem* item = [m itemWithTitle:[NSString stringWithUTF8String:old_label]];
     if (item) [item setTitle:[NSString stringWithUTF8String:new_label]];
+}
+
+// What a click on the item does: NSMenu sends the item's action to its
+// target (AetherMenuTarget -fire:, which reads the closure off the item's
+// representedObject). Returns 0 fired, 2 no such item, 4 item has no action.
+static int aeui_mac_menu_native_activate(int menu_handle, const char* label) {
+    if (menu_handle < 1 || menu_handle > mac_menu_count || !label) return 2;
+    NSMenu* m = mac_menus[menu_handle - 1].menu;
+    NSInteger idx = [m indexOfItemWithTitle:[NSString stringWithUTF8String:label]];
+    if (idx < 0) return 2;
+    NSMenuItem* item = [m itemAtIndex:idx];
+    if (![item action] || ![item target]) return 4;
+    [m performActionForItemAtIndex:idx];
+    return 0;
 }
 
 void aether_ui_menu_add_separator(int menu_handle) {

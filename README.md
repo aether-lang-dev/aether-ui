@@ -52,6 +52,11 @@ sudo apt install libgtk-4-dev   # Debian/Ubuntu
 ./build/counter
 ```
 
+The floor is GTK 4.6 / GLib 2.72 (Ubuntu 22.04). On GTK < 4.8 two things
+degrade: `image_fill` can only keep or ignore aspect ratio (original and
+cover apply, and report, as contain), and a chrome-drawn toggle keeps its
+native face because a 4.6 check button has no child slot.
+
 ### FreeBSD / GhostBSD (GTK4)
 
 Same GTK4 backend as Linux; `build.sh` detects FreeBSD and uses clang.

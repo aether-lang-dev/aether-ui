@@ -66,6 +66,57 @@ main() {
             spec.assert_contains(b, "\"Shortcuts\"",
                 "the second declared item is on the SAME menu")
         }
+
+        // NATIVE activation: through the item's own toolkit binding (GTK4's
+        // GAction), not the label side-store the specs above use. GTK4 named
+        // actions by index-within-section, so "Actual Size" (first item after
+        // the separator) and "Zoom +" (first item of the menu) shared one
+        // action and one of them ran the other's closure. Both sides of the
+        // separator are checked so it fails whichever registration wins.
+        spec.it("natively, the item BEFORE a separator runs its own closure") callback {
+            vh = uidriver.menu_handle_with("Actual Size")
+            spec.assert_gt(vh, 0, "the View menu has a handle")
+            st = uidriver.menu_native_activate(vh, "Zoom +")
+            if st != 501 {
+                spec.assert_eq(st, 200, "Zoom + activated natively")
+                ok = uidriver.wait_body_contains("/widgets", "Actions taken: 500", 20)
+                spec.assert_true(ok, "Zoom +'s closure ran (500), not Actual Size's")
+            }
+        }
+
+        spec.it("natively, the item AFTER a separator runs its own closure") callback {
+            vh = uidriver.menu_handle_with("Actual Size")
+            st = uidriver.menu_native_activate(vh, "Actual Size")
+            if st != 501 {
+                spec.assert_eq(st, 200, "Actual Size activated natively")
+                ok = uidriver.wait_body_contains("/widgets", "Actions taken: 700", 20)
+                spec.assert_true(ok, "Actual Size's closure ran (700), not Zoom +'s")
+            }
+        }
+
+        // The label route decodes its query: a space arrives as '+', a
+        // literal plus as %2B. Undecoded, neither label matched any item.
+        spec.it("a label with a literal '+' activates by label") callback {
+            vh = uidriver.menu_handle_with("Zoom +")
+            uidriver.menu_activate(vh, "Zoom +")
+            ok = uidriver.wait_body_contains("/widgets", "Actions taken: 500", 20)
+            spec.assert_true(ok, "Zoom +'s closure ran via label=Zoom+%2B")
+        }
+
+        spec.it("a label with a space activates by label") callback {
+            vh = uidriver.menu_handle_with("Actual Size")
+            uidriver.menu_activate(vh, "Actual Size")
+            ok = uidriver.wait_body_contains("/widgets", "Actions taken: 700", 20)
+            spec.assert_true(ok, "Actual Size's closure ran via label=Actual+Size")
+            st = uidriver.post_status("/menu/${vh}/activate?label=Actual%20Size")
+            spec.assert_eq(st, 200, "the %20 spelling of a space resolves too")
+        }
+
+        spec.it("an unknown label still answers 404") callback {
+            vh = uidriver.menu_handle_with("Actual Size")
+            st = uidriver.post_status("/menu/${vh}/activate?label=No+Such+Item")
+            spec.assert_eq(st, 404, "no such item")
+        }
     }
     return spec.run_summary(fw)
 }

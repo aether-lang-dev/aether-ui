@@ -26,7 +26,8 @@ exports(
     canvas_debug_w, canvas_debug_h, canvas_painted_pixels,
     wait_server, wait_body_contains, count_occurrences,
     wait_root_height_change,
-    menus_body, menu_handle_with, menu_activate, menu_activate_item
+    menus_body, menu_handle_with, menu_activate, menu_activate_item,
+    menu_native_activate
 )
 
 import std.string
@@ -34,6 +35,7 @@ import std.math
 import std.list
 import std.os
 import std.json
+import std.url
 import std.http.client
 import std.spec
 import std.http.client.httptest
@@ -525,12 +527,22 @@ menu_handle_with(label: string) -> int {
     return found
 }
 
-// Fire the menu item `label` under menu `handle` — the same closure the
-// native menu-bar click runs. Asserts the POST is 2xx. (Spaces in the label
-// must be sent as '+'; the server decodes them. Keep test labels space-free
-// or pass the '+'-encoded form.)
+// Fire the menu item `label` under menu `handle` by LABEL, through the shared
+// side-store. Asserts the POST is 2xx. The label is query-encoded here (space
+// -> '+', a literal '+' -> %2B), so pass it exactly as the menu shows it.
 menu_activate(handle: int, label: string) {
-    post_ok("/menu/${handle}/activate?label=${label}", "activate menu item ${label}")
+    q = url.encode(label)
+    post_ok("/menu/${handle}/activate?label=${q}", "activate menu item ${label}")
+}
+
+// Fire the item through the toolkit's OWN binding (GTK4 GAction, AppKit
+// target/action, Win32 WM_COMMAND id), i.e. what a real click runs, and
+// return the HTTP status (200 fired, 404 no such item, 409 not bound, 501 the
+// backend has no native menu). menu_activate cannot see an item bound to the
+// wrong closure; this can.
+menu_native_activate(handle: int, label: string) -> int {
+    q = url.encode(label)
+    return post_status("/menu/${handle}/native_activate?label=${q}")
 }
 
 // Convenience: find the item's menu and activate it in one call.
