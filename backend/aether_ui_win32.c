@@ -571,14 +571,6 @@ typedef struct {
     int rev;      // LIST: bumps on each set
 } StateCell;
 
-typedef struct {
-    int state_handle;
-    AeClosure* closure;
-} StateObserver;
-static StateObserver* state_observers = NULL;
-static int state_observer_count = 0;
-static int state_observer_capacity = 0;
-
 enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
        AEUI_BIND_VALUE = 3 };  // two-way: editable widget ⇄ string state
 typedef struct {
@@ -714,34 +706,14 @@ static void apply_prop_binding(PropBinding* b) {
     }
 }
 
-static void fire_state_observers(int state_handle) {
-    int n = state_observer_count;
-    for (int i = 0; i < n; i++) {
-        if (state_observers[i].state_handle == state_handle) {
-            invoke_closure(state_observers[i].closure);
-        }
-    }
-}
-
 static void update_prop_bindings(int state_handle) {
     for (int i = 0; i < prop_binding_count; i++) {
         if (prop_bindings[i].state_handle == state_handle) {
             apply_prop_binding(&prop_bindings[i]);
         }
     }
-    fire_state_observers(state_handle);
-}
-
-void aether_ui_state_on_change(int state_handle, void* boxed_closure) {
-    if (state_observer_count >= state_observer_capacity) {
-        state_observer_capacity = state_observer_capacity == 0 ? 16
-                                : state_observer_capacity * 2;
-        state_observers = realloc(state_observers,
-                                  sizeof(StateObserver) * state_observer_capacity);
-    }
-    state_observers[state_observer_count].state_handle = state_handle;
-    state_observers[state_observer_count].closure = (AeClosure*)boxed_closure;
-    state_observer_count++;
+    // Observers are the DSL's (ui/module.ae); the backend only reports the set.
+    aether_ui_state_notify(state_handle);
 }
 
 int aether_ui_state_create_list(void* list_ptr) {
@@ -3769,6 +3741,32 @@ static W32Chord* w32_chords = NULL;
 static int w32_chord_count = 0, w32_chord_cap = 0;
 static char* w32_chord_pending = NULL;   // armed prefix (owned)
 
+// "Primary" is the platform's command key (GTK's <Primary>): Command on
+// AppKit and UIKit, Control here. This backend stores combos as written and
+// compares them to the spelling a keypress produces ("Ctrl+Z"), so the token
+// is resolved at REGISTRATION: "Primary+Shift+Z" is stored as
+// "Ctrl+Shift+Z". Returns a malloc'd copy.
+static char* w32_resolve_primary(const char* combo) {
+    size_t n = strlen(combo);
+    char* out = (char*)malloc(n + 1);   // "Ctrl" is shorter than "Primary"
+    size_t o = 0;
+    const char* p = combo;
+    while (*p) {
+        const char* plus = strchr(p, '+');
+        size_t len = plus ? (size_t)(plus - p) : strlen(p);
+        if (plus && len == 7 && _strnicmp(p, "Primary", 7) == 0) {
+            memcpy(out + o, "Ctrl", 4); o += 4;
+        } else {
+            memcpy(out + o, p, len); o += len;
+        }
+        if (!plus) break;
+        out[o++] = '+';
+        p = plus + 1;
+    }
+    out[o] = '\0';
+    return out;
+}
+
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
                                   void* enabled_closure) {
     if (!combo) return;
@@ -3778,7 +3776,7 @@ void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure,
                                               sizeof(W32Shortcut) * w32_shortcut_cap);
     }
     W32Shortcut* s = &w32_shortcuts[w32_shortcut_count++];
-    s->combo = _strdup(combo);
+    s->combo = w32_resolve_primary(combo);
     s->closure = (AeClosure*)boxed_closure;
     s->enabled = (AeClosure*)enabled_closure;
 }
@@ -4133,8 +4131,8 @@ void aether_ui_shortcut_chord_impl(const char* first_combo,
         w32_chords = (W32Chord*)realloc(w32_chords, sizeof(W32Chord) * w32_chord_cap);
     }
     W32Chord* ch = &w32_chords[w32_chord_count++];
-    ch->first = _strdup(first_combo);
-    ch->second = _strdup(second_combo);
+    ch->first = w32_resolve_primary(first_combo);
+    ch->second = w32_resolve_primary(second_combo);
     ch->closure = (AeClosure*)boxed_closure;
 }
 
@@ -6624,6 +6622,10 @@ void aether_ui_timer_cancel_impl(int timer_id) {
 }
 
 void aether_ui_open_url_impl(const char* url) {
+    if (!url) return;
+    // Headless: record, never launch. A spec that clicks a link must not open
+    // a browser on the CI box; GET /opened_urls shows what was asked for.
+    if (aeui_is_headless()) { aether_ui_opened_url_record(url); return; }
     ShellExecuteW(NULL, L"open", utf8_to_wide(url), NULL, NULL, SW_SHOWNORMAL);
 }
 
@@ -7942,6 +7944,34 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
     menu_command_count++;
     // Side-store for the AetherUIDriver /tray/{id}/menu/activate route.
     aether_ui_menu_item_record(menu_handle, label, boxed_closure);
+}
+
+void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
+                                   const char* new_label) {
+    if (!old_label || !new_label) return;
+    aether_ui_menu_item_relabel(menu_handle, old_label, new_label);
+    MenuEntry* m = menu_at(menu_handle);
+    if (!m) return;
+    wchar_t want[256];
+    MultiByteToWideChar(CP_UTF8, 0, old_label, -1, want, 256);
+    int n = GetMenuItemCount(m->hmenu);
+    for (int pos = 0; pos < n; pos++) {
+        wchar_t have[256];
+        if (GetMenuStringW(m->hmenu, (UINT)pos, have, 256, MF_BYPOSITION) <= 0)
+            continue;   // a separator has no string
+        if (wcscmp(have, want) != 0) continue;
+        wchar_t now[256];
+        MultiByteToWideChar(CP_UTF8, 0, new_label, -1, now, 256);
+        // MIIM_STRING only: the item keeps its command id, so WM_COMMAND
+        // still reaches the same closure.
+        MENUITEMINFOW mi;
+        memset(&mi, 0, sizeof(mi));
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_STRING;
+        mi.dwTypeData = now;
+        SetMenuItemInfoW(m->hmenu, (UINT)pos, TRUE, &mi);
+        return;
+    }
 }
 
 void aether_ui_menu_add_separator(int menu_handle) {
@@ -11809,7 +11839,18 @@ static int hook_widget_visible(int handle) {
 static int hook_widget_parent(int handle) {
     Widget* w = widget_at(handle);
     if (!w) return 0;
-    return handle_for_hwnd(GetParent(w->hwnd));
+    // The nearest REGISTERED ancestor, as GTK4 and AppKit answer: a control
+    // can sit inside an untracked host HWND (a scroll host, a tab page), and
+    // one GetParent hop then reported 0 for it -- which cut
+    // ui.widget_shortcut's descendant walk short. Bounded: GetParent climbs
+    // to an owner window at the top, and owners cannot cycle, but a
+    // malformed tree should not hang the key path.
+    HWND p = GetParent(w->hwnd);
+    for (int hops = 0; p && hops < 64; hops++, p = GetParent(p)) {
+        int h = handle_for_hwnd(p);
+        if (h > 0) return h;
+    }
+    return 0;
 }
 
 // ── Stylesheet-walk ABI (ui.apply_styles) ───────────────────────────

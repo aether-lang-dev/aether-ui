@@ -354,7 +354,10 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 
 `open_file(title, start_dir)`, `save_file(title, name)` and `pick_folder` are
 native modals, so all three return `""` under `AETHER_UI_HEADLESS` rather than
-block a machine with no seat to dismiss them.
+block a machine with no seat to dismiss them. `open_url(url)` under
+`AETHER_UI_HEADLESS` does not hand the URL to the OS at all, so a spec that
+clicks a link never launches a browser; it is recorded instead, and the
+driver's `GET /opened_urls` lists every URL asked for, in order.
 
 ### Keys, and why there are two kinds
 
@@ -364,8 +367,22 @@ and what no number of registered shortcuts can express. The any-key handler
 fires only when no shortcut consumed the key, so accelerators keep priority,
 and it never swallows the key, so whatever has focus still receives it.
 
+A combo is modifiers and a key joined by `+`: `Ctrl`, `Shift`, `Alt`
+(`Option`), `Cmd` (`Super`, `Meta`), and **`Primary`**, the platform's own
+accelerator key in the sense of GTK's `<Primary>`: Command on macOS and iOS,
+Control on GTK4 and Win32. `Ctrl` always means the Control key itself. Write
+`Primary+S` for the keys a user expects under their platform's accelerator, and
+`Ctrl` only where Control is meant; `enable_undo_shortcuts()` registers
+`Primary+Z` and `Primary+Shift+Z`, so undo is ⌘Z on a Mac. Menus display
+`Primary` as the key it resolves to.
+
+`widget_shortcut(w, combo, cb)` and `on_key(w, cb)` are scoped to focus being
+on `w` **or anywhere inside it**, so a container can own a key for all of its
+children.
+
 ```aether
 ui.shortcut("Ctrl+R") callback { reload() }          // a bound combo
+ui.shortcut("Primary+S") callback { save() }         // ⌘S on a Mac, Ctrl+S elsewhere
 ui.window_on_key(|k: string, m: int| {               // anything at all
     if k == "BackSpace" { go_up() }
 })
@@ -405,6 +422,22 @@ ui.text_bound(counter, "Val: ", "")   // auto-updating text
 ui.ui_set(counter, 42)                // triggers re-render
 val = ui.ui_get(counter)              // read current value
 ```
+
+Observers of state (`computed_s`, `each_bind`) run on every set. To change
+several cells as one, set them in a batch: observers then run once each, after
+all of them, so a computed cell over two inputs never sees one new and one old.
+
+```aether
+ui.computed_s(|| {
+    _r = ui.ui_set_s(full, string.concat(ui.ui_get_s(first), ui.ui_get_s(last)))
+}, first, last)
+ui.ui_batch() callback {
+    _a = ui.ui_set_s(first, "Grace")
+    _b = ui.ui_set_s(last, "Hopper")   // `full` recomputes once, here
+}
+```
+
+An `each_bind` stops when its each group's container is destroyed.
 
 ## Background work
 
@@ -589,6 +622,12 @@ keymap_bind(km, "Ctrl+Shift+S", "file.save") // rebound, at runtime
 Keymaps chain, so an app keymap can ship defaults a user keymap overrides, and
 `keymap_count` / `keymap_key_at` / `keymap_name_at` enumerate the bindings for
 a rebind UI.
+
+Once a keymap is attached it owns the keys of the commands registered in it: a
+key bound after `keymap_attach` becomes a live accelerator at once, the
+command's own `command(label, accel)` key stops firing on its own, and a
+`menu_item_command` item shows the key the keymap binds **now**, relabelled
+when a bind, unbind or register changes it.
 
 ## Examples
 

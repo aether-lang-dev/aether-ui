@@ -10,6 +10,8 @@ status() -> string {
     b = uidriver.get_body("/widgets")
     if string.contains(b, "\"text\":\"status: name submitted\"") == 1 { return "name" }
     if string.contains(b, "\"text\":\"status: city submitted\"") == 1 { return "city" }
+    if string.contains(b, "\"text\":\"status: panel shortcut\"") == 1 { return "panel" }
+    if string.contains(b, "\"text\":\"status: panel key\"") == 1 { return "panelkey" }
     return "idle"
 }
 
@@ -40,6 +42,41 @@ main() {
             spec.assert_true(ok, "city shortcut fired while city focused")
             // And it's genuinely scoped: status is now 'city', not 'name'.
             spec.assert_str_eq(status(), "city", "the city scope won, not name")
+        }
+
+        // The scope is a CONTAINER; focus is on a field two levels inside it.
+        // focused_widget() names the field, so a scope test of equality never
+        // matched and the shortcut stayed dead for as long as a child had
+        // focus -- toolkit-envy G3. The note field is the LAST textfield
+        // built; its parent is an hstack whose parent is the panel.
+        spec.it("a container-scoped shortcut fires while a DESCENDANT has focus") callback {
+            note = uidriver.widget_id_last_of("textfield", "")
+            spec.assert_gt(note, uidriver.widget_id_of("textfield", "") + 1,
+                           "found the note field, not name or city")
+            uidriver.focus_widget(note)
+            spec.assert_eq(uidriver.focused_widget(), note, "the note field took focus")
+            r = uidriver.window_key("Ctrl+J")
+            spec.assert_eq(r, 1, "the key was handled")
+            ok = uidriver.wait_body_contains("/widgets", "status: panel shortcut", 20)
+            spec.assert_true(ok, "panel shortcut fired with focus in its grandchild")
+        }
+
+        spec.it("on_key on a container sees keys while a descendant has focus") callback {
+            uidriver.focus_widget(uidriver.widget_id_last_of("textfield", ""))
+            _r = uidriver.window_key("Ctrl+K")
+            ok = uidriver.wait_body_contains("/widgets", "status: panel key", 20)
+            spec.assert_true(ok, "on_key(panel) ran with focus in its grandchild")
+        }
+
+        spec.it("and stays inert while focus is OUTSIDE the container") callback {
+            name = uidriver.widget_id_of("textfield", "")
+            uidriver.focus_widget(name)
+            uidriver.window_key("Return")
+            _w = uidriver.wait_body_contains("/widgets", "status: name submitted", 20)
+            // (Not asserting "fired": the key still reaches the any-key
+            // handlers on_key registers, which the route counts as handled.)
+            _r = uidriver.window_key("Ctrl+J")
+            spec.assert_str_eq(status(), "name", "the panel shortcut did not fire")
         }
     }
     return spec.run_summary(fw)

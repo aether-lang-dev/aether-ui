@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ui_batch() callback { … }`: set several state cells as one change.**
+  Observers (`computed_s`, `each_bind`) run once each when the outermost
+  batch closes, so a computed cell over two inputs set together recomputes
+  once and never sees one new input with one old one. The observer table moved
+  out of the four backends into `ui/module.ae`; a backend now only calls
+  `aether_ui_state_notify(handle)` after each set (`aether_ui_state_on_change`
+  is gone from the ABI). `each_bind` stops when its group's container is
+  destroyed. Gated by `tests/state_batch`.
+- **`GET /opened_urls`.** Under `AETHER_UI_HEADLESS`, `open_url` records the
+  URL instead of handing it to the OS on all four backends, and the driver
+  lists them in order (`spec_openurl_demo`).
+- **`aether_ui_menu_item_set_label`** (ABI): relabel a menu item in place,
+  keeping its closure; on all four backends and the driver's side-store.
+
 - **`grid(cols, rs, cs) { ... }` fills itself, and `equal_cells()` makes a
   keypad.** A grid took children only through `grid_place(row, col)`;
   widgets built inside its block were never put in a cell. Now each child
@@ -41,6 +55,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs either way.
 
 ### Fixed
+
+- **`widget_shortcut` and `on_key` fire while a DESCENDANT has focus**, as
+  they promised. They compared `focused_widget()` (the nearest registered
+  widget at the focus, i.e. the child) with the scope, so a container scope
+  never fired. The ancestor walk uses `aether_ui_widget_parent_impl`, which on
+  Win32 and UIKit now also answers the nearest registered ancestor rather
+  than the raw parent.
+- **`Primary` is the platform's accelerator key: ⌘ on macOS/iOS, Ctrl on
+  GTK4/Win32**, as GTK's `<Primary>`. AppKit mapped it to Control, GTK4's
+  `Primary+Z` registered a bare `z`, and Win32/UIKit did not know it.
+  `enable_undo_shortcuts()` registers `Primary+Z`/`Primary+Shift+Z`, so undo
+  is ⌘Z on a Mac, not ⌃Z. `Ctrl` still means the Control key everywhere.
+  Menus display `Primary` resolved.
+- **A command's menu item follows a keymap rebind.** `menu_item_command`
+  showed the accel given to `command()` forever, and that key kept firing
+  after `keymap_bind` moved it. Once a keymap is attached it owns its
+  commands' keys: the menu shows the key bound now, a key bound after attach
+  is live at once, and the command's own accel goes inert.
 
 - **win32: an editor-sized app takes real mouse input the way GTK4 does.**
   Driven with physical clicks and the wheel (not the driver), the ae3d

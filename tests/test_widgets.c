@@ -12,8 +12,10 @@
 
 #include "test_framework.h"
 #include "../backend/aether_ui_backend.h"
+#include "../backend/aether_ui_system_extras.h"  // menu-item side-store readback
 #include <stdlib.h>  // getenv, setenv / _putenv
 #include <stdio.h>
+#include <string.h>  // strcmp
 
 // Portable "set this env var if it isn't already set" — setenv() exists
 // on POSIX but MinGW's CRT doesn't declare it, so Windows uses _putenv.
@@ -261,6 +263,18 @@ static void test_menu(void) {
     aether_ui_menu_add_item(file_menu, "Quit",    (void*)0);
     aether_ui_menu_bar_add_menu(bar, file_menu);
     AE_CASE(1, "menu populated + attached to bar");
+
+    // Relabel in place (a command's menu item following a keymap rebind):
+    // the item after the separator, so GTK's section walk is exercised, and
+    // the native item plus the driver's side-store both change.
+    aether_ui_menu_item_set_label(file_menu, "Quit", "Quit  Ctrl+Q");
+    AE_CASE(strcmp(aether_ui_menu_item_label_at(file_menu, 2), "Quit  Ctrl+Q") == 0,
+            "menu_item_set_label renamed the item");
+    AE_CASE(aether_ui_menu_item_count_for(file_menu) == 3,
+            "and did not add one");
+    aether_ui_menu_item_set_label(file_menu, "No such item", "x");
+    AE_CASE(aether_ui_menu_item_count_for(file_menu) == 3,
+            "a relabel of a missing item is a no-op");
 
     // Context menu via popup (can't actually trigger interactively;
     // just verify it doesn't crash when given a real anchor widget).

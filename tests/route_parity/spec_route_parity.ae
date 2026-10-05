@@ -115,6 +115,7 @@ main() {
             expect_route(fw, "/notifications")
             expect_route(fw, "/tray")
             expect_route(fw, "/undo_state")
+            expect_route(fw, "/opened_urls")
         }
 
         spec.it("serves the metrics routes") callback {

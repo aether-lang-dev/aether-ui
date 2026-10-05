@@ -1,6 +1,6 @@
 // spec_undo_demo.ae — Undo/Redo (the Swing UndoManager shape) over the
 // AetherUIDriver. undoable() records real do/undo pairs; the spec steps
-// the SAME stack the app's buttons and Ctrl+Z use, via POST /undo,
+// the SAME stack the app's buttons and Primary+Z (Cmd/Ctrl) use, via POST /undo,
 // POST /redo, GET /undo_state — and asserts effects from widget text.
 import std.spec
 import uidriver
@@ -52,11 +52,30 @@ main() {
             spec.assert_contains(b, "\"label\":\"rename\"", "rename is next undo")
         }
 
-        spec.it("Ctrl+Z routes to undo (enable_undo_shortcuts)") callback {
-            k = uidriver.post_body("/window/key?combo=Ctrl%2BZ")
+        // enable_undo_shortcuts registers Primary+Z: the platform's command
+        // key, Cmd on macOS/iOS and Ctrl on GTK4/Win32 (toolkit-envy G2).
+        // It used to register Ctrl+Z, so undo on a Mac was Control-Z.
+        spec.it("the OTHER platform's undo key is inert") callback {
+            b = uidriver.get_body("/widgets")
+            mac = string.contains(b, "backend: macos") + string.contains(b, "backend: uikit")
+            other = "Cmd%2BZ"
+            if mac > 0 { other = "Ctrl%2BZ" }
+            _k = uidriver.post_body("/window/key?combo=${other}")
+            ok = uidriver.wait_body_contains("/widgets", "name: Ellen", 5)
+            spec.assert_false(ok, "the non-platform key did not undo the rename")
+            st = uidriver.get_body("/undo_state")
+            spec.assert_contains(st, "\"label\":\"rename\"", "rename is still next undo")
+        }
+
+        spec.it("the platform's undo key (Primary+Z) routes to undo") callback {
+            b = uidriver.get_body("/widgets")
+            mac = string.contains(b, "backend: macos") + string.contains(b, "backend: uikit")
+            mine = "Ctrl%2BZ"
+            if mac > 0 { mine = "Cmd%2BZ" }
+            k = uidriver.post_body("/window/key?combo=${mine}")
             spec.assert_contains(k, "\"fired\":true", "shortcut handled")
             ok = uidriver.wait_body_contains("/widgets", "name: Ellen", 20)
-            spec.assert_true(ok, "Ctrl+Z undid the rename")
+            spec.assert_true(ok, "the platform's undo key undid the rename")
         }
     }
     return spec.run_summary(fw)

@@ -138,18 +138,6 @@ typedef struct {
     int rev;      // LIST: bumps on each set, so the driver sees a change
 } StateCell;
 
-// Generic state observers — a boxed Aether closure fired (no args) whenever a
-// state cell is set. The unifying primitive behind each_bind and computed
-// state: the ui layer registers a closure that re-runs each_update / recompute.
-typedef struct {
-    int state_handle;
-    AeClosure* closure;
-} StateObserver;
-
-static StateObserver* state_observers = NULL;
-static int state_observer_count = 0;
-static int state_observer_capacity = 0;
-
 enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
        AEUI_BIND_VALUE = 3 };  // two-way: editable widget ⇄ string state
 typedef struct {
@@ -285,39 +273,14 @@ static void apply_prop_binding(PropBinding* b) {
     }
 }
 
-static void fire_state_observers(int state_handle) {
-    // Snapshot the count: an observer's closure may register more (e.g. a
-    // computed state that itself has observers) — those fire on their own set.
-    int n = state_observer_count;
-    for (int i = 0; i < n; i++) {
-        if (state_observers[i].state_handle == state_handle) {
-            AeClosure* c = state_observers[i].closure;
-            if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
-        }
-    }
-}
-
 static void update_prop_bindings(int state_handle) {
     for (int i = 0; i < prop_binding_count; i++) {
         if (prop_bindings[i].state_handle == state_handle) {
             apply_prop_binding(&prop_bindings[i]);
         }
     }
-    fire_state_observers(state_handle);
-}
-
-// Register a boxed closure fired whenever `state_handle` is set. Powers
-// each_bind (re-run each_update) and computed state (recompute).
-void aether_ui_state_on_change(int state_handle, void* boxed_closure) {
-    if (state_observer_count >= state_observer_capacity) {
-        state_observer_capacity = state_observer_capacity == 0 ? 16
-                                : state_observer_capacity * 2;
-        state_observers = realloc(state_observers,
-                                  sizeof(StateObserver) * state_observer_capacity);
-    }
-    state_observers[state_observer_count].state_handle = state_handle;
-    state_observers[state_observer_count].closure = (AeClosure*)boxed_closure;
-    state_observer_count++;
+    // Observers are the DSL's (ui/module.ae); the backend only reports the set.
+    aether_ui_state_notify(state_handle);
 }
 
 // LIST state: an opaque std.list ptr + a revision that bumps on each set.
@@ -3211,6 +3174,9 @@ void aether_ui_timer_cancel_impl(int timer_id) {
 // Open URL in default browser
 void aether_ui_open_url_impl(const char* url) {
     if (!url) return;
+    // Headless: record, never launch. A spec that clicks a link must not open
+    // a browser on the CI box; GET /opened_urls shows what was asked for.
+    if (aeui_is_headless()) { aether_ui_opened_url_record(url); return; }
     ensure_gtk_init();
     gtk_show_uri(NULL, url, GDK_CURRENT_TIME);
 }
@@ -3690,7 +3656,19 @@ static gboolean aeui_shortcut_activate(GtkWidget* widget, GVariant* args,
 // through untouched. Named keys (Escape, Delete, F5…) keep their case.
 static char* aeui_normalize_combo(const char* combo) {
     if (!combo) return strdup("");
-    if (combo[0] == '<') return strdup(combo);
+    if (combo[0] == '<') {
+        // GTK's own syntax passes through, except <Primary> becomes
+        // <Control> -- what GTK resolves it to here anyway -- so a driver
+        // "Ctrl+Z" and a "<Primary>z" registration compare equal.
+        const char* pr = strstr(combo, "<Primary>");
+        if (!pr) return strdup(combo);
+        size_t pre = (size_t)(pr - combo);
+        char* out = malloc(strlen(combo) + 1);   // same length as "<Primary>"
+        memcpy(out, combo, pre);
+        strcpy(out + pre, "<Control>");
+        strcat(out, pr + strlen("<Primary>"));
+        return out;
+    }
     char mods[128] = "";
     char key[64] = "";
     char tmp[192];
@@ -3698,7 +3676,14 @@ static char* aeui_normalize_combo(const char* combo) {
     char* save = NULL;
     for (char* tok = strtok_r(tmp, "+", &save); tok;
          tok = strtok_r(NULL, "+", &save)) {
-        if (!g_ascii_strcasecmp(tok, "Ctrl") || !g_ascii_strcasecmp(tok, "Control")) {
+        // Primary is the platform's command key (GTK's own <Primary>): on
+        // this backend that is Control. Spelled out as <Control> rather than
+        // passed through as <Primary> so the driver's /window/key, which
+        // compares normalized trigger strings, matches "Ctrl+Z" against a
+        // "Primary+Z" registration exactly as the keyboard does. It used to
+        // fall through as the KEY, so "Primary+Z" registered a bare "z".
+        if (!g_ascii_strcasecmp(tok, "Ctrl") || !g_ascii_strcasecmp(tok, "Control")
+            || !g_ascii_strcasecmp(tok, "Primary")) {
             strcat(mods, "<Control>");
         } else if (!g_ascii_strcasecmp(tok, "Shift")) {
             strcat(mods, "<Shift>");
@@ -8784,6 +8769,45 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
     gtk_menu_actions[gtk_menu_action_count].action_name = strdup(action);
     gtk_menu_actions[gtk_menu_action_count].closure = (AeClosure*)boxed_closure;
     gtk_menu_action_count++;
+}
+
+// GMenu items are immutable once appended, so a relabel is a remove and an
+// insert at the same position carrying the same action -- which keeps the
+// item bound to its closure. A GtkPopoverMenuBar showing the model follows
+// the items-changed signal on its own.
+void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
+                                   const char* new_label) {
+    if (!old_label || !new_label) return;
+    aether_ui_menu_item_relabel(menu_handle, old_label, new_label);
+    GtkMenuEntry* e = gtk_menu_at(menu_handle);
+    if (!e) return;
+    int ns = g_menu_model_get_n_items(G_MENU_MODEL(e->model));
+    for (int s = 0; s < ns; s++) {
+        GMenuModel* sec = g_menu_model_get_item_link(G_MENU_MODEL(e->model), s,
+                                                     G_MENU_LINK_SECTION);
+        if (!sec) continue;
+        int ni = g_menu_model_get_n_items(sec);
+        for (int i = 0; i < ni; i++) {
+            char* label = NULL;
+            char* action = NULL;
+            if (!g_menu_model_get_item_attribute(sec, i, G_MENU_ATTRIBUTE_LABEL,
+                                                 "s", &label)) continue;
+            int hit = strcmp(label, old_label) == 0;
+            g_free(label);
+            if (!hit) continue;
+            g_menu_model_get_item_attribute(sec, i, G_MENU_ATTRIBUTE_ACTION,
+                                            "s", &action);
+            g_menu_remove(G_MENU(sec), i);
+            GMenuItem* it = g_menu_item_new(new_label, NULL);
+            if (action) g_menu_item_set_detailed_action(it, action);
+            g_menu_insert_item(G_MENU(sec), i, it);
+            g_object_unref(it);
+            g_free(action);
+            g_object_unref(sec);
+            return;
+        }
+        g_object_unref(sec);
+    }
 }
 
 void aether_ui_menu_add_separator(int menu_handle) {

@@ -27,7 +27,7 @@ exports (
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
     ui_state_b, ui_get_b, ui_set_b,
-    ui_state_list, ui_get_list, ui_set_list, each_bind, computed_s,
+    ui_state_list, ui_get_list, ui_set_list, each_bind, computed_s, ui_batch,
     bind_text, bind_text_fmt, bind_enabled, bind_hidden, bind_value,
     set_text, get_text, set_toggle, get_toggle,
     set_button_label, set_hidden, set_window_title,
@@ -268,7 +268,8 @@ extern aether_ui_state_create_list(list_ptr: ptr) -> int
 extern aether_ui_state_get_list(handle: int) -> ptr
 extern aether_ui_state_set_list(handle: int, list_ptr: ptr)
 extern aether_ui_state_list_rev(handle: int) -> int
-extern aether_ui_state_on_change(state_handle: int, boxed_closure: ptr)
+extern aether_ui_state_hub_set_impl(hub: ptr, boxed_notify: ptr)
+extern aether_ui_state_hub_get_impl() -> ptr
 
 // Group 2: Input widgets
 extern aether_ui_textfield_create(placeholder: string, boxed_closure: ptr) -> int
@@ -464,6 +465,7 @@ extern aether_ui_menu_bar_create() -> int
 extern aether_ui_menu_create(label: string) -> int
 extern aether_ui_menu_add_item(menu_handle: int, label: string, boxed_closure: ptr)
 extern aether_ui_menu_add_separator(menu_handle: int)
+extern aether_ui_menu_item_set_label(menu_handle: int, old_label: string, new_label: string)
 extern aether_ui_menu_bar_add_menu(bar_handle: int, menu_handle: int)
 extern aether_ui_menu_bar_attach(app_handle: int, bar_handle: int)
 extern aether_ui_menu_bar_attach_window(win_handle: int, bar_handle: int)
@@ -1548,12 +1550,180 @@ ui_set_list(handle: int, list_ptr: ptr) -> int {
     return handle
 }
 each_bind(each_group: ptr, list_state: int) {
-    // Re-run each_update whenever the list-state changes.
-    aether_ui_state_on_change(list_state, box_closure(|| {
+    // Re-run each_update whenever the list-state changes -- for as long as
+    // the group's container is alive. Owned by it, so an each() group that
+    // was rebuilt away stops re-rendering into a dead container.
+    e = each_group as *EachGroup
+    _state_observe(list_state, 0, e.container, || {
         each_update(each_group, aether_ui_state_get_list(list_state))
-    }))
+    })
     // Seed once from the current value.
     each_update(each_group, aether_ui_state_get_list(list_state))
+}
+
+// ── State observers, in one place (toolkit-envy G4) ─────────────────
+// Every backend reports each set of a cell through aether_ui_state_notify;
+// what happens next is decided HERE, once, instead of in four copies of an
+// observer table that fired synchronously per set. Two things follow:
+//
+//  * ui_batch { … } defers observer passes to the block's close and runs
+//    each observer ONCE however many of its inputs changed. computed_s over
+//    `first` and `last` used to recompute twice when both were set -- the
+//    first time seeing the new first with the OLD last, a state that never
+//    existed. Outside a batch every set is its own batch, so code that never
+//    asks for one sees exactly the behaviour it had.
+//  * An observer can have an OWNER widget. When the owner is gone (its
+//    registry slot reads dead), the observer is dropped instead of firing
+//    forever into a destroyed widget. each_bind's owner is its container.
+//    computed_s has none -- it writes a cell, not a widget, and there is no
+//    unobserve call to end it -- so it lives as long as the app.
+//
+// Observer passes run at batch depth 0, so a set an observer makes (computed
+// writing its derived cell) notifies ITS observers immediately, as before.
+struct StateObs { a: int, b: int, cb: ptr, owner: int, dirty: int, dead: int }
+struct StateHub { obs: ptr, depth: int, pending: int, firing: int }
+
+_state_invoke(cb: fn) {
+    cb()
+}
+
+// The one hub, created on first use and held by the C side (Aether has no
+// top-level mutable module state). Its notify closure is what every
+// backend's set lands in.
+_state_hub() -> ptr {
+    got = aether_ui_state_hub_get_impl()
+    if got != null { return got }
+    hub = malloc(sizeof(StateHub)) as *StateHub
+    hub.obs = list.new()
+    hub.depth = 0
+    hub.pending = 0
+    hub.firing = 0
+    hp = hub as ptr
+    aether_ui_state_hub_set_impl(hp, box_closure(|h: int| { _state_hub_notify(hp, h) }))
+    return hp
+}
+
+// Register cb to run when cell a or b (0 = none) is set. owner > 0 ties its
+// life to that widget.
+_state_observe(a: int, b: int, owner: int, cb: fn) {
+    hub = _state_hub() as *StateHub
+    o = malloc(sizeof(StateObs)) as *StateObs
+    o.a = a
+    o.b = b
+    o.cb = box_closure(cb)
+    o.owner = owner
+    o.dirty = 0
+    o.dead = 0
+    _ = list.add(hub.obs, o as ptr)
+}
+
+_state_obs_live(op: ptr) -> int {
+    o = op as *StateObs
+    if o.dead == 1 { return 0 }
+    if o.owner > 0 {
+        if string.length(aether_ui_widget_kind_impl(o.owner)) == 0 {
+            o.dead = 1
+            return 0
+        }
+    }
+    return 1
+}
+
+_state_obs_watches(op: ptr, h: int) -> int {
+    o = op as *StateObs
+    if h <= 0 { return 0 }
+    if o.a == h { return 1 }
+    if o.b == h { return 1 }
+    return 0
+}
+
+_state_obs_run(op: ptr) {
+    o = op as *StateObs
+    _state_invoke(unbox_closure(o.cb))
+}
+
+// Drop dead observers. Only between passes: a pass walks the list by index.
+_state_hub_compact(hp: ptr) {
+    hub = hp as *StateHub
+    if hub.firing > 0 { return }
+    i = list.size(hub.obs) - 1
+    while i >= 0 {
+        op, _e = list.get(hub.obs, i)
+        if (op as *StateObs).dead == 1 {
+            free(op)
+            list.remove(hub.obs, i)
+        }
+        i = i - 1
+    }
+}
+
+_state_hub_notify(hp: ptr, h: int) {
+    hub = hp as *StateHub
+    // Snapshot the count: an observer may register more (a computed that
+    // itself is observed) -- those fire on their own sets.
+    n = list.size(hub.obs)
+    if hub.depth > 0 {
+        i = 0
+        while i < n {
+            op, _e = list.get(hub.obs, i)
+            if _state_obs_watches(op, h) == 1 {
+                (op as *StateObs).dirty = 1
+                hub.pending = 1
+            }
+            i = i + 1
+        }
+        return
+    }
+    hub.firing = hub.firing + 1
+    j = 0
+    while j < n {
+        op, _e = list.get(hub.obs, j)
+        if _state_obs_watches(op, h) == 1 {
+            if _state_obs_live(op) == 1 { _state_obs_run(op) }
+        }
+        j = j + 1
+    }
+    hub.firing = hub.firing - 1
+    _state_hub_compact(hp)
+}
+
+// Run every observer a batch marked, once each.
+_state_hub_flush(hp: ptr) {
+    hub = hp as *StateHub
+    hub.firing = hub.firing + 1
+    while hub.pending == 1 {
+        hub.pending = 0
+        n = list.size(hub.obs)
+        i = 0
+        while i < n {
+            op, _e = list.get(hub.obs, i)
+            o = op as *StateObs
+            if o.dirty == 1 {
+                o.dirty = 0
+                if _state_obs_live(op) == 1 { _state_obs_run(op) }
+            }
+            i = i + 1
+        }
+    }
+    hub.firing = hub.firing - 1
+    _state_hub_compact(hp)
+}
+
+// ui_batch() callback { … } — set several cells as ONE change: observers
+// (computed_s, each_bind) run once each when the outermost batch closes,
+// after every set inside it, never in between. Property bindings (bind_text
+// and friends) still apply on each set; they hold no derived state.
+//   ui_batch() callback {
+//       ui_set_s(first, "Grace")
+//       ui_set_s(last, "Hopper")     // `full` recomputes once, here
+//   }
+ui_batch(body: fn) {
+    hp = _state_hub()
+    hub = hp as *StateHub
+    hub.depth = hub.depth + 1
+    body()
+    hub.depth = hub.depth - 1
+    if hub.depth == 0 { _state_hub_flush(hp) }
 }
 
 // ── Computed / derived state ────────────────────────────────────────
@@ -1566,11 +1736,14 @@ each_bind(each_group: ptr, list_state: int) {
 //   computed_s(|| { ui_set_s(full, string.concat(ui_get_s(first), ui_get_s(last))) },
 //              first, last)
 //   bind_text(lbl, full)
+//
+// ONE observer watching both inputs, so inside a ui_batch that sets both it
+// recomputes once, after both (see ui_batch).
 computed_s(recompute: fn, a: int, b: int) {
     recompute()   // seed the derived cell now
-    boxed = box_closure(recompute)
-    aether_ui_state_on_change(a, boxed)
-    if b != a { aether_ui_state_on_change(b, boxed) }
+    bb = b
+    if bb == a { bb = 0 }
+    _state_observe(a, bb, 0, recompute)
 }
 
 // ── Property bindings: state → widget property, no imperative set_*
@@ -1651,7 +1824,12 @@ set_hidden(handle: int, hidden: int) -> int {
 // InputMap WHEN_IN_FOCUSED_WINDOW; SwiftUI .keyboardShortcut). Fires no
 // matter which widget has focus: an entry swallows plain keys but never
 // modified combos. Combo syntax "Ctrl+R" / "Shift+Delete" / "F5" /
-// "Escape" (GTK's "<Control>r" also accepted). Register any time —
+// "Escape" (GTK's "<Control>r" also accepted). Modifiers: Ctrl (the
+// literal Control key, on every platform), Shift, Alt/Option, Cmd/Super/Meta,
+// and Primary -- the PLATFORM's command key, as GTK's <Primary>: Command on
+// macOS and iOS, Control on GTK4 and Win32. Use Primary for the keys a user
+// expects under their platform's accelerator (Primary+Z undo, Primary+S
+// save); use Ctrl only where Control itself is meant. Register any time —
 // pre-window registrations attach when the window appears. Driver:
 // POST /window/key?combo= fires the same closure (no fake input
 // events); GET /focus and POST /widget/{id}/focus round out the story.
@@ -1661,6 +1839,19 @@ set_hidden(handle: int, hidden: int) -> int {
 shortcut(combo: string, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_shortcut_impl(combo, boxed)
+}
+
+// _accel_shown(accel) — the combo as a menu should DISPLAY it: "Primary"
+// resolved to the key it means on this backend, so a Mac menu reads
+// "Undo  Cmd+Z" and a Linux one "Undo  Ctrl+Z". The registration keeps the
+// platform-neutral spelling; only the text a person reads is resolved.
+_accel_shown(accel: string) -> string {
+    if string.contains(accel, "Primary") == 0 { return accel }
+    b = backend_name()
+    key = "Ctrl"
+    if string.equals(b, "macos") == 1 { key = "Cmd" }
+    if string.equals(b, "uikit") == 1 { key = "Cmd" }
+    return string.string_replace_all(accel, "Primary", key)
 }
 
 // shortcut_when(combo, enabled, cb): a conditional/scoped shortcut. `enabled`
@@ -1758,8 +1949,21 @@ draggable(handle: int, path: string) {
 //   on_key(rows, |k: string, m: int| { if k == "Down" { select_next() } })
 on_key(widget: int, cb: fn) {
     window_on_key(|k: string, m: int| {
-        if focused_widget() == widget { cb(k, m) }
+        if _focus_within(widget) == 1 { cb(k, m) }
     })
+}
+
+// _focus_within(widget) -> 1 when keyboard focus is ON `widget` or anywhere
+// INSIDE it. focused_widget() names the nearest REGISTERED widget at the
+// focus -- for a field inside a panel that is the field, never the panel -- so
+// an equality test made every container scope dead while one of its children
+// had focus. The ancestry walk is aether_ui_widget_parent_impl, which every
+// backend answers as the nearest registered ancestor.
+_focus_within(widget: int) -> int {
+    if widget == 0 { return 0 }
+    f = focused_widget()
+    if f == 0 { return 0 }
+    return _style_is_under(f, widget)
 }
 
 // focused_widget() -> the registry handle of the widget with keyboard focus
@@ -1782,7 +1986,7 @@ focused_widget() -> int {
 // it's inert (the key propagates) when focus is elsewhere.
 //   widget_shortcut(search_box, "Enter", || run_search())
 widget_shortcut(widget: int, combo: string, cb: fn) {
-    shortcut_when(combo, || { return focused_widget() == widget }, cb)
+    shortcut_when(combo, || { return _focus_within(widget) }, cb)
 }
 
 // focus(handle) — explicit keyboard-focus grab. The default Tab order
@@ -1798,7 +2002,7 @@ focus(handle: int) {
 // registering ui.shortcut with the same combo.
 context_menu_item_accel(handle: int, label: string, accel: string, cb: fn) -> int {
     boxed = box_closure(cb)
-    aether_ui_context_menu_item_accel_impl(handle, label, accel, boxed)
+    aether_ui_context_menu_item_accel_impl(handle, label, _accel_shown(accel), boxed)
     return handle
 }
 
@@ -3007,8 +3211,15 @@ struct Command {
     enabled: int,
     n_surfaces: int,
     surfaces: ptr,    // intarr of widget handles to grey/ungrey
-    scope: ptr        // widget parent captured where the action was declared
+    scope: ptr,       // widget parent captured where the action was declared
+    kmap: ptr,        // the ATTACHED keymap that owns this command's keys, or null
+    kname: string,    // the name it is registered under in kmap
+    menus: ptr        // std.list of *MenuSurf: menu items showing its key
 }
+
+// A menu item wired to a command, with the text it is showing now -- the
+// handle a relabel needs, since the item is found by its current label.
+struct MenuSurf { menu: int, shown: string }
 
 _command_invoke(cb: fn) {
     cb()
@@ -3048,7 +3259,7 @@ command_fire(cp: ptr) {
 // behaves identically on all four and needs no window to exercise.
 struct KeyBind { key: string, name: string }
 struct NameCmd { name: string, cmd: ptr }
-struct Keymap  { parent: ptr, binds: ptr, names: ptr }
+struct Keymap  { parent: ptr, binds: ptr, names: ptr, attached: int }
 
 // keymap(parent) — a new keymap, chained to `parent` (null for a root).
 keymap(parent: ptr) -> ptr {
@@ -3056,7 +3267,102 @@ keymap(parent: ptr) -> ptr {
     k.parent = parent
     k.binds = list.new()
     k.names = list.new()
+    k.attached = 0
     return k as ptr
+}
+
+// ── What a menu SHOWS follows the keymap (toolkit-envy G3) ──────────
+// menu_item_command used to print c.accel, the string given to command(), so
+// after keymap_bind moved the key the menu still advertised the old one --
+// and the old key still fired, because command() had registered it itself.
+//
+// Once a keymap is ATTACHED, it owns the keys of every command reachable
+// through it: c.kmap points at it, the command's own accelerator goes inert
+// (it is registered with a predicate, so the key propagates to the keymap's
+// registration instead), and every menu item showing the command is relabelled
+// whenever a bind, unbind or register changes what that command's key is.
+// Before attach nothing changes: the command shows and fires its own accel.
+
+// The key a person should be told fires command `name`: the first key bound
+// in an ATTACHED keymap along km's chain -- only those are real accelerators
+// -- that still resolves to `name` through km. "" when none does.
+_keymap_key_for(km: ptr, name: string) -> string {
+    if string.length(name) == 0 { return "" }
+    cur = km
+    while cur != null {
+        k = cur as *Keymap
+        if k.attached == 1 {
+            n = list.size(k.binds)
+            i = 0
+            while i < n {
+                bp, _e = list.get(k.binds, i)
+                key = (bp as *KeyBind).key
+                if keymap_lookup(km, key) == name { return key }
+                i = i + 1
+            }
+        }
+        cur = k.parent
+    }
+    return ""
+}
+
+// The key a command's surfaces should display right now.
+_command_key(cp: ptr) -> string {
+    c = cp as *Command
+    if c.kmap != null { return _keymap_key_for(c.kmap, c.kname) }
+    return c.accel
+}
+
+_command_menu_text(cp: ptr) -> string {
+    c = cp as *Command
+    key = _command_key(cp)
+    if string.length(key) == 0 { return c.label }
+    return string.concat(c.label, string.concat("  ", _accel_shown(key)))
+}
+
+// Bring every menu item showing this command up to date with its key.
+_command_refresh_menus(cp: ptr) {
+    if cp == null { return }
+    c = cp as *Command
+    if c.menus == null { return }
+    want = _command_menu_text(cp)
+    n = list.size(c.menus)
+    i = 0
+    while i < n {
+        mp, _e = list.get(c.menus, i)
+        m = mp as *MenuSurf
+        if m.shown != want {
+            aether_ui_menu_item_set_label(m.menu, m.shown, want)
+            m.shown = want
+        }
+        i = i + 1
+    }
+}
+
+// The command `name` resolves to through km has had its key changed.
+_keymap_refresh(km: ptr, name: string) {
+    if string.length(name) == 0 { return }
+    _command_refresh_menus(keymap_named(km, name))
+}
+
+// Is the command's OWN accelerator (the one command() registered) live? Only
+// while no attached keymap owns it.
+_command_own_key_live(cp: ptr) -> int {
+    c = cp as *Command
+    if c.kmap == null { return 1 }
+    return 0
+}
+
+// Register the real accelerator for `key` on an attached keymap. Conditional,
+// so a key the keymap no longer resolves propagates to any other binding of
+// it instead of being swallowed by an inert registration.
+_keymap_register_key(km: ptr, key: string) {
+    shortcut_when(key, || {
+        if keymap_command(km, key) == null { return 0 }
+        return 1
+    }, || {
+        _k = keymap_fire(km, key)
+    })
 }
 
 _keymap_find(km: ptr, key: string) -> int {
@@ -3074,19 +3380,26 @@ _keymap_find(km: ptr, key: string) -> int {
 // keymap_bind(km, key, name) — bind a key to a command NAME in THIS keymap.
 // Re-binding a key already bound here replaces it rather than shadowing it,
 // so the enumeration a rebind UI shows never contains two rows for one key.
+// On an ATTACHED keymap a new key is registered as a real accelerator at
+// once, so a rebind at runtime makes the new key fire -- not only resolve.
 keymap_bind(km: ptr, key: string, name: string) {
     if km == null { return }
     k = km as *Keymap
     at = _keymap_find(km, key)
     if at >= 0 {
         bp, _e = list.get(k.binds, at)
+        was = (bp as *KeyBind).name
         (bp as *KeyBind).name = name
+        _keymap_refresh(km, was)
+        _keymap_refresh(km, name)
         return
     }
     b = malloc(sizeof(KeyBind)) as *KeyBind
     b.key = key
     b.name = name
     _ = list.add(k.binds, b as ptr)
+    if k.attached == 1 { _keymap_register_key(km, key) }
+    _keymap_refresh(km, name)
 }
 
 // keymap_unbind(km, key) — drop a binding made in THIS keymap. Returns 1 if
@@ -3098,8 +3411,10 @@ keymap_unbind(km: ptr, key: string) -> int {
     at = _keymap_find(km, key)
     if at < 0 { return 0 }
     bp, _e = list.get(k.binds, at)
+    was = (bp as *KeyBind).name
     free(bp)
     list.remove(k.binds, at)
+    _keymap_refresh(km, was)
     return 1
 }
 
@@ -3127,18 +3442,41 @@ keymap_register(km: ptr, name: string, cmd: ptr) {
     k = km as *Keymap
     n = list.size(k.names)
     i = 0
+    found = 0
     while i < n {
         np, _e = list.get(k.names, i)
         if (np as *NameCmd).name == name {
+            old = (np as *NameCmd).cmd
             (np as *NameCmd).cmd = cmd
-            return
+            // The command this replaced is no longer reached through km: its
+            // own accelerator and label come back.
+            if old != null {
+                if old != cmd {
+                    oc = old as *Command
+                    if oc.kmap == km {
+                        oc.kmap = null
+                        _command_refresh_menus(old)
+                    }
+                }
+            }
+            found = 1
         }
         i = i + 1
     }
-    nc = malloc(sizeof(NameCmd)) as *NameCmd
-    nc.name = name
-    nc.cmd = cmd
-    _ = list.add(k.names, nc as ptr)
+    if found == 0 {
+        nc = malloc(sizeof(NameCmd)) as *NameCmd
+        nc.name = name
+        nc.cmd = cmd
+        _ = list.add(k.names, nc as ptr)
+    }
+    if k.attached == 1 {
+        if cmd != null {
+            c = cmd as *Command
+            c.kmap = km
+            c.kname = name
+            _command_refresh_menus(cmd)
+        }
+    }
 }
 
 // keymap_named(km, name) — the command registered under `name`, through the
@@ -3209,14 +3547,43 @@ keymap_name_at(km: ptr, i: int) -> string {
 // So a later keymap_bind or keymap_register changes what an already-attached
 // key does, and a keymap_unbind leaves the accelerator registered but inert,
 // which is exactly the behaviour rebinding needs.
+//
+// Attaching also makes the keymap the owner of the keys of every command it
+// reaches (see _keymap_key_for above): their menu items show the key the
+// keymap binds, and each command's own accel stops firing on its own.
 keymap_attach(km: ptr) {
     if km == null { return }
+    k = km as *Keymap
+    if k.attached == 1 { return }
+    k.attached = 1
     n = keymap_count(km)
     i = 0
     while i < n {
-        key = keymap_key_at(km, i)
-        shortcut(key) callback { _k = keymap_fire(km, key) }
+        _keymap_register_key(km, keymap_key_at(km, i))
         i = i + 1
+    }
+    // Adopt every command reachable by name through the chain, unless a
+    // nearer keymap re-registered that name to something else.
+    cur = km
+    while cur != null {
+        ck = cur as *Keymap
+        m = list.size(ck.names)
+        j = 0
+        while j < m {
+            np, _e = list.get(ck.names, j)
+            nm = (np as *NameCmd).name
+            cp = (np as *NameCmd).cmd
+            if cp != null {
+                if keymap_named(km, nm) == cp {
+                    c = cp as *Command
+                    c.kmap = km
+                    c.kname = nm
+                    _command_refresh_menus(cp)
+                }
+            }
+            j = j + 1
+        }
+        cur = ck.parent
     }
 }
 
@@ -3237,7 +3604,18 @@ keymap_free(km: ptr) -> int {
     j = 0
     while j < m {
         np, _e2 = list.get(k.names, j)
-        if np != null { free(np) }
+        if np != null {
+            // A command this keymap owned keeps no pointer into freed memory:
+            // it falls back to its own accel, and its menus say so.
+            cp = (np as *NameCmd).cmd
+            if cp != null {
+                if (cp as *Command).kmap == km {
+                    (cp as *Command).kmap = null
+                    _command_refresh_menus(cp)
+                }
+            }
+            free(np)
+        }
         j = j + 1
     }
     list.free(k.names)
@@ -3255,11 +3633,16 @@ command(label: string, accel: string, cb: fn) -> ptr {
     c.n_surfaces = 0
     c.surfaces = intarr_new_raw(CMD_MAX_SURFACES)
     c.scope = 0
+    c.kmap = null
+    c.kname = ""
+    c.menus = list.new()
     cp = c as ptr
     // The accelerator fires through the guard, so a disabled command's key is
-    // inert without the backend having to unregister anything.
+    // inert without the backend having to unregister anything. And it is
+    // CONDITIONAL: once an attached keymap owns the command, this key goes
+    // inert and propagates, so a rebind really moves it.
     if string.length(accel) > 0 {
-        shortcut(accel) callback { command_fire(cp) }
+        shortcut_when(accel, || { return _command_own_key_live(cp) }, || { command_fire(cp) })
     }
     return cp
 }
@@ -3411,25 +3794,31 @@ btn_command(_ctx: ptr, cp: ptr) -> int {
     return h
 }
 
-// menu_item_command(menu, cmd) — a menu item wired to the command. The accel
+// menu_item_command(menu, cmd) — a menu item wired to the command. The key
 // is shown after the label when there is one, matching menu_item_accel, but
 // the KEY was already registered by command() -- registering it twice would
 // fire the action twice per keystroke.
+//
+// The key SHOWN is the command's current one: its own accel, or, once an
+// attached keymap owns it, whatever that keymap binds to it now -- and the
+// item is relabelled when a keymap_bind/unbind/register changes that.
 menu_item_command(menu_handle: int, cp: ptr) {
     c = cp as *Command
-    shown = c.label
-    if string.length(c.accel) > 0 {
-        shown = string.concat(c.label, string.concat("  ", c.accel))
-    }
+    shown = _command_menu_text(cp)
     boxed = box_closure(|| { command_fire(cp) })
     aether_ui_menu_add_item(menu_handle, shown, boxed)
+    ms = malloc(sizeof(MenuSurf)) as *MenuSurf
+    ms.menu = menu_handle
+    ms.shown = shown
+    _ = list.add(c.menus, ms as ptr)
 }
 
 // ── Undo/Redo (the Swing UndoManager shape) ─────────────────────────
 // An app-wide undoable-edit stack (backend-shared store): undoable(label,
 // do, undo) RUNS `do` now and records the pair; undo()/redo() step the
 // cursor; pushing after undos truncates the redo tail (the classic rule).
-// enable_undo_shortcuts() wires Ctrl+Z / Ctrl+Shift+Z. The driver drives
+// enable_undo_shortcuts() wires Primary+Z / Primary+Shift+Z (Cmd on a Mac,
+// Ctrl elsewhere). The driver drives
 // the same stack via POST /undo, POST /redo, GET /undo_state.
 undoable(label: string, do_action: fn, undo_action: fn) {
     do_action()
@@ -3468,11 +3857,14 @@ undo_depth() -> int { return aether_ui_undo_depth_impl() }
 redo_depth() -> int { return aether_ui_redo_depth_impl() }
 undo_label() -> string { return aether_ui_undo_label_impl() }
 
+// Primary, not Ctrl: the platform's own undo key, so Cmd+Z on a Mac and
+// Ctrl+Z on GTK4/Win32. Registering Ctrl+Z made undo Control-Z on a Mac,
+// a key no Mac user presses for it (toolkit-envy G2).
 enable_undo_shortcuts() {
-    shortcut("Ctrl+Z", || {
+    shortcut("Primary+Z", || {
         _u = aether_ui_undo_step_impl()
     })
-    shortcut("Ctrl+Shift+Z", || {
+    shortcut("Primary+Shift+Z", || {
         _r = aether_ui_redo_step_impl()
     })
 }
@@ -5670,10 +6062,14 @@ table_on_select(tp: ptr, cb: fn) {
 
 // table_bind(t, list_state): the table tracks a LIST state — every ui_set_list
 // re-runs table_update. The each_bind sibling for tables. Seeds once.
+// Owned, like each_bind, by the container its rows render into.
 table_bind(tp: ptr, list_state: int) {
-    aether_ui_state_on_change(list_state, box_closure(|| {
+    t = tp as *TableDef
+    lb = t.lb as *ListBox
+    eg = lb.group as *EachGroup
+    _state_observe(list_state, 0, eg.container, || {
         table_update(tp, aether_ui_state_get_list(list_state))
-    }))
+    })
     table_update(tp, aether_ui_state_get_list(list_state))
 }
 
@@ -6203,7 +6599,7 @@ menu_item(menu_handle: int, label: string, on_press: fn) {
 // fires from the menu OR the keystroke with no separate wiring.
 //   menu_item_accel(file, "Save", "Ctrl+S") callback { save() }
 menu_item_accel(menu_handle: int, label: string, accel: string, on_press: fn) {
-    shown = string.concat(label, string.concat("  ", accel))
+    shown = string.concat(label, string.concat("  ", _accel_shown(accel)))
     boxed = box_closure(on_press)
     aether_ui_menu_add_item(menu_handle, shown, boxed)
     aether_ui_shortcut_impl(accel, boxed)

@@ -1386,6 +1386,13 @@ to say "the platform's command key", and it already shows:
 does not; GTK4 and Win32 the reverse. Falsify by resolving `Mod` to Ctrl
 everywhere: the macOS half goes red.
 
+*Status 2026-10-05:* taken, spelled `Primary` rather than a new `Mod` token —
+`Primary` already existed and meant GTK's `<Primary>` on GTK, so it was made to
+mean that everywhere (⌘ on AppKit/UIKit, Ctrl on GTK4/Win32) instead of adding
+a synonym. `Ctrl` stays literal; `enable_undo_shortcuts` registers
+`Primary+Z`/`Primary+Shift+Z`; menus display the resolved key. Gated by
+`spec_undo_demo` (the other platform's key is inert, the platform's undoes).
+
 ## G3. Key contexts, and asking the keymap — the scope C5 left out
 
 **Theirs.** Any element can declare `key_context("Editor")`, with key=value
@@ -1418,6 +1425,16 @@ one key bound in two contexts fires A's handler with focus in a *child* of A;
 after a rebind, `/menus` shows the new key. Falsify by matching the focused
 widget alone: the child-of-A case goes red, which is today's bug.
 
+*Status 2026-10-05:* the two bugs are fixed, contexts are not built.
+`widget_shortcut` and `on_key` test focus *within* the scope (parent walk over
+`aether_ui_widget_parent_impl`, which now answers the nearest registered
+ancestor on all four backends; gated by `spec_wshortcut_demo`). An attached
+keymap owns its commands' keys: `menu_item_command` shows the key the keymap
+binds now and is relabelled on bind/unbind/register (new ABI
+`aether_ui_menu_item_set_label`), a key bound after attach is registered at
+once, and the command's own `command()` accel goes inert (gated by
+`spec_command_demo`).
+
 ## G4. Notifications through a queue, flushed once — reshapes Q5's loop item
 
 **Theirs.** `notify` and `emit` push an `Effect`; `flush_effects` runs when
@@ -1440,6 +1457,13 @@ set is its own batch, so simple apps see no change. Deduplicate per cell;
 becomes a bound on flush iterations, and the queue is the chain it reports.
 **M.** Acceptance: `computed_s` over two cells both set in one `ui_batch`
 recomputes once (a counter the driver reads). Falsify by flushing per set.
+
+*Status 2026-10-05:* the observer table moved into `ui/module.ae` (backends
+call `aether_ui_state_notify` after each set; the four tables are gone) with
+`ui_batch() callback { … }` deduplicating per observer. An observer can be
+owned by a widget and is dropped when it dies (`each_bind`'s container);
+there is still no `state_observe` token / `state_unobserve`, so a
+`computed_s` lives as long as the app. Gated headless by `tests/state_batch`.
 
 ## G5. Background work owned by what it updates — worth taking
 
@@ -1484,6 +1508,11 @@ than stepping them, and the chord timeout can only be waited out.
   ?ms=`, with timers, transition ticks and the chord timeout reading one
   clock; each backend's timer source needs a seam. Seeded task ordering is
   declined: scheduling is Aether's runtime, not the toolkit's.
+
+*Status 2026-10-05:* headless `open_url` records instead of launching, on all
+four backends (none had a headless check, not only GTK4), and `GET
+/opened_urls` serves the list (gated by `spec_openurl_demo`). Scripted dialog
+answers and the manual clock are not done.
 
 ## G7. The creation site as identity — Aether already has the primitive
 

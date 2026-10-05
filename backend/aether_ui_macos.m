@@ -265,14 +265,6 @@ typedef struct {
     int rev;      // LIST: bumps on each set
 } StateCell;
 
-typedef struct {
-    int state_handle;
-    AeClosure* closure;
-} StateObserver;
-static StateObserver* state_observers = NULL;
-static int state_observer_count = 0;
-static int state_observer_capacity = 0;
-
 enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
        AEUI_BIND_VALUE = 3 };  // two-way: editable widget ⇄ string state
 typedef struct {
@@ -417,35 +409,14 @@ static void apply_prop_binding(PropBinding* b) {
     }
 }
 
-static void fire_state_observers(int state_handle) {
-    int n = state_observer_count;
-    for (int i = 0; i < n; i++) {
-        if (state_observers[i].state_handle == state_handle) {
-            AeClosure* c = state_observers[i].closure;
-            if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
-        }
-    }
-}
-
 static void update_prop_bindings(int state_handle) {
     for (int i = 0; i < prop_binding_count; i++) {
         if (prop_bindings[i].state_handle == state_handle) {
             apply_prop_binding(&prop_bindings[i]);
         }
     }
-    fire_state_observers(state_handle);
-}
-
-void aether_ui_state_on_change(int state_handle, void* boxed_closure) {
-    if (state_observer_count >= state_observer_capacity) {
-        state_observer_capacity = state_observer_capacity == 0 ? 16
-                                : state_observer_capacity * 2;
-        state_observers = realloc(state_observers,
-                                  sizeof(StateObserver) * state_observer_capacity);
-    }
-    state_observers[state_observer_count].state_handle = state_handle;
-    state_observers[state_observer_count].closure = (AeClosure*)boxed_closure;
-    state_observer_count++;
+    // Observers are the DSL's (ui/module.ae); the backend only reports the set.
+    aether_ui_state_notify(state_handle);
 }
 
 int aether_ui_state_create_list(void* list_ptr) {
@@ -1185,6 +1156,13 @@ static int aeui_ctx_menu_activate(int handle, int idx) {
 // idiomatic Mac accelerator, but the combo string is the cross-platform
 // contract and a spec asserting "Ctrl+B" must mean what it says. Cmd+<key>
 // is accepted as an explicit alias so apps can still ask for it by name.
+//
+// Primary is the PLATFORM's command key, as GTK's <Primary> is: Command
+// here (and on UIKit), Control on GTK4 and Win32. It is how one combo says
+// "undo" on every platform -- enable_undo_shortcuts registers Primary+Z, so
+// undo is Cmd+Z on a Mac rather than Ctrl+Z (toolkit-envy G2). It used to
+// map to Control, which made it a synonym of Ctrl and left no way to ask for
+// the platform's own accelerator key.
 // ---------------------------------------------------------------------------
 #define AEUI_MOD_CTRL  (1 << 0)
 #define AEUI_MOD_ALT   (1 << 1)
@@ -1241,8 +1219,9 @@ static void combo_normalize(const char* combo, char* out, int outsize) {
             if (len >= sizeof(name)) len = sizeof(name) - 1;
             memcpy(name, p + 1, len);
             name[len] = '\0';
-            if (strcasecmp(name, "Control") == 0 || strcasecmp(name, "Primary") == 0
+            if (strcasecmp(name, "Control") == 0
                 || strcasecmp(name, "Ctrl") == 0)       mods |= AEUI_MOD_CTRL;
+            else if (strcasecmp(name, "Primary") == 0)  mods |= AEUI_MOD_CMD;
             else if (strcasecmp(name, "Shift") == 0)     mods |= AEUI_MOD_SHIFT;
             else if (strcasecmp(name, "Alt") == 0)       mods |= AEUI_MOD_ALT;
             else if (strcasecmp(name, "Meta") == 0
@@ -1254,8 +1233,9 @@ static void combo_normalize(const char* combo, char* out, int outsize) {
         // Plus-separated form: Ctrl+Shift+R (a bare "Tab" has no '+' and
         // falls through with mods == 0).
         for (char* tok = strtok(buf, "+"); tok; tok = strtok(NULL, "+")) {
-            if (strcasecmp(tok, "Ctrl") == 0 || strcasecmp(tok, "Control") == 0
-                || strcasecmp(tok, "Primary") == 0)      mods |= AEUI_MOD_CTRL;
+            if (strcasecmp(tok, "Ctrl") == 0 || strcasecmp(tok, "Control") == 0)
+                                                         mods |= AEUI_MOD_CTRL;
+            else if (strcasecmp(tok, "Primary") == 0)    mods |= AEUI_MOD_CMD;
             else if (strcasecmp(tok, "Shift") == 0)      mods |= AEUI_MOD_SHIFT;
             else if (strcasecmp(tok, "Alt") == 0
                      || strcasecmp(tok, "Option") == 0)  mods |= AEUI_MOD_ALT;
@@ -3626,6 +3606,9 @@ void aether_ui_timer_cancel_impl(int timer_id) {
 
 void aether_ui_open_url_impl(const char* url) {
     if (!url) return;
+    // Headless: record, never launch. A spec that clicks a link must not open
+    // a browser on the test machine; GET /opened_urls shows what was asked for.
+    if (aeui_is_headless()) { aether_ui_opened_url_record(url); return; }
     [[NSWorkspace sharedWorkspace] openURL:
         [NSURL URLWithString:[NSString stringWithUTF8String:url]]];
 }
@@ -8299,6 +8282,16 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
     [m addItem:item];
     // Side-store for the AetherUIDriver /tray/{id}/menu/activate route.
     aether_ui_menu_item_record(menu_handle, label, boxed_closure);
+}
+
+void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
+                                   const char* new_label) {
+    if (!old_label || !new_label) return;
+    aether_ui_menu_item_relabel(menu_handle, old_label, new_label);
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    NSMenu* m = mac_menus[menu_handle - 1].menu;
+    NSMenuItem* item = [m itemWithTitle:[NSString stringWithUTF8String:old_label]];
+    if (item) [item setTitle:[NSString stringWithUTF8String:new_label]];
 }
 
 void aether_ui_menu_add_separator(int menu_handle) {

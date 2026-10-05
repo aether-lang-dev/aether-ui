@@ -15,11 +15,13 @@ import ui (root_vstack, text, btn, listbox, listbox_update, listbox_selected,
     command, command_set_enabled, command_attach,
     undoable, undo, redo, undo_depth, undo_label, undo_group,
     keymap, keymap_register, keymap_bind, keymap_attach, keymap_unbind,
+    ui_state_s, ui_get_s, ui_set_s, computed_s, ui_batch,
     set_text, get_text, set_toggle, get_toggle, set_slider, get_slider,
     set_width, set_height, set_min_width, set_min_height,
     get_width, get_min_width,
     textfield, textarea, toggle, slider, vstack)
 import std.list
+import std.string
 
 extern exit(code: int)
 extern malloc(size: int) -> ptr
@@ -111,6 +113,21 @@ main() {
     keymap_attach(km)
     _un = keymap_unbind(km, "Ctrl+S")
     keymap_bind(km, "Ctrl+Shift+S", "file.save")
+
+    // --- README: Reactive state (ui_batch) ------------------------------
+    first = ui_state_s("Ada")
+    last = ui_state_s("Lovelace")
+    full = ui_state_s("")
+    computed_s(|| {
+        _r = ui_set_s(full, string.concat(ui_get_s(first), ui_get_s(last)))
+    }, first, last)
+    ui_batch() callback {
+        _a = ui_set_s(first, "Grace")
+        _b = ui_set_s(last, "Hopper")   // `full` recomputes once, here
+    }
+    if ui_get_s(full) != "GraceHopper" {
+        println("  FAIL: ui_batch did not leave the computed cell current")  bad = bad + 1
+    }
 
     // --- README: Widget accessors -------------------------------------
     tf = textfield(root, "hint", |val: string| { })

@@ -1,0 +1,116 @@
+// State observers coalesce in a batch, and die with their owner (toolkit-envy
+// G4).
+//
+// Observers used to fire synchronously, once per set, from four copies of an
+// observer table (one per backend). So computed_s over two inputs recomputed
+// TWICE when both changed, and the first recompute saw the new first name
+// with the old last name -- "Grace Lovelace", a value no one ever set. They
+// now live in ui/module.ae: ui_batch { … } runs each observer once at its
+// close, and an observer owned by a widget (each_bind's container) is dropped
+// once that widget is gone instead of rendering into it forever.
+//
+// Falsify: make ui_batch flush per set (or drop the depth check in
+// _state_hub_notify) and "recomputes once" reads 2 and the torn value shows
+// up; drop the owner check and the dead container renders again.
+
+import ui
+import ui (root_vstack, vstack, text, ui_state_s, ui_get_s, ui_set_s,
+    ui_state_list, ui_set_list, each, each_bind, computed_s, ui_batch,
+    clear_children)
+import std.string
+import std.list
+
+extern exit(code: int)
+
+var recomputes = 0
+var torn = 0
+var renders = 0
+var bad = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+check_s(label: string, got: string, want: string) {
+    if got != want { println("  MISMATCH: ${label} got='${got}' want='${want}'")  bad = bad + 1 }
+}
+
+// A set, without a discard binding in the caller: `_ = ui_set_s(...)` inside
+// a nested trailing block is captured as a variable named `_` by the closure
+// conversion and fails to compile (aether 0.778.0).
+put(h: int, v: string) {
+    _r = ui_set_s(h, v)
+}
+
+main() {
+    first = ui_state_s("Ada")
+    last = ui_state_s("Lovelace")
+    full = ui_state_s("")
+    computed_s(|| {
+        recomputes = recomputes + 1
+        v = string.concat(ui_get_s(first), string.concat(" ", ui_get_s(last)))
+        if v == "Grace Lovelace" { torn = torn + 1 }
+        put(full, v)
+    }, first, last)
+    check("computed_s seeds once", recomputes, 1)
+    check_s("seeded value", ui_get_s(full), "Ada Lovelace")
+
+    // --- the bug: both inputs change -----------------------------------
+    ui_batch() callback {
+        put(first, "Grace")
+        put(last, "Hopper")
+        check("nothing recomputed inside the batch", recomputes, 1)
+    }
+    check("both inputs set in one batch -> ONE recompute", recomputes, 2)
+    check("the half-updated value was never computed", torn, 0)
+    check_s("and the result is the final state", ui_get_s(full), "Grace Hopper")
+
+    // Nested batches flush once, at the OUTERMOST close.
+    ui_batch() callback {
+        put(first, "Ada")
+        ui_batch() callback {
+            put(last, "Byron")
+        }
+        check("an inner batch does not flush", recomputes, 2)
+    }
+    check("the outer close runs it once", recomputes, 3)
+    check_s("nested result", ui_get_s(full), "Ada Byron")
+
+    // A batch that changes nothing the observer reads runs nothing.
+    other = ui_state_s("x")
+    ui_batch() callback { put(other, "y") }
+    check("an unrelated batch recomputes nothing", recomputes, 3)
+
+    // Outside a batch every set is its own batch: unchanged behaviour.
+    put(last, "King")
+    check("an unbatched set recomputes immediately", recomputes, 4)
+    check_s("unbatched result", ui_get_s(full), "Ada King")
+
+    // --- an owned observer dies with its owner ------------------------
+    holder = 0
+    grp = null
+    rows = ui_state_list(list.new())
+    _r = root_vstack(4) {
+        holder = vstack(4) {
+            grp = each("v", 2, |item: ptr, i: int, parent: int| {
+                renders = renders + 1
+                _t = text(parent, "row")
+            })
+        }
+    }
+    each_bind(grp, rows)
+    one = list.new()
+    _ = list.add(one, null)
+    ui_set_list(rows, one)
+    check("each_bind renders on a set while its container lives", renders, 1)
+
+    clear_children(holder)          // the each container is destroyed
+    two = list.new()
+    _ = list.add(two, null)
+    _ = list.add(two, null)
+    ui_set_list(rows, two)
+    check("and not once its container is gone", renders, 1)
+
+    if bad > 0 { println("state_batch: ${bad} mismatch(es)")  exit(1) }
+    println("state_batch: observers coalesce per batch and die with their owner")
+    exit(0)
+}

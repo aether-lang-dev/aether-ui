@@ -86,6 +86,7 @@
 #include <math.h>
 #include "aether_ui_backend.h"
 #include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
+#include "aether_ui_system_extras.h" // headless open_url record (GET /opened_urls)
 
 // ---------------------------------------------------------------------------
 // Closure struct — must match Aether codegen's _AeClosure layout (identical to
@@ -3121,13 +3122,23 @@ int aether_ui_widget_count_impl(void) { return widget_count; }
 const char* aether_ui_widget_kind_impl(int handle) { return aeui_kind_name(get_widget_type(handle)); }
 int aether_ui_widget_parent_impl(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (!v || !v.superview) return 0;
-    return aether_ui_handle_for_widget((__bridge void*)v.superview);
+    if (!v) return 0;
+    // The nearest REGISTERED ancestor, as GTK4 and AppKit answer: UIKit
+    // interposes untracked views (a scroll view's content, a stack's
+    // wrappers), and stopping at the raw superview reported 0 for anything
+    // inside one -- which cut ui.widget_shortcut's descendant walk short.
+    for (UIView* p = v.superview; p; p = p.superview) {
+        int h = aether_ui_handle_for_widget((__bridge void*)p);
+        if (h > 0) return h;
+    }
+    return 0;
 }
 
 // --- System: URL open, dark mode, clipboard ---------------------------------
 void aether_ui_open_url_impl(const char* url) {
     if (!url || !url[0]) return;
+    // Headless: record, never launch (GET /opened_urls lists them).
+    if (aeui_is_headless()) { aether_ui_opened_url_record(url); return; }
     NSURL* u = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
     if (!u) return;
     if ([UIApplication respondsToSelector:@selector(sharedApplication)]) {
@@ -3169,11 +3180,6 @@ typedef struct {
     void* list;   // LIST payload (opaque std.list ptr, NOT owned)
     int rev;      // LIST: bumps on each set
 } StateCell;
-
-typedef struct { int state_handle; AeClosure* closure; } StateObserver;
-static StateObserver* state_observers = NULL;
-static int state_observer_count = 0;
-static int state_observer_capacity = 0;
 
 enum { AEUI_BIND_TEXT = 0, AEUI_BIND_ENABLED = 1, AEUI_BIND_HIDDEN = 2,
        AEUI_BIND_VALUE = 3 };
@@ -3269,29 +3275,12 @@ static void apply_prop_binding(PropBinding* b) {
         else                              aether_ui_widget_set_hidden(b->widget_handle, on);
     }
 }
-static void fire_state_observers(int state_handle) {
-    int n = state_observer_count;
-    for (int i = 0; i < n; i++)
-        if (state_observers[i].state_handle == state_handle) {
-            AeClosure* c = state_observers[i].closure;
-            if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
-        }
-}
 static void update_prop_bindings(int state_handle) {
     for (int i = 0; i < prop_binding_count; i++)
         if (prop_bindings[i].state_handle == state_handle)
             apply_prop_binding(&prop_bindings[i]);
-    fire_state_observers(state_handle);
-}
-
-void aether_ui_state_on_change(int state_handle, void* boxed_closure) {
-    if (state_observer_count >= state_observer_capacity) {
-        state_observer_capacity = state_observer_capacity == 0 ? 16 : state_observer_capacity * 2;
-        state_observers = realloc(state_observers, sizeof(StateObserver) * state_observer_capacity);
-    }
-    state_observers[state_observer_count].state_handle = state_handle;
-    state_observers[state_observer_count].closure = (AeClosure*)boxed_closure;
-    state_observer_count++;
+    // Observers are the DSL's (ui/module.ae); the backend only reports the set.
+    aether_ui_state_notify(state_handle);
 }
 
 int aether_ui_state_create_list(void* list_ptr) {
@@ -4248,6 +4237,21 @@ void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_clo
 void aether_ui_menu_add_separator(int menu_handle) {
     menu_push_item(menu_handle, "", NULL, 1);
 }
+// The item's label lives in the record menu_popup builds the sheet from, so
+// a relabel there is what the next popup shows.
+void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
+                                   const char* new_label) {
+    if (!old_label || !new_label) return;
+    aether_ui_menu_item_relabel(menu_handle, old_label, new_label);
+    if (menu_handle < 1 || menu_handle > menu_count) return;
+    AeuiMenuRec* m = &menus[menu_handle - 1];
+    for (int i = 0; i < m->count; i++) {
+        if (m->items[i].is_sep || strcmp(m->items[i].label, old_label) != 0) continue;
+        free(m->items[i].label);
+        m->items[i].label = strdup(new_label);
+        return;
+    }
+}
 // Menu-bar wiring: recorded, not displayed (no live iOS menu bar).
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) { (void)bar_handle; (void)menu_handle; }
 void aether_ui_menu_bar_attach(int app_handle, int bar_handle) { (void)app_handle; (void)bar_handle; }
@@ -4590,13 +4594,40 @@ typedef struct { char* combo; AeClosure* closure; AeClosure* enabled; } AeuiShor
 static AeuiShortcut* shortcuts = NULL;
 static int shortcut_count = 0, shortcut_cap = 0;
 
+// "Primary" is the platform's command key (GTK's <Primary>): Command here
+// and on AppKit, Control on GTK4 and Win32. Combos are matched verbatim
+// against the "[Cmd+][Ctrl+][Alt+][Shift+]Key" spelling window_key_deliver
+// builds, so the token is resolved at registration: "Primary+Z" is stored as
+// "Cmd+Z". Returns a malloc'd copy.
+static char* aeui_resolve_primary(const char* combo) {
+    size_t n = strlen(combo);
+    char* out = malloc(n + 1);          // "Cmd" is shorter than "Primary"
+    size_t o = 0;
+    const char* p = combo;
+    // Tokens split on '+' and on ' ' (a chord is stored "first second").
+    while (*p) {
+        size_t len = strcspn(p, "+ ");
+        const char* sep = p[len] ? p + len : NULL;
+        if (sep && *sep == '+' && len == 7 && strncasecmp(p, "Primary", 7) == 0) {
+            memcpy(out + o, "Cmd", 3); o += 3;
+        } else {
+            memcpy(out + o, p, len); o += len;
+        }
+        if (!sep) break;
+        out[o++] = *sep;
+        p = sep + 1;
+    }
+    out[o] = '\0';
+    return out;
+}
+
 void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) {
     if (!combo || !boxed_closure) return;
     if (shortcut_count >= shortcut_cap) {
         shortcut_cap = shortcut_cap == 0 ? 16 : shortcut_cap * 2;
         shortcuts = realloc(shortcuts, sizeof(AeuiShortcut) * shortcut_cap);
     }
-    shortcuts[shortcut_count].combo = strdup(combo);
+    shortcuts[shortcut_count].combo = aeui_resolve_primary(combo);
     shortcuts[shortcut_count].closure = (AeClosure*)boxed_closure;
     shortcuts[shortcut_count].enabled = (AeClosure*)enabled_closure;
     shortcut_count++;

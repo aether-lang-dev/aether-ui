@@ -322,6 +322,19 @@ int aether_ui_menu_item_invoke(int menu_handle, const char* label) {
     return 3;
 }
 
+int aether_ui_menu_item_relabel(int menu_handle, const char* old_label,
+                                const char* new_label) {
+    if (!old_label || !new_label) return 0;
+    for (int i = 0; i < g_menu_item_count; i++) {
+        MenuItemRec* m = &g_menu_items[i];
+        if (!m->in_use || m->menu_handle != menu_handle) continue;
+        if (strcmp(m->label, old_label) != 0) continue;
+        copy_str(m->label, sizeof(m->label), new_label);
+        return 1;
+    }
+    return 0;
+}
+
 int aether_ui_menu_item_count_for(int menu_handle) {
     int n = 0;
     for (int i = 0; i < g_menu_item_count; i++) {
@@ -354,6 +367,31 @@ int aether_ui_menu_handles(int* out, int max) {
         out[n++] = h;
     }
     return n;
+}
+
+// ---------------------------------------------------------------------------
+// Headless open_url record (see the header). A small fixed ring would hide
+// the order a spec asserts on, so this is a plain capped list: past the cap,
+// later URLs are dropped rather than overwriting earlier ones.
+// ---------------------------------------------------------------------------
+#define OPENED_URL_MAX 64
+static char* g_opened_urls[OPENED_URL_MAX];
+static int   g_opened_url_count = 0;
+
+void aether_ui_opened_url_record(const char* url) {
+    if (!url || g_opened_url_count >= OPENED_URL_MAX) return;
+    size_t n = strlen(url);
+    char* copy = (char*)malloc(n + 1);
+    if (!copy) return;
+    memcpy(copy, url, n + 1);
+    g_opened_urls[g_opened_url_count++] = copy;
+}
+
+int aether_ui_opened_url_count(void) { return g_opened_url_count; }
+
+const char* aether_ui_opened_url_at(int index) {
+    if (index < 0 || index >= g_opened_url_count) return "";
+    return g_opened_urls[index];
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +447,24 @@ void* aether_ui_current_sheet_get_impl(void) { return aecs_current_sheet; }
 static void* aeui_commands_scope = NULL;
 void aether_ui_commands_scope_set_impl(void* scope) { aeui_commands_scope = scope; }
 void* aether_ui_commands_scope_get_impl(void) { return aeui_commands_scope; }
+
+// The DSL's state-observer table and the closure that receives every set (see
+// aether_ui_backend.h). One copy for all four backends: before this each kept
+// its own observer array and fired it synchronously per set, so a computed
+// cell over two inputs recomputed twice when both changed, and there was no
+// place to coalesce that short of editing four files the same way.
+static void* aeui_state_hub = NULL;
+static void* aeui_state_notify_boxed = NULL;
+void aether_ui_state_hub_set_impl(void* hub, void* boxed_notify) {
+    aeui_state_hub = hub;
+    aeui_state_notify_boxed = boxed_notify;
+}
+void* aether_ui_state_hub_get_impl(void) { return aeui_state_hub; }
+void aether_ui_state_notify(int state_handle) {
+    AeClosureLocal* c = (AeClosureLocal*)aeui_state_notify_boxed;
+    if (!c || !c->fn) return;   // nothing observes any cell yet
+    ((void (*)(void*, int))c->fn)(c->env, state_handle);
+}
 
 // A builder _ctx is an opaque void*, but a widget/menu handle is an int -- and
 // Aether will not cast between ptr and int. The widget path already does this

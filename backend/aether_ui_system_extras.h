@@ -108,6 +108,10 @@ void aether_ui_menu_item_record(int menu_handle, const char* label,
                                  void* boxed_closure);
 // Returns 0 ok, 3 not-found, 4 no closure.
 int  aether_ui_menu_item_invoke(int menu_handle, const char* label);
+// Rename the first recorded item on menu_handle labelled old_label. Returns
+// 1 if one was renamed. Backends call it from aether_ui_menu_item_set_label.
+int  aether_ui_menu_item_relabel(int menu_handle, const char* old_label,
+                                 const char* new_label);
 // Enumerate items belonging to a given menu_handle in declaration
 // order. Used by the SNI/DBusMenu backend to project the menu over
 // D-Bus; the registry only stores labels (no separators) — passing a
@@ -119,6 +123,17 @@ const char*  aether_ui_menu_item_label_at(int menu_handle, int index);
 // order, written into out[] (up to max). Returns the count. Lets the driver's
 // GET /menus enumerate menus without a separate menu registry.
 int          aether_ui_menu_handles(int* out, int max);
+
+// ---------------------------------------------------------------------------
+// open_url under AETHER_UI_HEADLESS (toolkit-envy G6): a headless run must
+// not hand a URL to the OS -- a spec that clicks a link would launch a
+// browser on the CI box -- so every backend's open_url_impl records it here
+// instead, and the driver's GET /opened_urls lists what the app asked to
+// open, in order. Not recorded outside headless: there the URL really opens.
+// ---------------------------------------------------------------------------
+void        aether_ui_opened_url_record(const char* url);
+int         aether_ui_opened_url_count(void);
+const char* aether_ui_opened_url_at(int index);   // "" when out of range
 
 // ---------------------------------------------------------------------------
 // Headless

@@ -119,6 +119,43 @@ main() {
             ok = uidriver.wait_body_contains("/widgets", "fired: 5", 20)
             spec.assert_true(ok, "Ctrl+R reached the same command")
         }
+
+        // ── a keymap-owned command on a menu (toolkit-envy G3) ──────────
+        // menu_item_command printed the accel given to command(), so after a
+        // keymap rebind the menu still advertised the old key -- and the old
+        // key still fired, because command() had registered it itself.
+        spec.it("the menu shows the key the keymap binds") callback {
+            b = uidriver.menus_body()
+            spec.assert_contains(b, "\"Copy  Ctrl+Shift+C\"", "menu shows the bound key")
+            _r = uidriver.window_key("Ctrl+Shift+C")
+            ok = uidriver.wait_body_contains("/widgets", "copied: 1", 20)
+            spec.assert_true(ok, "the bound key fires the command")
+        }
+
+        spec.it("after a rebind the menu shows the NEW key") callback {
+            rb = uidriver.widget_id_by_text("Rebind copy")
+            uidriver.click_widget(rb)
+            ok = uidriver.wait_body_contains("/menus", "\"Copy  Ctrl+Shift+Y\"", 20)
+            spec.assert_true(ok, "menu relabelled to the new key")
+            b = uidriver.menus_body()
+            spec.assert_eq(string.contains(b, "Ctrl+Shift+C"), 0, "the old key is gone from the menu")
+        }
+
+        spec.it("the old key is inert and the new key fires") callback {
+            _r = uidriver.window_key("Ctrl+Shift+C")
+            _s = uidriver.wait_body_contains("/widgets", "copied: 2", 6)
+            spec.assert_contains(uidriver.get_body("/widgets"), "copied: 1",
+                "Ctrl+Shift+C no longer runs the command")
+            _r2 = uidriver.window_key("Ctrl+Shift+Y")
+            ok = uidriver.wait_body_contains("/widgets", "copied: 2", 20)
+            spec.assert_true(ok, "Ctrl+Shift+Y does")
+        }
+
+        spec.it("the item was relabelled, not duplicated") callback {
+            b = uidriver.menus_body()
+            spec.assert_eq(uidriver.count_occurrences(b, "\"Copy  "), 1,
+                "exactly one Copy item on the menu")
+        }
     }
     return spec.run_summary(fw)
 }

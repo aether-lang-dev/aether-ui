@@ -2,8 +2,8 @@
 // particular widget has focus. Two fields; Enter means different things
 // depending on which is focused (and nothing when neither is).
 import ui
-import ui (window, vstack, text, textfield, widget_shortcut, focus,
-    enable_test_server)
+import ui (window, vstack, hstack, text, textfield, widget_shortcut, on_key,
+    focus, enable_test_server)
 import std.os (os_getenv)
 
 extern aether_ui_text_set_string(handle: int, text: string)
@@ -23,6 +23,24 @@ main() {
             widget_shortcut(city, "Return") callback {
                 aether_ui_text_set_string(status_h, "status: city submitted")
             }
+            // A CONTAINER as the scope: `panel` never has focus itself, only
+            // the field two levels inside it does, and the shortcut must still
+            // fire -- "while widget (or a descendant) has focus". on_key makes
+            // the same promise for unbound keys.
+            panel = vstack(4) {
+                text("panel")
+                hstack(4) {
+                    _note = textfield("note…") callback |_v: string| {}
+                }
+            }
+            widget_shortcut(panel, "Ctrl+J") callback {
+                aether_ui_text_set_string(status_h, "status: panel shortcut")
+            }
+            on_key(panel, |k: string, _m: int| {
+                if k == "k" {   // Ctrl+K: bound by no shortcut, so it reaches on_key
+                    aether_ui_text_set_string(status_h, "status: panel key")
+                }
+            })
             // Focus the name field by default so the spec has a known start.
             focus(name)
         }

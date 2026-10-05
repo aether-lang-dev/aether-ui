@@ -1424,6 +1424,33 @@ static void handle_request_inner(aether_sock_t client_fd,
         aether_ui_tray_set_tooltip_reg(id, text);
         send_http(client_fd, 200, "OK", "text/plain", "set");
 
+    // --- /opened_urls ---
+    // GET /opened_urls → every URL the app passed to open_url while headless,
+    // in order. Headless open_url records instead of launching a browser
+    // (toolkit-envy G6), so a spec can assert a link was followed.
+    } else if (method == 0 && strcmp(path, "/opened_urls") == 0) {
+        int n = aether_ui_opened_url_count();
+        size_t cap = 64;
+        for (int i = 0; i < n; i++) cap += strlen(aether_ui_opened_url_at(i)) * 6 + 4;
+        char* body = (char*)malloc(cap);
+        size_t pos = 0;
+        body[pos++] = '[';
+        for (int i = 0; i < n; i++) {
+            if (i > 0) body[pos++] = ',';
+            body[pos++] = '"';
+            for (const unsigned char* u = (const unsigned char*)aether_ui_opened_url_at(i);
+                 *u; u++) {
+                if (*u == '"' || *u == '\\') { body[pos++] = '\\'; body[pos++] = (char)*u; }
+                else if (*u < 0x20) pos += (size_t)sprintf(body + pos, "\\u%04x", *u);
+                else body[pos++] = (char)*u;
+            }
+            body[pos++] = '"';
+        }
+        body[pos++] = ']';
+        body[pos] = '\0';
+        send_http(client_fd, 200, "OK", "application/json", body);
+        free(body);
+
     // --- /notifications ---
     } else if (method == 0 && strcmp(path, "/notifications") == 0) {
         int n = aether_ui_notif_count();

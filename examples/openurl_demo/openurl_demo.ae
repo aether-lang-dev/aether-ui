@@ -1,0 +1,29 @@
+// open_url under AETHER_UI_HEADLESS — a link a spec can click without a
+// browser opening on the machine running it (toolkit-envy G6).
+//
+// Headless, every backend RECORDS the URL instead of handing it to the OS,
+// and the driver's GET /opened_urls lists what the app asked to open, in
+// order. Outside headless the URL really opens. The URLs use a scheme no
+// application claims, so even a run that forgets AETHER_UI_HEADLESS opens
+// nothing.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, btn, open_url, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("open_url", 360, 180) {
+        vstack(8) {
+            text("Links open in the browser; headless, they are recorded.")
+            _d = btn("Open docs") callback {
+                open_url("aeui-spec-nohandler://docs/guide?section=keys")
+            }
+            _i = btn("Open issue") callback {
+                open_url("aeui-spec-nohandler://issues/42")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

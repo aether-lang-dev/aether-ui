@@ -429,7 +429,8 @@ Surveyed after win32 parity. Tier 1 (fits current architecture):
   `st-<name>` marker class. `states_demo` 3/3 GTK4 AND win32.
 - ~~**Undo/Redo (Swing UndoManager)**~~ **DONE 2026-07-20** —
   `undoable(label, do, undo)` + undo/redo/depths/label +
-  `enable_undo_shortcuts()` (Ctrl+Z/Ctrl+Shift+Z); shared edit stack in
+  `enable_undo_shortcuts()` (Primary+Z/Primary+Shift+Z: Cmd on macOS/iOS,
+  Ctrl on GTK4/Win32 -- it was Ctrl+Z everywhere until 2026-10); shared edit stack in
   system_extras; redo-tail truncation on new edits; driver POST /undo,
   POST /redo, GET /undo_state on both servers (per-platform marshalled
   fires). `undo_demo` 5/5 GTK4 AND win32. Follow-up: text-field

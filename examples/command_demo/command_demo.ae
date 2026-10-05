@@ -22,6 +22,8 @@ import ui
 import ui (window, vstack, hstack, text, btn, divider,
     command, command_set_enabled, command_enabled, btn_command,
     commands, action, does, on_button, command_group_set_enabled,
+    menu_bar, menu, menu_bar_add, attach_menu_bar, menu_item_command,
+    keymap, keymap_register, keymap_bind, keymap_unbind, keymap_attach,
     enable_test_server)
 import std.os (os_getenv)
 
@@ -29,8 +31,10 @@ extern aether_ui_text_set_string(handle: int, text: string)
 
 main() {
     fires = 0
+    copies = 0
     status = 0
     counter = 0
+    copied = 0
 
     window("command demo", 460, 300) {
         vstack(10) {
@@ -67,6 +71,30 @@ main() {
                     }
                     on_button()
                 }
+            }
+
+            divider()
+            // A command whose key a KEYMAP owns, shown on a menu item. The
+            // item must follow a rebind: it shows the key the keymap binds
+            // now, the old key goes inert (command() registered it too), and
+            // the new key fires (toolkit-envy G3).
+            copied = text("copied: 0")
+            copy = command("Copy", "Ctrl+Shift+C") callback {
+                copies = copies + 1
+                aether_ui_text_set_string(copied, "copied: ${copies}")
+            }
+            km = keymap(null)
+            keymap_register(km, "edit.copy", copy)
+            keymap_bind(km, "Ctrl+Shift+C", "edit.copy")
+            bar = menu_bar()
+            edit = menu("Edit")
+            menu_item_command(edit, copy)
+            menu_bar_add(bar, edit)
+            attach_menu_bar(0, bar)
+            keymap_attach(km)
+            _rb = btn("Rebind copy") callback {
+                _u = keymap_unbind(km, "Ctrl+Shift+C")
+                keymap_bind(km, "Ctrl+Shift+Y", "edit.copy")
             }
 
             divider()

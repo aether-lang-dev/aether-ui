@@ -1,0 +1,42 @@
+// spec_openurl_demo.ae — open_url under AETHER_UI_HEADLESS records the URL
+// rather than launching a browser (toolkit-envy G6). Run HEADLESS: ci.sh
+// launches this one app with AETHER_UI_HEADLESS=1.
+//
+// GTK4 called gtk_show_uri unconditionally, so a spec clicking a link opened
+// a browser on the CI box; AppKit, Win32 and UIKit did the same through
+// NSWorkspace, ShellExecuteW and UIApplication. Now all four record, and
+// GET /opened_urls is the "opened_url" a spec asserts on.
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "headless open_url over AetherUIDriver") {
+        spec.it("nothing is recorded before a link is clicked") callback {
+            spec.assert_eq(uidriver.get_status("/opened_urls"), 200, "the route exists")
+            spec.assert_str_eq(uidriver.get_body("/opened_urls"), "[]", "no URL yet")
+        }
+
+        spec.it("clicking a link records its URL instead of opening it") callback {
+            d = uidriver.widget_id_by_text("Open docs")
+            uidriver.click_widget(d)
+            ok = uidriver.wait_body_contains("/opened_urls",
+                "aeui-spec-nohandler://docs/guide?section=keys", 20)
+            spec.assert_true(ok, "the docs URL was recorded")
+        }
+
+        spec.it("URLs are recorded in the order they were opened") callback {
+            i = uidriver.widget_id_by_text("Open issue")
+            uidriver.click_widget(i)
+            ok = uidriver.wait_body_contains("/opened_urls", "issues/42", 20)
+            spec.assert_true(ok, "the issue URL was recorded")
+            spec.assert_str_eq(uidriver.get_body("/opened_urls"),
+                "[\"aeui-spec-nohandler://docs/guide?section=keys\",\"aeui-spec-nohandler://issues/42\"]",
+                "both, in click order")
+        }
+    }
+    return spec.run_summary(fw)
+}

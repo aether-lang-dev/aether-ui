@@ -1,13 +1,15 @@
 // Undo/Redo — the Swing UndoManager shape on aether-ui. undoable(label,
-// do, undo) runs the action AND records the pair; Ctrl+Z / Ctrl+Shift+Z
-// are prewired via enable_undo_shortcuts(); the driver steps the same
+// do, undo) runs the action AND records the pair; Primary+Z /
+// Primary+Shift+Z (Cmd on a Mac, Ctrl elsewhere) are prewired via
+// enable_undo_shortcuts(); the driver steps the same
 // stack via POST /undo, POST /redo, GET /undo_state.
 //
 //   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
 
 import ui
 import ui (content_inset, window, vstack, hstack, text, btn, divider,
-    undoable, undo, redo, enable_undo_shortcuts, enable_test_server)
+    undoable, undo, redo, enable_undo_shortcuts, enable_test_server,
+    backend_name)
 import std.os (os_getenv)
 import std.string
 
@@ -49,7 +51,10 @@ main() {
                 _d = btn("Redo") callback { _dr = redo() }
             }
             divider()
-            text("Ctrl+Z / Ctrl+Shift+Z work too.")
+            text("Cmd+Z / Cmd+Shift+Z on a Mac, Ctrl+Z / Ctrl+Shift+Z elsewhere.")
+            // Which backend: the spec asks the app, so it knows which key is
+            // the platform's undo and which must stay inert.
+            text(string.concat("backend: ", backend_name()))
         }
         // The standard window gutter: content not flush against the frame.
         _ci = content_inset(root)

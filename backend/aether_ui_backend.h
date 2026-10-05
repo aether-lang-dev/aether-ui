@@ -543,6 +543,13 @@ int  aether_ui_menu_create(const char* label);
 void aether_ui_menu_add_item(int menu_handle, const char* label,
                              void* boxed_closure);
 void aether_ui_menu_add_separator(int menu_handle);
+/* Relabel the item on `menu_handle` currently titled `old_label` (the first
+   such item). The native item and the driver's menu-item side-store both
+   change, so GET /menus and /menu/{h}/activate?label= see the new text. Its
+   closure is untouched. Exists so a command's menu item can follow a keymap
+   rebind: menu_item_command shows the key the keymap binds NOW. */
+void aether_ui_menu_item_set_label(int menu_handle, const char* old_label,
+                                   const char* new_label);
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle);
 void aether_ui_menu_bar_attach(int app_handle, int bar_handle);
 /* Per-window menu bar (win_handle: 1=primary, 2..=extras). */
@@ -766,10 +773,19 @@ int   aether_ui_state_create_list(void* list_ptr);
 void* aether_ui_state_get_list(int handle);
 void  aether_ui_state_set_list(int handle, void* list_ptr);
 int   aether_ui_state_list_rev(int handle);
-// Generic state observer: a boxed closure fired (no args) on every set of
-// state_handle. The unifying primitive behind each_bind (re-run each_update)
-// and computed state (recompute + re-set the derived cell).
-void  aether_ui_state_on_change(int state_handle, void* boxed_closure);
+// State observers live ABOVE the ABI (ui/module.ae), in one copy rather than
+// four: what an observer is, when it runs, and how a batch coalesces passes
+// are semantics, and a backend translates, never interprets
+// (docs/design/semantics-belong-above-the-abi.md). A backend's whole part is
+// to call aether_ui_state_notify(handle) after EVERY set of a cell -- from the
+// DSL, from the driver's /state route, from a bound widget writing back --
+// once its own property bindings are applied. Shared, in system_extras.c:
+// notify hands the handle to the one |handle: int| closure the DSL installed
+// with hub_set, and hub_get returns the DSL's observer table (Aether has no
+// top-level mutable module state, so the C side holds the pointer).
+void  aether_ui_state_notify(int state_handle);
+void  aether_ui_state_hub_set_impl(void* hub, void* boxed_notify);
+void* aether_ui_state_hub_get_impl(void);
 // Two-way value binding: editable widget ⇄ string state (bind_value).
 void  aether_ui_bind_value(int state_handle, int widget_handle);
 // Property bindings: state → widget property links, applied on set.

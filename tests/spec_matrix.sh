@@ -136,6 +136,7 @@ SUITES=(
   "zen|examples/zen_demo|zen_demo/spec_zen_demo|"
   "states|examples/states_demo|states_demo/spec_states_demo|"
   "undo|examples/undo_demo|undo_demo/spec_undo_demo|"
+  "openurl|examples/openurl_demo|openurl_demo/spec_openurl_demo|AETHER_UI_HEADLESS=1"
   "textpath|examples/textpath_demo|textpath_demo/spec_textpath_demo|"
   "pills|examples/pills_demo|pills_demo/spec_pills_demo|"
   "icons|examples/icons_demo|icons_demo/spec_icons_demo|"
