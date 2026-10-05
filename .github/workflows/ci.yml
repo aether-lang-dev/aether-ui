@@ -273,7 +273,11 @@ jobs:
           # against the 0.737 pinned above and both legs were red from that
           # bump on. aeb 3faaf02 is the fix; ebdfb22 keeps macOS's keg-only
           # -L directories.
-          AEB_REF: ${{ vars.AEB_REF || '1abdb316808bc2e0f0704c0fec45aa24cb7a35f1' }}
+          # v0.325 (2026-10-05): 1abdb31 predates Aether 0.758's byte[] slices,
+          # so `make install` died on fs.write_atomic's argument count and both
+          # legs were red from the 0.766 bump on. v0.325 is the aeb the whole
+          # family pins with 0.778.0 (verified there: 152/152 + the CI itests).
+          AEB_REF: ${{ vars.AEB_REF || 'v0.325' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
