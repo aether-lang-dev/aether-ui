@@ -37,6 +37,10 @@ needed to *use* aether-ui; read these to change it.
   NSAccessibility.
 - [**multi-window.md**](design/multi-window.md) — co-equal top-level
   windows over one event loop.
+- [**toolkit-envy.md**](design/toolkit-envy.md) — what Swing, Flutter,
+  Fyne, Slint, Qt Quick and Zed's GPUI got right, each read from its
+  source and judged against aether-ui's shape, with the change series
+  (C1–C10) that has been landing from it.
 
 ### Rendering
 

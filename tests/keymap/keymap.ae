@@ -1,4 +1,4 @@
-// Bindings as data (SWING_ENVY C5), and the rebind its acceptance asks for.
+// Bindings as data (toolkit-envy C5), and the rebind its acceptance asks for.
 //
 // A shortcut declared with shortcut("Ctrl+S") callback { ... } bakes the key
 // into the registration: nothing can enumerate it and nothing can move it, so

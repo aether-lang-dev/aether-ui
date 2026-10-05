@@ -1,4 +1,4 @@
-// Edits recorded inside undo_group collapse into one step (SWING_ENVY C10).
+// Edits recorded inside undo_group collapse into one step (toolkit-envy C10).
 //
 // A drag that records an edit per pixel is one gesture to the user, and undo
 // should agree rather than making them press it thirty times.

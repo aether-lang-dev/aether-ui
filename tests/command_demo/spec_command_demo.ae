@@ -1,4 +1,4 @@
-// spec_command_demo.ae — `command` over the AetherUIDriver (SWING_ENVY C1).
+// spec_command_demo.ae — `command` over the AetherUIDriver (toolkit-envy C1).
 //
 // The brief's acceptance test, stated there as: "one command attached to a
 // button, a menu item and its key; command_set_enabled(0) must disable all

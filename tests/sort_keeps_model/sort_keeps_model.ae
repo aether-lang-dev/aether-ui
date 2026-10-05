@@ -5,7 +5,7 @@
 // list, or reading the list back expecting the order it put things in, got a
 // different one because someone clicked a heading. Nothing warned it.
 //
-// This is SWING_ENVY.md's acceptance for C2, minus the model/view index split:
+// This is docs/design/toolkit-envy.md's acceptance for C2, minus the model/view index split:
 // sort a table, assert the underlying list is untouched while the first
 // visible row changed, and that the selected item survives.
 

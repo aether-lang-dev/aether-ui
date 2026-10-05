@@ -1,4 +1,4 @@
-// Aether UI `command` example — the Swing Action shape (SWING_ENVY C1).
+// Aether UI `command` example — the Swing Action shape (toolkit-envy C1).
 //
 // A command bundles a label, an accelerator and a callback. Any number of
 // SURFACES attach to it — a button, a menu item, the keystroke — and

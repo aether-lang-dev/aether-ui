@@ -3023,7 +3023,7 @@ command_fire(cp: ptr) {
     _command_invoke(f)
 }
 
-// ── Keymap: bindings as data (SWING_ENVY C5) ────────────────────────
+// ── Keymap: bindings as data (toolkit-envy C5) ────────────────────────
 // A shortcut declared with `shortcut("Ctrl+S") callback { ... }` bakes the
 // key into the registration. Nothing can enumerate it, nothing can move it,
 // and a "customise shortcuts" panel is therefore impossible to write: the app
