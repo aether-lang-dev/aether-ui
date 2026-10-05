@@ -1326,7 +1326,9 @@ LOC Rust, plus the platform crates it is assembled from — `gpui_macos` with
 `gpui_apple` (Metal), `gpui_linux` (Wayland/X11) with `gpui_wgpu` (wgpu and
 cosmic-text; there is no `blade` left in the tree), `gpui_windows`
 (Direct3D 11, DirectWrite) and `gpui_web` (wasm), another ~57k between them.
-Apache-2.0, so no licence fence this time.
+Apache-2.0, but as with every round here: ideas only, described in our own
+words and reimplemented from scratch. No GPUI code is copied, ported or
+paraphrased into aether-ui.
 
 Where it sits relative to F0: firmly on Flutter's side. Every pixel is
 GPUI's, the element tree is rebuilt from state every frame and laid out by
