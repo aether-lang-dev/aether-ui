@@ -273,9 +273,10 @@ void aether_ui_enable_test_server_ctx(int port, void* ctx);
 // System integration (Group 5)
 void aether_ui_alert_impl(const char* title, const char* message);
 // start_dir: the folder the chooser opens in; "" or NULL for the platform
-// default. Every one of these is a native MODAL, so all three backends
-// return "" under AETHER_UI_HEADLESS rather than block a machine with no
-// seat to dismiss them.
+// default. Every one of these is a native MODAL, so under AETHER_UI_HEADLESS
+// no backend opens one: each answers through aether_ui_prompt_headless
+// (aether_ui_system_extras.h) -- the driver's scripted answer, else "".
+// alert records itself there too.
 char* aether_ui_file_open(const char* title, const char* start_dir);
 char* aether_ui_file_save(const char* title, const char* default_name);
 char* aether_ui_file_pick_folder(const char* title, const char* start_dir);
@@ -786,6 +787,17 @@ int   aether_ui_state_list_rev(int handle);
 void  aether_ui_state_notify(int state_handle);
 void  aether_ui_state_hub_set_impl(void* hub, void* boxed_notify);
 void* aether_ui_state_hub_get_impl(void);
+// background_for's job table (toolkit-envy G5). What a job's owner and its
+// cancel MEAN is decided in ui/module.ae; this is only the cross-thread
+// flag store it needs, shared by all four backends in system_extras.c:
+// `work` reads the flag on a pool thread while the UI thread sets it, so it
+// sits behind a lock, which Aether code cannot take. begin returns a fresh
+// job id (> 0), or 0 when the table is full; cancel and cancelled on an id
+// that has ended (or never began) do nothing and answer 0.
+int  aether_ui_bg_job_begin(void);
+void aether_ui_bg_job_cancel(int job);
+int  aether_ui_bg_job_cancelled(int job);
+void aether_ui_bg_job_end(int job);
 // Two-way value binding: editable widget ⇄ string state (bind_value).
 void  aether_ui_bind_value(int state_handle, int widget_handle);
 // Property bindings: state → widget property links, applied on set.

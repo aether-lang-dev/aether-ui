@@ -3474,7 +3474,10 @@ void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
 // ---------------------------------------------------------------------------
 
 void aether_ui_alert_impl(const char* title, const char* message) {
-    if (aeui_is_headless()) return;  // runModal would block forever on CI
+    if (aeui_is_headless()) {  // runModal would block forever on CI: record it
+        free(aether_ui_prompt_headless(AEUI_PROMPT_ALERT, title, message));
+        return;
+    }
     NSAlert* alert = [[NSAlert alloc] init];
     [alert setMessageText:[NSString stringWithUTF8String:title ? title : ""]];
     [alert setInformativeText:[NSString stringWithUTF8String:message ? message : ""]];
@@ -3486,7 +3489,11 @@ void aether_ui_alert_impl(const char* title, const char* message) {
 // difference is which of canChooseFiles/canChooseDirectories is set.
 static char* aeui_run_open_panel(const char* title, const char* start_dir,
                                  BOOL folders) {
-    if (aeui_is_headless()) return strdup("");  // runModal would block forever
+    // runModal would block forever: the shared queue answers instead (a
+    // POST /prompts/answer script, else "").
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(folders ? AEUI_PROMPT_FOLDER : AEUI_PROMPT_OPEN,
+                                         title, start_dir);
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     if (title) [panel setTitle:[NSString stringWithUTF8String:title]];
     [panel setCanChooseFiles:folders ? NO : YES];
@@ -3516,7 +3523,8 @@ char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
 }
 
 char* aether_ui_file_save(const char* title, const char* default_name) {
-    if (aeui_is_headless()) return strdup("");
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_SAVE, title, default_name);
     NSSavePanel* panel = [NSSavePanel savePanel];
     if (title) [panel setTitle:[NSString stringWithUTF8String:title]];
     if (default_name && *default_name) {

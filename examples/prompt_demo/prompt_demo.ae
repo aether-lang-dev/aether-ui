@@ -1,0 +1,51 @@
+// Dialogs under AETHER_UI_HEADLESS, answered by a script (toolkit-envy G6).
+//
+// A native file chooser has no seat to dismiss it on CI, so headless every
+// backend used to answer "cancel" -- and no spec could reach an app's "the
+// user picked a file" branch. Now the driver can queue the answers:
+//
+//   POST /prompts/answer?kind=open&value=/tmp/song.mp3
+//
+// and the next headless open_file consumes it (save_file: kind=save,
+// pick_folder: kind=folder). With nothing queued a dialog still cancels.
+// GET /prompts lists what the app asked for -- kind, title, start folder or
+// default name, and the answer it got -- so a spec can assert the app asked
+// the right question, not only that it handled the answer. alert() has
+// nothing to answer; it is recorded there too.
+//
+// Each button shows what its dialog returned in the label underneath.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, btn, set_text, open_file, save_file,
+    pick_folder, alert, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+shown(kind: string, path: string) -> string {
+    if string.length(path) == 0 { return "${kind}: cancelled" }
+    return "${kind}: ${path}"
+}
+
+main() {
+    window("Prompts", 420, 240) {
+        vstack(8) {
+            result = text("result: none")
+            _o = btn("Open a song") callback {
+                set_text(result, shown("open", open_file("Choose a song", "/music")))
+            }
+            _s = btn("Export playlist") callback {
+                set_text(result, shown("save", save_file("Export as", "playlist.m3u")))
+            }
+            _f = btn("Pick a library") callback {
+                set_text(result, shown("folder", pick_folder("Library folder", "/music")))
+            }
+            _a = btn("About") callback {
+                alert("About", "Prompt demo")
+                set_text(result, "alert: shown")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

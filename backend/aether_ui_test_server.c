@@ -239,6 +239,19 @@ static void send_http(aether_sock_t fd, int status, const char* status_text,
     if (body && bodylen > 0) send_all(fd, body, bodylen);
 }
 
+// Append `s` to body at pos as a quoted JSON string, escaping '"', '\\' and
+// control bytes. The caller sizes body at 6 bytes per input byte plus 2.
+static size_t json_put_str(char* body, size_t pos, const char* s) {
+    body[pos++] = '"';
+    for (const unsigned char* u = (const unsigned char*)(s ? s : ""); *u; u++) {
+        if (*u == '"' || *u == '\\') { body[pos++] = '\\'; body[pos++] = (char)*u; }
+        else if (*u < 0x20) pos += (size_t)sprintf(body + pos, "\\u%04x", *u);
+        else body[pos++] = (char)*u;
+    }
+    body[pos++] = '"';
+    return pos;
+}
+
 static int widget_to_json(const AetherDriverHooks* h, int handle,
                           char* buf, int bufsize) {
     const char* type = h->widget_type(handle);
@@ -1440,14 +1453,70 @@ static void handle_request_inner(aether_sock_t client_fd,
         body[pos++] = '[';
         for (int i = 0; i < n; i++) {
             if (i > 0) body[pos++] = ',';
-            body[pos++] = '"';
-            for (const unsigned char* u = (const unsigned char*)aether_ui_opened_url_at(i);
-                 *u; u++) {
-                if (*u == '"' || *u == '\\') { body[pos++] = '\\'; body[pos++] = (char)*u; }
-                else if (*u < 0x20) pos += (size_t)sprintf(body + pos, "\\u%04x", *u);
-                else body[pos++] = (char)*u;
-            }
-            body[pos++] = '"';
+            pos = json_put_str(body, pos, aether_ui_opened_url_at(i));
+        }
+        body[pos++] = ']';
+        body[pos] = '\0';
+        send_http(client_fd, 200, "OK", "application/json", body);
+        free(body);
+
+    // --- /prompts ---
+    // POST /prompts/answer?kind=open|save|folder&value=V → queue V as the
+    // next answer to a headless dialog of that kind (FIFO per kind). A
+    // headless open_file / save_file / pick_folder consumes it instead of
+    // cancelling (toolkit-envy G6). value is URL-decoded ('+' is a space, a
+    // literal '+' is %2B); an absent value queues "", a scripted cancel.
+    // An alert returns nothing, so kind=alert is refused (400), not queued.
+    } else if (method == 1 && strncmp(path, "/prompts/answer", 15) == 0
+               && (path[15] == '\0' || path[15] == '?')) {
+        char kind[32] = "";
+        query_param_decoded(path, "kind", kind, sizeof(kind), 1);
+        char value[1024] = "";
+        query_param_decoded(path, "value", value, sizeof(value), 1);
+        int r = aether_ui_prompt_queue_answer(kind, value);
+        if (r == 0) {
+            char ok[64];
+            snprintf(ok, sizeof(ok), "{\"queued\":%d}", aether_ui_prompt_queued(kind));
+            send_http(client_fd, 200, "OK", "application/json", ok);
+        } else if (r == -2) {
+            send_http(client_fd, 400, "Bad Request", "text/plain",
+                      "an alert takes no answer; it is recorded in GET /prompts");
+        } else if (r == -3) {
+            send_http(client_fd, 409, "Conflict", "text/plain", "answer queue full");
+        } else {
+            send_http(client_fd, 400, "Bad Request", "text/plain",
+                      "kind must be open, save or folder");
+        }
+
+    // GET /prompts → every dialog the app asked for while headless, in
+    // order: [{"kind","title", start_dir|default_name|message, "answer",
+    // "scripted"}]. scripted is true when a queued answer was used and false
+    // when the dialog fell back to cancel ("").
+    } else if (method == 0 && strcmp(path, "/prompts") == 0) {
+        int n = aether_ui_prompt_count();
+        size_t cap = 64;
+        for (int i = 0; i < n; i++)
+            cap += (strlen(aether_ui_prompt_title_at(i))
+                    + strlen(aether_ui_prompt_detail_at(i))
+                    + strlen(aether_ui_prompt_answer_at(i))) * 6 + 128;
+        char* body = (char*)malloc(cap);
+        size_t pos = 0;
+        body[pos++] = '[';
+        for (int i = 0; i < n; i++) {
+            int k = aether_ui_prompt_kind_at(i);
+            const char* detail_key = k == AEUI_PROMPT_SAVE  ? "default_name"
+                                   : k == AEUI_PROMPT_ALERT ? "message"
+                                   : "start_dir";
+            if (i > 0) body[pos++] = ',';
+            pos += (size_t)sprintf(body + pos, "{\"kind\":\"%s\",\"title\":",
+                                   aether_ui_prompt_kind_name(k));
+            pos = json_put_str(body, pos, aether_ui_prompt_title_at(i));
+            pos += (size_t)sprintf(body + pos, ",\"%s\":", detail_key);
+            pos = json_put_str(body, pos, aether_ui_prompt_detail_at(i));
+            pos += (size_t)sprintf(body + pos, ",\"answer\":");
+            pos = json_put_str(body, pos, aether_ui_prompt_answer_at(i));
+            pos += (size_t)sprintf(body + pos, ",\"scripted\":%s}",
+                                   aether_ui_prompt_scripted_at(i) ? "true" : "false");
         }
         body[pos++] = ']';
         body[pos] = '\0';

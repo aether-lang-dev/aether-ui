@@ -3626,7 +3626,10 @@ int aether_ui_window_file_drop_deliver(const char* paths) {
 
 // --- Alert (UIAlertController) ----------------------------------------------
 void aether_ui_alert_impl(const char* title, const char* message) {
-    if (aeui_is_headless()) return;          // no modal loop without a user
+    if (aeui_is_headless()) {                // no modal loop without a user
+        free(aether_ui_prompt_headless(AEUI_PROMPT_ALERT, title, message));
+        return;
+    }
     UIViewController* top = aeui_top_vc();
     if (!top) return;
     UIAlertController* a = [UIAlertController
@@ -4340,15 +4343,23 @@ void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
 // --- File pickers — sync ABI, but iOS pickers are ASYNC (UIDocumentPicker) ---
 // There is no synchronous modal file panel on iOS, so these return an empty
 // selection (safe, caller-owned string). A real picker needs an async ABI —
-// tracked in asks/ios-ipados-libaether-and-appstore.md.
+// tracked in asks/ios-ipados-libaether-and-appstore.md. Headless they answer
+// from the shared queue like every other backend (a POST /prompts/answer
+// script, else ""), so a spec reaches the same branches here as elsewhere.
 char* aether_ui_file_open(const char* title, const char* start_dir) {
-    (void)title; (void)start_dir; return strdup("");
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_OPEN, title, start_dir);
+    return strdup("");
 }
 char* aether_ui_file_save(const char* title, const char* default_name) {
-    (void)title; (void)default_name; return strdup("");
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_SAVE, title, default_name);
+    return strdup("");
 }
 char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
-    (void)title; (void)start_dir; return strdup("");
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_FOLDER, title, start_dir);
+    return strdup("");
 }
 
 // --- File icon — UIImageView from the file (image → itself; else a doc glyph)-

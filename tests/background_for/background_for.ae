@@ -1,0 +1,140 @@
+// background_for: background work owned by the widget it updates, with a
+// cooperative cancel (toolkit-envy G5).
+//
+// background(work, done) runs `done` whatever happened meanwhile, so work
+// started by a panel that was closed before it finished delivered into dead
+// widgets. background_for(owner, work, done, dropped) checks the owner when
+// the work completes: still live -> done(result); gone (or the job was
+// cancelled) -> dropped(result), so the result is still freed and nothing
+// touches the dead widget. background_cancel(job) sets a flag `work` polls
+// with background_cancelled(job).
+//
+// Headless, completions wait on std.worker's drain queue, so worker.wait()
+// is the point where `done`/`dropped` run -- which is what lets this test
+// destroy the owner deterministically BEFORE the completion.
+//
+// Falsify: drop the owner check in background_for and "dropped ran, done did
+// not" fails for the destroyed panel; drop the cancel check and the
+// cancelled job's result reaches done.
+
+import ui
+import ui (root_vstack, vstack, text, clear_children, background,
+    background_for, background_cancel, background_cancelled)
+import std.worker
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct Res { v: int }
+
+var bad = 0
+var done_runs = 0
+var dropped_runs = 0
+var last_value = 0
+var saw_cancel = 0
+var plain_done_runs = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+new_res(v: int) -> ptr {
+    r = malloc(sizeof(Res)) as *Res
+    r.v = v
+    return r as ptr
+}
+
+on_done(result: ptr) {
+    r = result as *Res
+    done_runs = done_runs + 1
+    last_value = r.v
+    free(result)
+}
+
+on_dropped(result: ptr) {
+    r = result as *Res
+    dropped_runs = dropped_runs + 1
+    last_value = r.v
+    free(result)
+}
+
+main() {
+    holder = 0
+    alive = 0
+    doomed = 0
+    _r = root_vstack(4) {
+        alive = text("still here")
+        holder = vstack(4) {
+            doomed = text("about to go")
+        }
+    }
+
+    // --- owner alive: done runs -----------------------------------------
+    j1 = background_for(alive, |job: int| { return new_res(1) },
+                        |res: ptr| { on_done(res) },
+                        |res: ptr| { on_dropped(res) })
+    check("the job was queued (id > 0)", j1 > 0, 1)
+    _w1 = worker.wait()
+    check("owner alive -> done ran", done_runs, 1)
+    check("owner alive -> dropped did not", dropped_runs, 0)
+    check("done saw the result", last_value, 1)
+
+    // --- owner destroyed before the completion: dropped runs ------------
+    j2 = background_for(doomed, |job: int| { return new_res(2) },
+                        |res: ptr| { on_done(res) },
+                        |res: ptr| { on_dropped(res) })
+    check("the second job was queued", j2 > 0, 1)
+    clear_children(holder)          // the owner is destroyed meanwhile
+    _w2 = worker.wait()
+    check("owner gone -> done did NOT run", done_runs, 1)
+    check("owner gone -> dropped ran instead", dropped_runs, 1)
+    check("dropped still got the result to free", last_value, 2)
+
+    // What plain background() does in the same situation: done runs against
+    // a dead owner. Unchanged, and the reason background_for exists.
+    _b = background(|| { return new_res(3) }) callback |res: ptr| {
+        plain_done_runs = plain_done_runs + 1
+        free(res)
+    }
+    _w3 = worker.wait()
+    check("plain background still runs done after its widget died", plain_done_runs, 1)
+
+    // --- cooperative cancel: work observes the flag ---------------------
+    // The work waits (up to ~5 s) for the flag; it only returns early if it
+    // SEES background_cancelled flip, so saw_cancel=1 proves the poll works.
+    j4 = background_for(alive, |job: int| {
+        n = 0
+        while n < 500 {
+            if background_cancelled(job) == 1 {
+                saw_cancel = 1
+                return new_res(4)
+            }
+            sleep(10)
+            n = n + 1
+        }
+        return new_res(4)
+    }, |res: ptr| { on_done(res) }, |res: ptr| { on_dropped(res) })
+    check("the cancellable job was queued", j4 > 0, 1)
+    check("not cancelled before background_cancel", background_cancelled(j4), 0)
+    background_cancel(j4)
+    _w4 = worker.wait()
+    check("work observed the cancel flag", saw_cancel, 1)
+    check("a cancelled job's result goes to dropped", dropped_runs, 2)
+    check("and not to done, though its owner is alive", done_runs, 1)
+    check("the flag is gone once the job has ended", background_cancelled(j4), 0)
+
+    // Cancelling a finished job is a no-op, and ids are not reused.
+    background_cancel(j1)
+    j5 = background_for(alive, |job: int| { return new_res(5) },
+                        |res: ptr| { on_done(res) },
+                        |res: ptr| { on_dropped(res) })
+    check("a fresh id", j5 > j4, 1)
+    _w5 = worker.wait()
+    check("a job after a stale cancel still reaches done", done_runs, 2)
+    check("with its own result", last_value, 5)
+
+    if bad > 0 { println("background_for: ${bad} mismatch(es)")  exit(1) }
+    println("background_for: done only while the owner lives; cancel is seen and drops")
+    exit(0)
+}

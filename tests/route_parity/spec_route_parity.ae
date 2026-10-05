@@ -116,6 +116,16 @@ main() {
             expect_route(fw, "/tray")
             expect_route(fw, "/undo_state")
             expect_route(fw, "/opened_urls")
+            expect_route(fw, "/prompts")
+        }
+
+        // The write half of the headless-dialog routes. kind=open with an
+        // empty value queues a scripted cancel, harmless to an app that never
+        // opens a dialog; anything but 404 means the route exists.
+        spec.it("serves POST /prompts/answer") callback {
+            st = uidriver.post_status("/prompts/answer?kind=open&value=")
+            spec.assert_false(st == 404 || st == 0,
+                "POST /prompts/answer must exist on every backend")
         }
 
         spec.it("serves the metrics routes") callback {

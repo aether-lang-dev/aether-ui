@@ -136,6 +136,52 @@ int         aether_ui_opened_url_count(void);
 const char* aether_ui_opened_url_at(int index);   // "" when out of range
 
 // ---------------------------------------------------------------------------
+// Dialogs under AETHER_UI_HEADLESS (toolkit-envy G6): scripted answers.
+//
+// A native modal has no seat to dismiss it on CI, so headless every backend
+// skipped it and answered "cancel" -- which left no spec able to reach an
+// app's "the user picked a file" branch. Now each backend's headless branch
+// is ONE call here, and what happens is decided once:
+//
+//   * the driver's POST /prompts/answer?kind=K&value=V queues an answer
+//     (FIFO per kind) through aether_ui_prompt_queue_answer;
+//   * the dialog consumes the oldest queued answer of its kind, or answers
+//     "" (cancel, today's behaviour) when none is queued;
+//   * every dialog asked for is recorded, with its answer, for GET /prompts.
+//
+// Kinds are the dialogs ui/module.ae exposes: "open" (open_file), "save"
+// (save_file), "folder" (pick_folder) and "alert" (alert). An alert has
+// nothing to answer -- it returns nothing -- so it is recorded but cannot
+// be queued for. Outside headless none of this runs: the real dialog does.
+// ---------------------------------------------------------------------------
+#define AEUI_PROMPT_OPEN   0
+#define AEUI_PROMPT_SAVE   1
+#define AEUI_PROMPT_FOLDER 2
+#define AEUI_PROMPT_ALERT  3
+
+// "open" / "save" / "folder" / "alert" for a kind, "" for anything else.
+const char* aether_ui_prompt_kind_name(int kind);
+// Queue `value` as the next answer to a dialog of kind `kind_name`. Returns
+// 0 queued, -1 unknown kind, -2 the kind takes no answer (alert), -3 queue
+// full. The value is copied.
+int   aether_ui_prompt_queue_answer(const char* kind_name, const char* value);
+// A backend's headless dialog path: record the request and return the
+// answer -- the next queued one of this kind, else "". Always a malloc'd
+// string the caller owns (the file ABI's contract). `detail` is the
+// dialog's second argument: start_dir (open, folder), default_name (save)
+// or the message (alert); for an alert the return can simply be freed.
+char* aether_ui_prompt_headless(int kind, const char* title, const char* detail);
+// What was asked, in order (GET /prompts). Strings are "" out of range.
+int         aether_ui_prompt_count(void);
+int         aether_ui_prompt_kind_at(int index);       // -1 out of range
+const char* aether_ui_prompt_title_at(int index);
+const char* aether_ui_prompt_detail_at(int index);
+const char* aether_ui_prompt_answer_at(int index);
+int         aether_ui_prompt_scripted_at(int index);   // 1 a queued answer was used
+// Answers queued and not yet consumed, for `kind_name` ("" = all kinds).
+int         aether_ui_prompt_queued(const char* kind_name);
+
+// ---------------------------------------------------------------------------
 // Headless
 // ---------------------------------------------------------------------------
 

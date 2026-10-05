@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`GET /opened_urls`.** Under `AETHER_UI_HEADLESS`, `open_url` records the
   URL instead of handing it to the OS on all four backends, and the driver
   lists them in order (`spec_openurl_demo`).
+- **Scripted answers to headless dialogs: `POST /prompts/answer` and
+  `GET /prompts`.** Under `AETHER_UI_HEADLESS` a file dialog answered `""`
+  without asking anyone, so no spec could reach an app's "user picked a
+  file" branch. Now `POST /prompts/answer?kind=open|save|folder&value=<path>`
+  queues an answer (FIFO per kind) that the next headless `open_file`,
+  `save_file` or `pick_folder` returns; with none queued it still cancels.
+  `GET /prompts` lists every dialog asked for, in order, alerts included,
+  with title, start folder / default name / message, the answer and whether
+  it was scripted. One queue for all four backends, in
+  `aether_ui_system_extras.c`; uidriver gains `answer_prompt` and
+  `prompts()` (`spec_prompt_demo`, `examples/prompt_demo`).
+- **`background_for(owner, work, done, dropped)`, `background_cancel(job)`,
+  `background_cancelled(job)`.** Background work owned by the widget it
+  updates: when the work finishes after its owner was destroyed, or after
+  it was cancelled, the result goes to `dropped` instead of `done`, so it is
+  still freed but no dead widget is touched. `work` receives the job id and
+  polls `background_cancelled` to stop early. `background` is unchanged.
+  Gated by `tests/background_for`.
 - **`aether_ui_menu_item_set_label`** (ABI): relabel a menu item in place,
   keeping its closure; on all four backends and the driver's side-store.
 

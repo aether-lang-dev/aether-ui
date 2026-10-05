@@ -114,6 +114,7 @@ exports (
     native_view, native_view_widget, native_view_available, native_view_handle, native_view_kind,
     on_native_view_realize, on_native_view_resize,
     background, background_detached, on_ui_thread,
+    background_for, background_cancel, background_cancelled,
     gpuview_create, gpuview_widget, gpuview_size, gpuview_available,
     gpuview_on_realize, gpuview_on_render, gpuview_on_resize,
     gpuview_request_render, gpuview_read_pixel, canvas_begin_path, canvas_move_to, canvas_line_to,
@@ -404,6 +405,10 @@ extern aether_ui_backend_name_impl() -> string
 extern aether_ui_timer_create_impl(interval_ms: int, boxed_closure: ptr) -> int
 extern aether_ui_timer_cancel_impl(timer_id: int)
 extern aether_ui_worker_poster_install_impl()
+extern aether_ui_bg_job_begin() -> int
+extern aether_ui_bg_job_cancel(job: int)
+extern aether_ui_bg_job_cancelled(job: int) -> int
+extern aether_ui_bg_job_end(job: int)
 extern aether_ui_on_ui_thread_impl() -> int
 
 extern aether_ui_window_create_impl(title: string, width: int, height: int) -> int
@@ -546,10 +551,78 @@ canvas_widget(canvas_id: int) -> int {
 // UI thread through the backend's poster (installed here, idempotently, and
 // at app_create); under AETHER_UI_HEADLESS on GTK4/Win32/AppKit there is no
 // loop to reach, so completions wait on std.worker's drain queue instead.
+//
+// `done` runs whatever happened meanwhile: close the window that started a
+// scan and its `done` still runs, against widgets that are gone. When the
+// result is FOR some widget, use background_for below.
 background(work: fn, done: fn) -> int {
     aether_ui_worker_poster_install_impl()
     if worker.run(work, done) { return 1 }
     return 0
+}
+
+// background_for(owner, work, done, dropped): background work owned by the
+// widget it updates (toolkit-envy G5). When the work finishes, on the UI
+// thread: if `owner` is still live (its registry slot has not been cleared)
+// and the job was not cancelled, `done(result)` runs; otherwise
+// `dropped(result)` runs INSTEAD, so the result is still freed but nothing
+// touches the dead widget. Exactly one of the two runs, once.
+//
+// `work` takes the job id, so it can poll background_cancelled(job) and stop
+// early; the id is what background_cancel takes. Returns the job id (> 0),
+// or 0 if the work could not be queued (none of the closures runs then).
+//
+//     job = background_for(panel, |job: int| {
+//         r = new_scan()
+//         while more_to_scan(r) {
+//             if background_cancelled(job) == 1 { return r as ptr }  // stop early
+//             scan_some(r)
+//         }
+//         return r as ptr
+//     }, |result: ptr| {
+//         show_scan(panel, result)       // panel is alive here
+//         free(result)
+//     }, |result: ptr| {
+//         free(result)                   // panel is gone, or the scan was cancelled
+//     })
+//     ...
+//     background_cancel(job)             // "Stop" button
+//
+// owner is a WIDGET handle; to tie work to a window, pass its body/root
+// widget, which dies with it. owner <= 0 means no owner (only cancel drops).
+// Cancellation is cooperative: `work` that never polls runs to the end, and
+// its result then goes to `dropped`.
+background_for(owner: int, work: fn, done: fn, dropped: fn) -> int {
+    aether_ui_worker_poster_install_impl()
+    job = aether_ui_bg_job_begin()
+    if job == 0 { return 0 }
+    ok = worker.run(|| {
+        return call(work, job)
+    }, |result: ptr| {
+        keep = 1
+        if aether_ui_bg_job_cancelled(job) == 1 { keep = 0 }
+        if owner > 0 {
+            if string.length(aether_ui_widget_kind_impl(owner)) == 0 { keep = 0 }
+        }
+        aether_ui_bg_job_end(job)
+        if keep == 1 { call(done, result) } else { call(dropped, result) }
+    })
+    if ok { return job }
+    aether_ui_bg_job_end(job)
+    return 0
+}
+
+// Ask job `job` (from background_for) to stop: its `work` sees
+// background_cancelled(job) == 1 from now on, and its result goes to
+// `dropped`, not `done`. A no-op once the job has completed.
+background_cancel(job: int) {
+    aether_ui_bg_job_cancel(job)
+}
+
+// 1 once background_cancel(job) has been called and the job is still in
+// flight, else 0. Safe to call from `work`, on the pool thread.
+background_cancelled(job: int) -> int {
+    return aether_ui_bg_job_cancelled(job)
 }
 
 // Fire-and-forget: `work` runs off the UI thread and its result is dropped.
@@ -4010,8 +4083,10 @@ open_url(url: string) {
 
 // Native file pickers. They BLOCK and return the chosen path, "" if
 // cancelled. GtkFileChooserNative / GetOpenFileNameW + SHBrowseForFolderW /
-// NSOpenPanel + NSSavePanel. Headless-no-op (return "") like alert and
-// menu_popup: a modal has no seat to dismiss it on CI.
+// NSOpenPanel + NSSavePanel. Under AETHER_UI_HEADLESS no dialog opens (a
+// modal has no seat to dismiss it on CI): each returns the next answer the
+// driver queued for its kind (POST /prompts/answer?kind=open|save|folder),
+// or "" when none is, and GET /prompts records what was asked.
 //
 // start_dir is the folder the chooser opens in; pass "" for the platform
 // default.

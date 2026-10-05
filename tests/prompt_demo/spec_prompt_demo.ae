@@ -1,0 +1,124 @@
+// spec_prompt_demo.ae — headless dialogs answered by a script
+// (toolkit-envy G6). Run HEADLESS: ci.sh launches this one app with
+// AETHER_UI_HEADLESS=1.
+//
+// Headless, every backend's open_file / save_file / pick_folder used to
+// return "" without asking anyone, so no spec could reach the branch where
+// the user picked something. POST /prompts/answer queues the answer a
+// headless dialog of that kind consumes (FIFO per kind, falling back to
+// cancel), and GET /prompts records what the app asked for.
+//
+// Falsify: drop the route and every answer_prompt fails its POST; make the
+// backends return "" again and the label reads "cancelled" for a scripted
+// path.
+import std.spec
+import uidriver
+import std.string
+
+// The result label's text once it reads `want` (polls: the click lands on
+// the UI thread). Returns the last text seen either way, so a failure says
+// what the label showed instead.
+result_becomes(rid: int, want: string) -> string {
+    seen = ""
+    i = 0
+    while i < 40 {
+        seen = uidriver.widget_text_by_id(rid)
+        if string.equals(seen, want) == 1 { return seen }
+        sleep(50)
+        i = i + 1
+    }
+    return seen
+}
+
+click(label: string) {
+    uidriver.click_widget(uidriver.widget_id_by_text(label))
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    rid = uidriver.widget_id_by_text("result: none")
+
+    spec.describe(fw, "headless dialogs over AetherUIDriver") {
+        spec.it("nothing has been asked before a button is clicked") callback {
+            spec.assert_eq(uidriver.get_status("/prompts"), 200, "the route exists")
+            spec.assert_str_eq(uidriver.prompts(), "[]", "no dialog yet")
+        }
+
+        spec.it("an unscripted dialog still cancels, and is recorded") callback {
+            click("Open a song")
+            spec.assert_str_eq(result_becomes(rid, "open: cancelled"), "open: cancelled",
+                "nothing queued -> open_file returned \"\"")
+            spec.assert_true(string.contains(uidriver.prompts(),
+                "{\"kind\":\"open\",\"title\":\"Choose a song\",\"start_dir\":\"/music\",\"answer\":\"\",\"scripted\":false}") == 1,
+                "GET /prompts shows the open request and that it cancelled")
+        }
+
+        spec.it("a queued answer is what open_file returns") callback {
+            uidriver.answer_prompt("open", "/tmp/My Songs/a+b.mp3")
+            click("Open a song")
+            spec.assert_str_eq(result_becomes(rid, "open: /tmp/My Songs/a+b.mp3"),
+                "open: /tmp/My Songs/a+b.mp3",
+                "the scripted path, decoded (space and a literal '+')")
+            spec.assert_true(string.contains(uidriver.prompts(),
+                "\"answer\":\"/tmp/My Songs/a+b.mp3\",\"scripted\":true}") == 1,
+                "recorded as a scripted answer")
+        }
+
+        spec.it("save_file gets its own answer and reports the default name") callback {
+            uidriver.answer_prompt("save", "/tmp/out.m3u")
+            click("Export playlist")
+            spec.assert_str_eq(result_becomes(rid, "save: /tmp/out.m3u"), "save: /tmp/out.m3u",
+                "the scripted save path")
+            spec.assert_true(string.contains(uidriver.prompts(),
+                "{\"kind\":\"save\",\"title\":\"Export as\",\"default_name\":\"playlist.m3u\",\"answer\":\"/tmp/out.m3u\",\"scripted\":true}") == 1,
+                "GET /prompts shows the save title and default name")
+        }
+
+        spec.it("answers of one kind queue in order, then fall back to cancel") callback {
+            uidriver.answer_prompt("folder", "/lib/one")
+            uidriver.answer_prompt("folder", "/lib/two")
+            click("Pick a library")
+            spec.assert_str_eq(result_becomes(rid, "folder: /lib/one"), "folder: /lib/one", "first in")
+            click("Pick a library")
+            spec.assert_str_eq(result_becomes(rid, "folder: /lib/two"), "folder: /lib/two", "first out")
+            click("Pick a library")
+            spec.assert_str_eq(result_becomes(rid, "folder: cancelled"), "folder: cancelled",
+                "the queue is empty again")
+        }
+
+        spec.it("an answer waits for a dialog of ITS kind") callback {
+            uidriver.answer_prompt("open", "/tmp/later.mp3")
+            click("Export playlist")
+            spec.assert_str_eq(result_becomes(rid, "save: cancelled"), "save: cancelled",
+                "a save dialog does not take an open answer")
+            click("Open a song")
+            spec.assert_str_eq(result_becomes(rid, "open: /tmp/later.mp3"), "open: /tmp/later.mp3",
+                "the open answer was still there")
+        }
+
+        spec.it("an alert is recorded but takes no answer; unknown kinds are refused") callback {
+            spec.assert_eq(uidriver.answer_prompt_status("alert", "OK"), 400,
+                "alert returns nothing, so there is nothing to queue")
+            spec.assert_eq(uidriver.answer_prompt_status("confirm", "yes"), 400,
+                "no such dialog")
+            click("About")
+            spec.assert_str_eq(result_becomes(rid, "alert: shown"), "alert: shown",
+                "the alert did not block")
+            spec.assert_true(string.contains(uidriver.prompts(),
+                "{\"kind\":\"alert\",\"title\":\"About\",\"message\":\"Prompt demo\",\"answer\":\"\",\"scripted\":false}") == 1,
+                "GET /prompts shows the alert")
+        }
+
+        spec.it("GET /prompts lists every request, in order") callback {
+            body = uidriver.prompts()
+            spec.assert_eq(uidriver.count_occurrences(body, "\"kind\":"), 9,
+                "open x3, save x2, folder x3, alert x1")
+            o = string.index_of(body, "\"default_name\":\"playlist.m3u\",\"answer\":\"/tmp/out.m3u\"")
+            f = string.index_of(body, "\"answer\":\"/lib/one\"")
+            a = string.index_of(body, "\"kind\":\"alert\"")
+            spec.assert_true(o > 0 && f > o && a > f, "save before folder before alert")
+        }
+    }
+    return spec.run_summary(fw)
+}

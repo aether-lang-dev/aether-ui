@@ -358,8 +358,13 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 | `draggable(h, path)` | `GtkDragSource` over a `GFile` | `NSDraggingSession` over an `NSURL` | OLE `DoDragDrop` offering `CF_HDROP` |
 
 `open_file(title, start_dir)`, `save_file(title, name)` and `pick_folder` are
-native modals, so all three return `""` under `AETHER_UI_HEADLESS` rather than
-block a machine with no seat to dismiss them. `open_url(url)` under
+native modals, so under `AETHER_UI_HEADLESS` none of them opens: each takes
+the next answer a spec queued for its kind with the driver's
+`POST /prompts/answer?kind=open|save|folder&value=<path>` (FIFO per kind),
+and returns `""` (cancel) when none is queued. `alert` does not block either.
+`GET /prompts` lists every dialog the app asked for, in order, with its
+title, start folder or default name (an alert's message) and the answer it
+got. `open_url(url)` under
 `AETHER_UI_HEADLESS` does not hand the URL to the OS at all, so a spec that
 clicks a link never launches a browser; it is recorded instead, and the
 driver's `GET /opened_urls` lists every URL asked for, in order.
@@ -466,6 +471,33 @@ main queue) that `std.worker` leaves to its host. `ui.on_ui_thread()` says
 which thread the caller is on; `ui.background_detached(work)` drops the result.
 Under `AETHER_UI_HEADLESS` there is no loop to post to on GTK4, Win32 and
 AppKit, so completions wait on `worker.drain()`.
+
+`background`'s completion runs whatever happened meanwhile, including after
+the window that started the work has closed. When the result is for a widget,
+own the work by it:
+
+```aether
+job = ui.background_for(panel, |job: int| {
+    r = new_scan()
+    while more_to_scan(r) {
+        if ui.background_cancelled(job) == 1 { return r as ptr }   // stop early
+        scan_some(r)
+    }
+    return r as ptr
+}, |result: ptr| {
+    show_scan(panel, result)      // panel is still alive
+    free(result)
+}, |result: ptr| {
+    free(result)                  // panel was destroyed, or the job cancelled
+})
+ui.background_cancel(job)         // e.g. from a Stop button
+```
+
+When the work finishes, `done` runs only if `owner` (a widget handle; for a
+window, its body) is still in the registry and the job was not cancelled;
+otherwise `dropped` runs instead, so the result is still freed and nothing
+touches a dead widget. Cancelling is cooperative: `work` polls
+`background_cancelled(job)`.
 
 ## Widget accessors
 
@@ -668,8 +700,10 @@ no code changes needed. A red "Under Remote Control" banner is injected
 so a user can't mistake a test-driven session for a real one.
 
 The HTTP API exposes `/widgets` (list + filter), `/widget/{id}` (state),
-`/widget/{id}/click | set_text | toggle | set_value` (mutations), and
-`/state/{id}` + `/state/{id}/set` (reactive-state cells). See the full
+`/widget/{id}/click | set_text | toggle | set_value` (mutations),
+`/state/{id}` + `/state/{id}/set` (reactive-state cells), and what a
+headless app asked of the OS: `/opened_urls`, `/prompts`, and
+`/prompts/answer?kind=&value=` to script a file dialog's answer. See the full
 reference and end-to-end examples in
 [`tests/test_driver.sh`](tests/test_driver.sh) (curl against every route)
 and the Aether specs under [`tests/`](tests) driven by

@@ -1484,6 +1484,14 @@ so the result is still freed; plus a cooperative `background_cancel(job)`
 that `work` polls. Actor-owned work already has this through the actor's
 lifetime; this is the closure path. **S–M.**
 
+*Status 2026-10-05:* done, in `ui/module.ae` for all four backends.
+`background_for(owner, work, done, dropped)` returns a job id; `work` takes
+that id and polls `background_cancelled(job)`; `background_cancel(job)` sets
+the flag. At completion a dead owner (registry slot cleared) or a cancelled
+job sends the result to `dropped`, else `done`. The cross-thread flag table
+is the only C (`aether_ui_bg_job_*`, shared in `aether_ui_system_extras.c`).
+`background` is unchanged. Gated headless by `tests/background_for`.
+
 ## G6. A test platform that records, and a clock the spec advances
 
 **Theirs.** The test platform records what the app asked of the OS and lets
@@ -1514,7 +1522,14 @@ than stepping them, and the chord timeout can only be waited out.
 *Status 2026-10-05:* headless `open_url` records instead of launching, on all
 four backends (none had a headless check, not only GTK4), and `GET
 /opened_urls` serves the list (gated by `spec_openurl_demo`). Scripted dialog
-answers and the manual clock are not done.
+answers are done: `POST /prompts/answer?kind=open|save|folder&value=` queues
+(FIFO per kind) what a headless `open_file` / `save_file` / `pick_folder`
+returns, falling back to cancel, and `GET /prompts` records every dialog asked
+for, alerts included, with its title, start folder / default name / message
+and answer. The queue and record live once in `aether_ui_system_extras.c`;
+each backend's headless branch is one call into it (gated by
+`spec_prompt_demo`). There is no `confirm` dialog in the API to answer. The
+manual clock is not done.
 
 ## G7. The creation site as identity — Aether already has the primitive
 

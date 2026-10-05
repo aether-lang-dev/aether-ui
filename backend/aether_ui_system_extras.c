@@ -395,6 +395,154 @@ const char* aether_ui_opened_url_at(int index) {
 }
 
 // ---------------------------------------------------------------------------
+// Headless dialog answers (see the header). The driver thread queues and
+// the UI thread consumes, so both sides take one lock. Records are written
+// once, complete, before the count that publishes them moves, and never
+// change after -- so the accessors can hand out their strings.
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+static SRWLOCK g_prompt_lock = SRWLOCK_INIT;
+#define PROMPT_LOCK()   AcquireSRWLockExclusive(&g_prompt_lock)
+#define PROMPT_UNLOCK() ReleaseSRWLockExclusive(&g_prompt_lock)
+#else
+static pthread_mutex_t g_prompt_lock = PTHREAD_MUTEX_INITIALIZER;
+#define PROMPT_LOCK()   pthread_mutex_lock(&g_prompt_lock)
+#define PROMPT_UNLOCK() pthread_mutex_unlock(&g_prompt_lock)
+#endif
+
+#define PROMPT_KINDS      4
+#define PROMPT_QUEUE_MAX  64
+#define PROMPT_RECORD_MAX 256
+
+static const char* const g_prompt_kind_names[PROMPT_KINDS] = {
+    "open", "save", "folder", "alert"
+};
+
+typedef struct {
+    int   kind;
+    int   scripted;
+    char* title;
+    char* detail;
+    char* answer;
+} PromptRec;
+
+// One FIFO per kind: head is the next answer out, count how many wait.
+static char* g_prompt_queue[PROMPT_KINDS][PROMPT_QUEUE_MAX];
+static int   g_prompt_q_head[PROMPT_KINDS];
+static int   g_prompt_q_count[PROMPT_KINDS];
+static PromptRec g_prompts[PROMPT_RECORD_MAX];
+static int   g_prompt_count = 0;
+
+static char* prompt_dup(const char* s) {
+    if (!s) s = "";
+    size_t n = strlen(s);
+    char* c = (char*)malloc(n + 1);
+    if (c) memcpy(c, s, n + 1);
+    return c;
+}
+
+static int prompt_kind_of(const char* name) {
+    if (!name) return -1;
+    for (int k = 0; k < PROMPT_KINDS; k++)
+        if (strcmp(name, g_prompt_kind_names[k]) == 0) return k;
+    return -1;
+}
+
+const char* aether_ui_prompt_kind_name(int kind) {
+    if (kind < 0 || kind >= PROMPT_KINDS) return "";
+    return g_prompt_kind_names[kind];
+}
+
+int aether_ui_prompt_queue_answer(const char* kind_name, const char* value) {
+    int k = prompt_kind_of(kind_name);
+    if (k < 0) return -1;
+    if (k == AEUI_PROMPT_ALERT) return -2;
+    char* copy = prompt_dup(value);
+    if (!copy) return -3;
+    PROMPT_LOCK();
+    if (g_prompt_q_count[k] >= PROMPT_QUEUE_MAX) {
+        PROMPT_UNLOCK();
+        free(copy);
+        return -3;
+    }
+    int slot = (g_prompt_q_head[k] + g_prompt_q_count[k]) % PROMPT_QUEUE_MAX;
+    g_prompt_queue[k][slot] = copy;
+    g_prompt_q_count[k]++;
+    PROMPT_UNLOCK();
+    return 0;
+}
+
+char* aether_ui_prompt_headless(int kind, const char* title, const char* detail) {
+    if (kind < 0 || kind >= PROMPT_KINDS) return prompt_dup("");
+    char* queued = NULL;
+    PROMPT_LOCK();
+    if (g_prompt_q_count[kind] > 0) {
+        queued = g_prompt_queue[kind][g_prompt_q_head[kind]];
+        g_prompt_queue[kind][g_prompt_q_head[kind]] = NULL;
+        g_prompt_q_head[kind] = (g_prompt_q_head[kind] + 1) % PROMPT_QUEUE_MAX;
+        g_prompt_q_count[kind]--;
+    }
+    // Past the cap later requests still get their answer; only the record
+    // is dropped, so earlier entries a spec asserts on keep their order.
+    if (g_prompt_count < PROMPT_RECORD_MAX) {
+        PromptRec* r = &g_prompts[g_prompt_count];
+        r->kind = kind;
+        r->scripted = queued ? 1 : 0;
+        r->title = prompt_dup(title);
+        r->detail = prompt_dup(detail);
+        r->answer = prompt_dup(queued ? queued : "");
+        g_prompt_count++;
+    }
+    PROMPT_UNLOCK();
+    if (queued) return queued;   // already a malloc'd copy: hand it over
+    return prompt_dup("");
+}
+
+int aether_ui_prompt_count(void) {
+    PROMPT_LOCK();
+    int n = g_prompt_count;
+    PROMPT_UNLOCK();
+    return n;
+}
+
+static const PromptRec* prompt_at(int index) {
+    if (index < 0 || index >= aether_ui_prompt_count()) return NULL;
+    return &g_prompts[index];
+}
+
+int aether_ui_prompt_kind_at(int index) {
+    const PromptRec* r = prompt_at(index);
+    return r ? r->kind : -1;
+}
+const char* aether_ui_prompt_title_at(int index) {
+    const PromptRec* r = prompt_at(index);
+    return r && r->title ? r->title : "";
+}
+const char* aether_ui_prompt_detail_at(int index) {
+    const PromptRec* r = prompt_at(index);
+    return r && r->detail ? r->detail : "";
+}
+const char* aether_ui_prompt_answer_at(int index) {
+    const PromptRec* r = prompt_at(index);
+    return r && r->answer ? r->answer : "";
+}
+int aether_ui_prompt_scripted_at(int index) {
+    const PromptRec* r = prompt_at(index);
+    return r ? r->scripted : 0;
+}
+
+int aether_ui_prompt_queued(const char* kind_name) {
+    int n = 0;
+    int only = (kind_name && *kind_name) ? prompt_kind_of(kind_name) : -2;
+    if (only == -1) return 0;
+    PROMPT_LOCK();
+    for (int k = 0; k < PROMPT_KINDS; k++)
+        if (only == -2 || only == k) n += g_prompt_q_count[k];
+    PROMPT_UNLOCK();
+    return n;
+}
+
+// ---------------------------------------------------------------------------
 // Cross-backend headless park fallback.
 //
 // `aether_ui_app_run_headless_impl` lives in each backend file because
@@ -460,6 +608,69 @@ void aether_ui_state_hub_set_impl(void* hub, void* boxed_notify) {
     aeui_state_notify_boxed = boxed_notify;
 }
 void* aether_ui_state_hub_get_impl(void) { return aeui_state_hub; }
+
+// background_for's in-flight jobs (aether_ui_backend.h): id + cancel flag.
+// A small table of the jobs still running, not one flag per id ever issued,
+// so a long-lived app that runs millions of jobs does not grow it. Ids are
+// never reused, so a stale id cannot read a later job's flag.
+#define BG_JOB_MAX 1024
+typedef struct { int id; int cancelled; } BgJob;
+static BgJob g_bg_jobs[BG_JOB_MAX];
+static int   g_bg_next_id = 0;
+#ifdef _WIN32
+static SRWLOCK g_bg_lock = SRWLOCK_INIT;
+#define BG_LOCK()   AcquireSRWLockExclusive(&g_bg_lock)
+#define BG_UNLOCK() ReleaseSRWLockExclusive(&g_bg_lock)
+#else
+static pthread_mutex_t g_bg_lock = PTHREAD_MUTEX_INITIALIZER;
+#define BG_LOCK()   pthread_mutex_lock(&g_bg_lock)
+#define BG_UNLOCK() pthread_mutex_unlock(&g_bg_lock)
+#endif
+
+int aether_ui_bg_job_begin(void) {
+    int id = 0;
+    BG_LOCK();
+    for (int i = 0; i < BG_JOB_MAX; i++) {
+        if (g_bg_jobs[i].id == 0) {
+            if (g_bg_next_id == 0x7fffffff) g_bg_next_id = 0;
+            id = ++g_bg_next_id;
+            g_bg_jobs[i].id = id;
+            g_bg_jobs[i].cancelled = 0;
+            break;
+        }
+    }
+    BG_UNLOCK();
+    return id;
+}
+
+static BgJob* bg_job_find(int job) {   // caller holds the lock
+    if (job <= 0) return NULL;
+    for (int i = 0; i < BG_JOB_MAX; i++)
+        if (g_bg_jobs[i].id == job) return &g_bg_jobs[i];
+    return NULL;
+}
+
+void aether_ui_bg_job_cancel(int job) {
+    BG_LOCK();
+    BgJob* j = bg_job_find(job);
+    if (j) j->cancelled = 1;
+    BG_UNLOCK();
+}
+
+int aether_ui_bg_job_cancelled(int job) {
+    BG_LOCK();
+    BgJob* j = bg_job_find(job);
+    int c = j ? j->cancelled : 0;
+    BG_UNLOCK();
+    return c;
+}
+
+void aether_ui_bg_job_end(int job) {
+    BG_LOCK();
+    BgJob* j = bg_job_find(job);
+    if (j) { j->id = 0; j->cancelled = 0; }
+    BG_UNLOCK();
+}
 void aether_ui_state_notify(int state_handle) {
     AeClosureLocal* c = (AeClosureLocal*)aeui_state_notify_boxed;
     if (!c || !c->fn) return;   // nothing observes any cell yet

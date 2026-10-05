@@ -6339,7 +6339,10 @@ int aether_ui_fire_scroll(int container_handle, int dy) {
 // System services: alert, file open, clipboard, timer, open URL, dark mode.
 // ---------------------------------------------------------------------------
 void aether_ui_alert_impl(const char* title, const char* message) {
-    if (aeui_is_headless()) return;  // MessageBox would block indefinitely
+    if (aeui_is_headless()) {  // MessageBox would block indefinitely: record it
+        free(aether_ui_prompt_headless(AEUI_PROMPT_ALERT, title, message));
+        return;
+    }
     ensure_win_init();
     MessageBoxW(NULL, utf8_to_wide(message), utf8_to_wide(title),
                 MB_OK | MB_ICONINFORMATION);
@@ -6354,7 +6357,10 @@ static int CALLBACK w32_browse_init_cb(HWND hwnd, UINT msg, LPARAM lp, LPARAM da
 }
 
 char* aether_ui_file_open(const char* title, const char* start_dir) {
-    if (aeui_is_headless()) return strdup("");  // modal would block on CI
+    // A modal would block on CI: the shared queue answers instead (a
+    // POST /prompts/answer script, else "").
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_OPEN, title, start_dir);
     ensure_win_init();
     wchar_t file[1024] = L"";
     OPENFILENAMEW ofn;
@@ -6378,7 +6384,8 @@ char* aether_ui_file_open(const char* title, const char* start_dir) {
 // needs no COM vtable plumbing to stay readable in C. BIF_NEWDIALOGSTYLE is
 // what gives it the resizable modern chooser with a New Folder button.
 char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
-    if (aeui_is_headless()) return strdup("");
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_FOLDER, title, start_dir);
     ensure_win_init();
     BROWSEINFOW bi;
     memset(&bi, 0, sizeof(bi));
@@ -6402,7 +6409,8 @@ char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
 }
 
 char* aether_ui_file_save(const char* title, const char* default_name) {
-    if (aeui_is_headless()) return strdup("");
+    if (aeui_is_headless())
+        return aether_ui_prompt_headless(AEUI_PROMPT_SAVE, title, default_name);
     ensure_win_init();
     wchar_t file[1024] = L"";
     if (default_name && *default_name) {

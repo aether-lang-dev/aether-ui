@@ -2976,7 +2976,10 @@ void aether_ui_enable_test_server_ctx(int port, void* ctx) {
 
 // Alert dialog — modal message box with OK button.
 void aether_ui_alert_impl(const char* title, const char* message) {
-    if (aeui_is_headless()) return;  // modal dialog would block on CI
+    if (aeui_is_headless()) {  // modal dialog would block on CI: record it
+        free(aether_ui_prompt_headless(AEUI_PROMPT_ALERT, title, message));
+        return;
+    }
     ensure_gtk_init();
     GtkWidget* dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
         GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s", message ? message : "");
@@ -2986,8 +2989,9 @@ void aether_ui_alert_impl(const char* title, const char* message) {
 }
 
 // File dialogs — block and return the chosen path, "" if cancelled. Native
-// modals, so headless-no-op (like alert / menu_popup): CI has no seat to
-// dismiss them. GtkFileChooserNative is portable back to GTK 4.8; it's
+// modals, so headless they never open (CI has no seat to dismiss them): the
+// shared queue answers instead -- a POST /prompts/answer script, else ""
+// (aether_ui_system_extras.h). GtkFileChooserNative is portable back to GTK 4.8; it's
 // "async-oriented" only in that it has no run() — we drive its response
 // synchronously with a nested GMainLoop, exactly as the modal message
 // dialogs do, so the ABI stays blocking-and-returns-a-path across backends.
@@ -3007,9 +3011,15 @@ static void on_file_chooser_response(GtkNativeDialog* dlg, int response,
 static char* aeui_run_file_chooser(const char* title, GtkFileChooserAction action,
                                    const char* default_name,
                                    const char* start_dir) {
+    if (aeui_is_headless()) {
+        if (action == GTK_FILE_CHOOSER_ACTION_SAVE)
+            return aether_ui_prompt_headless(AEUI_PROMPT_SAVE, title, default_name);
+        return aether_ui_prompt_headless(
+            action == GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER ? AEUI_PROMPT_FOLDER
+                                                            : AEUI_PROMPT_OPEN,
+            title, start_dir);
+    }
     ensure_gtk_init();
-    const char* hl = getenv("AETHER_UI_HEADLESS");
-    if (hl && hl[0] && hl[0] != '0') return strdup("");
     const char* accept = "_Open";
     if (action == GTK_FILE_CHOOSER_ACTION_SAVE) accept = "_Save";
     else if (action == GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER) accept = "_Select";

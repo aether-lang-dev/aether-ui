@@ -27,7 +27,8 @@ exports(
     wait_server, wait_body_contains, count_occurrences,
     wait_root_height_change,
     menus_body, menu_handle_with, menu_activate, menu_activate_item,
-    menu_native_activate
+    menu_native_activate,
+    answer_prompt, answer_prompt_status, prompts, opened_urls
 )
 
 import std.string
@@ -550,3 +551,34 @@ menu_activate_item(label: string) {
     h = menu_handle_with(label)
     menu_activate(h, label)
 }
+
+// ─── Headless dialogs + opened URLs (toolkit-envy G6) ─────────────
+// Under AETHER_UI_HEADLESS a dialog never opens: it takes the next answer a
+// spec queued for its kind, else cancels (""). Kinds: "open" (open_file),
+// "save" (save_file), "folder" (pick_folder). An alert takes no answer.
+
+// Queue `value` as the next answer to a dialog of `kind` (FIFO per kind).
+// Asserts the POST is 2xx. The value is query-encoded here (space -> '+',
+// a literal '+' -> %2B), so pass the path exactly as the app should get it;
+// "" queues a scripted cancel.
+answer_prompt(kind: string, value: string) {
+    k = url.encode(kind)
+    v = url.encode(value)
+    post_ok("/prompts/answer?kind=${k}&value=${v}", "queue a ${kind} answer")
+}
+
+// The same, non-asserting: the HTTP status (200 queued, 400 a kind that
+// takes no answer or does not exist).
+answer_prompt_status(kind: string, value: string) -> int {
+    k = url.encode(kind)
+    v = url.encode(value)
+    return post_status("/prompts/answer?kind=${k}&value=${v}")
+}
+
+// The raw GET /prompts body: every dialog asked for, in order --
+// [{"kind":"open","title":"…","start_dir":"…","answer":"…","scripted":true}]
+// (save carries "default_name", alert "message", instead of "start_dir").
+prompts() -> string { return get_body("/prompts") }
+
+// The raw GET /opened_urls body: ["url", …] in the order open_url was called.
+opened_urls() -> string { return get_body("/opened_urls") }
