@@ -40,9 +40,9 @@ public class AetherActivity extends Activity {
     // keeps running in it rather than in a loop of its own.
     static native void nativeStart(Activity activity, ViewGroup host, float density);
     static native void nativeLifecycle(int event, boolean finishing);
-    // A View listener firing: `closure` is the boxed Aether closure the
-    // listener was created with.
-    static native void nativeClick(long closure);
+    // A View's listener firing (AetherListener): the widget's registry
+    // handle, the kind of event, and its payload.
+    static native void nativeEvent(int handle, int kind, int a, int b, String s);
 
     @Override
     protected void onCreate(Bundle state) {

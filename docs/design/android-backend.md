@@ -1,32 +1,71 @@
 # An Android backend
 
-Status: **stage 1 (the skeleton) done** (2026-10-06); stage 2 next. The fifth
+Status: **stage 2, pass A done** (2026-10-07); passes B and C next. The fifth
 native implementation of the backend ABI (`backend/aether_ui_backend.h`),
 beside GTK4, AppKit, Win32 and UIKit.
 
 ## Status
 
-Stage 1 runs `examples/counter` on a Pixel 6a (Android 16, API 36) and
-`tests/counter/spec_counter.ae` passes 4/4 against it through
-`adb forward tcp:9222 tcp:9222` (as does `spec_route_parity`, 7/7). The whole
-chain is real: `--emit=lib` for `aarch64-linux-android`, JNI, the ALooper
-bridge, packaging without Gradle, and the shared driver.
+Stage 1 ran `examples/counter` on a Pixel 6a (Android 16, API 36) and
+`tests/counter/spec_counter.ae` passed 4/4 against it through
+`adb forward tcp:9222 tcp:9222`. The whole chain is real: `--emit=lib` for
+`aarch64-linux-android`, JNI, the ALooper bridge, packaging without Gradle,
+and the shared driver.
 
-- `backend/aether_ui_android.c` — 66 ABI functions real (registry,
-  lifecycle/surfaces, vstack/hstack/text/button/spacer/divider, the state
-  subsystem, the per-widget driver readbacks, the worker poster and timerfd
-  timers), plus the driver hooks (enumeration, children, geometry, click,
-  set_text, state, `GET /screenshot`). The other **261 are stubs** that log
-  once through liblog and return a neutral value; the full list is the
-  STATUS comment at the top of the file (and the STUBS section at its end).
-- `backend/android/` — the Java shim (`AetherActivity`,
-  `AetherClickListener`) and the manifest template. Natives are bound with
-  `RegisterNatives`, so the shim's package is fixed (`dev.aether.ui`) and an
-  activity-alias gives every app `<package>/.AetherActivity`. String extras
-  named `AETHER_*` become environment variables before `main()` runs
-  (`am start ... -e AETHER_UI_TEST_PORT 9222` arms the driver).
-- `tools/android-apk.sh` builds the APK; `tools/android-install.sh` installs
-  it in 256 KB pieces (for hosts whose adb dies on large transfers).
+Stage 2 pass A brought the widget set most apps are made of, and the spec
+matrix's example suites that use only those now pass on the emulator (AVD
+API 36 arm64, `aelane android`): counter, calculator, text_metrics, bindings,
+rbind, placeholder, imagefill, scrollbg, each, clearchildren (rebuild_demo),
+picker, typo, a11y, disclosure, hoverpaint, timer, background, auto_hide,
+tabledeleg, routeparity and native_view. Every other example suite fails only
+where it uses a pass-B/C stub (canvas, menus, overlays, sheets, tabs,
+navstack, split, shortcuts and key handling, CSS classes, seal, fire_*,
+multi-window, file pickers), which the backend's log names.
+
+- `backend/aether_ui_android.c` — 168 ABI functions real: the stage-1 core
+  plus textfield/securefield/textarea (`EditText`), toggle (`CheckBox`, a
+  radio button in a group), slider (`SeekBar`), picker (`Spinner`),
+  progress bar, scroll view, grid (`GridLayout`), form and section, image
+  (`ImageView` over `BitmapFactory`, all four fill modes, tint), text
+  wrap/anchor/truncation and metrics, every `set_*` styler and sizer, the
+  a11y role/name/description, on_click/double/hover/layout, focus,
+  enabled/hidden and the property bindings. The other **159 are stubs**
+  that log once through liblog and return a neutral value; the full list is
+  the STATUS comment at the top of the file (and the STUBS section at its
+  end).
+- **Layout** is real Android layouts (`LinearLayout`, `GridLayout`,
+  `ScrollView`). A child's `LayoutParams` are derived in one place from what
+  the DSL asked of it and of its parent (fixed size, expansion, spacing,
+  alignment, distribution, grid cell), and re-derived whenever one of those
+  changes, since the DSL assembles top-down. Expansion follows GTK4's
+  propagation (a scroll area makes every container above it take the slack).
+- **Styling** keeps every background input (colour, gradient, border,
+  radius, hover and pressed colours, flatness) on the widget record and
+  rebuilds the background `Drawable` from all of them; hover and pressed
+  colours are a `StateListDrawable`, so the platform's own state machinery
+  shows them.
+- **Units are dp** everywhere the ABI has a length: sizes the app sets,
+  geometry the driver reports, `get_width`, `on_layout`, font sizes and text
+  metrics. That is what points are on AppKit and UIKit, so a spec's numbers
+  mean the same on all of them.
+- `backend/android/` — the Java shim: `AetherActivity`, `AetherListener`
+  (every View event — click, text change, check change, seek, item
+  selection, hover, layout change, double tap — carried to one native
+  dispatch with the widget's handle; what the event means is decided in C)
+  and `AetherA11y` (the accessibility delegate that reports a role as a
+  class name and a description as hint text), and the manifest template.
+  Natives are bound with `RegisterNatives`, so the shim's package is fixed
+  (`dev.aether.ui`) and an activity-alias gives every app
+  `<package>/.AetherActivity`. String extras named `AETHER_*` become
+  environment variables before `main()` runs (`am start ... -e
+  AETHER_UI_TEST_PORT 9222` arms the driver).
+- `tools/android-apk.sh` builds the APK, now with **the app's files**: what
+  sits beside the source and is not source goes in as assets at its
+  checkout-relative path, the backend copies them out under the app's files
+  directory and runs the app there, so a relative path a desktop app opens
+  (`examples/imagefill_demo/swatch.png`) opens on the phone.
+  `tools/android-install.sh` installs in 256 KB pieces (for hosts whose adb
+  dies on large transfers).
 - Selection: `AETHER_UI_TARGET=android` in `build_support/aetherui` picks the
   sources (dormant, like the iOS arm); `ci.sh` Phase 1e3 compiles the backend
   `-Wall -Werror` for bionic and builds the counter's `libapp.so` when

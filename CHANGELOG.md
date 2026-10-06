@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Android backend, stage 2 pass A: the everyday widgets and styling.** 102
+  more ABI functions are real (168 of 327): text fields, secure fields, text
+  areas, toggles and radio groups, sliders, pickers (`Spinner`), progress
+  bars, scroll views, grids, forms, images (`BitmapFactory`, all four fills,
+  tint), the `set_*`/`get_*` styling and sizing family, `on_*` events, focus,
+  bindings and a11y. One Java listener (`AetherListener`) carries every View
+  event to a single native dispatch; `AetherA11y` reports roles. Units are dp
+  throughout, like points on AppKit/UIKit, and kind names follow GTK4/AppKit.
+  22 example specs pass on the emulator lane (`aelane android`), from
+  calculator and bindings to imagefill and a11y; the rest wait on pass B or C
+  families. `tools/android-apk.sh` now ships an app's resource files as assets.
+
 - **An Android backend, stage 1** (`backend/aether_ui_android.c`, design in
   `docs/design/android-backend.md`): android.widget Views driven from C over
   JNI, a ~110-line Java shim (`backend/android/`), work from actors, timers

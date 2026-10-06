@@ -26,8 +26,11 @@
 #      platform android.jar, then d8 to classes.dex.
 #   3. aapt2 link of the manifest template (backend/android/AndroidManifest.xml)
 #      against android.jar -> the base APK.
-#   4. classes.dex and lib/arm64-v8a/libapp.so added, zipalign, apksigner with a
-#      debug key generated once under target/android/.
+#   4. classes.dex, lib/arm64-v8a/libapp.so and the app's files (assets/: what
+#      sits beside the source and is not source, at its checkout-relative
+#      path, + aeui-files.txt) added, zipalign, apksigner with a debug key
+#      generated once under target/android/. The backend copies the files out
+#      and runs the app among them, so its relative paths resolve.
 #
 # Environment:
 #   AETHER_SYSROOT   Android sysroot for zig (aether-crossbuild's
@@ -131,10 +134,28 @@ sed -e "s|@PACKAGE@|$PACKAGE|g" -e "s|@LABEL@|$LABEL|g" -e "s|@VERSION@|1.0|g" \
 "$BT/aapt2" link -o "$OUT/base.apk" --manifest "$MANIFEST" -I "$ANDROID_JAR" \
     --min-sdk-version "$MIN_SDK" --target-sdk-version "$TARGET_SDK" --debug-mode
 
-# --- 4. dex + .so in, align, sign --------------------------------------------
-echo "[4/4] align + sign"
+# --- 4. dex + .so + the app's files in, align, sign --------------------------
+# The app's files: everything beside its source that is not source (an image
+# it opens, a data file), as assets at their path relative to the checkout,
+# plus a manifest of them (the NDK cannot list an asset tree). At start-up
+# the backend copies them out under the app's files directory and runs the
+# app there, so the relative paths a desktop app opens from the checkout
+# ("examples/imagefill_demo/swatch.png") open on the phone too.
+echo "[4/4] app files + align + sign"
+REL_BASE="$ROOT"
+case "$APP_DIR/" in "$ROOT"/*) ;; *) REL_BASE="$(dirname "$APP_DIR")" ;; esac
+ASSETS="$STAGE/assets"
+mkdir -p "$ASSETS"
+: > "$ASSETS/aeui-files.txt"
+while IFS= read -r f; do
+    rel="${f#"$REL_BASE"/}"
+    mkdir -p "$ASSETS/$(dirname "$rel")"
+    cp "$f" "$ASSETS/$rel"
+    echo "$rel" >> "$ASSETS/aeui-files.txt"
+done < <(find "$APP_DIR" -type f ! -name '*.ae' ! -name '.*' ! -path '*/.*' -size -8M | sort)
+echo "  $(wc -l < "$ASSETS/aeui-files.txt" | tr -d ' ') app file(s)"
 cp "$OUT/base.apk" "$OUT/unaligned.apk"
-( cd "$STAGE" && zip -q -r "$OUT/unaligned.apk" classes.dex lib )
+( cd "$STAGE" && zip -q -r "$OUT/unaligned.apk" classes.dex lib assets )
 "$BT/zipalign" -f -p 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 KEYSTORE="$ROOT/target/android/debug.keystore"
 if [ ! -f "$KEYSTORE" ]; then
