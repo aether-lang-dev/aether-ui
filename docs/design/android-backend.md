@@ -1,8 +1,54 @@
 # An Android backend
 
-Status: design, not started (2026-10-06). The fifth native implementation of
-the backend ABI (`backend/aether_ui_backend.h`), beside GTK4, AppKit, Win32
-and UIKit.
+Status: **stage 1 (the skeleton) done** (2026-10-06); stage 2 next. The fifth
+native implementation of the backend ABI (`backend/aether_ui_backend.h`),
+beside GTK4, AppKit, Win32 and UIKit.
+
+## Status
+
+Stage 1 runs `examples/counter` on a Pixel 6a (Android 16, API 36) and
+`tests/counter/spec_counter.ae` passes 4/4 against it through
+`adb forward tcp:9222 tcp:9222` (as does `spec_route_parity`, 7/7). The whole
+chain is real: `--emit=lib` for `aarch64-linux-android`, JNI, the ALooper
+bridge, packaging without Gradle, and the shared driver.
+
+- `backend/aether_ui_android.c` — 66 ABI functions real (registry,
+  lifecycle/surfaces, vstack/hstack/text/button/spacer/divider, the state
+  subsystem, the per-widget driver readbacks, the worker poster and timerfd
+  timers), plus the driver hooks (enumeration, children, geometry, click,
+  set_text, state, `GET /screenshot`). The other **261 are stubs** that log
+  once through liblog and return a neutral value; the full list is the
+  STATUS comment at the top of the file (and the STUBS section at its end).
+- `backend/android/` — the Java shim (`AetherActivity`,
+  `AetherClickListener`) and the manifest template. Natives are bound with
+  `RegisterNatives`, so the shim's package is fixed (`dev.aether.ui`) and an
+  activity-alias gives every app `<package>/.AetherActivity`. String extras
+  named `AETHER_*` become environment variables before `main()` runs
+  (`am start ... -e AETHER_UI_TEST_PORT 9222` arms the driver).
+- `tools/android-apk.sh` builds the APK; `tools/android-install.sh` installs
+  it in 256 KB pieces (for hosts whose adb dies on large transfers).
+- Selection: `AETHER_UI_TARGET=android` in `build_support/aetherui` picks the
+  sources (dormant, like the iOS arm); `ci.sh` Phase 1e3 compiles the backend
+  `-Wall -Werror` for bionic and builds the counter's `libapp.so` when
+  `AETHER_ANDROID_SYSROOT` is set; Phase 4a runs the counter spec on the
+  desktop; `check_backend_parity.py` counts five backends.
+
+Found on the way: `--emit=lib` drops a program's `main()`, so the packaging
+script compiles a copy with `main()` renamed to `aeui_app_main()` (exported as
+`aether_aeui_app_main`) — `asks/aether-emit-lib-keeps-main.md`. And an
+app-as-library needs `--with=fs,net,os`, since `--emit=lib` is
+capability-empty by default.
+
+Run it by hand:
+
+```sh
+export AETHER_SYSROOT=<bases/aarch64-android29> ANDROID_HOME=<sdk> JAVA_HOME=<jdk>
+AETHER_UI_WITH_DRIVER=1 tools/android-apk.sh examples/counter/counter.ae
+tools/android-install.sh target/android/counter/counter.apk
+adb forward tcp:9222 tcp:9222
+adb shell am start -n dev.aether.ui.counter/.AetherActivity -e AETHER_UI_TEST_PORT 9222
+UI_SPEC=counter/spec_counter tests/run_spec.sh
+```
 
 ## The decision: native Views, not a drawn surface
 

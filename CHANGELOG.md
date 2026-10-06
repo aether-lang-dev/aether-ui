@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An Android backend, stage 1** (`backend/aether_ui_android.c`, design in
+  `docs/design/android-backend.md`): android.widget Views driven from C over
+  JNI, a ~110-line Java shim (`backend/android/`), work from actors, timers
+  and the driver reaching the UI thread through an `ALooper` pipe, and an APK
+  built without Gradle by `tools/android-apk.sh` (installed in small pieces by
+  `tools/android-install.sh`). `examples/counter` runs on a Pixel 6a
+  (Android 16) and the new `spec_counter` passes 4/4 through
+  `adb forward tcp:9222`; the driver gains `GET /screenshot` there too. 66 of
+  327 ABI functions are real; the other 261 log "unimplemented" once each and
+  are listed for the next passes. ci.sh Phase 1e3 builds it with `-Werror`
+  when `AETHER_ANDROID_SYSROOT` is set.
+
 - **`ui_batch() callback { … }`: set several state cells as one change.**
   Observers (`computed_s`, `each_bind`) run once each when the outermost
   batch closes, so a computed cell over two inputs set together recomputes

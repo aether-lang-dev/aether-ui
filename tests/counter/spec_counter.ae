@@ -1,0 +1,91 @@
+// spec_counter.ae — drives examples/counter over the AetherUIDriver: the
+// widget tree it builds (two stacks, a bound label, three buttons), clicks
+// that run the buttons' closures, and the reactive state behind the label.
+//
+// It is the Android backend's stage-1 acceptance (docs/design/
+// android-backend.md): the smallest app that exercises the whole chain --
+// stacks, text, buttons with closures, a state binding, and the driver's
+// enumeration/click/state routes -- and it asserts nothing a desktop backend
+// does differently, so it runs unchanged on all five.
+//
+// Desktop:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/counter/bin/counter &
+//   UI_SPEC=counter/spec_counter tests/run_spec.sh
+// Android (the phone's driver port forwarded to the Mac's 127.0.0.1:9222):
+//   AETHER_UI_WITH_DRIVER=1 tools/android-apk.sh examples/counter/counter.ae
+//   tools/android-install.sh target/android/counter/counter.apk
+//   adb forward tcp:9222 tcp:9222
+//   adb shell am start -n dev.aether.ui.counter/.AetherActivity -e AETHER_UI_TEST_PORT 9222
+//   UI_SPEC=counter/spec_counter tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+// The label's text, closed by the JSON quote so "Count: 1" does not also
+// match "Count: 12".
+label_reads(label: int, value: int) -> int {
+    return uidriver.wait_body_contains("/widget/${label}", "\"Count: ${value}\"", 20)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "counter example over AetherUIDriver") {
+        spec.it("lists the counter's widgets") callback {
+            body = uidriver.get_body("/widgets")
+            spec.assert_contains(body, "\"Aether UI Counter Demo\"", "the heading label")
+            spec.assert_contains(body, "\"divider\"", "the divider")
+            spec.assert_gt(uidriver.widget_id_of("button", "+1"), 0, "+1 button")
+            spec.assert_gt(uidriver.widget_id_of("button", "-1"), 0, "-1 button")
+            spec.assert_gt(uidriver.widget_id_of("button", "Reset"), 0, "Reset button")
+            spec.assert_gt(uidriver.widget_id_of("text", "Count: 0"), 0,
+                "the bound label starts at Count: 0")
+        }
+
+        spec.it("nests the buttons in an hstack under the label's vstack") callback {
+            plus = uidriver.widget_id_of("button", "+1")
+            label = uidriver.widget_id_of("text", "Count: 0")
+            row = uidriver.widget_int_field_by_id(plus, "parent")
+            spec.assert_gt(row, 0, "+1 has a parent")
+            spec.assert_eq(uidriver.widget_id_of_parent("button", row), plus,
+                "+1 is the row's first button")
+            spec.assert_contains(uidriver.get_body("/widget/${row}"), "\"hstack\"",
+                "the row is an hstack")
+            col = uidriver.widget_int_field_by_id(label, "parent")
+            spec.assert_eq(uidriver.widget_int_field_by_id(row, "parent"), col,
+                "the row and the label share the vstack")
+            spec.assert_contains(uidriver.get_body("/widget/${col}"), "\"vstack\"",
+                "their parent is a vstack")
+        }
+
+        spec.it("+1, -1 and Reset run their closures on the bound state") callback {
+            plus = uidriver.widget_id_of("button", "+1")
+            minus = uidriver.widget_id_of("button", "-1")
+            reset = uidriver.widget_id_of("button", "Reset")
+            label = uidriver.widget_id_of("text", "Count: 0")
+            uidriver.click_widget(plus)
+            spec.assert_true(label_reads(label, 1), "Count: 1 after +1")
+            uidriver.click_widget(plus)
+            spec.assert_true(label_reads(label, 2), "Count: 2 after +1 again")
+            uidriver.click_widget(minus)
+            spec.assert_true(label_reads(label, 1), "Count: 1 after -1")
+            spec.assert_eq(uidriver.state_value_int(1), 1, "the state cell agrees")
+            uidriver.click_widget(reset)
+            spec.assert_true(label_reads(label, 0), "Count: 0 after Reset")
+            spec.assert_eq(uidriver.state_value_int(1), 0, "the state cell is reset")
+        }
+
+        spec.it("a direct state set re-renders the bound label") callback {
+            label = uidriver.widget_id_of("text", "Count: 0")
+            uidriver.set_state(1, 42)
+            spec.assert_true(label_reads(label, 42), "Count: 42 after POST /state/1/set")
+            uidriver.click_widget(uidriver.widget_id_of("button", "-1"))
+            spec.assert_true(label_reads(label, 41), "a click continues from the set value")
+            uidriver.click_widget(uidriver.widget_id_of("button", "Reset"))
+            spec.assert_true(label_reads(label, 0), "and Reset still resets")
+        }
+    }
+
+    return spec.run_summary(fw)
+}

@@ -78,13 +78,29 @@ builder ui_backend(root: string) {
     // of backend/aether_ui_uikit.m for the full status.
     os_name = platform()
     is_ios = 0
+    is_android = 0
     ui_target = os_getenv("AETHER_UI_TARGET")
     if ui_target != null {
         if string.equals(ui_target, "ios") == 1 { is_ios = 1 }
+        if string.equals(ui_target, "android") == 1 { is_android = 1 }
     }
     // Force os_name off every host branch when cross-targeting iOS (on macOS,
     // platform() would otherwise also fire the AppKit arm alongside UIKit).
     if is_ios == 1 { os_name = "ios" }
+    // Android the same way (AETHER_UI_TARGET=android): the native-Views
+    // backend over JNI, the shared driver + system extras, liblog and
+    // libandroid (ALooper). Like the iOS arm this only selects the sources:
+    // an Android app is a shared library (--emit=lib with main() renamed)
+    // inside an APK, which aeb has no verb for yet, so the working path is
+    // tools/android-apk.sh. See docs/design/android-backend.md.
+    if is_android == 1 { os_name = "android" }
+    if is_android == 1 {
+        extra_source("${root}/backend/aether_ui_android.c")
+        extra_source("${root}/backend/${control_src}")
+        extra_source("${root}/backend/aether_ui_system_extras.c")
+        link_flag("-llog")
+        link_flag("-landroid")
+    }
     if is_ios == 1 {
         extra_source("${root}/backend/aether_ui_uikit.m")
         // Same SHARED driver + system-extras the AppKit/Win32 backends carry.

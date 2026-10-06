@@ -81,6 +81,7 @@ SUITES=(
   "calculator|examples/calculator|calculator/spec_calculator|"
   "text_metrics|examples/calculator|text_metrics/spec_text_metrics|"
   "testable|examples/testable|testable/spec_testable|"
+  "counter|examples/counter|counter/spec_counter|"
   "context_menu|examples/context_menu|context_menu/spec_context_menu|"
   "overlay|examples/overlay_demo|overlay_demo/spec_overlay_demo|"
   "auto_hide|examples/auto_hide_demo|auto_hide_demo/spec_auto_hide_demo|"

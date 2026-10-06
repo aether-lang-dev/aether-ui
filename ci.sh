@@ -638,7 +638,7 @@ else
 fi
 
 echo
-echo "=== Phase 1c2: backend ABI parity across all four backends ==="
+echo "=== Phase 1c2: backend ABI parity across all five backends ==="
 # Compiling and linking a backend proves it builds; it proves nothing about
 # what it OMITS. A missing entry point is invisible to every other phase,
 # because nothing here calls it: the iOS lane links against a stub, and the
@@ -936,6 +936,67 @@ else
 fi
 
 echo
+echo "=== Phase 1e3: Android backend (examples/counter as libapp.so) ==="
+# The Android backend (docs/design/android-backend.md) is, like UIKit, one no
+# CI box RUNS: that takes a device or an emulator. What any box with the
+# toolchain CAN check is the rest of the chain: the backend and the shared
+# driver/system sources compile -Wall -Werror for bionic, examples/counter
+# builds as the shared library an APK carries (`ae build
+# --target=aarch64-linux-android --emit=lib`, via tools/android-apk.sh), and
+# that library exports what AetherActivity binds (JNI_OnLoad) and calls (the
+# renamed main). Running it on a phone is tools/android-install.sh, then
+# `adb forward tcp:9222 tcp:9222` and tests/counter/spec_counter.ae.
+# Opt-in: AETHER_ANDROID_SYSROOT=<aether-crossbuild bases/aarch64-android29>.
+if [ -z "${AETHER_ANDROID_SYSROOT:-}" ] || [ ! -f "$AETHER_ANDROID_SYSROOT/usr/include/jni.h" ]; then
+    echo "  SKIP set AETHER_ANDROID_SYSROOT to an Android sysroot (aether-crossbuild fetch-android-sysroot.sh) to enable"
+elif ! command -v zig > /dev/null 2>&1; then
+    echo "  SKIP no zig on PATH (ae's cross-compiler)"
+elif ! ae build --help 2>&1 | grep -q "linux-android"; then
+    echo "  SKIP this ae has no Android target"
+else
+    android_fail=0
+    ANDROID_API_DIR="$(ls -d "$AETHER_ANDROID_SYSROOT"/usr/lib/aarch64-linux-android/[0-9]* | sort -V | head -1)"
+    ANDROID_LIBC_FILE="/tmp/ci_android_zig_libc.txt"
+    printf 'include_dir=%s/usr/include\nsys_include_dir=%s/usr/include/aarch64-linux-android\ncrt_dir=%s\nmsvc_lib_dir=\nkernel32_lib_dir=\ngcc_dir=\n' \
+        "$AETHER_ANDROID_SYSROOT" "$AETHER_ANDROID_SYSROOT" "$ANDROID_API_DIR" > "$ANDROID_LIBC_FILE"
+    for src in backend/aether_ui_android.c \
+               backend/aether_ui_test_server.c \
+               backend/aether_ui_system_extras.c; do
+        if ZIG_LIBC="$ANDROID_LIBC_FILE" zig cc -target "aarch64-linux-android.$(basename "$ANDROID_API_DIR")" \
+                -c -o /dev/null -Wall -Wextra -Wno-unused-parameter -Werror -Ibackend "$ROOT/$src" \
+                > "/tmp/ci_android_$(basename "$src").log" 2>&1; then
+            echo "  OK   $(basename "$src")"
+        else
+            echo "  FAIL $(basename "$src")"
+            grep -E "(error|warning):" "/tmp/ci_android_$(basename "$src").log" | head -10 | sed 's/^/       /'
+            android_fail=1
+        fi
+    done
+    if [ "$android_fail" -eq 0 ]; then
+        if AETHER_SYSROOT="$AETHER_ANDROID_SYSROOT" ANDROID_LIB_ONLY=1 AETHER_UI_WITH_DRIVER=1 \
+                "$ROOT/tools/android-apk.sh" "$ROOT/examples/counter/counter.ae" \
+                > /tmp/ci_android_build.log 2>&1; then
+            ANDROID_SO="$ROOT/target/android/counter/stage/lib/arm64-v8a/libapp.so"
+            exports="$(nm -D --defined-only "$ANDROID_SO" 2>/dev/null)"
+            if echo "$exports" | grep -q ' JNI_OnLoad$' \
+               && echo "$exports" | grep -q ' aether_aeui_app_main$'; then
+                echo "  OK   counter builds as libapp.so (JNI_OnLoad + aether_aeui_app_main exported)"
+            elif [ -z "$exports" ]; then
+                echo "  OK   counter builds as libapp.so (no ELF-capable nm here to check its exports)"
+            else
+                echo "  FAIL libapp.so is missing JNI_OnLoad or aether_aeui_app_main"
+                android_fail=1
+            fi
+        else
+            echo "  FAIL counter as libapp.so"
+            tail -15 /tmp/ci_android_build.log | sed 's/^/       /'
+            android_fail=1
+        fi
+    fi
+    [ "$android_fail" -eq 0 ] || FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 1f: AppKit label retention across list rebuilds (#139) ==="
 # tests/appkit_retention/retention_probe.ae rebuilds a 400-row listbox on a
 # timer and then sits still, and `heap` (Xcode's, in /usr/bin) counts the
@@ -1092,6 +1153,16 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=testable/spec_testable \
     run_server_test "$(EX_BIN testable)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" testable || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 4a: AetherUIDriver counter spec ==="
+# The Android backend's stage-1 acceptance spec (tests/counter), held green on
+# the desktop too so it stays a spec every backend passes, not an Android one.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=counter/spec_counter \
+    run_server_test "$(EX_BIN counter)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" counter || FAIL=$((FAIL + 1))
 fi
 
 echo

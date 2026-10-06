@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Manifest TEMPLATE for an aether-ui Android app. tools/android-apk.sh
+     fills the @...@ fields and links it with aapt2; nothing here is
+     app-specific beyond those.
+
+     The activity class is the shim's fixed dev.aether.ui.AetherActivity; the
+     alias gives every app the conventional <package>/.AetherActivity
+     component name, so `adb shell am start -n <package>/.AetherActivity`
+     works whatever the package is. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="@PACKAGE@"
+    android:versionCode="1"
+    android:versionName="@VERSION@">
+
+    <!-- The AetherUIDriver is a localhost HTTP server (reached from the
+         host through `adb forward tcp:9222 tcp:9222`). Binding a socket
+         needs INTERNET. Only builds with the driver include it. -->
+    @INTERNET_PERMISSION@
+
+    <application
+        android:label="@LABEL@"
+        android:hasCode="true"
+        android:extractNativeLibs="true">
+        <!-- configChanges: a rotation or theme switch must not destroy the
+             activity, which would throw away the widget tree main() built. -->
+        <activity
+            android:name="dev.aether.ui.AetherActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.DarkActionBar"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection" />
+        <activity-alias
+            android:name=".AetherActivity"
+            android:targetActivity="dev.aether.ui.AetherActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+    </application>
+</manifest>

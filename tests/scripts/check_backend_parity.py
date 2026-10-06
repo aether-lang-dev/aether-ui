@@ -42,6 +42,7 @@ BACKENDS = {
     "gtk4":   "backend/aether_ui_gtk4.c",
     "win32":  "backend/aether_ui_win32.c",
     "uikit":  "backend/aether_ui_uikit.m",
+    "android": "backend/aether_ui_android.c",
 }
 SHARED = ("backend/aether_ui_system_extras.c",
           "backend/aether_ui_test_server.c",
