@@ -37,6 +37,10 @@ needed to *use* aether-ui; read these to change it.
   NSAccessibility.
 - [**multi-window.md**](design/multi-window.md) — co-equal top-level
   windows over one event loop.
+- [**android-backend.md**](design/android-backend.md) — the fifth native
+  backend: android.widget Views through JNI with a small Java shim, the
+  ALooper bridge, APK packaging without Gradle, and the driver over
+  `adb forward`. Design, not started.
 - [**toolkit-envy.md**](design/toolkit-envy.md) — what Swing, Flutter,
   Fyne, Slint, Qt Quick and Zed's GPUI got right, each read from its
   source and judged against aether-ui's shape, with the change series
