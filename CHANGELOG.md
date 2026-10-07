@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Android backend, stage 2 pass C: drawing. The backend has no stubs left**
+  (321 real functions plus the 6 documented tray no-ops). The canvas replays
+  its command buffer through `android.graphics.Canvas` (Skia) in a new
+  `AetherCanvas` view, onto a retained Bitmap like GTK4's paint surface, with
+  cairo's conventions where Skia's defaults differ (miter limit, zero-width
+  strokes, full-turn arcs, group opacity, gradient spread); pixel readback,
+  PNG export and the golden-image gallery work (Android goldens blessed in
+  `tests/goldens/android/`). `gpuview` is a `SurfaceView` with an EGL
+  (GLES 3, else 2) context. Across the whole spec matrix on the emulator lane,
+  79 of 84 suites pass; the five red ones are narrow-screen layouts in
+  stroker/vg3d/tumbling_cube, env not forwarded to two apps, and no FFmpeg for
+  Android (video_frame).
+
+### Fixed
+
+- **Chrome faces read "middle" on every backend:** `ui/chrome.ae` passed
+  `text_anchored` its anchor and label in the wrong order.
+
 - **Android backend, stage 2 pass B: navigation and system.** 104 more ABI
   functions are real (272 of 327; only canvas, gpuview and
   `fire_double_click` remain, for pass C): tabs, navstack, split view,

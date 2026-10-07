@@ -25,18 +25,20 @@
 // aeui_android_run_sync); timers are timerfds on the same looper. Every JNI
 // call that touches a View therefore happens on the UI thread.
 //
-// STATUS: STAGE 2, PASS B -- 272 of the 327 ABI functions the UIKit backend
-// exports are implemented for real, 6 are documented no-ops (the tray: there
-// is no status-area tray on Android, as on iOS), and 49 are STUBS: the canvas
-// and the GPU view, and fire_double_click, which pass C brings. Stage 1
-// proved the chain (`--emit=lib`, JNI, the looper bridge, packaging, the
-// driver over `adb forward`) with examples/counter; pass A brought the widget
-// set most apps are made of (inputs, containers, images, styling, sizing,
-// accessibility, events and bindings); pass B everything around the widgets
-// (containers of pages, extra windows and sheets, overlays, menus, the
-// keyboard, dialogs and pickers, notifications, the clipboard, appearance,
-// CSS classes, native lists and views). Pass C replaces the rest, with the
-// spec matrix as the ratchet, until none remain (the backend-parity rule).
+// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 327 ABI functions
+// the UIKit backend exports are here: 321 implemented for real and 6
+// documented no-ops (the tray: there is no status-area tray on Android, as
+// on iOS). There are NO STUBS. Stage 1 proved the chain (`--emit=lib`, JNI,
+// the looper bridge, packaging, the driver over `adb forward`) with
+// examples/counter; pass A brought the widget set most apps are made of
+// (inputs, containers, images, styling, sizing, accessibility, events and
+// bindings); pass B everything around the widgets (containers of pages,
+// extra windows and sheets, overlays, menus, the keyboard, dialogs and
+// pickers, notifications, the clipboard, appearance, CSS classes, native
+// lists and views); pass C the canvas (a command buffer replayed through
+// android.graphics.Canvas into a retained Bitmap, see the canvas section),
+// the GPU view (a SurfaceView with an EGL / OpenGL ES context) and
+// fire_double_click.
 //
 // Real:
 //   registry   register_widget get_widget handle_for_widget backend_name_impl
@@ -161,37 +163,39 @@
 // modifiers_impl is 0 (no pollable modifier state, as on UIKit), the
 // disclosure triangle is drawn as a path (no system chevron).
 //
-// STUBS (each calls aeui_android_unimplemented(__func__), which logs the
-// name once through liblog, and returns a neutral value: 0, 0.0 or NULL).
-// The full list is the STUBS section at the end of this file; by family:
-//   canvas     canvas_arc_impl canvas_begin_path_impl canvas_clear_impl
-//              canvas_clip_rect_impl canvas_close_path_impl
-//              canvas_cmd_count_impl canvas_create_impl
-//              canvas_draw_image_borrowed_impl canvas_draw_image_impl
-//              canvas_draw_image_impl_ptr
-//              canvas_draw_image_scaled_borrowed_impl
+// Real, pass C (49):
+//   canvas     canvas_create_impl canvas_get_widget canvas_begin_path_impl
+//              canvas_move_to_impl canvas_line_to_impl canvas_arc_impl
+//              canvas_close_path_impl canvas_stroke_impl canvas_fill_impl
+//              canvas_fill_rect_impl canvas_clip_rect_impl
+//              canvas_set_clip_rects_impl canvas_reset_clip_impl
+//              canvas_group_begin_impl canvas_group_end_impl
+//              canvas_fill_text_impl canvas_stroke_text_impl
+//              canvas_draw_image_impl canvas_draw_image_impl_ptr
 //              canvas_draw_image_scaled_impl canvas_draw_image_scaled_impl_ptr
-//              canvas_fill_impl canvas_fill_linear_gradient_impl
-//              canvas_fill_radial_gradient_impl canvas_fill_rect_impl
-//              canvas_fill_text_impl canvas_gesture_probe_impl
-//              canvas_get_widget canvas_group_begin_impl canvas_group_end_impl
-//              canvas_line_to_impl canvas_move_to_impl canvas_on_click_impl
+//              canvas_draw_image_borrowed_impl
+//              canvas_draw_image_scaled_borrowed_impl
+//              canvas_fill_linear_gradient_impl canvas_fill_radial_gradient_impl
+//              canvas_clear_impl canvas_redraw_impl canvas_cmd_count_impl
+//              canvas_read_pixel_impl canvas_write_png_impl
+//              canvas_render_range_rgba_impl canvas_painted_pixels_impl
+//              canvas_on_click_impl canvas_on_move_impl canvas_on_release_impl
 //              canvas_on_key_impl canvas_on_key_release_impl
-//              canvas_on_move_impl canvas_on_release_impl canvas_on_resize_impl
-//              canvas_on_scroll_impl canvas_painted_pixels_impl
-//              canvas_read_pixel_impl canvas_redraw_impl
-//              canvas_render_range_rgba_impl canvas_reset_clip_impl
-//              canvas_set_clip_rects_impl canvas_stroke_impl
-//              canvas_stroke_text_impl canvas_write_png_impl     (40)
+//              canvas_on_scroll_impl canvas_on_resize_impl
+//              canvas_gesture_probe_impl                         (40)
 //   gpuview    gpuview_available_impl gpuview_create_impl gpuview_get_widget
 //              gpuview_on_realize_impl gpuview_on_render_impl
-//              gpuview_on_resize_impl gpuview_read_pixel_impl
-//              gpuview_request_render_impl                       (8)
+//              gpuview_on_resize_impl gpuview_request_render_impl
+//              gpuview_read_pixel_impl                           (8)
 //   fire       fire_double_click                                 (1)
+//   driver     the canvas events (click, move, release, key, keyup,
+//              scroll), /canvas/{id}/debug and its paint counters
 //
 // Limitations: Back finishes the activity, which ends the program as
 // closing a desktop window does (in an extra window or a sheet, Back closes
-// that dialog); the driver's canvas routes answer 404 until pass C.
+// that dialog). The window size an app asks for is not applied (the
+// activity is the screen), so a layout written for a wider desktop window
+// is narrower here.
 // ===========================================================================
 
 #include <jni.h>
@@ -234,26 +238,6 @@ typedef struct {
 
 static void aeui_call0(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
-}
-
-// ---------------------------------------------------------------------------
-// Stubs report themselves once each. A stub is reached on every /widgets
-// request or every frame in some apps, so logging each call would bury the
-// log; once per name says what an app needs from the next pass.
-// ---------------------------------------------------------------------------
-static pthread_mutex_t aeui_unimpl_lock = PTHREAD_MUTEX_INITIALIZER;
-static const char* aeui_unimpl_seen[512];
-static int aeui_unimpl_count = 0;
-
-static void aeui_android_unimplemented(const char* fn) {
-    pthread_mutex_lock(&aeui_unimpl_lock);
-    for (int i = 0; i < aeui_unimpl_count; i++) {
-        if (aeui_unimpl_seen[i] == fn) { pthread_mutex_unlock(&aeui_unimpl_lock); return; }
-    }
-    if (aeui_unimpl_count < (int)(sizeof(aeui_unimpl_seen) / sizeof(aeui_unimpl_seen[0])))
-        aeui_unimpl_seen[aeui_unimpl_count++] = fn;
-    pthread_mutex_unlock(&aeui_unimpl_lock);
-    AEUI_LOGW("unimplemented on Android (a pass-C stub): %s", fn);
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +613,8 @@ enum {
     AUI_FORM_SECTION, AUI_FORM_SECTION_INNER, AUI_BANNER,
     AUI_SCRIM,          // a modal overlay's scrim (registered, as on AppKit)
     AUI_LIST,           // a native list (ListView); reported as a vstack, as AppKit's is
-    AUI_NATIVE_VIEW     // a native view (SurfaceView)
+    AUI_NATIVE_VIEW,    // a native view (SurfaceView)
+    AUI_GPUVIEW         // a GPU view (SurfaceView + EGL); "widget", as GTK4's GtkGLArea reports
 };
 
 // Which Java listeners a View already carries (one of each per View).
@@ -911,6 +896,8 @@ JMETHOD(M_View_setMinimumHeight, C_View, "setMinimumHeight", "(I)V");
 JMETHOD(M_View_getParent, C_View, "getParent", "()Landroid/view/ViewParent;");
 JMETHOD(M_View_getWidth, C_View, "getWidth", "()I");
 JMETHOD(M_View_getHeight, C_View, "getHeight", "()I");
+JMETHOD(M_View_getMeasuredWidth, C_View, "getMeasuredWidth", "()I");
+JMETHOD(M_View_getMeasuredHeight, C_View, "getMeasuredHeight", "()I");
 JMETHOD(M_View_getLocationInWindow, C_View, "getLocationInWindow", "([I)V");
 JMETHOD(M_VG_addView, C_ViewGroup, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
 JMETHOD(M_VG_addViewIdx, C_ViewGroup, "addView", "(Landroid/view/View;I)V");
@@ -1337,6 +1324,7 @@ static void aeui_restack(JNIEnv* env, int parent) {
 }
 
 static void aeui_apply_enabled(JNIEnv* env, int handle, int parent_on);
+static void aeui_mount_face(JNIEnv* env, int handle);
 static int aeui_opacity_transition_ms(int handle);
 static jobject aeui_listener3(JNIEnv* env, int handle, int kind, int arg);
 static void aeui_apply_background(JNIEnv* env, int handle);
@@ -1457,6 +1445,7 @@ static void aeui_attach(JNIEnv* env, int parent_handle, int child_handle, int in
     aeui_apply_lp(env, child_handle);
     JV(aeui_content_of(p), M_VG_addViewIdx, c->view, (jint)index);
     if (index >= 0) aeui_restack(env, parent_handle);
+    if (c->face) aeui_mount_face(env, child_handle);
     aeui_update_expand(env, child_handle);
     aeui_update_expand(env, parent_handle);
     if (p->disabled || !aeui_parent_enabled(parent_handle)) aeui_apply_enabled(env, child_handle, 0);
@@ -1817,7 +1806,7 @@ void aether_ui_text_set_string(int handle, const char* text) {
     if (!w) return;
     JNIEnv* env = aeui_frame(8);
     if (!env) return;
-    if (w->type == AUI_BUTTON && w->text_override) {
+    if ((w->type == AUI_BUTTON || w->type == AUI_TOGGLE) && w->text_override) {
         free(w->text_override);
         w->text_override = strdup(text ? text : "");
     } else if (aeui_is_edit(w->type)) {
@@ -2434,6 +2423,7 @@ JMETHOD(M_View_setLayoutDirection, C_View, "setLayoutDirection", "(I)V");
 JMETHOD(M_View_setFocusable, C_View, "setFocusable", "(Z)V");
 JMETHOD(M_View_setFocusableInTouchMode, C_View, "setFocusableInTouchMode", "(Z)V");
 JMETHOD(M_View_requestFocus, C_View, "requestFocus", "()Z");
+JMETHOD(M_View_requestFocusFromTouch, C_View, "requestFocusFromTouch", "()Z");
 JMETHOD(M_View_requestLayout, C_View, "requestLayout", "()V");
 JMETHOD(M_View_setContentDescription, C_View, "setContentDescription", "(Ljava/lang/CharSequence;)V");
 JMETHOD(M_View_setAccessibilityDelegate, C_View, "setAccessibilityDelegate",
@@ -3121,7 +3111,11 @@ void aether_ui_focus_impl(int handle) {
     if (!w) return;
     JNIEnv* env = aeui_frame(4);
     if (!env) return;
-    JZ(w->view, M_View_requestFocus);
+    // A widget not focusable by touch (a button, a checkbox) is still
+    // focusable by keyboard, and focus() is the keyboard's kind: it takes
+    // focus the way a key press would, leaving touch mode (as GTK4 grabs
+    // focus on any focusable widget).
+    if (!JZ(w->view, M_View_requestFocus)) JZ(w->view, M_View_requestFocusFromTouch);
     aeui_unframe(env);
 }
 
@@ -3319,6 +3313,21 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
         }
     }
     aeui_unframe(env);
+}
+
+// The driver's /widget/{id}/double_click and a programmatic double-click:
+// the closure a double tap runs, on the UI thread. 1 if there was one.
+static void aeui_fire_double_run(void* arg) {
+    int* io = (int*)arg;
+    AeuiWidget* w = live_widget(io[0]);
+    if (!w || !w->dbl || !w->dbl->fn) return;
+    aeui_call0(w->dbl);
+    io[1] = 1;
+}
+int aether_ui_fire_double_click(int handle) {
+    int io[2] = { handle, 0 };
+    aeui_android_run_sync(aeui_fire_double_run, io);
+    return io[1];
 }
 
 // Enter (1) and leave (0), as GTK4's motion controller reports them. Real
@@ -4148,8 +4157,34 @@ static void aeui_place_face(JNIEnv* env, int handle) {
     int l = JI(w->view, M_View_getLeft), t = JI(w->view, M_View_getTop);
     int r = JI(w->view, M_View_getRight), b = JI(w->view, M_View_getBottom);
     if (r <= l || b <= t) return;
+    if (f->type == AUI_CANVAS) {
+        // A canvas face draws a scene of its natural size (a chrome face
+        // has no on_resize to re-map it), so it sits at that size centred
+        // on the widget, the way a GtkButton centres a child smaller than
+        // itself, rather than in its top-left corner.
+        JV(f->view, M_View_measure, (jint)(0x80000000 | (r - l)), (jint)(0x80000000 | (b - t)));
+        int fw = JI(f->view, M_View_getMeasuredWidth), fh = JI(f->view, M_View_getMeasuredHeight);
+        int x = l + ((r - l) - fw) / 2, y = t + ((b - t) - fh) / 2;
+        JV(f->view, M_View_layout, (jint)x, (jint)y, (jint)(x + fw), (jint)(y + fh));
+        return;
+    }
     JV(f->view, M_View_measure, (jint)(0x40000000 | (r - l)), (jint)(0x40000000 | (b - t)));
     JV(f->view, M_View_layout, (jint)l, (jint)t, (jint)r, (jint)b);
+}
+
+// A face goes in the overlay of the ViewGroup its widget is in. The DSL
+// assembles top-down, so a face is often set before its widget has been
+// put anywhere (ui.btn makes the chrome face first, then adds the button):
+// then it is mounted when the widget is attached (aeui_attach).
+static void aeui_mount_face(JNIEnv* env, int handle) {
+    AeuiWidget* w = live_widget(handle);
+    AeuiWidget* f = w ? live_widget(w->face) : NULL;
+    if (!f) return;
+    jobject vp = JO(w->view, M_View_getParent);
+    if (!vp || !(*env)->IsInstanceOf(env, vp, jcls(env, &C_ViewGroup))) return;
+    jobject ov = JO(vp, M_VG_getOverlay);
+    if (ov) JV(ov, M_VGO_add, f->view);   // out of any earlier overlay first
+    aeui_place_face(env, handle);
 }
 
 void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
@@ -4170,21 +4205,27 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
         aeui_match_parent(child_handle, 0);
         aeui_match_parent(child_handle, 1);
     } else {
-        jobject vp = JO(p->view, M_View_getParent);
-        if (vp && (*env)->IsInstanceOf(env, vp, jcls(env, &C_ViewGroup))) {
-            if (c->parent) aeui_detach(env, child_handle);
-            c = widget_at(child_handle);
-            jobject ov = JO(vp, M_VG_getOverlay);
-            if (ov) JV(ov, M_VGO_add, c->view);
-            c->parent = parent_handle;
-            p = widget_at(parent_handle);
-            p->face = child_handle;
-            if (!(p->listeners & LST_LAYOUT)) {
-                jobject l = aeui_listener(env, parent_handle, AEUI_EV_LAYOUT);
-                if (l) { JV(p->view, M_View_addOnLayoutChangeListener, l); p->listeners |= LST_LAYOUT; }
-            }
-            aeui_place_face(env, parent_handle);
+        if (c->parent) aeui_detach(env, child_handle);
+        c = widget_at(child_handle);
+        c->parent = parent_handle;
+        p = widget_at(parent_handle);
+        p->face = child_handle;
+        // The face IS the widget's look now, as gtk_button_set_child
+        // replaces the label: the caption leaves the screen but stays the
+        // widget's text for the driver and its description for TalkBack
+        // (the disclosure's arrangement).
+        if ((p->type == AUI_BUTTON || p->type == AUI_TOGGLE) && !p->text_override) {
+            jobject cs = (*env)->CallObjectMethod(env, p->view, J.TextView_getText);
+            p->text_override = aeui_check(env, "getText") ? strdup("") : aeui_charseq_dup(env, cs);
+            jstring d = aeui_jstring(env, p->text_override);
+            if (!p->a11y_name) JV(p->view, M_View_setContentDescription, d);
+            set_text_on(env, p->view, "");
         }
+        if (!(p->listeners & LST_LAYOUT)) {
+            jobject l = aeui_listener(env, parent_handle, AEUI_EV_LAYOUT);
+            if (l) { JV(p->view, M_View_addOnLayoutChangeListener, l); p->listeners |= LST_LAYOUT; }
+        }
+        aeui_mount_face(env, parent_handle);
     }
     aeui_unframe(env);
 }
@@ -4811,8 +4852,14 @@ int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text, double cx, d
 void aether_ui_vg_tooltip_hide_impl(void) {
     if (g_vg_tooltip) { aether_ui_overlay_close_impl(g_vg_tooltip); g_vg_tooltip = 0; }
 }
+// Whether vg scenes take the DRAWN tooltip path (the question GTK4, AppKit
+// and Win32 answer here; it is not "is one showing"). On Android it is the
+// default: a vg shape is a region of one View, and the platform's tooltip
+// (View.setTooltipText) belongs to a whole View, so drawing it is the only
+// way a shape's tooltip shows at all. AETHER_UI_TOOLTIP=native turns it off.
 int aether_ui_vg_tooltip_drawn_impl(void) {
-    return (g_vg_tooltip && aether_ui_overlay_is_live_impl(g_vg_tooltip)) ? 1 : 0;
+    const char* force = getenv("AETHER_UI_TOOLTIP");
+    return !(force && strcmp(force, "native") == 0);
 }
 
 // --- Alert -------------------------------------------------------------------
@@ -5582,10 +5629,16 @@ static int aeui_combo_split(const char* canonical, char* name, int namesize) {
 }
 
 // Tab / Shift+Tab move focus through the focusable widgets, as a desktop
-// window's do (View.focusSearch, the platform's own focus order).
+// window's do (View.focusSearch, the platform's own focus order). A real
+// key takes the window out of touch mode, and with it every focusable
+// widget (a checkbox, a button) joins the order rather than only those
+// focusable by touch (a text field, a canvas that takes keys); the driver's
+// Tab is not a real key event, so it leaves touch mode the way a key would
+// (requestFocusFromTouch on the focused widget) before searching.
 static int aeui_focus_step(JNIEnv* env, int backward) {
     jobject f = g_activity ? JO(g_activity, M_Act_getCurrentFocus) : NULL;
     if (!f) return 0;
+    JZ(f, M_View_requestFocusFromTouch);
     jobject next = JO(f, M_View_focusSearch, (jint)(backward ? 1 /* FOCUS_BACKWARD */ : 2 /* FOCUS_FORWARD */));
     return next ? (JZ(next, M_View_requestFocus) ? 1 : 0) : 0;
 }
@@ -6299,6 +6352,1723 @@ static void aeui_native_view_surface(JNIEnv* env, int widget, int w, int h) {
 }
 
 // ===========================================================================
+// Canvas -- a command buffer replayed through android.graphics.Canvas.
+//
+// The same shape as every other backend's canvas: the drawing calls append
+// commands to a buffer, and the buffer is REPLAYED onto a platform drawing
+// surface whenever something needs pixels. Here the surface is an
+// android.graphics.Canvas (Skia) over a Bitmap, which is Android's
+// counterpart of cairo on GTK4 and Core Graphics on AppKit/UIKit: the
+// backend translates each command into the platform's own path, paint,
+// shader and text calls and never rasterises anything itself.
+//
+// Three consumers replay the buffer, all through canvas_replay_range:
+//   * the View (dev.aether.ui.AetherCanvas). onDraw replays into a Bitmap
+//     the size of the View in device pixels, scaled by the density so the
+//     canvas's units are dp like every other length here, and shows it.
+//     That Bitmap is the RETAINED paint surface (GTK4's paint_surface):
+//     painted_pixels samples it, and a dirty-region paint (set_clip_rects)
+//     redraws only its clip;
+//   * read_pixel, write_png and render_range_rgba, which replay offscreen at
+//     one pixel per canvas unit, the size the caller names -- what GTK4,
+//     AppKit and UIKit do -- so a spec's pixel coordinates mean the same on
+//     all of them;
+//   * the headless snapshot path the others have is not needed: a phone
+//     always has the activity's window.
+//
+// Text is drawn with the platform's text renderer through a Paint, in the
+// typeface the CSS font-family stack resolves to (Typeface.create walks the
+// system font map, as fontconfig and CoreText do on the desktop); with no
+// family it is Typeface.DEFAULT, the face text_measure and the font metrics
+// report for text widgets, so a vg label anchored by measured width lands
+// where the measurement says.
+//
+// Input arrives through AetherCanvas's natives: the touch stream (press =
+// on_click, move = on_move, release = on_release, as UIKit's touches map),
+// a mouse's hover and wheel, hardware keys while the canvas has focus, and
+// size changes (on_resize). The gesture probe sees the same stream.
+// ===========================================================================
+#include <android/bitmap.h>
+
+typedef enum {
+    CANVAS_BEGIN_PATH, CANVAS_MOVE_TO, CANVAS_LINE_TO, CANVAS_STROKE, CANVAS_FILL_RECT,
+    CANVAS_CLEAR, CANVAS_ARC, CANVAS_CLOSE_PATH, CANVAS_FILL, CANVAS_FILL_TEXT,
+    CANVAS_STROKE_TEXT, CANVAS_DRAW_IMAGE, CANVAS_FILL_LINEAR, CANVAS_FILL_RADIAL,
+    CANVAS_CLIP_RECT, CANVAS_GROUP_BEGIN, CANVAS_GROUP_END, CANVAS_RESET_CLIP
+} CanvasCmdType;
+
+typedef struct {
+    CanvasCmdType type;
+    double x, y;            // points; STROKE line width in x; GROUP_END alpha in x
+    double r, g, b, a;      // colour
+    double w, h;            // rect size; ARC radius in w; text size in w, stroke width in h;
+                            // DRAW_IMAGE destination extent (0 = the pixel size)
+    double a0, a1;          // ARC start/end angle (radians)
+    char* text;             // FILL_TEXT / STROKE_TEXT (owned)
+    char* font_family;      // the raw CSS stack (owned), NULL = none declared
+    unsigned char* pixels;  // DRAW_IMAGE RGBA8888, straight alpha
+    int pixels_borrowed;    // 1 = the caller's, valid until the next clear
+    jobject bitmap;         // global ref: the owned pixels as a Bitmap, made on first replay
+    int iw, ih;             // DRAW_IMAGE pixel size; STROKE/gradient cap & join; FILL even-odd;
+                            // text font flags (iw: bit0 mono, bit1 bold, bit2 italic)
+    double gx1, gy1, gx2, gy2, gr, gfx, gfy;   // gradient geometry
+    double grad_line_width; // 0 = fill the path, > 0 = stroke it this wide
+    int grad_extend;        // spreadMethod: 0 pad, 1 reflect, 2 repeat
+    double grx, gry, grot;  // a radial gradient's ellipse (grx == 0: a circle of gr)
+    int n_stops;
+    double* stop_off;       // owned
+    double* stop_rgba;      // owned, 4 per stop, 0..1
+} CanvasCmd;
+
+typedef struct {
+    CanvasCmd* cmds;
+    int count, capacity;
+    int widget_handle;
+    AeClosure* on_click;      // press (x, y) in canvas units
+    AeClosure* on_move;       // pointer move (x, y)
+    AeClosure* on_release;    // release (x, y)
+    AeClosure* on_key;        // key down (name)
+    AeClosure* on_key_release;
+    AeClosure* on_resize;     // (w, h) on a change of size
+    AeClosure* on_scroll;     // wheel (dx, dy), dy < 0 away from the user
+    AeClosure* probe;         // gesture probe (kind, a, b, mods)
+    int last_w, last_h;       // the size on_resize last reported (dp), -1 none yet
+    int created_w, created_h;
+    // Dirty-region paint (set_clip_rects) and the paint metrics the driver's
+    // /canvas/{id}/debug reports, as GTK4, AppKit and UIKit keep them.
+    double* paint_clip_rects; int paint_clip_count, paint_clip_capacity;
+    int last_paint_w, last_paint_h, last_paint_area, last_paint_count;
+    int paint_full_count, paint_clip_count_total, last_clip_area;
+    // The retained paint surface: what the View shows, in device pixels.
+    jobject paint_bmp, paint_canvas;
+    int paint_w, paint_h;
+    // read_pixel's replay cache (GTK4's): one rendered buffer per
+    // (generation, command count, size). The generation moves on clear;
+    // within one the buffer only grows, so the pair names its content. A
+    // golden signature reads 1536 pixels; without this each would replay
+    // the whole scene.
+    unsigned long gen, cache_gen;
+    int cache_count, cache_w, cache_h;
+    unsigned char* cache_px;  // premultiplied RGBA, cache_w * cache_h * 4
+    // The gesture probe's view of the touch stream.
+    int g_down; double g_x0, g_y0;
+    int g_two; double g_span0, g_ang0;
+    int keys;                 // focusable for keys (a key handler is set)
+} CanvasState;
+
+static CanvasState* canvas_states = NULL;
+static int canvas_state_count = 0;
+static int canvas_state_capacity = 0;
+
+extern double floatarr_get_raw(void* arr, int i);
+
+static jclass g_canvas_class = NULL;
+static jmethodID g_canvas_init = NULL;
+
+static CanvasState* get_canvas_state(int canvas_id) {
+    if (canvas_id < 1 || canvas_id > canvas_state_count) return NULL;
+    return &canvas_states[canvas_id - 1];
+}
+
+static void canvas_add_cmd(int canvas_id, CanvasCmd cmd) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) {
+        free(cmd.text); free(cmd.font_family);
+        if (!cmd.pixels_borrowed) free(cmd.pixels);
+        free(cmd.stop_off); free(cmd.stop_rgba);
+        return;
+    }
+    if (cs->count >= cs->capacity) {
+        int cap = cs->capacity == 0 ? 64 : cs->capacity * 2;
+        CanvasCmd* nc = (CanvasCmd*)realloc(cs->cmds, sizeof(CanvasCmd) * (size_t)cap);
+        if (!nc) return;
+        cs->cmds = nc;
+        cs->capacity = cap;
+    }
+    cs->cmds[cs->count++] = cmd;
+}
+
+// --- The platform's drawing API -----------------------------------------------
+JCLASS(C_GCanvas, "android/graphics/Canvas");
+JCLASS(C_GPath, "android/graphics/Path");
+JCLASS(C_GPaint, "android/graphics/Paint");
+JCLASS(C_FillType, "android/graphics/Path$FillType");
+JCLASS(C_PathDir, "android/graphics/Path$Direction");
+JCLASS(C_PaintStyle, "android/graphics/Paint$Style");
+JCLASS(C_PaintCap, "android/graphics/Paint$Cap");
+JCLASS(C_PaintJoin, "android/graphics/Paint$Join");
+JCLASS(C_Shader, "android/graphics/Shader");
+JCLASS(C_LinearGradient, "android/graphics/LinearGradient");
+JCLASS(C_RadialGradient, "android/graphics/RadialGradient");
+JCLASS(C_Matrix, "android/graphics/Matrix");
+JCLASS(C_RectF, "android/graphics/RectF");
+JCLASS(C_GBitmap, "android/graphics/Bitmap");
+JCLASS(C_PorterDuffMode, "android/graphics/PorterDuff$Mode");
+JCLASS(C_Typeface2, "android/graphics/Typeface");
+JCLASS(C_FileOutputStream, "java/io/FileOutputStream");
+
+JMETHOD(M_GC_init, C_GCanvas, "<init>", "(Landroid/graphics/Bitmap;)V");
+JMETHOD(M_GC_setDensity, C_GCanvas, "setDensity", "(I)V");
+JMETHOD(M_GC_save, C_GCanvas, "save", "()I");
+JMETHOD(M_GC_restoreToCount, C_GCanvas, "restoreToCount", "(I)V");
+JMETHOD(M_GC_saveLayerAlpha, C_GCanvas, "saveLayerAlpha", "(Landroid/graphics/RectF;I)I");
+JMETHOD(M_GC_clipRect, C_GCanvas, "clipRect", "(FFFF)Z");
+JMETHOD(M_GC_clipPath, C_GCanvas, "clipPath", "(Landroid/graphics/Path;)Z");
+JMETHOD(M_GC_translate, C_GCanvas, "translate", "(FF)V");
+JMETHOD(M_GC_scale, C_GCanvas, "scale", "(FF)V");
+JMETHOD(M_GC_drawPath, C_GCanvas, "drawPath", "(Landroid/graphics/Path;Landroid/graphics/Paint;)V");
+JMETHOD(M_GC_drawRect, C_GCanvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V");
+JMETHOD(M_GC_drawText, C_GCanvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V");
+JMETHOD(M_GC_drawBitmapRect, C_GCanvas, "drawBitmap",
+        "(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V");
+JMETHOD(M_GC_drawBitmapAt, C_GCanvas, "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V");
+JMETHOD(M_GC_drawColorMode, C_GCanvas, "drawColor", "(ILandroid/graphics/PorterDuff$Mode;)V");
+JMETHOD(M_GP_init, C_GPath, "<init>", "()V");
+JMETHOD(M_GP_reset, C_GPath, "reset", "()V");
+JMETHOD(M_GP_moveTo, C_GPath, "moveTo", "(FF)V");
+JMETHOD(M_GP_lineTo, C_GPath, "lineTo", "(FF)V");
+JMETHOD(M_GP_close, C_GPath, "close", "()V");
+JMETHOD(M_GP_arcTo, C_GPath, "arcTo", "(FFFFFFZ)V");
+JMETHOD(M_GP_setFillType, C_GPath, "setFillType", "(Landroid/graphics/Path$FillType;)V");
+JMETHOD(M_GP_addRect, C_GPath, "addRect", "(FFFFLandroid/graphics/Path$Direction;)V");
+JSFIELD(F_FT_WINDING, C_FillType, "WINDING", "Landroid/graphics/Path$FillType;");
+JSFIELD(F_FT_EVEN_ODD, C_FillType, "EVEN_ODD", "Landroid/graphics/Path$FillType;");
+JSFIELD(F_PD_CW, C_PathDir, "CW", "Landroid/graphics/Path$Direction;");
+JMETHOD(M_GPt_init, C_GPaint, "<init>", "(I)V");
+JMETHOD(M_GPt_setColor, C_GPaint, "setColor", "(I)V");
+JMETHOD(M_GPt_setStyle, C_GPaint, "setStyle", "(Landroid/graphics/Paint$Style;)V");
+JMETHOD(M_GPt_setStrokeWidth, C_GPaint, "setStrokeWidth", "(F)V");
+JMETHOD(M_GPt_setStrokeCap, C_GPaint, "setStrokeCap", "(Landroid/graphics/Paint$Cap;)V");
+JMETHOD(M_GPt_setStrokeJoin, C_GPaint, "setStrokeJoin", "(Landroid/graphics/Paint$Join;)V");
+JMETHOD(M_GPt_setStrokeMiter, C_GPaint, "setStrokeMiter", "(F)V");
+JMETHOD(M_GPt_setShader, C_GPaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;");
+JMETHOD(M_GPt_setTypeface, C_GPaint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
+JMETHOD(M_GPt_setTextSize, C_GPaint, "setTextSize", "(F)V");
+JSFIELD(F_PS_FILL, C_PaintStyle, "FILL", "Landroid/graphics/Paint$Style;");
+JSFIELD(F_PS_STROKE, C_PaintStyle, "STROKE", "Landroid/graphics/Paint$Style;");
+JSFIELD(F_PC_BUTT, C_PaintCap, "BUTT", "Landroid/graphics/Paint$Cap;");
+JSFIELD(F_PC_ROUND, C_PaintCap, "ROUND", "Landroid/graphics/Paint$Cap;");
+JSFIELD(F_PC_SQUARE, C_PaintCap, "SQUARE", "Landroid/graphics/Paint$Cap;");
+JSFIELD(F_PJ_MITER, C_PaintJoin, "MITER", "Landroid/graphics/Paint$Join;");
+JSFIELD(F_PJ_ROUND, C_PaintJoin, "ROUND", "Landroid/graphics/Paint$Join;");
+JSFIELD(F_PJ_BEVEL, C_PaintJoin, "BEVEL", "Landroid/graphics/Paint$Join;");
+JSFIELD(F_TM_MIRROR, C_TileMode, "MIRROR", "Landroid/graphics/Shader$TileMode;");
+JSFIELD(F_TM_REPEAT, C_TileMode, "REPEAT", "Landroid/graphics/Shader$TileMode;");
+JSFIELD(F_PDM_CLEAR, C_PorterDuffMode, "CLEAR", "Landroid/graphics/PorterDuff$Mode;");
+JMETHOD(M_LG_init, C_LinearGradient, "<init>", "(FFFF[I[FLandroid/graphics/Shader$TileMode;)V");
+JMETHOD(M_RG_init, C_RadialGradient, "<init>", "(FFF[I[FLandroid/graphics/Shader$TileMode;)V");
+JMETHOD(M_RG_init2pt, C_RadialGradient, "<init>", "(FFFFFF[J[FLandroid/graphics/Shader$TileMode;)V");
+JMETHOD(M_Shader_setLocalMatrix, C_Shader, "setLocalMatrix", "(Landroid/graphics/Matrix;)V");
+JMETHOD(M_Mx_init, C_Matrix, "<init>", "()V");
+JMETHOD(M_Mx_setTranslate, C_Matrix, "setTranslate", "(FF)V");
+JMETHOD(M_Mx_preRotate, C_Matrix, "preRotate", "(F)Z");
+JMETHOD(M_Mx_preScale, C_Matrix, "preScale", "(FF)Z");
+JMETHOD(M_RF_init, C_RectF, "<init>", "(FFFF)V");
+JMETHOD(M_GB_setDensity, C_GBitmap, "setDensity", "(I)V");
+JMETHOD(M_GB_eraseColor, C_GBitmap, "eraseColor", "(I)V");
+JMETHOD(M_GB_recycle, C_GBitmap, "recycle", "()V");
+JMETHOD(M_GB_compress, C_GBitmap, "compress",
+        "(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z");
+JSTATIC(M_TF_create2, C_Typeface2, "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;");
+JSTATIC(M_TF_default2, C_Typeface2, "defaultFromStyle", "(I)Landroid/graphics/Typeface;");
+JMETHOD(M_Obj_equals, C_Typeface2, "equals", "(Ljava/lang/Object;)Z");
+JMETHOD(M_FOS_init, C_FileOutputStream, "<init>", "(Ljava/lang/String;)V");
+JMETHOD(M_FOS_close, C_FileOutputStream, "close", "()V");
+JMETHOD(M_View_invalidate, C_View, "invalidate", "()V");
+JMETHOD(M_View_postInvalidate, C_View, "postInvalidate", "()V");
+
+// A colour component 0..1 as the 0..255 the platform's 8-bit ARGB takes,
+// rounded (cairo and Core Graphics round too; truncating darkens by one).
+static unsigned int cv_c8(double v) {
+    if (!(v > 0.0)) return 0;
+    if (v >= 1.0) return 255;
+    return (unsigned int)lrint(v * 255.0);
+}
+static jint cv_argb(double r, double g, double b, double a) {
+    return (jint)((cv_c8(a) << 24) | (cv_c8(r) << 16) | (cv_c8(g) << 8) | cv_c8(b));
+}
+
+// A Bitmap of w x h, ARGB_8888 (premultiplied), cleared, and with no
+// density: drawBitmap must not rescale it for a screen it was not made for.
+static jobject cv_new_bitmap(JNIEnv* env, int w, int h) {
+    jobject bmp = (*env)->CallStaticObjectMethod(env, J.Bitmap, J.Bitmap_createBitmap,
+                                                 (jint)w, (jint)h, J.ARGB_8888);
+    if (aeui_check(env, "Bitmap.createBitmap") || !bmp) return NULL;
+    JV(bmp, M_GB_setDensity, (jint)0 /* DENSITY_NONE */);
+    return bmp;
+}
+
+static jobject cv_new_canvas(JNIEnv* env, jobject bmp) {
+    jobject c = JNEW(M_GC_init, bmp);
+    if (c) JV(c, M_GC_setDensity, (jint)0);
+    return c;
+}
+
+// An image command's pixels as a Bitmap: straight RGBA in, the platform's
+// premultiplied RGBA_8888 out (byte order R, G, B, A on every Android ABI).
+static jobject cv_image_bitmap(JNIEnv* env, const CanvasCmd* c) {
+    jobject bmp = cv_new_bitmap(env, c->iw, c->ih);
+    if (!bmp) return NULL;
+    AndroidBitmapInfo info;
+    void* px = NULL;
+    if (AndroidBitmap_getInfo(env, bmp, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        AndroidBitmap_lockPixels(env, bmp, &px) != ANDROID_BITMAP_RESULT_SUCCESS || !px) {
+        (*env)->DeleteLocalRef(env, bmp);
+        return NULL;
+    }
+    for (int y = 0; y < c->ih; y++) {
+        const unsigned char* s = c->pixels + (size_t)y * (size_t)c->iw * 4;
+        unsigned char* d = (unsigned char*)px + (size_t)y * info.stride;
+        for (int x = 0; x < c->iw; x++, s += 4, d += 4) {
+            unsigned int a = s[3];
+            d[0] = (unsigned char)((s[0] * a + 127) / 255);
+            d[1] = (unsigned char)((s[1] * a + 127) / 255);
+            d[2] = (unsigned char)((s[2] * a + 127) / 255);
+            d[3] = (unsigned char)a;
+        }
+    }
+    AndroidBitmap_unlockPixels(env, bmp);
+    return bmp;
+}
+
+// --- Fonts: the CSS stack through the platform's font map -----------------------
+// font_flags: bit0 monospace, bit1 bold, bit2 italic. Typeface.create(name,
+// style) answers the system font map's family for a name it knows and the
+// default family for one it does not, so a name whose answer IS the default
+// is passed over and the next in the stack tried, as fontconfig and CoreText
+// skip a face that is not installed. The generic families are the platform's
+// own aliases ("serif", "sans-serif", "monospace", "cursive", ...). The
+// result is cached per (stack, style): a scene draws the same few faces over
+// and over.
+typedef struct { char* key; jobject tf; } CvFont;
+static CvFont cv_fonts[64];
+static int cv_nfonts = 0;
+
+static int cv_is_generic(const char* n) {
+    static const char* gen[] = { "serif", "sans-serif", "monospace", "cursive", "fantasy",
+                                 "system-ui", "serif-monospace", "casual", NULL };
+    for (int i = 0; gen[i]; i++) if (strcasecmp(n, gen[i]) == 0) return 1;
+    return 0;
+}
+
+static jobject cv_typeface(JNIEnv* env, int flags, const char* family) {
+    int style = ((flags & 2) ? 1 : 0) | ((flags & 4) ? 2 : 0);   // Typeface.BOLD / ITALIC
+    char key[300];
+    snprintf(key, sizeof(key), "%d|%s", flags, family ? family : "");
+    for (int i = 0; i < cv_nfonts; i++)
+        if (strcmp(cv_fonts[i].key, key) == 0) return cv_fonts[i].tf;
+    jobject fallback = JSO(M_TF_default2, (jint)style);
+    jobject chosen = NULL;
+    if (family && family[0]) {
+        const char* p = family;
+        while (*p && !chosen) {
+            const char* comma = strchr(p, ',');
+            size_t n = comma ? (size_t)(comma - p) : strlen(p);
+            char name[128];
+            size_t k = 0;
+            for (size_t i = 0; i < n && k < sizeof(name) - 1; i++) {
+                char ch = p[i];
+                if (ch == '"' || ch == '\'') continue;
+                if (k == 0 && (ch == ' ' || ch == '\t')) continue;
+                name[k++] = ch;
+            }
+            while (k > 0 && (name[k - 1] == ' ' || name[k - 1] == '\t')) k--;
+            name[k] = '\0';
+            if (k > 0) {
+                jstring js = aeui_jstring(env, name);
+                jobject tf = js ? JSO(M_TF_create2, js, (jint)style) : NULL;
+                if (tf && (cv_is_generic(name) || !fallback || !JZ(tf, M_Obj_equals, fallback)))
+                    chosen = tf;
+            }
+            p = comma ? comma + 1 : p + n;
+        }
+    }
+    if (!chosen && (flags & 1)) {
+        jstring js = aeui_jstring(env, "monospace");
+        chosen = js ? JSO(M_TF_create2, js, (jint)style) : NULL;
+    }
+    if (!chosen) chosen = fallback;
+    if (!chosen) return NULL;
+    jobject g = (*env)->NewGlobalRef(env, chosen);
+    if (cv_nfonts < (int)(sizeof(cv_fonts) / sizeof(cv_fonts[0]))) {
+        cv_fonts[cv_nfonts].key = strdup(key);
+        cv_fonts[cv_nfonts].tf = g;
+        cv_nfonts++;
+    }
+    return g;
+}
+
+// --- The replay -----------------------------------------------------------------
+// One replay's working objects. The path is the CURRENT path, which is not
+// part of the canvas's saved state on Android any more than on cairo, so it
+// lives here; `cur` says whether it has a current point (cairo's notion,
+// which Skia lacks: a lineTo on an empty Skia path starts from (0, 0), a
+// cairo line_to with no current point is a move_to).
+typedef struct {
+    JNIEnv* env;
+    jobject canvas, path, paint;
+    jobject s_fill, s_stroke;
+    int cur;
+    int bases[64]; int nbases;   // save counts RESET_CLIP restores to
+    int layers[64]; int nlayers; // saveLayerAlpha counts GROUP_END restores to
+} CvReplay;
+
+static void cv_path_reset(CvReplay* r) {
+    JNIEnv* env = r->env;
+    JV(r->path, M_GP_reset);
+    r->cur = 0;
+}
+
+static jobject cv_cap(JNIEnv* env, int cap) {
+    return JSFO(*(cap == 1 ? &F_PC_ROUND : cap == 2 ? &F_PC_SQUARE : &F_PC_BUTT));
+}
+static jobject cv_join(JNIEnv* env, int join) {
+    return JSFO(*(join == 1 ? &F_PJ_ROUND : join == 2 ? &F_PJ_BEVEL : &F_PJ_MITER));
+}
+
+static void cv_set_stroke(CvReplay* r, double width, int cap, int join) {
+    JNIEnv* env = r->env;
+    JV(r->paint, M_GPt_setStyle, r->s_stroke);
+    JV(r->paint, M_GPt_setStrokeWidth, (jfloat)width);
+    jobject c = cv_cap(env, cap), j = cv_join(env, join);
+    JV(r->paint, M_GPt_setStrokeCap, c);
+    JV(r->paint, M_GPt_setStrokeJoin, j);
+    if (c) (*env)->DeleteLocalRef(env, c);
+    if (j) (*env)->DeleteLocalRef(env, j);
+}
+
+// The fill rule rides on the path in Skia; cairo's default (and every fill
+// that does not ask) is nonzero.
+static void cv_fill_type(CvReplay* r, int even_odd) {
+    JNIEnv* env = r->env;
+    jobject ft = JSFO(*(even_odd ? &F_FT_EVEN_ODD : &F_FT_WINDING));
+    if (ft) { JV(r->path, M_GP_setFillType, ft); (*env)->DeleteLocalRef(env, ft); }
+}
+
+// cairo_arc: a line from the current point (if there is one) to the arc's
+// start, then the arc in the positive-angle direction, end angle advanced by
+// 2pi until it is not before the start. Skia's arcTo treats a sweep of 360
+// or more modulo 360 (a full circle could vanish), so the sweep goes in
+// pieces of at most 180 degrees.
+static void cv_arc(CvReplay* r, const CanvasCmd* c) {
+    JNIEnv* env = r->env;
+    double a0 = c->a0, a1 = c->a1, rad = c->w;
+    if (rad <= 0.0) return;
+    while (a1 < a0) a1 += 2.0 * M_PI;
+    double sweep = (a1 - a0) * 180.0 / M_PI;
+    double start = a0 * 180.0 / M_PI;
+    int pieces = (int)ceil(sweep / 180.0);
+    if (pieces < 1) pieces = 1;
+    double step = sweep / pieces;
+    float l = (float)(c->x - rad), t = (float)(c->y - rad);
+    float rt = (float)(c->x + rad), b = (float)(c->y + rad);
+    for (int i = 0; i < pieces; i++) {
+        JV(r->path, M_GP_arcTo, l, t, rt, b, (jfloat)(start + step * i), (jfloat)step,
+           (r->cur || i > 0) ? JNI_FALSE : JNI_TRUE);
+    }
+    r->cur = 1;
+}
+
+// A gradient's shader: the stops as the platform's colour and position
+// arrays (at least two; a single stop is a flat colour, as cairo paints
+// it), spreadMethod as the tile mode (pad CLAMP, reflect MIRROR, repeat
+// REPEAT -- the same three cairo's extend has), and for a radial its focal
+// point (two-point conical, API 31+: the start circle at the focal point
+// with radius 0, the end circle the gradient's own, which is cairo's radial
+// exactly) and its ellipse (a unit circle under a local matrix, as GTK4
+// maps one with the pattern matrix).
+static jobject cv_shader(CvReplay* r, const CanvasCmd* c) {
+    JNIEnv* env = r->env;
+    int n = c->n_stops;
+    if (n <= 0) return NULL;
+    int m = n < 2 ? 2 : n;
+    jintArray colors = (*env)->NewIntArray(env, m);
+    jlongArray lcolors = (*env)->NewLongArray(env, m);
+    jfloatArray pos = (*env)->NewFloatArray(env, m);
+    if (!colors || !lcolors || !pos) return NULL;
+    jint ci[m];
+    jlong cl[m];
+    jfloat pf[m];
+    float prev = 0.0f;
+    for (int i = 0; i < m; i++) {
+        int si = i < n ? i : n - 1;
+        const double* s = &c->stop_rgba[si * 4];
+        ci[i] = cv_argb(s[0], s[1], s[2], s[3]);
+        // Color.pack(int): an sRGB colour long is the ARGB int in the high word.
+        cl[i] = (jlong)((uint64_t)(uint32_t)ci[i] << 32);
+        float o = (float)(n < 2 ? (double)i : c->stop_off[si]);
+        if (o < 0.0f) o = 0.0f;
+        if (o > 1.0f) o = 1.0f;
+        if (o < prev) o = prev;   // positions must not go backwards
+        prev = o;
+        pf[i] = o;
+    }
+    (*env)->SetIntArrayRegion(env, colors, 0, m, ci);
+    (*env)->SetLongArrayRegion(env, lcolors, 0, m, cl);
+    (*env)->SetFloatArrayRegion(env, pos, 0, m, pf);
+    jobject tile = JSFO(*(c->grad_extend == 1 ? &F_TM_MIRROR : c->grad_extend == 2 ? &F_TM_REPEAT : &F_TM_CLAMP));
+    jobject sh = NULL;
+    if (c->type == CANVAS_FILL_LINEAR) {
+        sh = JNEW(M_LG_init, (jfloat)c->gx1, (jfloat)c->gy1, (jfloat)c->gx2, (jfloat)c->gy2,
+                  colors, pos, tile);
+    } else {
+        int ellipse = c->grx > 0.0 && c->gry > 0.0 &&
+                      (fabs(c->grx - c->gry) > 0.01 || fabs(c->grot) > 0.01);
+        int two_point = aeui_sdk_int(env) >= 31;
+        if (ellipse) {
+            // The focal offset in the ellipse's own (unit-circle) space:
+            // de-rotated, then scaled per axis.
+            double fdx = c->gfx - c->gx1, fdy = c->gfy - c->gy1;
+            if (fabs(c->grot) > 0.01) {
+                double ang = -c->grot * M_PI / 180.0, ca = cos(ang), sa = sin(ang);
+                double tx = fdx * ca - fdy * sa, ty = fdx * sa + fdy * ca;
+                fdx = tx; fdy = ty;
+            }
+            double fx = fdx / c->grx, fy = fdy / c->gry;
+            if (two_point && (fabs(fx) > 1e-6 || fabs(fy) > 1e-6))
+                sh = JNEW(M_RG_init2pt, (jfloat)fx, (jfloat)fy, (jfloat)0.0f,
+                          (jfloat)0.0f, (jfloat)0.0f, (jfloat)1.0f, lcolors, pos, tile);
+            else
+                sh = JNEW(M_RG_init, (jfloat)0.0f, (jfloat)0.0f, (jfloat)1.0f, colors, pos, tile);
+            jobject mx = sh ? JNEW(M_Mx_init) : NULL;
+            if (mx) {
+                JV(mx, M_Mx_setTranslate, (jfloat)c->gx1, (jfloat)c->gy1);
+                if (fabs(c->grot) > 0.01) JZ(mx, M_Mx_preRotate, (jfloat)c->grot);
+                JZ(mx, M_Mx_preScale, (jfloat)c->grx, (jfloat)c->gry);
+                JV(sh, M_Shader_setLocalMatrix, mx);
+                (*env)->DeleteLocalRef(env, mx);
+            }
+        } else {
+            double rad = c->gr;
+            if (rad <= 0.0) rad = c->grx > 0.0 ? c->grx : 0.0;
+            if (rad > 0.0) {
+                int focal = fabs(c->gfx - c->gx1) > 1e-6 || fabs(c->gfy - c->gy1) > 1e-6;
+                if (focal && two_point)
+                    sh = JNEW(M_RG_init2pt, (jfloat)c->gfx, (jfloat)c->gfy, (jfloat)0.0f,
+                              (jfloat)c->gx1, (jfloat)c->gy1, (jfloat)rad, lcolors, pos, tile);
+                else   // below API 31 the focal point has nowhere to go: centred
+                    sh = JNEW(M_RG_init, (jfloat)c->gx1, (jfloat)c->gy1, (jfloat)rad, colors, pos, tile);
+            }
+        }
+    }
+    if (tile) (*env)->DeleteLocalRef(env, tile);
+    (*env)->DeleteLocalRef(env, colors);
+    (*env)->DeleteLocalRef(env, lcolors);
+    (*env)->DeleteLocalRef(env, pos);
+    return sh;
+}
+
+static void cv_draw_text(CvReplay* r, const CanvasCmd* c, int stroke) {
+    JNIEnv* env = r->env;
+    if (!c->text || c->w <= 0.0) return;
+    if (stroke && c->h <= 0.0) return;
+    jobject tf = cv_typeface(env, c->iw, c->font_family);
+    jstring s = aeui_jstring(env, c->text);
+    if (!s) return;
+    if (tf) { jobject old = JO(r->paint, M_GPt_setTypeface, tf); if (old) (*env)->DeleteLocalRef(env, old); }
+    JV(r->paint, M_GPt_setTextSize, (jfloat)c->w);
+    JV(r->paint, M_GPt_setColor, cv_argb(c->r, c->g, c->b, c->a));
+    if (stroke) cv_set_stroke(r, c->h, 1, 1);   // round, as GTK4's text outline
+    else JV(r->paint, M_GPt_setStyle, r->s_fill);
+    JV(r->canvas, M_GC_drawText, s, (jfloat)c->x, (jfloat)c->y, r->paint);
+    (*env)->DeleteLocalRef(env, s);
+}
+
+static void cv_draw_image(CvReplay* r, CanvasCmd* c) {
+    JNIEnv* env = r->env;
+    if (!c->pixels || c->iw <= 0 || c->ih <= 0) return;
+    jobject bmp = NULL;
+    int local = 0;
+    if (c->bitmap) {
+        bmp = c->bitmap;
+    } else {
+        bmp = cv_image_bitmap(env, c);
+        if (!bmp) return;
+        local = 1;
+        // Owned pixels never change, so their Bitmap is kept until the
+        // clear; a borrowed buffer is the caller's to rewrite, so it is
+        // read afresh each replay.
+        if (!c->pixels_borrowed) { c->bitmap = (*env)->NewGlobalRef(env, bmp); }
+    }
+    double dw = c->w > 0.0 ? c->w : (double)c->iw;
+    double dh = c->h > 0.0 ? c->h : (double)c->ih;
+    jobject dst = JNEW(M_RF_init, (jfloat)c->x, (jfloat)c->y, (jfloat)(c->x + dw), (jfloat)(c->y + dh));
+    jobject p = JNEW(M_GPt_init, (jint)(1 | 2) /* ANTI_ALIAS | FILTER_BITMAP */);
+    if (dst) JV(r->canvas, M_GC_drawBitmapRect, bmp, (jobject)NULL, dst, p);
+    if (dst) (*env)->DeleteLocalRef(env, dst);
+    if (p) (*env)->DeleteLocalRef(env, p);
+    if (local) (*env)->DeleteLocalRef(env, bmp);
+}
+
+// Replay [start, end) of the buffer onto `canvas`. The caller has set the
+// canvas's transform (density, an origin) and its clip; everything this
+// adds is undone before it returns.
+static void canvas_replay_range(JNIEnv* env, jobject canvas, CanvasState* cs, int start, int end) {
+    if (!cs || !canvas) return;
+    if (start < 0) start = 0;
+    if (end > cs->count) end = cs->count;
+    if ((*env)->PushLocalFrame(env, 64) != 0) { aeui_check(env, "PushLocalFrame"); return; }
+    CvReplay r;
+    memset(&r, 0, sizeof(r));
+    r.env = env;
+    r.canvas = canvas;
+    r.path = JNEW(M_GP_init);
+    r.paint = JNEW(M_GPt_init, (jint)1 /* ANTI_ALIAS_FLAG */);
+    r.s_fill = JSFO(F_PS_FILL);
+    r.s_stroke = JSFO(F_PS_STROKE);
+    if (!r.path || !r.paint || !r.s_fill || !r.s_stroke) { (*env)->PopLocalFrame(env, NULL); return; }
+    // cairo's and Core Graphics' miter limit; Skia's own default is 4, which
+    // bevels joins the others mitre.
+    JV(r.paint, M_GPt_setStrokeMiter, (jfloat)10.0f);
+    int outer = JI(canvas, M_GC_save);
+    r.bases[r.nbases++] = JI(canvas, M_GC_save);
+    for (int i = start; i < end; i++) {
+        CanvasCmd* c = &cs->cmds[i];
+        switch (c->type) {
+            case CANVAS_BEGIN_PATH:
+                cv_path_reset(&r);
+                break;
+            case CANVAS_MOVE_TO:
+                JV(r.path, M_GP_moveTo, (jfloat)c->x, (jfloat)c->y);
+                r.cur = 1;
+                break;
+            case CANVAS_LINE_TO:
+                if (r.cur) JV(r.path, M_GP_lineTo, (jfloat)c->x, (jfloat)c->y);
+                else JV(r.path, M_GP_moveTo, (jfloat)c->x, (jfloat)c->y);
+                r.cur = 1;
+                break;
+            case CANVAS_ARC:
+                cv_arc(&r, c);
+                break;
+            case CANVAS_CLOSE_PATH:
+                JV(r.path, M_GP_close);
+                break;
+            case CANVAS_STROKE:
+                // A zero width strokes nothing on cairo; Skia's is a hairline.
+                if (c->x > 0.0) {
+                    JV(r.paint, M_GPt_setColor, cv_argb(c->r, c->g, c->b, c->a));
+                    cv_set_stroke(&r, c->x, c->iw, c->ih);
+                    JV(canvas, M_GC_drawPath, r.path, r.paint);
+                }
+                cv_path_reset(&r);
+                break;
+            case CANVAS_FILL:
+                cv_fill_type(&r, c->iw);
+                JV(r.paint, M_GPt_setColor, cv_argb(c->r, c->g, c->b, c->a));
+                JV(r.paint, M_GPt_setStyle, r.s_fill);
+                JV(canvas, M_GC_drawPath, r.path, r.paint);
+                cv_path_reset(&r);
+                cv_fill_type(&r, 0);
+                break;
+            case CANVAS_FILL_RECT:
+                JV(r.paint, M_GPt_setColor, cv_argb(c->r, c->g, c->b, c->a));
+                JV(r.paint, M_GPt_setStyle, r.s_fill);
+                JV(canvas, M_GC_drawRect, (jfloat)fmin(c->x, c->x + c->w), (jfloat)fmin(c->y, c->y + c->h),
+                   (jfloat)fmax(c->x, c->x + c->w), (jfloat)fmax(c->y, c->y + c->h), r.paint);
+                break;
+            case CANVAS_CLIP_RECT:
+                // Intersects, and holds until the scope ends or RESET_CLIP.
+                JZ(canvas, M_GC_clipRect, (jfloat)c->x, (jfloat)c->y,
+                   (jfloat)(c->x + c->w), (jfloat)(c->y + c->h));
+                cv_path_reset(&r);
+                break;
+            case CANVAS_RESET_CLIP:
+                // Back to this compositing scope's baseline: the clip a
+                // platform canvas cannot widen is dropped by restoring.
+                JV(canvas, M_GC_restoreToCount, (jint)r.bases[r.nbases - 1]);
+                r.bases[r.nbases - 1] = JI(canvas, M_GC_save);
+                cv_path_reset(&r);
+                break;
+            case CANVAS_GROUP_BEGIN: {
+                // True group opacity: everything up to the matching END is
+                // composited into one layer, painted once at the group alpha
+                // (cairo_push_group / paint_with_alpha). The alpha arrives
+                // with END; the buffer is complete, so look ahead for it.
+                double ga = 1.0;
+                int depth = 1;
+                for (int j = i + 1; j < end; j++) {
+                    if (cs->cmds[j].type == CANVAS_GROUP_BEGIN) depth++;
+                    else if (cs->cmds[j].type == CANVAS_GROUP_END && --depth == 0) { ga = cs->cmds[j].x; break; }
+                }
+                if (r.nlayers >= 64 || r.nbases >= 64) break;
+                r.layers[r.nlayers++] = JI(canvas, M_GC_saveLayerAlpha, (jobject)NULL, (jint)cv_c8(ga));
+                r.bases[r.nbases++] = JI(canvas, M_GC_save);
+                break;
+            }
+            case CANVAS_GROUP_END:
+                if (r.nlayers <= 0) break;
+                JV(canvas, M_GC_restoreToCount, (jint)r.layers[--r.nlayers]);
+                r.nbases--;
+                break;
+            case CANVAS_FILL_TEXT:
+                cv_draw_text(&r, c, 0);
+                cv_path_reset(&r);
+                break;
+            case CANVAS_STROKE_TEXT:
+                cv_draw_text(&r, c, 1);
+                cv_path_reset(&r);
+                break;
+            case CANVAS_DRAW_IMAGE:
+                cv_draw_image(&r, c);
+                break;
+            case CANVAS_FILL_LINEAR:
+            case CANVAS_FILL_RADIAL: {
+                jobject sh = cv_shader(&r, c);
+                if (sh) {
+                    jobject old = JO(r.paint, M_GPt_setShader, sh);
+                    if (old) (*env)->DeleteLocalRef(env, old);
+                    JV(r.paint, M_GPt_setColor, (jint)0xFF000000);
+                    if (c->grad_line_width > 0.0) {
+                        // The command's own cap and join: it is the only
+                        // thing dispatched for a gradient stroke.
+                        cv_set_stroke(&r, c->grad_line_width, c->iw, c->ih);
+                    } else {
+                        cv_fill_type(&r, 0);
+                        JV(r.paint, M_GPt_setStyle, r.s_fill);
+                    }
+                    JV(canvas, M_GC_drawPath, r.path, r.paint);
+                    old = JO(r.paint, M_GPt_setShader, (jobject)NULL);
+                    if (old) (*env)->DeleteLocalRef(env, old);
+                    (*env)->DeleteLocalRef(env, sh);
+                }
+                cv_path_reset(&r);
+                break;
+            }
+            case CANVAS_CLEAR:
+                break;
+        }
+    }
+    JV(canvas, M_GC_restoreToCount, (jint)outer);
+    (*env)->PopLocalFrame(env, NULL);
+}
+
+// --- Offscreen replay: read_pixel, write_png, render_range_rgba -------------------
+// One pixel per canvas unit, at the size the caller names, onto a cleared
+// (transparent) Bitmap -- what the other backends' offscreen replays give.
+static jobject cv_render_offscreen(JNIEnv* env, CanvasState* cs, int start, int end,
+                                   double ox, double oy, int w, int h) {
+    jobject bmp = cv_new_bitmap(env, w, h);
+    if (!bmp) return NULL;
+    jobject cv = cv_new_canvas(env, bmp);
+    if (!cv) { (*env)->DeleteLocalRef(env, bmp); return NULL; }
+    if (ox != 0.0 || oy != 0.0) JV(cv, M_GC_translate, (jfloat)-ox, (jfloat)-oy);
+    canvas_replay_range(env, cv, cs, start, end);
+    (*env)->DeleteLocalRef(env, cv);
+    return bmp;
+}
+
+// The rendered pixels as premultiplied RGBA bytes, rows packed (malloc'd).
+static unsigned char* cv_bitmap_bytes(JNIEnv* env, jobject bmp, int w, int h) {
+    AndroidBitmapInfo info;
+    void* px = NULL;
+    if (AndroidBitmap_getInfo(env, bmp, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        (int)info.width != w || (int)info.height != h ||
+        AndroidBitmap_lockPixels(env, bmp, &px) != ANDROID_BITMAP_RESULT_SUCCESS || !px)
+        return NULL;
+    unsigned char* out = (unsigned char*)malloc((size_t)w * (size_t)h * 4);
+    if (out)
+        for (int y = 0; y < h; y++)
+            memcpy(out + (size_t)y * (size_t)w * 4, (unsigned char*)px + (size_t)y * info.stride, (size_t)w * 4);
+    AndroidBitmap_unlockPixels(env, bmp);
+    return out;
+}
+
+static void cv_cache_drop(CanvasState* cs) {
+    free(cs->cache_px);
+    cs->cache_px = NULL;
+    cs->cache_count = -1;
+}
+
+typedef struct { int canvas_id, px, py, w, h, result; } CvPixelReq;
+
+static void cv_read_pixel_run(void* arg) {
+    CvPixelReq* q = (CvPixelReq*)arg;
+    CanvasState* cs = get_canvas_state(q->canvas_id);
+    if (!cs) return;
+    if (!cs->cache_px || cs->cache_gen != cs->gen || cs->cache_count != cs->count ||
+        cs->cache_w != q->w || cs->cache_h != q->h) {
+        cv_cache_drop(cs);
+        JNIEnv* env = aeui_frame(16);
+        if (!env) return;
+        jobject bmp = cv_render_offscreen(env, cs, 0, cs->count, 0, 0, q->w, q->h);
+        if (bmp) {
+            cs->cache_px = cv_bitmap_bytes(env, bmp, q->w, q->h);
+            JV(bmp, M_GB_recycle);
+        }
+        aeui_unframe(env);
+        if (!cs->cache_px) return;
+        cs->cache_gen = cs->gen;
+        cs->cache_count = cs->count;
+        cs->cache_w = q->w;
+        cs->cache_h = q->h;
+    }
+    const unsigned char* p = cs->cache_px + ((size_t)q->py * (size_t)q->w + (size_t)q->px) * 4;
+    // 0xAARRGGBB, premultiplied, as cairo's ARGB32 and Core Graphics' read.
+    q->result = (int)(((unsigned)p[3] << 24) | ((unsigned)p[0] << 16) | ((unsigned)p[1] << 8) | p[2]);
+}
+
+int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py, int width, int height) {
+    if (px < 0 || py < 0 || px >= width || py >= height) return -1;
+    if (!get_canvas_state(canvas_id)) return -1;
+    CvPixelReq q = { canvas_id, px, py, width, height, -1 };
+    aeui_android_run_sync(cv_read_pixel_run, &q);
+    return q.result;
+}
+
+typedef struct { int canvas_id; const char* path; int w, h, ok; } CvPngReq;
+
+static void cv_write_png_run(void* arg) {
+    CvPngReq* q = (CvPngReq*)arg;
+    CanvasState* cs = get_canvas_state(q->canvas_id);
+    JNIEnv* env = cs ? aeui_frame(16) : NULL;
+    if (!env) return;
+    jobject bmp = cv_render_offscreen(env, cs, 0, cs->count, 0, 0, q->w, q->h);
+    jstring path = bmp ? aeui_jstring(env, q->path) : NULL;
+    jobject out = path ? JNEW(M_FOS_init, path) : NULL;
+    if (out) {
+        q->ok = JZ(bmp, M_GB_compress, J.PNG, (jint)100, out) ? 1 : 0;
+        JV(out, M_FOS_close);
+    }
+    if (bmp) JV(bmp, M_GB_recycle);
+    aeui_unframe(env);
+}
+
+int aether_ui_canvas_write_png_impl(int canvas_id, const char* path, int width, int height) {
+    if (!get_canvas_state(canvas_id) || !path || width <= 0 || height <= 0) return 0;
+    CvPngReq q = { canvas_id, path, width, height, 0 };
+    aeui_android_run_sync(cv_write_png_run, &q);
+    return q.ok;
+}
+
+typedef struct { int canvas_id, start, end; double ox, oy; int w, h; unsigned char* out; int result; } CvRangeReq;
+
+static void cv_render_range_run(void* arg) {
+    CvRangeReq* q = (CvRangeReq*)arg;
+    CanvasState* cs = get_canvas_state(q->canvas_id);
+    JNIEnv* env = cs ? aeui_frame(16) : NULL;
+    if (!env) return;
+    jobject bmp = cv_render_offscreen(env, cs, q->start, q->end, q->ox, q->oy, q->w, q->h);
+    unsigned char* px = bmp ? cv_bitmap_bytes(env, bmp, q->w, q->h) : NULL;
+    if (bmp) JV(bmp, M_GB_recycle);
+    aeui_unframe(env);
+    if (!px) return;
+    // Straight (non-premultiplied) RGBA out: the form draw_image takes back.
+    int n = q->w * q->h;
+    for (int i = 0; i < n; i++) {
+        unsigned int r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2], a = px[i * 4 + 3];
+        if (a != 0 && a != 255) {
+            r = (r * 255 + a / 2) / a; if (r > 255) r = 255;
+            g = (g * 255 + a / 2) / a; if (g > 255) g = 255;
+            b = (b * 255 + a / 2) / a; if (b > 255) b = 255;
+        }
+        q->out[i * 4] = (unsigned char)r;
+        q->out[i * 4 + 1] = (unsigned char)g;
+        q->out[i * 4 + 2] = (unsigned char)b;
+        q->out[i * 4 + 3] = (unsigned char)a;
+    }
+    free(px);
+    q->result = n * 4;
+}
+
+int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
+                                            double ox, double oy, int width, int height,
+                                            unsigned char* out, int out_len) {
+    if (!get_canvas_state(canvas_id) || !out || width <= 0 || height <= 0) return 0;
+    if (out_len < width * height * 4) return 0;
+    CvRangeReq q = { canvas_id, start, end, ox, oy, width, height, out, 0 };
+    aeui_android_run_sync(cv_render_range_run, &q);
+    return q.result;
+}
+
+int aether_ui_canvas_cmd_count_impl(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->count : -1;
+}
+
+// Pixels of the retained paint surface that differ from its top-left (the
+// background), sampled every 4 canvas units each way as GTK4 samples its
+// own, so the count means the same there and here. -1 before the first
+// paint (nothing to sample), 0 = the app painted nothing.
+static void cv_painted_run(void* arg) {
+    int* io = (int*)arg;
+    CanvasState* cs = get_canvas_state(io[0]);
+    io[1] = -1;
+    if (!cs || !cs->paint_bmp) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    AndroidBitmapInfo info;
+    void* px = NULL;
+    if (AndroidBitmap_getInfo(env, cs->paint_bmp, &info) == ANDROID_BITMAP_RESULT_SUCCESS &&
+        AndroidBitmap_lockPixels(env, cs->paint_bmp, &px) == ANDROID_BITMAP_RESULT_SUCCESS && px) {
+        int step = (int)lrint(4.0 * g_density);
+        if (step < 1) step = 1;
+        uint32_t bg = *(uint32_t*)px;
+        int differing = 0;
+        for (uint32_t y = 0; y < info.height; y += (uint32_t)step) {
+            const uint32_t* row = (const uint32_t*)((unsigned char*)px + (size_t)y * info.stride);
+            for (uint32_t x = 0; x < info.width; x += (uint32_t)step)
+                if (row[x] != bg) differing++;
+        }
+        AndroidBitmap_unlockPixels(env, cs->paint_bmp);
+        io[1] = differing;
+    }
+    aeui_unframe(env);
+}
+
+int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
+    int io[2] = { canvas_id, -1 };
+    aeui_android_run_sync(cv_painted_run, io);
+    return io[1];
+}
+
+// --- The View ---------------------------------------------------------------------
+static void cv_invalidate(CanvasState* cs) {
+    AeuiWidget* w = cs ? live_widget(cs->widget_handle) : NULL;
+    if (!w) return;
+    JNIEnv* env = aeui_env();
+    if (!env) return;
+    if (aeui_on_ui_thread()) JV(w->view, M_View_invalidate);
+    else JV(w->view, M_View_postInvalidate);
+}
+
+// on_resize on a CHANGE of size, never per frame, and synchronously, as
+// GTK4 fires it from its draw func: the closure re-maps the scene and
+// re-flushes the buffer, and the paint in progress replays the new one.
+// The closure takes (w, h) as doubles (vg.live's |rw: float, rh: float|),
+// as GTK4 and Win32 call it.
+static void cv_note_size(int canvas_id, int wpx, int hpx) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || wpx <= 0 || hpx <= 0) return;
+    int w = aeui_px_to_dp(wpx), h = aeui_px_to_dp(hpx);
+    if (w == cs->last_w && h == cs->last_h) return;
+    AeClosure* c = cs->on_resize;
+    if (!c || !c->fn) return;   // reported once a hook exists to hear it
+    cs->last_w = w;
+    cs->last_h = h;
+    ((void (*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
+}
+
+// onDraw: replay into the retained surface at device resolution and show it.
+static void JNICALL native_canvas_draw(JNIEnv* env, jclass cls, jint canvas_id, jobject vcanvas,
+                                       jint wpx, jint hpx) {
+    (void)cls;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || wpx <= 0 || hpx <= 0) return;
+    if ((*env)->PushLocalFrame(env, 32) != 0) return;
+    cv_note_size(canvas_id, wpx, hpx);
+    cs = get_canvas_state(canvas_id);   // the closure may have made canvases (realloc)
+    int fresh = 0;
+    if (!cs->paint_bmp || cs->paint_w != wpx || cs->paint_h != hpx) {
+        if (cs->paint_canvas) (*env)->DeleteGlobalRef(env, cs->paint_canvas);
+        if (cs->paint_bmp) { JV(cs->paint_bmp, M_GB_recycle); (*env)->DeleteGlobalRef(env, cs->paint_bmp); }
+        cs->paint_bmp = cs->paint_canvas = NULL;
+        jobject bmp = cv_new_bitmap(env, wpx, hpx);
+        jobject cv = bmp ? cv_new_canvas(env, bmp) : NULL;
+        if (!cv) { (*env)->PopLocalFrame(env, NULL); return; }
+        cs->paint_bmp = (*env)->NewGlobalRef(env, bmp);
+        cs->paint_canvas = (*env)->NewGlobalRef(env, cv);
+        cs->paint_w = wpx;
+        cs->paint_h = hpx;
+        fresh = 1;
+    }
+    // The paint metrics, in canvas units, as GTK4/AppKit/UIKit report them.
+    int clipped = cs->paint_clip_count > 0 && !fresh;
+    double area = 0.0;
+    for (int i = 0; i < cs->paint_clip_count; i++) {
+        double* r = &cs->paint_clip_rects[i * 4];
+        if (r[2] > 0.0 && r[3] > 0.0) area += r[2] * r[3];
+    }
+    cs->last_paint_w = aeui_px_to_dp(wpx);
+    cs->last_paint_h = aeui_px_to_dp(hpx);
+    cs->last_paint_count = cs->count;
+    if (clipped) {
+        cs->last_clip_area = (int)(area + 0.5);
+        cs->last_paint_area = cs->last_clip_area;
+        cs->paint_clip_count_total++;
+    } else {
+        cs->last_clip_area = 0;
+        cs->last_paint_area = cs->last_paint_w * cs->last_paint_h;
+        cs->paint_full_count++;
+    }
+    jobject pc = cs->paint_canvas;
+    int saved = JI(pc, M_GC_save);
+    JV(pc, M_GC_scale, (jfloat)g_density, (jfloat)g_density);
+    if (clipped) {
+        // Only the dirty region is cleared and redrawn; the rest of the
+        // retained surface keeps what the last paint put there.
+        jobject clip = JNEW(M_GP_init);
+        jobject dir = JSFO(F_PD_CW);
+        for (int i = 0; clip && dir && i < cs->paint_clip_count; i++) {
+            double* r = &cs->paint_clip_rects[i * 4];
+            if (r[2] > 0.0 && r[3] > 0.0)
+                JV(clip, M_GP_addRect, (jfloat)r[0], (jfloat)r[1], (jfloat)(r[0] + r[2]), (jfloat)(r[1] + r[3]), dir);
+        }
+        if (clip) JZ(pc, M_GC_clipPath, clip);
+        jobject mode = JSFO(F_PDM_CLEAR);
+        if (mode) JV(pc, M_GC_drawColorMode, (jint)0, mode);
+    } else {
+        JV(cs->paint_bmp, M_GB_eraseColor, (jint)0);
+    }
+    canvas_replay_range(env, pc, cs, 0, cs->count);
+    JV(pc, M_GC_restoreToCount, (jint)saved);
+    cs->paint_clip_count = 0;
+    JV(vcanvas, M_GC_drawBitmapAt, cs->paint_bmp, (jfloat)0.0f, (jfloat)0.0f, (jobject)NULL);
+    (*env)->PopLocalFrame(env, NULL);
+}
+
+// The ABI's modifier bits as GDK reports them to the gesture probe (SHIFT 1,
+// CONTROL 4, MOD1/alt 8, SUPER 1<<26), from Android's meta state.
+static int cv_gdk_mods(int meta) {
+    return ((meta & 0x1) ? 1 : 0) | ((meta & 0x1000) ? 4 : 0) | ((meta & 0x2) ? 8 : 0) |
+           ((meta & 0x10000) ? (1 << 26) : 0);
+}
+
+static void cv_probe(CanvasState* cs, const char* kind, double a, double b, int meta) {
+    AeClosure* p = cs->probe;
+    if (p && p->fn)
+        ((void (*)(void*, const char*, double, double, intptr_t))p->fn)(p->env, kind, a, b, (intptr_t)cv_gdk_mods(meta));
+}
+
+static void cv_xy(AeClosure* c, double x, double y) {
+    if (c && c->fn) ((void (*)(void*, double, double))c->fn)(c->env, x, y);
+}
+
+// A key's name as the DSL speaks it (GDK's): the named keys, F1..F12, and
+// otherwise the character typed (shift folded in). Modifiers alone are not
+// keys the app hears.
+static int cv_key_name(int code, int unicode, char* out, int n) {
+    const char* named = aeui_key_name(code);
+    if (named) { snprintf(out, (size_t)n, "%s", named); return 1; }
+    if (code >= 131 && code <= 142) { snprintf(out, (size_t)n, "F%d", code - 130); return 1; }
+    if (unicode <= 0) return 0;
+    char u[8] = "";
+    if (unicode < 0x80) { u[0] = (char)unicode; }
+    else if (unicode < 0x800) { u[0] = (char)(0xC0 | (unicode >> 6)); u[1] = (char)(0x80 | (unicode & 63)); }
+    else { u[0] = (char)(0xE0 | (unicode >> 12)); u[1] = (char)(0x80 | ((unicode >> 6) & 63)); u[2] = (char)(0x80 | (unicode & 63)); }
+    snprintf(out, (size_t)n, "%s", u);
+    return 1;
+}
+
+enum { AEUI_CV_DOWN = 1, AEUI_CV_MOVE = 2, AEUI_CV_UP = 3, AEUI_CV_CANCEL = 4,
+       AEUI_CV_POINTER_DOWN = 5, AEUI_CV_POINTER_UP = 6, AEUI_CV_HOVER = 7,
+       AEUI_CV_SCROLL = 8, AEUI_CV_SIZE = 9, AEUI_CV_KEY_DOWN = 10, AEUI_CV_KEY_UP = 11 };
+
+static jboolean JNICALL native_canvas_event(JNIEnv* env, jclass cls, jint canvas_id, jint kind,
+                                            jint count, jfloat x0, jfloat y0, jfloat x1, jfloat y1,
+                                            jint meta) {
+    (void)cls; (void)env;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return JNI_FALSE;
+    // Pixels in, canvas units (dp) out.
+    double x = x0 / g_density, y = y0 / g_density;
+    int pointer = cs->on_click || cs->on_move || cs->on_release || cs->probe;
+    switch (kind) {
+        case AEUI_CV_SIZE:
+            cv_note_size(canvas_id, (int)x0, (int)y0);
+            return JNI_TRUE;
+        case AEUI_CV_DOWN:
+            cs->g_down = 1; cs->g_x0 = x; cs->g_y0 = y; cs->g_two = 0;
+            cv_probe(cs, "drag-begin", x, y, meta);
+            cv_xy(cs->on_click, x, y);
+            return pointer ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_POINTER_DOWN:
+        case AEUI_CV_MOVE:
+            if (count >= 2) {
+                double dx = (x1 - x0) / g_density, dy = (y1 - y0) / g_density;
+                double span = sqrt(dx * dx + dy * dy), ang = atan2(dy, dx);
+                if (!cs->g_two) {
+                    cs->g_two = 1; cs->g_span0 = span; cs->g_ang0 = ang;
+                } else if (kind == AEUI_CV_MOVE) {
+                    if (cs->g_span0 > 0.0) cv_probe(cs, "zoom", span / cs->g_span0, 0.0, meta);
+                    cv_probe(cs, "rotate", ang - cs->g_ang0, 0.0, meta);
+                }
+                return pointer ? JNI_TRUE : JNI_FALSE;
+            }
+            if (kind == AEUI_CV_MOVE) {
+                if (cs->g_down) cv_probe(cs, "drag-update", x - cs->g_x0, y - cs->g_y0, meta);
+                cv_xy(cs->on_move, x, y);
+            }
+            return pointer ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_POINTER_UP:
+            if (count <= 2) cs->g_two = 0;
+            return pointer ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_UP:
+        case AEUI_CV_CANCEL:
+            if (cs->g_down) cv_probe(cs, "drag-end", x - cs->g_x0, y - cs->g_y0, meta);
+            cs->g_down = 0; cs->g_two = 0;
+            cv_xy(cs->on_release, x, y);
+            return pointer ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_HOVER:
+            cv_xy(cs->on_move, x, y);
+            return cs->on_move ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_SCROLL: {
+            // AXIS_VSCROLL is positive AWAY from the user, the DSL's dy is
+            // negative away (the zoom-in direction); AXIS_HSCROLL is
+            // positive to the right, as the DSL's dx is.
+            double dx = x0, dy = -y0;
+            cv_probe(cs, "scroll", dx, dy, meta);
+            cv_xy(cs->on_scroll, dx, dy);
+            return (cs->on_scroll || cs->probe) ? JNI_TRUE : JNI_FALSE;
+        }
+        case AEUI_CV_KEY_DOWN:
+        case AEUI_CV_KEY_UP: {
+            AeClosure* c = kind == AEUI_CV_KEY_DOWN ? cs->on_key : cs->on_key_release;
+            char name[16];
+            if (!c || !c->fn || !cv_key_name(count, (int)x0, name, (int)sizeof(name))) return JNI_FALSE;
+            ((void (*)(void*, const char*))c->fn)(c->env, name);
+            return JNI_TRUE;
+        }
+        default:
+            return JNI_FALSE;
+    }
+}
+
+int aether_ui_canvas_create_impl(int width, int height) {
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    if (!g_activity || !g_canvas_init) { aeui_unframe(env); return 0; }
+    if (canvas_state_count >= canvas_state_capacity) {
+        int cap = canvas_state_capacity == 0 ? 16 : canvas_state_capacity * 2;
+        CanvasState* nc = (CanvasState*)realloc(canvas_states, sizeof(CanvasState) * (size_t)cap);
+        if (!nc) { aeui_unframe(env); return 0; }
+        canvas_states = nc;
+        canvas_state_capacity = cap;
+    }
+    int canvas_id = canvas_state_count + 1;
+    jobject v = (*env)->NewObject(env, g_canvas_class, g_canvas_init, g_activity, (jint)canvas_id);
+    if (aeui_check(env, "new AetherCanvas") || !v) { aeui_unframe(env); return 0; }
+    int h = register_widget_typed(env, v, AUI_CANVAS);
+    if (!h) { aeui_unframe(env); return 0; }
+    CanvasState* cs = &canvas_states[canvas_state_count++];
+    memset(cs, 0, sizeof(*cs));
+    cs->widget_handle = h;
+    cs->created_w = width;
+    cs->created_h = height;
+    cs->last_w = cs->last_h = -1;
+    cs->cache_count = -1;
+    // The size asked for is the canvas's NATURAL size, and it takes the
+    // slack both ways, as GTK4's drawing area (hexpand + vexpand) and
+    // AppKit's low-priority constraints do: a vg scene fills the window and
+    // re-maps its viewBox through on_resize. A pinned size (width/height)
+    // still holds it exactly.
+    AeuiWidget* w = widget_at(h);
+    w->own_hexp = w->own_vexp = w->hexp = w->vexp = 1;
+    JV(v, M_View_setMinimumWidth, (jint)aeui_dp(width > 0 ? width : 0));
+    JV(v, M_View_setMinimumHeight, (jint)aeui_dp(height > 0 ? height : 0));
+    aeui_unframe(env);
+    return canvas_id;
+}
+
+int aether_ui_canvas_get_widget(int canvas_id) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    return cs ? cs->widget_handle : 0;
+}
+
+void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return;
+    cs->on_resize = (AeClosure*)boxed_closure;
+    // Already laid out: the size it has now is news to this hook (GTK4
+    // seeds its last size to -1 so the next paint reports it).
+    cs->last_w = cs->last_h = -1;
+    cv_invalidate(cs);
+}
+void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->on_click = (AeClosure*)boxed_closure;
+}
+void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->on_move = (AeClosure*)boxed_closure;
+}
+void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->on_release = (AeClosure*)boxed_closure;
+}
+void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->on_scroll = (AeClosure*)boxed_closure;
+}
+void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->probe = (AeClosure*)boxed_closure;
+}
+
+// Keys reach a View only while it has focus, so a canvas that listens for
+// them becomes focusable (in touch mode too, so a tap focuses it, as a click
+// focuses GTK4's): one that does not stays out of the focus order.
+static void cv_want_keys(CanvasState* cs) {
+    if (cs->keys) return;
+    AeuiWidget* w = live_widget(cs->widget_handle);
+    JNIEnv* env = w ? aeui_frame(4) : NULL;
+    if (!env) return;
+    JV(w->view, M_View_setFocusable, JNI_TRUE);
+    JV(w->view, M_View_setFocusableInTouchMode, JNI_TRUE);
+    cs->keys = 1;
+    aeui_unframe(env);
+}
+void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key = (AeClosure*)boxed_closure;
+    cv_want_keys(cs);
+}
+void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_key_release = (AeClosure*)boxed_closure;
+    cv_want_keys(cs);
+}
+
+// --- Recording ------------------------------------------------------------------
+void aether_ui_canvas_begin_path_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_BEGIN_PATH });
+}
+void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_MOVE_TO, .x = x, .y = y });
+}
+void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_LINE_TO, .x = x, .y = y });
+}
+void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b, double a,
+                                  double line_width, int cap, int join) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_STROKE, .r = r, .g = g, .b = b, .a = a,
+                                           .x = line_width, .iw = cap, .ih = join });
+}
+void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y, double w, double h,
+                                     double r, double g, double b, double a) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_FILL_RECT, .x = x, .y = y, .w = w, .h = h,
+                                           .r = r, .g = g, .b = b, .a = a });
+}
+void aether_ui_canvas_group_begin_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_BEGIN });
+}
+void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_END, .x = alpha });
+}
+void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y, double w, double h) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLIP_RECT, .x = x, .y = y, .w = w, .h = h });
+}
+void aether_ui_canvas_reset_clip_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_RESET_CLIP });
+}
+void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
+                               double start_angle, double end_angle) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_ARC, .x = cx, .y = cy, .w = radius,
+                                           .a0 = start_angle, .a1 = end_angle });
+}
+void aether_ui_canvas_close_path_impl(int canvas_id) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLOSE_PATH });
+}
+void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a, int even_odd) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_FILL, .r = r, .g = g, .b = b, .a = a,
+                                           .iw = even_odd });
+}
+void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text, double x, double y,
+                                     double font_size, int font_flags, const char* font_family,
+                                     double r, double g, double b, double a) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_FILL_TEXT, .x = x, .y = y, .w = font_size, .iw = font_flags,
+        .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
+        .text = text ? strdup(text) : NULL });
+}
+void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text, double x, double y,
+                                       double font_size, double line_width, int font_flags,
+                                       const char* font_family, double r, double g, double b, double a) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_STROKE_TEXT, .x = x, .y = y, .w = font_size, .h = line_width, .iw = font_flags,
+        .r = r, .g = g, .b = b, .a = a,
+        .font_family = (font_family && font_family[0]) ? strdup(font_family) : NULL,
+        .text = text ? strdup(text) : NULL });
+}
+
+static void cv_add_image(int canvas_id, double x, double y, double dw, double dh, int iw, int ih,
+                         const unsigned char* rgba, int byte_len, int borrowed) {
+    if (iw <= 0 || ih <= 0 || !rgba || byte_len < iw * ih * 4) return;
+    unsigned char* px = (unsigned char*)rgba;
+    if (!borrowed) {
+        px = (unsigned char*)malloc((size_t)iw * (size_t)ih * 4);
+        if (!px) return;
+        memcpy(px, rgba, (size_t)iw * (size_t)ih * 4);
+    }
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_DRAW_IMAGE, .x = x, .y = y, .w = dw, .h = dh,
+                                           .pixels = px, .pixels_borrowed = borrowed, .iw = iw, .ih = ih });
+}
+void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y, int iw, int ih,
+                                      const unsigned char* rgba, int byte_len) {
+    cv_add_image(canvas_id, x, y, 0, 0, iw, ih, rgba, byte_len, 0);
+}
+void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y, int iw, int ih,
+                                          const unsigned char* rgba, int byte_len) {
+    cv_add_image(canvas_id, x, y, 0, 0, iw, ih, rgba, byte_len, 0);
+}
+void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y, double dw, double dh,
+                                             int iw, int ih, const unsigned char* rgba, int byte_len) {
+    cv_add_image(canvas_id, x, y, dw, dh, iw, ih, rgba, byte_len, 0);
+}
+void aether_ui_canvas_draw_image_scaled_impl_ptr(int canvas_id, double x, double y, double dw, double dh,
+                                                 int iw, int ih, const unsigned char* rgba, int byte_len) {
+    cv_add_image(canvas_id, x, y, dw, dh, iw, ih, rgba, byte_len, 0);
+}
+// Borrowed: the caller's pixels, valid until the next clear (#102); not
+// copied, and never freed here.
+void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y, int iw, int ih,
+                                               const unsigned char* rgba, int byte_len) {
+    cv_add_image(canvas_id, x, y, 0, 0, iw, ih, rgba, byte_len, 1);
+}
+void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y, double dw,
+                                                      double dh, int iw, int ih,
+                                                      const unsigned char* rgba, int byte_len) {
+    cv_add_image(canvas_id, x, y, dw, dh, iw, ih, rgba, byte_len, 1);
+}
+
+static void cv_copy_stops(CanvasCmd* c, int n_stops, void* offsets, void* rgba) {
+    if (n_stops < 0 || !offsets || !rgba) n_stops = 0;
+    c->n_stops = n_stops;
+    c->stop_off = (double*)malloc(sizeof(double) * (size_t)(n_stops > 0 ? n_stops : 1));
+    c->stop_rgba = (double*)malloc(sizeof(double) * (size_t)(n_stops > 0 ? n_stops * 4 : 1));
+    if (!c->stop_off || !c->stop_rgba) { c->n_stops = 0; return; }
+    for (int i = 0; i < n_stops; i++) {
+        c->stop_off[i] = floatarr_get_raw(offsets, i);
+        for (int k = 0; k < 4; k++) c->stop_rgba[i * 4 + k] = floatarr_get_raw(rgba, i * 4 + k);
+    }
+}
+void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id, double x1, double y1, double x2, double y2,
+                                                int n_stops, void* offsets, void* rgba,
+                                                double line_width, int extend, int cap, int join) {
+    CanvasCmd cmd = { .type = CANVAS_FILL_LINEAR, .gx1 = x1, .gy1 = y1, .gx2 = x2, .gy2 = y2,
+                      .grad_line_width = line_width, .grad_extend = extend, .iw = cap, .ih = join };
+    cv_copy_stops(&cmd, n_stops, offsets, rgba);
+    canvas_add_cmd(canvas_id, cmd);
+}
+void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id, double cx, double cy, double radius,
+                                                double fx, double fy, int n_stops, void* offsets,
+                                                void* rgba, double line_width, int extend, int cap,
+                                                int join, double rx, double ry, double rot_deg) {
+    CanvasCmd cmd = { .type = CANVAS_FILL_RADIAL, .gx1 = cx, .gy1 = cy, .gr = radius, .gfx = fx, .gfy = fy,
+                      .grad_line_width = line_width, .grad_extend = extend, .iw = cap, .ih = join,
+                      .grx = rx, .gry = ry, .grot = rot_deg };
+    cv_copy_stops(&cmd, n_stops, offsets, rgba);
+    canvas_add_cmd(canvas_id, cmd);
+}
+
+void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return;
+    if (!rects || n <= 0) { cs->paint_clip_count = 0; return; }
+    if (n > cs->paint_clip_capacity) {
+        double* nr = (double*)realloc(cs->paint_clip_rects, sizeof(double) * (size_t)n * 4);
+        if (!nr) { cs->paint_clip_count = 0; return; }
+        cs->paint_clip_rects = nr;
+        cs->paint_clip_capacity = n;
+    }
+    for (int i = 0; i < n * 4; i++) cs->paint_clip_rects[i] = floatarr_get_raw(rects, i);
+    cs->paint_clip_count = n;
+}
+
+// A new frame: every command goes (with what it owned), the generation
+// moves so read_pixel's cache cannot answer for the old scene.
+static void cv_clear_run(void* arg) {
+    CanvasState* cs = get_canvas_state((int)(intptr_t)arg);
+    if (!cs) return;
+    JNIEnv* env = aeui_env();
+    for (int i = 0; i < cs->count; i++) {
+        CanvasCmd* c = &cs->cmds[i];
+        free(c->text); c->text = NULL;
+        free(c->font_family); c->font_family = NULL;
+        if (c->pixels && !c->pixels_borrowed) free(c->pixels);
+        c->pixels = NULL;
+        if (c->bitmap && env) (*env)->DeleteGlobalRef(env, c->bitmap);
+        c->bitmap = NULL;
+        free(c->stop_off); c->stop_off = NULL;
+        free(c->stop_rgba); c->stop_rgba = NULL;
+    }
+    cs->count = 0;
+    cs->gen++;
+    cv_cache_drop(cs);
+    cv_invalidate(cs);
+}
+
+void aether_ui_canvas_clear_impl(int canvas_id) {
+    if (!get_canvas_state(canvas_id)) return;
+    // On the UI thread, where the replays run, so a paint never sees a
+    // buffer being freed under it.
+    aeui_android_run_sync(cv_clear_run, (void*)(intptr_t)canvas_id);
+}
+
+void aether_ui_canvas_redraw_impl(int canvas_id) {
+    cv_invalidate(get_canvas_state(canvas_id));
+}
+
+// The driver's canvas events: the same closures the View's input runs.
+static int cv_driver_event(AetherDriverActionCtx* ctx) {
+    CanvasState* cs = get_canvas_state(ctx->handle);
+    if (!cs) return 3;
+    AeClosure* c = ctx->action == AETHER_DRV_CANVAS_SCROLL  ? cs->on_scroll
+                 : ctx->action == AETHER_DRV_CANVAS_CLICK   ? cs->on_click
+                 : ctx->action == AETHER_DRV_CANVAS_MOVE    ? cs->on_move
+                 : ctx->action == AETHER_DRV_CANVAS_RELEASE ? cs->on_release
+                 : ctx->action == AETHER_DRV_CANVAS_KEYUP   ? cs->on_key_release
+                                                            : cs->on_key;
+    if (!c || !c->fn) return 3;   // 404: nothing wired, not an event missed
+    if (ctx->action == AETHER_DRV_CANVAS_KEY || ctx->action == AETHER_DRV_CANVAS_KEYUP)
+        ((void (*)(void*, const char*))c->fn)(c->env, ctx->sval);
+    else
+        ((void (*)(void*, double, double))c->fn)(c->env, ctx->dval, ctx->dval2);
+    return 0;
+}
+
+static int hook_canvas_debug(int canvas_id, int* area, int* commands, int* w, int* h) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    if (area) *area = cs->last_paint_area;
+    if (commands) *commands = cs->count;
+    // The canvas's real size once painted; its natural size before that.
+    if (w) *w = cs->last_paint_w > 0 ? cs->last_paint_w : cs->created_w;
+    if (h) *h = cs->last_paint_h > 0 ? cs->last_paint_h : cs->created_h;
+    return 0;
+}
+
+static int hook_canvas_paint_counters(int canvas_id, int* full_paints, int* clip_paints,
+                                      int* last_clip_area) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return 1;
+    if (full_paints) *full_paints = cs->paint_full_count;
+    if (clip_paints) *clip_paints = cs->paint_clip_count_total;
+    if (last_clip_area) *last_clip_area = cs->last_clip_area;
+    return 0;
+}
+
+// ===========================================================================
+// GPU view (#92) -- a SurfaceView with an OpenGL ES context (EGL).
+//
+// The contract is canvas's shape with a GL context the backend owns: the
+// app's on_render runs with the context current and the backend presents
+// afterwards. Android's GL is OpenGL ES, through EGL, onto the SurfaceView's
+// Surface (the ANativeWindow pass B's native view hands out); the entry
+// points an app calls -- glClearColor, glClear, glViewport, and the rest of
+// what ES shares with desktop GL -- are libGLESv3's. ES 3 where the device
+// has it, else ES 2.
+//
+// Frames are drawn on the UI thread, where the app's closures belong: once
+// when the Surface arrives (realize, then resize, then a frame, as a GtkGLArea
+// draws when it is shown), and then whenever the app asks
+// (request_render). With no Surface yet -- the view not laid out, the
+// activity in the background -- a frame goes to an offscreen framebuffer of
+// the view's size instead, as AppKit's headless path does, so an app that
+// animates still runs.
+//
+// read_pixel draws a fresh frame into that offscreen framebuffer and reads
+// it (AppKit's approach): a window surface's back buffer is undefined once
+// swapped, so reading the presented frame would answer with whatever the
+// driver left there.
+//
+// gpuview_available says whether EGL gives this device a context of either
+// version -- the honest answer for a phone, and for the emulator's GPU
+// (SwiftShader or the host's) alike.
+// ===========================================================================
+#include <EGL/egl.h>
+#include <GLES3/gl3.h>
+
+#ifndef EGL_OPENGL_ES3_BIT_KHR
+#define EGL_OPENGL_ES3_BIT_KHR 0x0040
+#endif
+
+typedef struct {
+    int widget;
+    ANativeWindow* window;
+    EGLSurface surface;    // the window's, EGL_NO_SURFACE until the Surface exists
+    EGLSurface pbuffer;    // 1x1, what makes the context current without one
+    EGLContext ctx;
+    AeClosure* on_realize; AeClosure* on_render; AeClosure* on_resize;
+    int realized, last_w, last_h;
+    int surf_w, surf_h;
+    int pending;
+    double last_render;
+    GLuint fbo, tex, depth; int probe_w, probe_h;
+} AeuiGpu;
+
+static AeuiGpu* gpus = NULL;
+static int ngpus = 0;
+static EGLDisplay g_egl_dpy = EGL_NO_DISPLAY;
+static EGLConfig g_egl_cfg = NULL;
+static int g_egl_version = 0;   // 3, 2, or -1 = no GL here
+
+static AeuiGpu* gpu_at(int id) { return (id >= 1 && id <= ngpus) ? &gpus[id - 1] : NULL; }
+
+static int gpu_egl_init(void) {
+    if (g_egl_version) return g_egl_version > 0;
+    g_egl_version = -1;
+    EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (d == EGL_NO_DISPLAY || !eglInitialize(d, NULL, NULL)) {
+        AEUI_LOGW("gpuview: no EGL display (0x%x)", eglGetError());
+        return 0;
+    }
+    for (int ver = 3; ver >= 2; ver--) {
+        const EGLint attrs[] = {
+            EGL_RENDERABLE_TYPE, ver == 3 ? EGL_OPENGL_ES3_BIT_KHR : EGL_OPENGL_ES2_BIT,
+            EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+            EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+            EGL_DEPTH_SIZE, 16,
+            EGL_NONE };
+        EGLConfig cfg = NULL;
+        EGLint n = 0;
+        if (eglChooseConfig(d, attrs, &cfg, 1, &n) && n > 0) {
+            g_egl_dpy = d;
+            g_egl_cfg = cfg;
+            g_egl_version = ver;
+            return 1;
+        }
+    }
+    AEUI_LOGW("gpuview: no RGBA8888 ES2/ES3 EGL config on this device");
+    return 0;
+}
+
+static double gpu_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+// The context, made current on the window surface when there is one, else
+// on the 1x1 pbuffer (enough to drive an offscreen framebuffer).
+static int gpu_make_current(AeuiGpu* g) {
+    if (!gpu_egl_init()) return 0;
+    if (g->ctx == EGL_NO_CONTEXT || !g->ctx) {
+        const EGLint ca[] = { EGL_CONTEXT_CLIENT_VERSION, g_egl_version, EGL_NONE };
+        g->ctx = eglCreateContext(g_egl_dpy, g_egl_cfg, EGL_NO_CONTEXT, ca);
+        if (g->ctx == EGL_NO_CONTEXT) { g->ctx = NULL; AEUI_LOGW("gpuview: eglCreateContext 0x%x", eglGetError()); return 0; }
+    }
+    EGLSurface s = g->surface;
+    if (s == EGL_NO_SURFACE || !s) {
+        if (g->pbuffer == EGL_NO_SURFACE || !g->pbuffer) {
+            const EGLint pa[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+            g->pbuffer = eglCreatePbufferSurface(g_egl_dpy, g_egl_cfg, pa);
+            if (g->pbuffer == EGL_NO_SURFACE) { g->pbuffer = NULL; return 0; }
+        }
+        s = g->pbuffer;
+    }
+    return eglMakeCurrent(g_egl_dpy, s, s, g->ctx) ? 1 : 0;
+}
+
+static void gpu_fire_wh(AeClosure* c, int w, int h) {
+    if (c && c->fn) ((void (*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+}
+
+// The view's size in pixels: the Surface's once it exists, else its layout.
+static void gpu_size(AeuiGpu* g, int* w, int* h) {
+    *w = g->surf_w; *h = g->surf_h;
+    if (*w > 0 && *h > 0) return;
+    AeuiWidget* sw = live_widget(g->widget);
+    JNIEnv* env = sw ? aeui_env() : NULL;
+    if (env) { *w = JI(sw->view, M_View_getWidth); *h = JI(sw->view, M_View_getHeight); }
+    if (*w <= 0 || *h <= 0) { *w = 1; *h = 1; }
+}
+
+// Realize once (on_realize, then on_resize), and resize on a change: with
+// the context current, as the contract says, before the frame it precedes.
+static void gpu_settle(AeuiGpu* g, int w, int h) {
+    if (!g->realized) {
+        g->realized = 1;
+        g->last_w = w; g->last_h = h;
+        AeClosure* c = g->on_realize;
+        if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
+        gpu_fire_wh(g->on_resize, w, h);
+    } else if (w != g->last_w || h != g->last_h) {
+        g->last_w = w; g->last_h = h;
+        gpu_fire_wh(g->on_resize, w, h);
+    }
+}
+
+static void gpu_call_render(AeuiGpu* g) {
+    double now = gpu_now();
+    double dt = g->last_render > 0.0 ? now - g->last_render : 0.0;
+    g->last_render = now;
+    AeClosure* c = g->on_render;
+    if (c && c->fn) ((void (*)(void*, double))c->fn)(c->env, dt);
+}
+
+// A frame into the offscreen framebuffer (kept, and resized with the view).
+// Leaves it bound; 0 when there is no usable target.
+static int gpu_frame_offscreen(AeuiGpu* g, int* out_w, int* out_h) {
+    if (!gpu_make_current(g)) return 0;
+    int w, h;
+    gpu_size(g, &w, &h);
+    if (!g->fbo) {
+        glGenFramebuffers(1, &g->fbo);
+        glGenTextures(1, &g->tex);
+        glGenRenderbuffers(1, &g->depth);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, g->fbo);
+    if (g->probe_w != w || g->probe_h != h) {
+        glBindTexture(GL_TEXTURE_2D, g->tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g->tex, 0);
+        glBindRenderbuffer(GL_RENDERBUFFER, g->depth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, w, h);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, g->depth);
+        g->probe_w = w; g->probe_h = h;
+    }
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return 0;
+    }
+    glViewport(0, 0, w, h);
+    gpu_settle(g, w, h);
+    gpu_call_render(g);
+    glFinish();
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return 1;
+}
+
+// A frame onto the Surface, presented.
+static void gpu_frame(AeuiGpu* g) {
+    if (!g->surface) {
+        if (gpu_frame_offscreen(g, NULL, NULL)) glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return;
+    }
+    if (!gpu_make_current(g)) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // The whole Surface, as a GtkGLArea sets it before each render; an
+    // on_resize that sets its own runs after this and wins.
+    glViewport(0, 0, g->surf_w, g->surf_h);
+    gpu_settle(g, g->surf_w, g->surf_h);
+    gpu_call_render(g);
+    if (!eglSwapBuffers(g_egl_dpy, g->surface))
+        AEUI_LOGW("gpuview: eglSwapBuffers 0x%x", eglGetError());
+}
+
+static void gpu_render_job(void* arg) {
+    AeuiGpu* g = gpu_at((int)(intptr_t)arg);
+    if (!g) return;
+    g->pending = 0;
+    if (live_widget(g->widget)) gpu_frame(g);
+}
+
+// The Surface arriving, changing size (w, h in pixels) or going (0 x 0):
+// the SurfaceHolder.Callback a native view also listens with.
+static void aeui_gpu_surface(JNIEnv* env, int widget, int w, int h) {
+    AeuiGpu* g = NULL;
+    for (int i = 0; i < ngpus; i++) if (gpus[i].widget == widget) g = &gpus[i];
+    AeuiWidget* sw = live_widget(widget);
+    if (!g || !sw || !gpu_egl_init()) return;
+    if (w <= 0 || h <= 0) {
+        if (g->surface) {
+            if (g->ctx) eglMakeCurrent(g_egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            eglDestroySurface(g_egl_dpy, g->surface);
+            g->surface = NULL;
+        }
+        if (g->window) { ANativeWindow_release(g->window); g->window = NULL; }
+        g->surf_w = g->surf_h = 0;
+        return;
+    }
+    if (!g->window) {
+        jobject holder = JO(sw->view, M_SV2_getHolder);
+        jobject surface = holder ? JO(holder, M_SH_getSurface) : NULL;
+        if (surface) g->window = ANativeWindow_fromSurface(env, surface);
+    }
+    if (g->window && !g->surface) {
+        g->surface = eglCreateWindowSurface(g_egl_dpy, g_egl_cfg, g->window, NULL);
+        if (g->surface == EGL_NO_SURFACE) {
+            AEUI_LOGW("gpuview: eglCreateWindowSurface 0x%x", eglGetError());
+            g->surface = NULL;
+        }
+    }
+    g->surf_w = w;
+    g->surf_h = h;
+    gpu_frame(g);
+}
+
+int aether_ui_gpuview_available_impl(void) {
+    return gpu_egl_init();
+}
+
+int aether_ui_gpuview_create_impl(int width, int height) {
+    if (!gpu_egl_init()) return 0;   // asked first, as the contract says
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return 0;
+    if (!g_activity) { aeui_unframe(env); return 0; }
+    int id = 0;
+    jobject sv = JNEW(M_SV2_init, g_activity);
+    AeuiGpu* ng = sv ? (AeuiGpu*)realloc(gpus, sizeof(AeuiGpu) * (size_t)(ngpus + 1)) : NULL;
+    if (ng) {
+        gpus = ng;
+        int h = register_widget_typed(env, sv, AUI_GPUVIEW);
+        AeuiGpu* g = &gpus[ngpus++];
+        memset(g, 0, sizeof(*g));
+        g->widget = h;
+        id = ngpus;
+        // Canvas's natural-size contract: the size asked for is where the
+        // view starts, and it takes the slack both ways.
+        AeuiWidget* w = widget_at(h);
+        if (w) w->own_hexp = w->own_vexp = w->hexp = w->vexp = 1;
+        JV(sv, M_View_setMinimumWidth, (jint)aeui_dp(width > 0 ? width : 1));
+        JV(sv, M_View_setMinimumHeight, (jint)aeui_dp(height > 0 ? height : 1));
+        jobject holder = JO(sv, M_SV2_getHolder);
+        jobject l = aeui_listener(env, h, AEUI_EV_SURFACE);
+        if (holder && l) JV(holder, M_SH_addCallback, l);
+    }
+    aeui_unframe(env);
+    return id;
+}
+
+int aether_ui_gpuview_get_widget(int gpu_id) {
+    AeuiGpu* g = gpu_at(gpu_id);
+    return g ? g->widget : 0;
+}
+void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
+    AeuiGpu* g = gpu_at(gpu_id);
+    if (g) g->on_realize = (AeClosure*)boxed_closure;
+}
+void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
+    AeuiGpu* g = gpu_at(gpu_id);
+    if (g) g->on_render = (AeClosure*)boxed_closure;
+}
+void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
+    AeuiGpu* g = gpu_at(gpu_id);
+    if (g) g->on_resize = (AeClosure*)boxed_closure;
+}
+
+// One more frame, on the UI thread's next turn; requests that arrive before
+// it is drawn are one frame, as gtk_gl_area_queue_render coalesces them.
+void aether_ui_gpuview_request_render_impl(int gpu_id) {
+    AeuiGpu* g = gpu_at(gpu_id);
+    if (!g || g->pending) return;
+    g->pending = 1;
+    aeui_android_post(gpu_render_job, (void*)(intptr_t)gpu_id);
+}
+
+typedef struct { int id, px, py, result; } GpuPixelReq;
+
+static void gpu_read_pixel_run(void* arg) {
+    GpuPixelReq* q = (GpuPixelReq*)arg;
+    AeuiGpu* g = gpu_at(q->id);
+    if (!g || !live_widget(g->widget)) return;
+    int w = 0, h = 0;
+    if (!gpu_frame_offscreen(g, &w, &h)) return;
+    if (q->px < w && q->py < h) {
+        unsigned char rgba[4] = { 0, 0, 0, 0 };
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        // GL's origin is bottom-left; every read-back in this ABI is top-left.
+        glReadPixels(q->px, h - 1 - q->py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        q->result = (int)(((unsigned)rgba[0] << 24) | ((unsigned)rgba[1] << 16) |
+                          ((unsigned)rgba[2] << 8) | rgba[3]);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
+    if (!gpu_at(gpu_id) || px < 0 || py < 0) return -1;
+    GpuPixelReq q = { gpu_id, px, py, -1 };
+    aeui_android_run_sync(gpu_read_pixel_run, &q);
+    return q.result;
+}
+
+// ===========================================================================
 // File icons -- an ImageView showing the icon for a path: an image file is
 // its own picture; anything else gets the icon of the app that opens its
 // type (PackageManager, as a file manager shows it), else a framework glyph
@@ -6691,9 +8461,15 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_PRESS:
         case AETHER_DRV_RELEASE:
             break;   // handled below, against the widget
+        case AETHER_DRV_CANVAS_CLICK:
+        case AETHER_DRV_CANVAS_MOVE:
+        case AETHER_DRV_CANVAS_RELEASE:
+        case AETHER_DRV_CANVAS_KEY:
+        case AETHER_DRV_CANVAS_KEYUP:
+        case AETHER_DRV_CANVAS_SCROLL:
+            ctx->result = cv_driver_event(ctx);
+            return;
         default:
-            // The canvas events arrive with the canvas (pass C): 404
-            // honestly rather than pretend.
             ctx->result = 3;
             return;
     }
@@ -6801,8 +8577,8 @@ static const AetherDriverHooks android_driver_hooks = {
     .focused_widget       = hook_focused_widget,
     .widget_a11y          = hook_widget_a11y,
     .screenshot_png       = hook_screenshot_png,
-    .canvas_debug         = NULL,
-    .canvas_paint_counters = NULL,
+    .canvas_debug         = hook_canvas_debug,
+    .canvas_paint_counters = hook_canvas_paint_counters,
     .run_on_ui_thread     = hook_run_on_ui_thread,
 };
 
@@ -7143,7 +8919,8 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
             break;
         case AEUI_EV_SURFACE:
             if ((*env)->PushLocalFrame(env, 16) != 0) break;
-            aeui_native_view_surface(env, handle, a, b);
+            if (w->type == AUI_GPUVIEW) aeui_gpu_surface(env, handle, a, b);
+            else aeui_native_view_surface(env, handle, a, b);
             (*env)->PopLocalFrame(env, NULL);
             break;
         case AEUI_EV_ROW_DRAG: {
@@ -7250,6 +9027,19 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
             g_adapter_init = NULL;   // no native list: vlist composes its own window
         }
     }
+    // The canvas's View and its natives.
+    g_canvas_class = aeui_find_class(env, "dev/aether/ui/AetherCanvas");
+    if (g_canvas_class) {
+        g_canvas_init = M(g_canvas_class, "<init>", "(Landroid/content/Context;I)V");
+        static const JNINativeMethod canvas_natives[] = {
+            { "nativeCanvasDraw", "(ILandroid/graphics/Canvas;II)V", (void*)native_canvas_draw },
+            { "nativeCanvasEvent", "(IIIFFFFI)Z", (void*)native_canvas_event },
+        };
+        if ((*env)->RegisterNatives(env, g_canvas_class, canvas_natives, 2) != JNI_OK) {
+            aeui_check(env, "RegisterNatives(AetherCanvas)");
+            g_canvas_init = NULL;   // canvas_create answers 0
+        }
+    }
     J.Bitmap                = aeui_find_class(env, "android/graphics/Bitmap");
     J.Canvas                = aeui_find_class(env, "android/graphics/Canvas");
     J.ByteArrayOutputStream = aeui_find_class(env, "java/io/ByteArrayOutputStream");
@@ -7309,135 +9099,3 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     (*env)->DeleteGlobalRef(env, shim);
     return JNI_VERSION_1_6;
 }
-
-// ===========================================================================
-// STUBS -- every remaining ABI function, so the backend links. Each is
-// replaced by a real implementation in pass C (the canvas, the GPU view,
-// fire_double_click); the list in STATUS at
-// the top is the same set.
-// ===========================================================================
-void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius, double start_angle, double end_angle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_begin_path_impl(int canvas_id) { aeui_android_unimplemented(__func__); }
-void aether_ui_canvas_clear_impl(int canvas_id) { aeui_android_unimplemented(__func__); }
-void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y, double w, double h) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_close_path_impl(int canvas_id) { aeui_android_unimplemented(__func__); }
-int aether_ui_canvas_cmd_count_impl(int canvas_id) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_canvas_create_impl(int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_canvas_draw_image_borrowed_impl(int canvas_id, double x, double y, int iw, int ih, const unsigned char* rgba, int byte_len) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_draw_image_impl(int canvas_id, double x, double y, int iw, int ih, const unsigned char* rgba, int byte_len) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y, int iw, int ih, const unsigned char* rgba, int byte_len) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_draw_image_scaled_borrowed_impl(int canvas_id, double x, double y, double dw, double dh, int iw, int ih, const unsigned char* rgba, int byte_len) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_draw_image_scaled_impl(int canvas_id, double x, double y, double dw, double dh, int iw, int ih, const unsigned char* rgba, int byte_len) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_draw_image_scaled_impl_ptr(int canvas_id, double x, double y, double dw, double dh, int iw, int ih, const unsigned char* rgba, int byte_len) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_fill_impl(int canvas_id, double r, double g, double b, double a, int even_odd) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_fill_linear_gradient_impl(int canvas_id, double x1, double y1, double x2, double y2, int n_stops, void* offsets, void* rgba, double line_width, int extend, int cap, int join) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_fill_radial_gradient_impl(int canvas_id, double cx, double cy, double radius, double fx, double fy, int n_stops, void* offsets, void* rgba, double line_width, int extend, int cap, int join, double rx, double ry, double rot_deg) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y, double w, double h, double r, double g, double b, double a) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_fill_text_impl(int canvas_id, const char* text, double x, double y, double font_size, int font_flags, const char* font_family, double r, double g, double b, double a) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_gesture_probe_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_canvas_get_widget(int canvas_id) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_canvas_group_begin_impl(int canvas_id) { aeui_android_unimplemented(__func__); }
-void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_on_scroll_impl(int canvas_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_canvas_painted_pixels_impl(int canvas_id) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py, int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_canvas_redraw_impl(int canvas_id) { aeui_android_unimplemented(__func__); }
-int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end, double ox, double oy, int width, int height, unsigned char* out, int out_len) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_canvas_reset_clip_impl(int canvas_id) { aeui_android_unimplemented(__func__); }
-void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_stroke_impl(int canvas_id, double r, double g, double b, double a, double line_width, int cap, int join) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text, double x, double y, double font_size, double line_width, int font_flags, const char* font_family, double r, double g, double b, double a) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_canvas_write_png_impl(int canvas_id, const char* path, int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_fire_double_click(int handle) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_gpuview_available_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_gpuview_create_impl(int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_gpuview_get_widget(int gpu_id) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_gpuview_on_realize_impl(int gpu_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_gpuview_on_render_impl(int gpu_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_gpuview_on_resize_impl(int gpu_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_gpuview_request_render_impl(int gpu_id) { aeui_android_unimplemented(__func__); }

@@ -1,0 +1,3 @@
+# Files a desktop run reads from elsewhere in the checkout, packaged into the
+# Android APK at the same relative paths (tools/android-apk.sh).
+tests/goldens

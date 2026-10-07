@@ -351,6 +351,7 @@ main() {
     found = found + scan_dir(app, "C:/Windows/Fonts", "sans-serif", "latin")
     found = found + scan_dir(app, "/System/Library/Fonts", "sans-serif", "latin")
     found = found + scan_dir(app, "/Library/Fonts", "sans-serif", "latin")
+    found = found + scan_dir(app, "/system/fonts", "sans-serif", "latin")   // Android
 
     window("Font Picker", 620, 720) {
         root = vstack(6) {

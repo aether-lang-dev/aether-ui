@@ -124,7 +124,7 @@ chrome_label(rn: ptr, cx: float, cy: float, label: string,
     asc = font_ascent(t.font_size)
     desc = font_descent(t.font_size)
     baseline = cy + (asc - desc) / 2.0
-    node = text_anchored(rn, cx, baseline, t.font_size, label, "middle")
+    node = text_anchored(rn, cx, baseline, t.font_size, "middle", label)
     if st == CHROME_DISABLED {
         fill(node, t.fg_disabled)
     } else {
@@ -223,7 +223,7 @@ chrome_toggle(rn: ptr, x: float, y: float, label: string, on: int,
     asc = font_ascent(t.font_size)
     desc = font_descent(t.font_size)
     baseline = y + h / 2.0 + (asc - desc) / 2.0
-    lbl = text_anchored(rn, x + tw + 8.0, baseline, t.font_size, label, "start")
+    lbl = text_anchored(rn, x + tw + 8.0, baseline, t.font_size, "start", label)
     if st == CHROME_DISABLED {
         fill(lbl, t.fg_disabled)
     } else {

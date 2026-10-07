@@ -10,8 +10,10 @@
 #
 #   1. The app as a shared library: `ae build --target=aarch64-linux-android
 #      --emit=lib`, with the Android backend, the shared system extras and the
-#      driver (or the no-control stub) as --extra sources, and liblog /
-#      libandroid from the sysroot. Two things --emit=lib needs that an
+#      driver (or the no-control stub) as --extra sources, and liblog,
+#      libandroid, libjnigraphics (the canvas reads its Bitmaps) and libEGL +
+#      libGLESv3 (the GPU view's context, and the GL an app calls in it) from
+#      the sysroot. Two things --emit=lib needs that an
 #      executable build does not:
 #        * main() is RENAMED to aeui_app_main() in a generated copy of the
 #          source. --emit=lib drops a program's main() (aether's codegen:
@@ -108,6 +110,9 @@ AETHER_SYSROOT="$AETHER_SYSROOT" AETHER_ANDROID_API="$MIN_SDK" \
     --extra "$ROOT/backend/aether_ui_system_extras.c" \
     --extra "$SYSLIB/liblog.so" \
     --extra "$SYSLIB/libandroid.so" \
+    --extra "$SYSLIB/libjnigraphics.so" \
+    --extra "$SYSLIB/libEGL.so" \
+    --extra "$SYSLIB/libGLESv3.so" \
     -o "$STAGE/lib/arm64-v8a/libapp.so"
 
 if [ -n "${ANDROID_LIB_ONLY:-}" ]; then
@@ -153,6 +158,31 @@ while IFS= read -r f; do
     cp "$f" "$ASSETS/$rel"
     echo "$rel" >> "$ASSETS/aeui-files.txt"
 done < <(find "$APP_DIR" -type f ! -name '*.ae' ! -name '.*' ! -path '*/.*' -size -8M | sort)
+# Two more sources of files, at their checkout-relative paths too:
+#   * the toolkit's own fonts/ -- vg's default typeface is
+#     fonts/DejaVuSans-Bold.ttf, opened relative to the working directory
+#     exactly as a desktop run from the checkout opens it;
+#   * what the app's .aeui-files names (one checkout-relative file or
+#     directory per line, # comments): data a desktop run reads from
+#     elsewhere in the checkout, e.g. golden_gallery's tests/goldens/.
+add_tree() {   # add_tree <checkout-relative path>
+    local src="$ROOT/$1"
+    [ -e "$src" ] || { echo "  warning: $1 (named for the app) does not exist" >&2; return 0; }
+    while IFS= read -r f; do
+        rel="${f#"$ROOT"/}"
+        grep -qxF "$rel" "$ASSETS/aeui-files.txt" && continue
+        mkdir -p "$ASSETS/$(dirname "$rel")"
+        cp "$f" "$ASSETS/$rel"
+        echo "$rel" >> "$ASSETS/aeui-files.txt"
+    done < <(find "$src" -type f ! -name '.*' -size -8M | sort)
+}
+[ -d "$ROOT/fonts" ] && add_tree fonts
+if [ -f "$APP_DIR/.aeui-files" ]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"; line="$(echo "$line" | tr -d '[:space:]')"
+        [ -n "$line" ] && add_tree "$line"
+    done < "$APP_DIR/.aeui-files"
+fi
 echo "  $(wc -l < "$ASSETS/aeui-files.txt" | tr -d ' ') app file(s)"
 cp "$OUT/base.apk" "$OUT/unaligned.apk"
 ( cd "$STAGE" && zip -q -r "$OUT/unaligned.apk" classes.dex lib assets )

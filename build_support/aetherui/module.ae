@@ -88,11 +88,12 @@ builder ui_backend(root: string) {
     // platform() would otherwise also fire the AppKit arm alongside UIKit).
     if is_ios == 1 { os_name = "ios" }
     // Android the same way (AETHER_UI_TARGET=android): the native-Views
-    // backend over JNI, the shared driver + system extras, liblog and
-    // libandroid (ALooper). Like the iOS arm this only selects the sources:
-    // an Android app is a shared library (--emit=lib with main() renamed)
-    // inside an APK, which aeb has no verb for yet, so the working path is
-    // tools/android-apk.sh. See docs/design/android-backend.md.
+    // backend over JNI, the shared driver + system extras, liblog,
+    // libandroid (ALooper), libjnigraphics, libEGL and libGLESv3. Like the
+    // iOS arm this only selects the sources: an Android app is a shared
+    // library (--emit=lib with main() renamed) inside an APK, which aeb has
+    // no verb for yet, so the working path is tools/android-apk.sh. See
+    // docs/design/android-backend.md.
     if is_android == 1 { os_name = "android" }
     if is_android == 1 {
         extra_source("${root}/backend/aether_ui_android.c")
@@ -100,6 +101,9 @@ builder ui_backend(root: string) {
         extra_source("${root}/backend/aether_ui_system_extras.c")
         link_flag("-llog")
         link_flag("-landroid")
+        link_flag("-ljnigraphics")   // the canvas reads its Bitmaps' pixels
+        link_flag("-lEGL")           // the GPU view's context ...
+        link_flag("-lGLESv3")        // ... and the GL an app calls in it
     }
     if is_ios == 1 {
         extra_source("${root}/backend/aether_ui_uikit.m")

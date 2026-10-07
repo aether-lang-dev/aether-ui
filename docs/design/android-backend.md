@@ -1,7 +1,7 @@
 # An Android backend
 
-Status: **stage 2, pass B done** (2026-10-07); pass C (canvas, GPU view)
-next. The fifth
+Status: **stage 2 done** (pass C, 2026-10-07): no ABI function is a stub.
+The fifth
 native implementation of the backend ABI (`backend/aether_ui_backend.h`),
 beside GTK4, AppKit, Win32 and UIKit.
 
@@ -128,6 +128,94 @@ functions, the 8 GPU-view functions and `fire_double_click`. The mappings:
   `AetherListAdapter`: rows are built on demand and retired when scrapped.
   A native view is a `SurfaceView` whose handle is its `ANativeWindow*`
   (native-view kind 5).
+
+Stage 2 pass C brought the last 49: the 40 canvas functions, the 8
+GPU-view functions and `fire_double_click`. The backend now has **321 real
+functions and the 6 documented tray no-ops, of 327; no stubs**.
+
+- **Canvas: the platform's 2D API, not a renderer of our own.** Every
+  backend keeps the canvas as a command buffer and replays it through its
+  own drawing library (cairo, Core Graphics, GDI+); there is no shared CPU
+  rasteriser to reuse below the ABI (vg's `rasterize.ae` is the software
+  path for filters and clip masks, above it). Android's counterpart is
+  `android.graphics.Canvas` (Skia): `canvas_replay_range` turns each
+  command into Path / Paint / Shader / drawText calls through JNI and
+  nothing is rasterised in C. Where Skia and cairo disagree on a default,
+  the replay says cairo's out loud: the miter limit is 10 (Skia's is 4), a
+  zero-width stroke draws nothing (Skia's is a hairline), a `line_to` with
+  no current point is a `move_to`, an arc of 360 degrees or more goes in
+  half-turns (Skia's `arcTo` takes the sweep modulo 360), group opacity is
+  a `saveLayerAlpha`, spreadMethod is the shader's tile mode, and a focal
+  radial is a two-point conical gradient (API 31+; centred below it).
+- **The View shows a retained Bitmap.** `AetherCanvas` (the shim's View)
+  replays the buffer in `onDraw` into a Bitmap of its size in device
+  pixels, scaled by the density so canvas units are dp, and draws that.
+  The Bitmap is the retained paint surface GTK4 has, so
+  `canvas_painted_pixels` is real here (sampled every 4 dp, as GTK4 samples
+  its own) and a dirty-region paint (`set_clip_rects`) redraws only its
+  clip. `read_pixel`, `write_png` and `render_range_rgba` replay offscreen
+  at one pixel per canvas unit, at the size the caller names, as every
+  other backend does, with GTK4's (generation, count, size) replay cache
+  under `read_pixel`.
+- **Text** is the platform's text renderer, in the face the CSS
+  `font-family` stack resolves to through `Typeface.create` (a name the
+  font map does not know answers the default family, so it is skipped and
+  the next one tried); with no family it is `Typeface.DEFAULT`, the face
+  `text_measure` and the font metrics report for text widgets.
+- **Input**: the touch stream (press = `on_click`, move = `on_move`,
+  release and cancel = `on_release`, as UIKit maps touches), a mouse's hover
+  and wheel (`on_scroll`, dy negative away from the user), hardware keys
+  while the canvas has focus (a canvas with a key handler becomes
+  focusable, in touch mode too), size changes (`on_resize`, synchronously
+  and with the size as doubles, as GTK4 fires it), and the gesture probe
+  (drag-begin/update/end, zoom and rotate from two pointers, scroll). The
+  driver's canvas routes run the same closures.
+- **GPU view**: a `SurfaceView` with an OpenGL ES context (EGL, ES 3, else
+  ES 2) on its Surface. `on_realize`, `on_resize` (pixels) and a first
+  frame when the Surface arrives, then a frame per `request_render`
+  (coalesced, on the UI thread); with no Surface a frame goes to an
+  offscreen framebuffer, as AppKit's headless path does. `read_pixel`
+  draws a fresh frame into that framebuffer and reads it (a swapped window
+  back buffer is undefined). `gpuview_available` is whether EGL gives a
+  context of either version: 1 on the emulator (SwiftShader) and on the
+  Pixel. The app's GL calls resolve against libGLESv3, which the APK
+  links, with libEGL and libjnigraphics.
+- **The whole spec matrix on the emulator** (every suite in
+  `tests/spec_matrix.sh`, one by one through `aelane android`, 2026-10-07):
+  **84 suites, 79 green; 433 passing, 29 failing.** The five red ones,
+  none a canvas or GPU fault: `stroker` 2/4 and `vg3d` 2/4 and
+  `tumbling_cube` 4/6 are layouts written for a desktop window wider than
+  the phone (the size an app asks for is not applied here, so a canvas is
+  185 dp wide and tall where the spec expects about 320 x 240 -- vg3d's
+  probe reads 294 inked samples, well over its 60, once
+  `/window/resize?w=700&h=360` gives it the window it asked for), and
+  tumbling_cube's AEVG_FREEZE=1 and lismusic's LIS_OFFLINE=1 (4/6) are not
+  AETHER_* variables, so the lane does not carry them to the device;
+  `video_frame` 0/21 links contrib.avcodec, which has no FFmpeg for Android
+  (the library fails to load; the desktop matrix SKIPs it without FFmpeg).
+  The grand_perspective specs are not run: they need a fixture directory
+  on the host. `golden` is green against `tests/goldens/android/`, blessed
+  from this backend; the same signatures are within the gallery's own
+  tolerance of macOS's goldens on all four scenes (prims 2 cells over, the
+  limit is 2; stroke, type and cube 0) and of GTK4's on three (prims 3
+  cells, all on the anti-aliased rim of the stroked circle).
+- **The app's files** now include the toolkit's `fonts/` (vg's default
+  typeface is `fonts/DejaVuSans-Bold.ttf`, opened relative to the working
+  directory) and whatever an app's `.aeui-files` names
+  (`examples/golden_gallery/.aeui-files` packs `tests/goldens/`, so the
+  gallery finds `tests/goldens/android/`).
+
+Fixed on the way in pass C, because the canvas suites exposed them:
+`focus()` and the driver's Tab now leave touch mode as a real key does
+(`requestFocusFromTouch`), so a button or checkbox can hold focus and Tab
+walks every focusable widget; a face set before its widget is attached
+(`ui.btn`'s chrome face) is mounted when the widget is; a face replaces the
+caption on screen (kept as the widget's text), with a canvas face centred
+at its natural size; `vg_tooltip_drawn` answers whether the drawn path is
+on (the desktop backends' meaning; on Android it is, unless
+`AETHER_UI_TOOLTIP=native`) rather than whether a tooltip is showing; and
+`ui/chrome.ae` passed `text_anchored` its label and anchor the wrong way
+round, so every chrome face on every backend read "middle".
 
 Found on the way: `--emit=lib` drops a program's `main()`, so the packaging
 script compiles a copy with `main()` renamed to `aeui_app_main()` (exported as
