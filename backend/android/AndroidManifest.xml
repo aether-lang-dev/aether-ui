@@ -17,15 +17,26 @@
          needs INTERNET. Only builds with the driver include it. -->
     @INTERNET_PERMISSION@
 
+    <!-- notify(): posting a notification needs this granted at runtime from
+         API 33 (notify_request_permission asks for it). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- supportsRtl: without it Android forces every layout left to right,
+         and set_rtl (View.setLayoutDirection) would be ignored. -->
     <application
         android:label="@LABEL@"
         android:hasCode="true"
+        android:supportsRtl="true"
         android:extractNativeLibs="true">
-        <!-- configChanges: a rotation or theme switch must not destroy the
+        <!-- launchMode singleTop: a tap on one of the app's notifications
+             reaches the running activity (onNewIntent) instead of starting
+             a second one.
+             configChanges: a rotation or theme switch must not destroy the
              activity, which would throw away the widget tree main() built. -->
         <activity
             android:name="dev.aether.ui.AetherActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:theme="@android:style/Theme.Material.Light.DarkActionBar"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection" />
         <activity-alias

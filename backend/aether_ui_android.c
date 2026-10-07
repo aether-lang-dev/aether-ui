@@ -25,14 +25,18 @@
 // aeui_android_run_sync); timers are timerfds on the same looper. Every JNI
 // call that touches a View therefore happens on the UI thread.
 //
-// STATUS: STAGE 2, PASS A -- 168 of the 327 ABI functions the UIKit backend
-// exports are implemented for real; the other 159 are STUBS. Stage 1 proved
-// the chain (`--emit=lib`, JNI, the looper bridge, packaging, the driver over
-// `adb forward`) with examples/counter; pass A brought the widget set that
-// most apps are made of: inputs, containers, images, styling, sizing,
-// accessibility, events and bindings. Passes B and C replace the rest, with
-// the spec matrix as the ratchet, until none remain (the backend-parity
-// rule).
+// STATUS: STAGE 2, PASS B -- 272 of the 327 ABI functions the UIKit backend
+// exports are implemented for real, 6 are documented no-ops (the tray: there
+// is no status-area tray on Android, as on iOS), and 49 are STUBS: the canvas
+// and the GPU view, and fire_double_click, which pass C brings. Stage 1
+// proved the chain (`--emit=lib`, JNI, the looper bridge, packaging, the
+// driver over `adb forward`) with examples/counter; pass A brought the widget
+// set most apps are made of (inputs, containers, images, styling, sizing,
+// accessibility, events and bindings); pass B everything around the widgets
+// (containers of pages, extra windows and sheets, overlays, menus, the
+// keyboard, dialogs and pickers, notifications, the clipboard, appearance,
+// CSS classes, native lists and views). Pass C replaces the rest, with the
+// spec matrix as the ratchet, until none remain (the backend-parity rule).
 //
 // Real:
 //   registry   register_widget get_widget handle_for_widget backend_name_impl
@@ -99,6 +103,58 @@
 //   loop       worker_poster_install_impl on_ui_thread_impl
 //              timer_create_impl timer_cancel_impl
 //
+// Real, pass B (104, + the 6 tray no-ops):
+//   containers zstack_create wrap_create tabs_create tab_add tabs_select
+//              tabs_selected tabs_count tabs_set_on_change navstack_create
+//              navstack_push navstack_pop navstack_depth splitview_create
+//              split_position_impl split_set_position_impl
+//              widget_set_child_impl widget_weight_impl
+//   windows    window_create_impl window_set_body_impl window_show_impl
+//              window_close_impl close_window_by_handle_impl
+//              window_set_title_impl app_quit_impl (and window_count_impl,
+//              window_is_open_impl, window_title_impl, widget_window_impl
+//              over the extra windows)
+//   sheet      sheet_create_impl sheet_set_body_impl sheet_present_impl
+//              sheet_dismiss_impl
+//   overlay    overlay_open_impl overlay_close_impl overlay_count_impl
+//              overlay_is_live_impl overlay_is_modal_impl
+//              overlay_is_exiting_impl overlay_exit_played_impl
+//              overlay_set_on_dismiss_impl overlay_set_transition_impl
+//              overlay_set_material_impl overlay_material_effective_impl
+//              toast_impl vg_tooltip_show_impl vg_tooltip_hide_impl
+//              vg_tooltip_drawn_impl
+//   menus      menu_bar_create menu_create menu_add_item menu_add_separator
+//              menu_item_set_label menu_bar_add_menu menu_bar_attach
+//              menu_bar_attach_window menu_popup context_menu_item_impl
+//              context_menu_item_accel_impl
+//   keys       shortcut_impl shortcut_when_impl shortcut_chord_impl
+//              window_on_key_impl window_key_deliver
+//   system     alert_impl file_open file_save file_pick_folder
+//              clipboard_read_impl clipboard_write_impl open_url_impl
+//              dark_mode_check watch_appearance_impl fire_appearance
+//              notify_impl notify_full_impl notify_request_permission_impl
+//              file_icon_create file_icon_set
+//   lists      native_list_available_impl native_list_create_impl
+//              native_list_set_row_builder_impl native_list_set_count_impl
+//              native_list_scroll_to_impl native_list_first_visible_impl
+//              vlist_attach_scroll_impl fire_scroll row_drag_reorder_impl
+//              fire_row_drop
+//   native     native_view_available_impl native_view_kind_impl
+//              native_view_create_impl native_view_get_widget
+//              native_view_handle_impl native_view_on_realize_impl
+//              native_view_on_resize_impl
+//   widget     widget_add_css_class_impl widget_remove_css_class_impl
+//              widget_classes_impl widget_apply_css_impl widget_count_impl
+//              widget_draggable_file_impl widget_drag_payload_impl
+//              window_on_file_drop_impl window_file_drop_deliver
+//              seal_widget_impl seal_subtree_impl fire_undo fire_redo
+//   driver     window resize, key, pick, split position, tab select,
+//              context menu, menu activate (side-store and native), and the
+//              classes hook
+//   tray       tray_create_impl tray_set_menu_impl tray_set_tooltip_impl
+//              tray_set_icon_template_impl tray_set_icon_for_state_impl
+//              tray_seal_impl -- documented no-ops (see the tray section)
+//
 // Where Android has no counterpart, the closest faithful behaviour is
 // implemented and the comment at the function says so: hover is real only
 // under a pointer (mouse, trackpad, hovering stylus; a finger never hovers),
@@ -106,11 +162,8 @@
 // disclosure triangle is drawn as a path (no system chevron).
 //
 // STUBS (each calls aeui_android_unimplemented(__func__), which logs the
-// name once through liblog, and returns a neutral value: 0, 0.0, NULL, or a
-// fresh empty string). The full list is generated into the STUBS section at
-// the end of this file; by family:
-//   alert      alert_impl
-//   app        app_quit_impl
+// name once through liblog, and returns a neutral value: 0, 0.0 or NULL).
+// The full list is the STUBS section at the end of this file; by family:
 //   canvas     canvas_arc_impl canvas_begin_path_impl canvas_clear_impl
 //              canvas_clip_rect_impl canvas_close_path_impl
 //              canvas_cmd_count_impl canvas_create_impl
@@ -129,68 +182,16 @@
 //              canvas_read_pixel_impl canvas_redraw_impl
 //              canvas_render_range_rgba_impl canvas_reset_clip_impl
 //              canvas_set_clip_rects_impl canvas_stroke_impl
-//              canvas_stroke_text_impl canvas_write_png_impl
-//   clipboard  clipboard_read_impl clipboard_write_impl
-//   close      close_window_by_handle_impl
-//   context    context_menu_item_accel_impl context_menu_item_impl
-//   dark       dark_mode_check
-//   file       file_icon_create file_icon_set file_open file_pick_folder
-//              file_save
-//   fire       fire_appearance fire_double_click fire_redo fire_row_drop
-//              fire_scroll fire_undo
+//              canvas_stroke_text_impl canvas_write_png_impl     (40)
 //   gpuview    gpuview_available_impl gpuview_create_impl gpuview_get_widget
 //              gpuview_on_realize_impl gpuview_on_render_impl
 //              gpuview_on_resize_impl gpuview_read_pixel_impl
-//              gpuview_request_render_impl
-//   menu       menu_add_item menu_add_separator menu_bar_add_menu
-//              menu_bar_attach menu_bar_attach_window menu_bar_create
-//              menu_create menu_item_set_label menu_popup
-//   native     native_list_available_impl native_list_create_impl
-//              native_list_first_visible_impl native_list_scroll_to_impl
-//              native_list_set_count_impl native_list_set_row_builder_impl
-//              native_view_available_impl native_view_create_impl
-//              native_view_get_widget native_view_handle_impl
-//              native_view_kind_impl native_view_on_realize_impl
-//              native_view_on_resize_impl
-//   navstack   navstack_create navstack_depth navstack_pop navstack_push
-//   notify     notify_full_impl notify_impl notify_request_permission_impl
-//   open       open_url_impl
-//   overlay    overlay_close_impl overlay_count_impl overlay_exit_played_impl
-//              overlay_is_exiting_impl overlay_is_live_impl
-//              overlay_is_modal_impl overlay_material_effective_impl
-//              overlay_open_impl overlay_set_material_impl
-//              overlay_set_on_dismiss_impl overlay_set_transition_impl
-//   row        row_drag_reorder_impl
-//   seal       seal_subtree_impl seal_widget_impl
-//   sheet      sheet_create_impl sheet_dismiss_impl sheet_present_impl
-//              sheet_set_body_impl
-//   shortcut   shortcut_chord_impl shortcut_impl shortcut_when_impl
-//   split      split_position_impl split_set_position_impl
-//   splitview  splitview_create
-//   tab        tab_add
-//   tabs       tabs_count tabs_create tabs_select tabs_selected
-//              tabs_set_on_change
-//   toast      toast_impl
-//   tray       tray_create_impl tray_seal_impl tray_set_icon_for_state_impl
-//              tray_set_icon_template_impl tray_set_menu_impl
-//              tray_set_tooltip_impl
-//   vg         vg_tooltip_drawn_impl vg_tooltip_hide_impl vg_tooltip_show_impl
-//   vlist      vlist_attach_scroll_impl
-//   watch      watch_appearance_impl
-//   widget     widget_add_css_class_impl widget_apply_css_impl
-//              widget_classes_impl widget_count_impl widget_drag_payload_impl
-//              widget_draggable_file_impl widget_remove_css_class_impl
-//              widget_set_child_impl widget_weight_impl
-//   window     window_close_impl window_create_impl window_file_drop_deliver
-//              window_key_deliver window_on_file_drop_impl window_on_key_impl
-//              window_set_body_impl window_set_title_impl window_show_impl
-//   wrap       wrap_create
-//   zstack     zstack_create
+//              gpuview_request_render_impl                       (8)
+//   fire       fire_double_click                                 (1)
 //
-// Limitations beyond the stubs: there is one window; Back finishes the
-// activity, which ends the program as closing a desktop window does; a
-// container that is not yet real (zstack, wrap, tabs, navstack, splitview)
-// takes no children, which the log names.
+// Limitations: Back finishes the activity, which ends the program as
+// closing a desktop window does (in an extra window or a sheet, Back closes
+// that dialog); the driver's canvas routes answer 404 until pass C.
 // ===========================================================================
 
 #include <jni.h>
@@ -252,14 +253,7 @@ static void aeui_android_unimplemented(const char* fn) {
     if (aeui_unimpl_count < (int)(sizeof(aeui_unimpl_seen) / sizeof(aeui_unimpl_seen[0])))
         aeui_unimpl_seen[aeui_unimpl_count++] = fn;
     pthread_mutex_unlock(&aeui_unimpl_lock);
-    AEUI_LOGW("unimplemented on Android (stage 1 stub): %s", fn);
-}
-
-// The neutral string a stub returns. Fresh each time: some string-returning
-// ABI functions hand ownership to the caller, which frees it, so a literal
-// would be a crash there; a leaked empty string is the safe side.
-static char* aeui_empty_string(void) {
-    return strdup("");
+    AEUI_LOGW("unimplemented on Android (a pass-C stub): %s", fn);
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +626,10 @@ enum {
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
     AUI_CANVAS, AUI_IMAGE,
     AUI_TABS, AUI_NAVSTACK, AUI_SPLITVIEW, AUI_WRAP, AUI_GRID,
-    AUI_FORM_SECTION, AUI_FORM_SECTION_INNER, AUI_BANNER
+    AUI_FORM_SECTION, AUI_FORM_SECTION_INNER, AUI_BANNER,
+    AUI_SCRIM,          // a modal overlay's scrim (registered, as on AppKit)
+    AUI_LIST,           // a native list (ListView); reported as a vstack, as AppKit's is
+    AUI_NATIVE_VIEW     // a native view (SurfaceView)
 };
 
 // Which Java listeners a View already carries (one of each per View).
@@ -692,7 +689,24 @@ typedef struct {
     char** items; int nitems; int selected;   // picker
     int radio_leader;          // toggle group
     int fill, tint;            // image: fill mode, tint (-1 none)
+
+    // --- pass B ---
+    jobject content;           // global ref: the ViewGroup children go in, when not the view
+                               // (a tab set's page host); NULL = the view itself
+    char* classes;             // CSS classes, space-separated (NULL none)
+    int weight;                // widget_weight: a share of the stack's slack, 0 none
+    AeClosure* scroll_cb;      // vlist_attach_scroll: on_scroll(dy)
+    AeClosure* row_drop;       // row_drag_reorder: on_drop(src)
+    int row_index;             //   ... and this row's index
+    char* drag_path;           // widget_draggable_file
+    int face;                  // set_child on a non-container: the face widget laid over it
+    struct AeuiCtxItem* ctx; int nctx;   // context_menu_item
+    int split_pos;             // splitview: pane 1's size (dp), -1 none yet
+    int split_vertical;
+    int nav_depth;             // navstack: pages pushed above the root
 } AeuiWidget;
+
+typedef struct AeuiCtxItem { char* label; char* accel; AeClosure* closure; } AeuiCtxItem;
 
 static AeuiWidget* widgets = NULL;
 static int widget_count = 0;
@@ -717,6 +731,7 @@ static int register_widget_typed(JNIEnv* env, jobject view, int type) {
     w->bold = -1;
     w->tint = -1;
     w->fill = 1;   // contain, stated explicitly as on every backend
+    w->split_pos = -1;
     widget_count++;
     return widget_count;
 }
@@ -759,7 +774,15 @@ static int aeui_is_linear(int type) {
 }
 
 static int aeui_is_container(int type) {
-    return aeui_is_linear(type) || type == AUI_GRID || type == AUI_SCROLLVIEW;
+    return aeui_is_linear(type) || type == AUI_GRID || type == AUI_SCROLLVIEW ||
+           type == AUI_ZSTACK || type == AUI_WRAP || type == AUI_TABS ||
+           type == AUI_NAVSTACK || type == AUI_SPLITVIEW;
+}
+
+// The ViewGroup a container's children go in: the view itself, or the host
+// inside it (a tab set's page frame).
+static jobject aeui_content_of(AeuiWidget* w) {
+    return w->content ? w->content : w->view;
 }
 
 static void closure_push(AeClosure*** arr, int* n, AeClosure* c) {
@@ -781,6 +804,8 @@ static void aeui_retire_tree(JNIEnv* env, int handle) {
     w->view = NULL;
     if (w->orig_bg) { (*env)->DeleteGlobalRef(env, w->orig_bg); w->orig_bg = NULL; }
     if (w->a11y) { (*env)->DeleteGlobalRef(env, w->a11y); w->a11y = NULL; }
+    if (w->content) { (*env)->DeleteGlobalRef(env, w->content); w->content = NULL; }
+    free(w->classes); w->classes = NULL;
     w->parent = 0;
 }
 
@@ -846,11 +871,17 @@ static const char* aeui_kind_name(int type) {
         case AUI_FORM_SECTION:       return "form_section";
         case AUI_FORM_SECTION_INNER: return "form_section_inner";
         case AUI_BANNER:      return "banner";
+        case AUI_SCRIM:       return "scrim";
+        case AUI_LIST:        return "vstack";
+        case AUI_NATIVE_VIEW: return "native_view";
         default:              return "widget";
     }
 }
 
+// "" for a dead or unknown handle (the ABI's word), so a stylesheet walk
+// over every handle skips what is gone.
 const char* aether_ui_widget_kind_impl(int handle) {
+    if (!view_of(handle)) return "";
     return aeui_kind_name(get_widget_type(handle));
 }
 
@@ -859,10 +890,6 @@ int aether_ui_widget_parent_impl(int handle) {
     return w ? w->parent : 0;
 }
 
-// One window per activity: every live widget is in window 1.
-int aether_ui_widget_window_impl(int widget_handle) {
-    return view_of(widget_handle) ? 1 : 0;
-}
 
 // Classes the layout engine and the widgets below need.
 JCLASS(C_View, "android/view/View");
@@ -900,6 +927,9 @@ JMETHOD(M_MP_setMargins, C_MarginParams, "setMargins", "(IIII)V");
 JMETHOD(M_MP_setMarginStart, C_MarginParams, "setMarginStart", "(I)V");
 JMETHOD(M_MP_setMarginEnd, C_MarginParams, "setMarginEnd", "(I)V");
 JMETHOD(M_FP_init, C_FrameParams, "<init>", "(II)V");
+JMETHOD(M_MP_init, C_MarginParams, "<init>", "(II)V");
+JCLASS(C_AbsListParams, "android/widget/AbsListView$LayoutParams");
+JMETHOD(M_ALP_init, C_AbsListParams, "<init>", "(II)V");
 JMETHOD(M_GL_init, C_GridLayout, "<init>", "(Landroid/content/Context;)V");
 JMETHOD(M_GL_setColumnCount, C_GridLayout, "setColumnCount", "(I)V");
 JMETHOD(M_GL_getColumnCount, C_GridLayout, "getColumnCount", "()I");
@@ -933,6 +963,7 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
 
 // Put the body in the activity's host layout and title the activity. Also
 // the re-mount path when the system recreates the activity in a live process.
+static void aeui_apply_window_size(JNIEnv* env);
 static void aeui_mount_body(JNIEnv* env) {
     jobject root = view_of(g_root_handle);
     if (!root || !g_host) return;
@@ -957,6 +988,7 @@ static void aeui_mount_body(JNIEnv* env) {
     (*env)->CallVoidMethod(env, g_host, J.ViewGroup_addView, root, lp);
     aeui_check(env, "host.addView");
     if (lp) (*env)->DeleteLocalRef(env, lp);
+    aeui_apply_window_size(env);   // a size the driver set survives a re-mount
     if (g_title && g_activity) {
         jstring t = aeui_jstring(env, g_title);
         (*env)->CallVoidMethod(env, g_activity, J.Activity_setTitle, t);
@@ -1072,12 +1104,6 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
     return s ? s->diag_count : 0;
 }
 
-int aether_ui_window_count_impl(void) { return 1; }
-int aether_ui_window_is_open_impl(int win_handle) { return win_handle == 1 && g_mounted ? 1 : 0; }
-const char* aether_ui_window_title_impl(int win_handle) {
-    (void)win_handle;
-    return g_title ? g_title : "";
-}
 
 // ===========================================================================
 // The layout engine. Every container is a real Android layout -- vstack and
@@ -1124,6 +1150,12 @@ static void aeui_apply_lp(JNIEnv* env, int handle) {
         float weight = 0.0f;
         if (c->type == AUI_SPACER) {
             main_sz = 0; weight = 1.0f;
+        } else if (c->weight > 0) {
+            // widget_weight: a share of the slack in proportion to n, on top
+            // of a stated size, which is then the floor it cannot go below
+            // (weightclamp: a 260-wide weighted label keeps 260 and more).
+            main_sz = main_fixed > 0 ? aeui_dp(main_fixed) : 0;
+            weight = (float)c->weight;
         } else if (c->type == AUI_DIVIDER) {
             main_sz = aeui_dp(1);
         } else if (main_fixed > 0) {
@@ -1193,6 +1225,38 @@ static void aeui_apply_lp(JNIEnv* env, int handle) {
         JV(lp, M_MP_setMargins, ml, mt + (c->row > 0 ? aeui_dp(p->grid_rsp) : 0), mr, mb);
         JV(lp, M_MP_setMarginStart, ml + (c->col > 0 ? aeui_dp(p->grid_csp) : 0));
         JV(lp, M_MP_setMarginEnd, mr);
+    } else if (p->type == AUI_SPLITVIEW) {
+        // Two panes either side of the divider: the first is the split
+        // position long (or an even share until one is set), the second
+        // takes the rest; across, both fill.
+        int vertical = p->split_vertical;
+        int first = 1;
+        for (int i = 0; i < widget_count; i++)
+            if (widgets[i].parent == c->parent && widgets[i].view && i + 1 < handle) { first = 0; break; }
+        int main_sz = 0;
+        float weight = 1.0f;
+        if (first && p->split_pos >= 0) { main_sz = aeui_dp(p->split_pos); weight = 0.0f; }
+        lp = JNEW(M_LLP_init, (jint)(vertical ? LP_MATCH_PARENT : main_sz),
+                  (jint)(vertical ? main_sz : LP_MATCH_PARENT), (jfloat)weight);
+        if (!lp) return;
+        JV(lp, M_MP_setMargins, ml, mt, mr, mb);
+    } else if (p->type == AUI_ZSTACK || p->type == AUI_TABS || p->type == AUI_NAVSTACK) {
+        // Layered: every child fills the frame (a zstack's layers, a tab
+        // set's pages, a navigation stack's pages), unless it stated a size.
+        lp = JNEW(M_FP_init, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_MATCH_PARENT),
+                  (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_MATCH_PARENT));
+        if (!lp) return;
+        JV(lp, M_MP_setMargins, ml, mt, mr, mb);
+    } else if (p->type == AUI_WRAP) {
+        lp = JNEW(M_MP_init, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_WRAP_CONTENT),
+                  (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_WRAP_CONTENT));
+        if (!lp) return;
+        JV(lp, M_MP_setMargins, ml, mt, mr, mb);
+    } else if (p->type == AUI_LIST) {
+        // A ListView's rows carry ITS params (it casts to them).
+        lp = JNEW(M_ALP_init, (jint)LP_MATCH_PARENT,
+                  (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_WRAP_CONTENT));
+        if (!lp) return;
     } else if (p->type == AUI_SCROLLVIEW) {
         // The document view: the scroll area's width, its own height.
         lp = JNEW(M_FP_init, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_MATCH_PARENT),
@@ -1235,9 +1299,18 @@ static void aeui_update_expand(JNIEnv* env, int handle) {
 static int aeui_children_in_order(JNIEnv* env, int parent, int* out, int max) {
     AeuiWidget* p = live_widget(parent);
     if (!p) return 0;
-    int n = JI(p->view, M_VG_getChildCount), k = 0;
+    jobject host = aeui_content_of(p);
+    int k = 0;
+    if (!(*env)->IsInstanceOf(env, host, jcls(env, &C_ViewGroup))) {
+        // A leaf with a face laid over it (set_child on a button): its one
+        // registered child lives in the overlay, not inside it.
+        for (int j = 0; j < widget_count && k < max; j++)
+            if (widgets[j].parent == parent && widgets[j].view) out[k++] = j + 1;
+        return k;
+    }
+    int n = JI(host, M_VG_getChildCount);
     for (int i = 0; i < n && k < max; i++) {
-        jobject v = JO(p->view, M_VG_getChildAt, (jint)i);
+        jobject v = JO(host, M_VG_getChildAt, (jint)i);
         if (!v) continue;
         for (int j = 0; j < widget_count; j++) {
             if (widgets[j].parent == parent && widgets[j].view &&
@@ -1264,6 +1337,8 @@ static void aeui_restack(JNIEnv* env, int parent) {
 }
 
 static void aeui_apply_enabled(JNIEnv* env, int handle, int parent_on);
+static int aeui_opacity_transition_ms(int handle);
+static jobject aeui_listener3(JNIEnv* env, int handle, int kind, int arg);
 static void aeui_apply_background(JNIEnv* env, int handle);
 
 static int aeui_parent_enabled(int handle) {
@@ -1374,11 +1449,13 @@ static void aeui_attach(JNIEnv* env, int parent_handle, int child_handle, int in
         c->own_hexp = c->hexp = !aeui_is_vertical(p->type);
     }
     c->lead = (aeui_is_linear(p->type) && p->child_count > 0 && index < 0) ? p->spacing : 0;
+    // A split's first pane goes before the divider, the second after it.
+    if (p->type == AUI_SPLITVIEW && p->child_count == 0) index = 0;
     p->child_count++;
     // The derived params go on the View first; addView then keeps them
     // (ViewGroup.addView(child, index) uses the child's own LayoutParams).
     aeui_apply_lp(env, child_handle);
-    JV(p->view, M_VG_addViewIdx, c->view, (jint)index);
+    JV(aeui_content_of(p), M_VG_addViewIdx, c->view, (jint)index);
     if (index >= 0) aeui_restack(env, parent_handle);
     aeui_update_expand(env, child_handle);
     aeui_update_expand(env, parent_handle);
@@ -1538,11 +1615,24 @@ int aether_ui_form_section_create(const char* title) {
 // --- Scroll view -- a vertical ScrollView ----------------------------------
 // It takes the slack in both directions, as GTK4's scrolled window does
 // (hexpand + vexpand), so a scroll area in a window fills what is left of it.
+// The shim's AetherScroll and AetherHost (bound in JNI_OnLoad): the scroll
+// area that reports its minimum when asked for its natural height, and the
+// window frame that grows to its body's natural height rather than letting
+// LinearLayout squash what overflows (see AetherHost.java).
+static jclass g_scroll_class = NULL, g_host_class = NULL;
+static jmethodID g_scroll_init = NULL, g_host_init = NULL;
+
 int aether_ui_scrollview_create(void) {
     JNIEnv* env = aeui_frame(8);
     if (!env) return 0;
     int h = 0;
-    jobject sv = g_activity ? JNEW(M_SV_init, g_activity) : NULL;
+    jobject sv = NULL;
+    if (g_activity && g_scroll_init) {
+        sv = (*env)->NewObject(env, g_scroll_class, g_scroll_init, g_activity);
+        if (aeui_check(env, "new AetherScroll")) sv = NULL;
+    } else if (g_activity) {
+        sv = JNEW(M_SV_init, g_activity);
+    }
     if (sv) {
         h = register_widget_typed(env, sv, AUI_SCROLLVIEW);
         AeuiWidget* w = widget_at(h);
@@ -1559,7 +1649,11 @@ int aether_ui_scrollview_create(void) {
 // native_event, against the registry, never in Java.
 // ===========================================================================
 enum { AEUI_EV_CLICK = 1, AEUI_EV_TEXT = 2, AEUI_EV_CHECK = 3, AEUI_EV_SEEK = 4,
-       AEUI_EV_SELECT = 5, AEUI_EV_HOVER = 6, AEUI_EV_LAYOUT = 7, AEUI_EV_DOUBLE = 8 };
+       AEUI_EV_SELECT = 5, AEUI_EV_HOVER = 6, AEUI_EV_LAYOUT = 7, AEUI_EV_DOUBLE = 8,
+       AEUI_EV_TAB = 9, AEUI_EV_MENU = 10, AEUI_EV_CONTEXT = 11, AEUI_EV_SCRIM = 12,
+       AEUI_EV_DISMISS = 13, AEUI_EV_DRAG = 14, AEUI_EV_WHEEL = 15, AEUI_EV_MENU_CLOSED = 16,
+       AEUI_EV_SURFACE = 17, AEUI_EV_MENU_OPEN = 18, AEUI_EV_ROW_DRAG = 19, AEUI_EV_ROW_DROP = 20,
+       AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22 };
 
 static jobject aeui_listener(JNIEnv* env, int handle, int kind) {
     jobject l = (*env)->NewObject(env, J.Listener, J.Listener_init, (jint)handle, (jint)kind);
@@ -2354,6 +2448,15 @@ JMETHOD(M_View_setStateListAnimator, C_View, "setStateListAnimator", "(Landroid/
 JMETHOD(M_TV_setMinWidth, C_TextView, "setMinWidth", "(I)V");
 JMETHOD(M_TV_setCompoundDrawablePadding, C_TextView, "setCompoundDrawablePadding", "(I)V");
 
+JMETHOD(M_View_animate, C_View, "animate", "()Landroid/view/ViewPropertyAnimator;");
+JCLASS(C_VPA, "android/view/ViewPropertyAnimator");
+JMETHOD(M_VPA_alpha, C_VPA, "alpha", "(F)Landroid/view/ViewPropertyAnimator;");
+JMETHOD(M_VPA_translationY, C_VPA, "translationY", "(F)Landroid/view/ViewPropertyAnimator;");
+JMETHOD(M_VPA_scaleX, C_VPA, "scaleX", "(F)Landroid/view/ViewPropertyAnimator;");
+JMETHOD(M_VPA_scaleY, C_VPA, "scaleY", "(F)Landroid/view/ViewPropertyAnimator;");
+JMETHOD(M_VPA_setDuration, C_VPA, "setDuration", "(J)Landroid/view/ViewPropertyAnimator;");
+JMETHOD(M_VPA_start, C_VPA, "start", "()V");
+
 static unsigned int aeui_argb(double r, double g, double b, double a) {
     return ((unsigned)((int)(a * 255) & 255) << 24) | ((unsigned)((int)(r * 255) & 255) << 16) |
            ((unsigned)((int)(g * 255) & 255) << 8) | (unsigned)((int)(b * 255) & 255);
@@ -2512,8 +2615,9 @@ void aether_ui_set_border(int handle, double width, double r, double g, double b
     if (!env) return;
     w->border_w = width > 0 ? width : 0;
     w->border_argb = aeui_argb(r, g, b, 1.0);
-    w->styled_border = width > 0
-        ? (((int)width & 0x3F) << 24) | 0x40000000 | aeui_rgb(r, g, b) : -1;
+    // Width 0 is a border explicitly CLEARED, recorded as such (a re-theme
+    // removing one), not as never-set: the flag bit keeps it >= 0.
+    w->styled_border = (((int)(width > 0 ? width : 0) & 0x3F) << 24) | 0x40000000 | aeui_rgb(r, g, b);
     aeui_apply_background(env, handle);
     aeui_unframe(env);
 }
@@ -2546,7 +2650,17 @@ void aether_ui_set_opacity(int handle, double opacity) {
     if (!env) return;
     if (opacity < 0) opacity = 0;
     if (opacity > 1) opacity = 1;
-    JV(w->view, M_View_setAlpha, (jfloat)opacity);
+    int ms = aeui_opacity_transition_ms(handle);
+    jobject anim = ms > 0 ? JO(w->view, M_View_animate) : NULL;
+    if (anim) {
+        // A transition declared through apply_css ("transition: opacity
+        // 300ms ...", ui.transition's carrier): tween to it.
+        JO(anim, M_VPA_setDuration, (jlong)ms);
+        JO(anim, M_VPA_alpha, (jfloat)opacity);
+        JV(anim, M_VPA_start);
+    } else {
+        JV(w->view, M_View_setAlpha, (jfloat)opacity);
+    }
     w->styled_opacity = (int)(opacity * 100 + 0.5);
     aeui_unframe(env);
 }
@@ -2695,11 +2809,15 @@ static void aeui_apply_typeface(JNIEnv* env, AeuiWidget* w) {
 
 void aether_ui_set_text_color(int handle, double r, double g, double b) {
     AeuiWidget* w = live_widget(handle);
-    if (!w || !aeui_is_textview(w->type)) return;
+    if (!w) return;
+    // Recorded on any widget (a stylesheet's container rule colours the
+    // container itself; the readback says it was applied), painted where
+    // there is text to paint.
+    w->styled_fg = aeui_rgb(r, g, b);
+    if (!aeui_is_textview(w->type)) return;
     JNIEnv* env = aeui_frame(4);
     if (!env) return;
     JV(w->view, M_TV_setTextColor, (jint)aeui_argb(r, g, b, 1.0));
-    w->styled_fg = aeui_rgb(r, g, b);
     aeui_unframe(env);
 }
 void aether_ui_set_text_color_ctx(void* ctx, double r, double g, double b) {
@@ -3563,6 +3681,2777 @@ void aether_ui_timer_cancel_impl(int timer_id) {
 
 
 // ===========================================================================
+// STAGE 2, PASS B -- containers, windows, overlays, menus, keys, system.
+// Everything an app does around its widgets: the containers that hold pages
+// (tabs, navstack, splitview, zstack, wrap), extra windows and sheets,
+// in-window overlays, menus and context menus, the keyboard (shortcuts,
+// chords, the any-key handler), dialogs, notifications, the clipboard, URLs,
+// pickers, appearance, CSS classes, native lists and native views.
+//
+// Where Android differs from the desktop the ABI was written against, the
+// mapping is stated at the function, in the manner of the UIKit backend:
+//
+//   windows    An activity is the app's one full window (handle 1). An extra
+//              window is an android.app.Dialog -- a real platform window of
+//              its own, with a title, its own view tree and a close path
+//              (Back, or a tap outside) -- which is what a secondary window
+//              is on a phone. Sheets are dialogs too. UIKit collapses every
+//              window into one; a Dialog keeps each one observable (title,
+//              live flag, the widgets in it), which the multi-window specs
+//              hold every backend to.
+//   menu bar   The action bar's options menu (overflow): each menu is a
+//              submenu, each item a MenuItem. A Dialog has no action bar,
+//              so a window-2 menu bar is a row of menu titles at the top of
+//              the dialog, each opening its menu as a PopupMenu.
+//   menus      menu_popup and context menus are PopupMenus anchored to the
+//              widget; a context menu opens on a long press, or a
+//              secondary click under a mouse (OnContextClickListener).
+//   keys       No window-level accelerator table: AetherActivity's
+//              dispatchKeyEvent hands every hardware-keyboard key here
+//              first, where shortcuts and chords are matched (and consume
+//              the key) and the any-key handlers run (and do not).
+//              "Primary" is Ctrl, as on GTK4 and Win32: Ctrl+Z/C/V are
+//              Android's own keyboard accelerators.
+//   pickers    The ABI's file dialogs are synchronous; the Storage Access
+//              Framework's are activities that answer later. A desktop modal
+//              is a nested event loop, and so is this one
+//              (AetherActivity.pick). The answer is a path C can open:
+//              /proc/self/fd/N for a document, the content:// URI of a tree
+//              for a folder.
+//   tray       There is no status-area tray on Android: the tray family is
+//              a set of documented no-ops, exactly as on UIKit.
+// ===========================================================================
+
+static int aeui_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
+}
+
+static int aeui_animations_off(void) {
+    const char* v = getenv("AETHER_UI_NO_ANIMATION");
+    return v && v[0] && v[0] != '0';
+}
+
+// The platform's API level (Build.VERSION.SDK_INT).
+JCLASS(C_BuildVersion, "android/os/Build$VERSION");
+JSFIELD(F_BV_SDK_INT, C_BuildVersion, "SDK_INT", "I");
+static int aeui_sdk_int(JNIEnv* env) {
+    static int sdk = 0;
+    if (!sdk) sdk = JSFI(F_BV_SDK_INT);
+    return sdk;
+}
+
+// A listener carrying a payload of its own (AetherListener(int, int, int)).
+static jmethodID g_listener_init3 = NULL;
+static jobject aeui_listener3(JNIEnv* env, int handle, int kind, int arg) {
+    if (!g_listener_init3) return NULL;
+    jobject l = (*env)->NewObject(env, J.Listener, g_listener_init3, (jint)handle, (jint)kind, (jint)arg);
+    if (aeui_check(env, "new AetherListener(3)")) return NULL;
+    return l;
+}
+
+// Work for later on the UI thread: a one-shot timerfd on the looper (a
+// toast's lifetime, an exit tween's end).
+typedef struct { void (*fn)(void*); void* arg; } AeuiAfter;
+static int aeui_after_cb(int fd, int events, void* data) {
+    (void)events;
+    AeuiAfter* a = (AeuiAfter*)data;
+    uint64_t x;
+    if (read(fd, &x, sizeof(x)) < 0) { /* drained either way */ }
+    ALooper_removeFd(g_looper, fd);
+    a->fn(a->arg);
+    close(fd);   // after fn: a timer fn arms cannot be handed this fd number
+    free(a);
+    return 0;
+}
+static void aeui_after(int ms, void (*fn)(void*), void* arg) {
+    AeuiAfter* a = (AeuiAfter*)malloc(sizeof(AeuiAfter));
+    if (!a) return;
+    a->fn = fn; a->arg = arg;
+    int fd = g_looper ? timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC) : -1;
+    if (fd < 0) { fn(arg); free(a); return; }
+    struct itimerspec its;
+    memset(&its, 0, sizeof(its));
+    if (ms < 1) ms = 1;
+    its.it_value.tv_sec = ms / 1000;
+    its.it_value.tv_nsec = (long)(ms % 1000) * 1000000L;
+    timerfd_settime(fd, 0, &its, NULL);
+    ALooper_addFd(g_looper, fd, ALOOPER_POLL_CALLBACK, ALOOPER_EVENT_INPUT, aeui_after_cb, a);
+}
+
+// The registered ancestor at the top of a widget's tree.
+static int aeui_top_of(int handle) {
+    int h = handle, guard = 0;
+    while (h && guard++ < 4096) {
+        AeuiWidget* w = widget_at(h);
+        if (!w || !w->parent) return h;
+        h = w->parent;
+    }
+    return h;
+}
+
+// Take a widget's View out of whatever holds it, registered or not (an
+// overlay host, a dialog), then retire it and everything under it.
+static void aeui_unhost_and_retire(JNIEnv* env, int handle) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    jobject vp = JO(w->view, M_View_getParent);
+    if (vp) {
+        if ((*env)->IsInstanceOf(env, vp, jcls(env, &C_ViewGroup))) JV(vp, M_VG_removeView, w->view);
+        (*env)->DeleteLocalRef(env, vp);
+    }
+    if (w->parent) aeui_detach(env, handle);
+    aeui_retire_tree(env, handle);
+}
+
+JCLASS(C_FrameLayout, "android/widget/FrameLayout");
+JMETHOD(M_FL_init, C_FrameLayout, "<init>", "(Landroid/content/Context;)V");
+JMETHOD(M_FP_init3, C_FrameParams, "<init>", "(III)V");
+JMETHOD(M_View_setTranslationX, C_View, "setTranslationX", "(F)V");
+JMETHOD(M_View_setTranslationY, C_View, "setTranslationY", "(F)V");
+JMETHOD(M_View_setOnLongClickListener, C_View, "setOnLongClickListener", "(Landroid/view/View$OnLongClickListener;)V");
+JMETHOD(M_View_setOnContextClickListener, C_View, "setOnContextClickListener", "(Landroid/view/View$OnContextClickListener;)V");
+JMETHOD(M_View_setOnGenericMotionListener, C_View, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V");
+JMETHOD(M_View_setOnDragListener, C_View, "setOnDragListener", "(Landroid/view/View$OnDragListener;)V");
+JMETHOD(M_View_getVisibility, C_View, "getVisibility", "()I");
+JMETHOD(M_View_setSelected, C_View, "setSelected", "(Z)V");
+JMETHOD(M_View_measure, C_View, "measure", "(II)V");
+JMETHOD(M_View_layout, C_View, "layout", "(IIII)V");
+JMETHOD(M_View_getLeft, C_View, "getLeft", "()I");
+JMETHOD(M_View_getTop, C_View, "getTop", "()I");
+JMETHOD(M_View_getRight, C_View, "getRight", "()I");
+JMETHOD(M_View_getBottom, C_View, "getBottom", "()I");
+JMETHOD(M_View_setRenderEffect, C_View, "setRenderEffect", "(Landroid/graphics/RenderEffect;)V");
+JMETHOD(M_View_focusSearch, C_View, "focusSearch", "(I)Landroid/view/View;");
+JMETHOD(M_VG_getOverlay, C_ViewGroup, "getOverlay", "()Landroid/view/ViewGroupOverlay;");
+JCLASS(C_VGOverlay, "android/view/ViewGroupOverlay");
+JMETHOD(M_VGO_add, C_VGOverlay, "add", "(Landroid/view/View;)V");
+
+static jobject aeui_frame_layout(JNIEnv* env) {
+    return g_activity ? JNEW(M_FL_init, g_activity) : NULL;
+}
+
+// ===========================================================================
+// Containers: zstack, wrap, tabs, navstack, splitview
+// ===========================================================================
+
+// zstack -- a FrameLayout: children layered, each filling it (GtkOverlay's
+// children, UIKit's pinned subviews).
+int aether_ui_zstack_create(void) {
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    jobject fl = aeui_frame_layout(env);
+    int h = fl ? register_widget_typed(env, fl, AUI_ZSTACK) : 0;
+    aeui_unframe(env);
+    return h;
+}
+
+// wrap -- AetherWrap, a flow layout: children left to right, wrapping when
+// the width runs out, 8 dp apart both ways (UIKit's gaps, GtkFlowBox's
+// look). The shim's one layout class: android.widget has no flow layout.
+static jclass g_wrap_class = NULL;
+static jmethodID g_wrap_init = NULL;
+int aether_ui_wrap_create(void) {
+    JNIEnv* env = aeui_frame(8);
+    if (!env || !g_activity || !g_wrap_init) { if (env) aeui_unframe(env); return 0; }
+    jobject v = (*env)->NewObject(env, g_wrap_class, g_wrap_init, g_activity,
+                                  (jint)aeui_dp(8), (jint)aeui_dp(8));
+    int h = 0;
+    if (!aeui_check(env, "new AetherWrap") && v) {
+        h = register_widget_typed(env, v, AUI_WRAP);
+        AeuiWidget* w = widget_at(h);
+        if (w) w->own_hexp = w->hexp = 1;   // it flows across the width it is given
+    }
+    aeui_unframe(env);
+    return h;
+}
+
+// --- Tabs: a strip of tab buttons over a frame of pages ---------------------
+// The tabs widget is a vertical LinearLayout: the strip (a horizontal
+// LinearLayout of Buttons, the selected one marked with View.setSelected and
+// a rule under it) and the page frame. Each page is a registered vstack in
+// the frame; the selected one is VISIBLE, the others GONE, so every page's
+// widgets stay registered and findable (GtkStack keeps its pages the same
+// way). The strip's buttons are chrome, not widgets, as GtkStackSwitcher's
+// and NSTabView's are.
+typedef struct {
+    int handle;
+    jobject strip;           // global ref: the button row
+    int* pages; int npages;
+    int selected;
+    AeClosure* on_change;
+} AeuiTabs;
+static AeuiTabs* tabsets = NULL;
+static int ntabsets = 0;
+
+static AeuiTabs* tabs_of(int handle) {
+    for (int i = 0; i < ntabsets; i++) if (tabsets[i].handle == handle) return &tabsets[i];
+    return NULL;
+}
+
+int aether_ui_tabs_create(void* boxed_closure) {
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return 0; }
+    int h = 0;
+    jobject root = JNEW(M_LL_init, g_activity);
+    jobject strip = JNEW(M_LL_init, g_activity);
+    jobject frame = aeui_frame_layout(env);
+    AeuiTabs* nt = (AeuiTabs*)realloc(tabsets, sizeof(AeuiTabs) * (size_t)(ntabsets + 1));
+    if (root && strip && frame && nt) {
+        tabsets = nt;
+        JV(root, M_LL_setOrientation, (jint)LL_VERTICAL);
+        JV(strip, M_LL_setOrientation, (jint)LL_HORIZONTAL);
+        jobject slp = JNEW(M_LLP_init, (jint)LP_MATCH_PARENT, (jint)LP_WRAP_CONTENT, (jfloat)0.0f);
+        JV(root, M_VG_addView, strip, slp);
+        jobject flp = JNEW(M_LLP_init, (jint)LP_MATCH_PARENT, (jint)LP_WRAP_CONTENT, (jfloat)1.0f);
+        if (flp) JV(flp, M_MP_setMargins, 0, aeui_dp(6), 0, 0);
+        JV(root, M_VG_addView, frame, flp);
+        h = register_widget_typed(env, root, AUI_TABS);
+        AeuiWidget* w = widget_at(h);
+        if (w) w->content = (*env)->NewGlobalRef(env, frame);
+        AeuiTabs* t = &tabsets[ntabsets++];
+        memset(t, 0, sizeof(*t));
+        t->handle = h;
+        t->strip = (*env)->NewGlobalRef(env, strip);
+        t->on_change = (AeClosure*)boxed_closure;
+    }
+    aeui_unframe(env);
+    return h;
+}
+
+static void aeui_tabs_show(JNIEnv* env, AeuiTabs* t) {
+    for (int i = 0; i < t->npages; i++) {
+        AeuiWidget* pw = live_widget(t->pages[i]);
+        if (pw) JV(pw->view, M_View_setVisibility, (jint)(i == t->selected ? 0 : 8));
+        jobject b = JO(t->strip, M_VG_getChildAt, (jint)i);
+        if (b) {
+            JV(b, M_View_setSelected, i == t->selected ? JNI_TRUE : JNI_FALSE);
+            JV(b, M_View_setAlpha, (jfloat)(i == t->selected ? 1.0f : 0.6f));
+        }
+    }
+}
+
+// The page's container comes back, so the tab's block builds into it.
+int aether_ui_tab_add(int tabs_handle, const char* title) {
+    AeuiTabs* t = tabs_of(tabs_handle);
+    if (!t || !live_widget(tabs_handle)) return 0;
+    int page = aether_ui_vstack_create(8);
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return page;
+    int* np = (int*)realloc(t->pages, sizeof(int) * (size_t)(t->npages + 1));
+    if (np && page) {
+        t->pages = np;
+        int index = t->npages;
+        t->pages[t->npages++] = page;
+        jobject b = make_button(env, title);
+        if (b) {
+            jobject l = aeui_listener3(env, tabs_handle, AEUI_EV_TAB, index);
+            if (l) JV(b, M_View_setOnClickListener, l);
+            jobject blp = JNEW(M_LLP_init, (jint)LP_WRAP_CONTENT, (jint)LP_WRAP_CONTENT, (jfloat)0.0f);
+            JV(t->strip, M_VG_addView, b, blp);
+        }
+        aeui_attach(env, tabs_handle, page, -1);
+        aeui_tabs_show(env, t);
+    }
+    aeui_unframe(env);
+    return page;
+}
+
+// Selecting runs on_change with the index, whoever selected (a tap, the app,
+// the driver), as every backend's tab switch does.
+void aether_ui_tabs_select(int tabs_handle, int index) {
+    AeuiTabs* t = tabs_of(tabs_handle);
+    if (!t || index < 0 || index >= t->npages) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    t->selected = index;
+    aeui_tabs_show(env, t);
+    aeui_unframe(env);
+    AeClosure* c = t->on_change;
+    if (c && c->fn) ((void (*)(void*, intptr_t))c->fn)(c->env, (intptr_t)index);
+}
+int aether_ui_tabs_selected(int tabs_handle) {
+    AeuiTabs* t = tabs_of(tabs_handle);
+    return t ? t->selected : -1;
+}
+int aether_ui_tabs_count(int tabs_handle) {
+    AeuiTabs* t = tabs_of(tabs_handle);
+    return t ? t->npages : 0;
+}
+void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
+    AeuiTabs* t = tabs_of(tabs_handle);
+    if (t) t->on_change = (AeClosure*)boxed_closure;
+}
+
+// --- Navstack: a stack of pages, the top one showing ------------------------
+// A FrameLayout holding every pushed page; push hides the page below
+// (GONE) and shows the new one, pop retires the top page -- its widgets
+// leave the registry, so the driver's census shrinks -- and shows the one
+// under it again (the desktop backends hold one page and cannot go back to
+// it; a phone's back stack can). Depth counts the pages pushed. A title is a real text widget above the page's body
+// (the desktop backends' title bar), so a spec can find it.
+int aether_ui_navstack_create(void) {
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    jobject fl = aeui_frame_layout(env);
+    int h = fl ? register_widget_typed(env, fl, AUI_NAVSTACK) : 0;
+    aeui_unframe(env);
+    return h;
+}
+
+static int aeui_nav_pages(JNIEnv* env, int handle, int* out, int max) {
+    return aeui_children_in_order(env, handle, out, max);
+}
+
+void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
+    AeuiWidget* nav = live_widget(handle);
+    if (!nav || nav->type != AUI_NAVSTACK || !live_widget(body_handle)) return;
+    int page = body_handle;
+    if (title && title[0]) {
+        page = aether_ui_vstack_create(0);
+        int bar = aether_ui_text_create(title);
+        aether_ui_set_font_bold(bar, 1);
+        aether_ui_widget_add_child_ctx((void*)(intptr_t)page, bar);
+        aether_ui_widget_add_child_ctx((void*)(intptr_t)page, body_handle);
+    }
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    int pages[256];
+    int n = aeui_nav_pages(env, handle, pages, 256);
+    for (int i = 0; i < n; i++) {
+        AeuiWidget* pw = live_widget(pages[i]);
+        if (pw) JV(pw->view, M_View_setVisibility, (jint)8);
+    }
+    aeui_attach(env, handle, page, -1);
+    nav = widget_at(handle);
+    nav->nav_depth++;
+    aeui_unframe(env);
+}
+
+void aether_ui_navstack_pop(int handle) {
+    AeuiWidget* nav = live_widget(handle);
+    if (!nav || nav->type != AUI_NAVSTACK) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    int pages[256];
+    int n = aeui_nav_pages(env, handle, pages, 256);
+    if (n >= 1 && nav->nav_depth > 0) {   // at the root: nothing to pop
+        aeui_detach(env, pages[n - 1]);
+        aeui_retire_tree(env, pages[n - 1]);
+        AeuiWidget* below = n >= 2 ? live_widget(pages[n - 2]) : NULL;
+        if (below) JV(below->view, M_View_setVisibility, (jint)0);
+        nav = widget_at(handle);
+        nav->nav_depth--;
+    }
+    aeui_unframe(env);
+}
+
+int aether_ui_navstack_depth(int handle) {
+    AeuiWidget* nav = live_widget(handle);
+    return (nav && nav->type == AUI_NAVSTACK) ? nav->nav_depth : 0;
+}
+
+// --- Splitview: two panes and a draggable divider -------------------------
+// A LinearLayout [pane 1, divider, pane 2]; vertical=1 stacks the panes (the
+// GTK sense). The position is pane 1's size in dp from the start edge; until
+// one is set the panes share the space evenly. The divider is a real drag
+// handle: a touch (or a mouse) dragging it moves the position, as GtkPaned's
+// and NSSplitView's do.
+typedef struct { int handle; int start_raw; int start_pos; } AeuiSplitDrag;
+static AeuiSplitDrag g_split_drag = { 0, 0, 0 };
+
+int aether_ui_splitview_create(int vertical) {
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return 0; }
+    int h = 0;
+    jobject ll = JNEW(M_LL_init, g_activity);
+    jobject div = (*env)->NewObject(env, J.View, J.View_init, g_activity);
+    aeui_check(env, "split divider");
+    if (ll && div) {
+        JV(ll, M_LL_setOrientation, (jint)(vertical ? LL_VERTICAL : LL_HORIZONTAL));
+        h = register_widget_typed(env, ll, AUI_SPLITVIEW);
+        AeuiWidget* w = widget_at(h);
+        w->split_vertical = vertical ? 1 : 0;
+        w->own_hexp = w->hexp = 1;
+        (*env)->CallVoidMethod(env, div, J.View_setBackgroundColor, (jint)0x33000000);
+        aeui_check(env, "divider colour");
+        // 1 dp of line, inside 8 dp of touch target (Material's minimum
+        // drag handle reads as the hairline the desktop draws).
+        int t = aeui_dp(8);
+        jobject dlp = JNEW(M_LLP_init, (jint)(vertical ? LP_MATCH_PARENT : t),
+                           (jint)(vertical ? t : LP_MATCH_PARENT), (jfloat)0.0f);
+        JV(ll, M_VG_addView, div, dlp);
+        jobject l = aeui_listener3(env, h, AEUI_EV_DRAG, vertical ? 1 : 0);
+        if (l) JV(div, M_View_setOnTouchListener, l);
+    }
+    aeui_unframe(env);
+    return h;
+}
+
+void aether_ui_split_set_position_impl(int handle, int px) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_SPLITVIEW) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    w->split_pos = px < 0 ? 0 : px;
+    aeui_relayout_children(env, handle);
+    // Settle now, so a position read straight after (the driver's, the
+    // app's) sees the layout it asked for.
+    JV(w->view, M_View_requestLayout);
+    aeui_unframe(env);
+}
+
+// The first pane's laid-out size along the split (dp), or the position asked
+// for before the first layout; -1 = not a split.
+int aether_ui_split_position_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_SPLITVIEW) return -1;
+    return w->split_pos >= 0 ? w->split_pos : 0;
+}
+
+static void aeui_split_drag(JNIEnv* env, int handle, int action, int raw_px) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    if (action == 0 /* ACTION_DOWN */) {
+        int kids[2];
+        int n = aeui_children_in_order(env, handle, kids, 2);
+        int pos = w->split_pos;
+        if (pos < 0 && n > 0) {
+            AeuiWidget* first = widget_at(kids[0]);
+            int x, y, ww, hh;
+            pos = (first && aeui_rect_dp(env, first->view, &x, &y, &ww, &hh) == 0)
+                ? (w->split_vertical ? hh : ww) : 0;
+        }
+        g_split_drag.handle = handle;
+        g_split_drag.start_raw = raw_px;
+        g_split_drag.start_pos = pos < 0 ? 0 : pos;
+    } else if (g_split_drag.handle == handle && (action == 2 /* MOVE */ || action == 1 /* UP */)) {
+        int pos = g_split_drag.start_pos + aeui_px_to_dp(raw_px - g_split_drag.start_raw);
+        aether_ui_split_set_position_impl(handle, pos < 0 ? 0 : pos);
+        if (action == 1) g_split_drag.handle = 0;
+    } else if (action == 3 /* CANCEL */) {
+        g_split_drag.handle = 0;
+    }
+}
+
+// --- set_child: one widget inside another -----------------------------------
+// Into a container: it becomes the only child (the other registered
+// children retire, as UIKit's set_child unregisters them), filling it.
+// Onto a leaf -- a Button cannot hold Views -- the child is a FACE laid over
+// it: hosted in the parent's own parent's ViewGroupOverlay and kept on the
+// leaf's bounds as it lays out (AppKit puts a subview over the button face
+// the same way).
+static void aeui_place_face(JNIEnv* env, int handle) {
+    AeuiWidget* w = live_widget(handle);
+    AeuiWidget* f = w ? live_widget(w->face) : NULL;
+    if (!f) return;
+    int l = JI(w->view, M_View_getLeft), t = JI(w->view, M_View_getTop);
+    int r = JI(w->view, M_View_getRight), b = JI(w->view, M_View_getBottom);
+    if (r <= l || b <= t) return;
+    JV(f->view, M_View_measure, (jint)(0x40000000 | (r - l)), (jint)(0x40000000 | (b - t)));
+    JV(f->view, M_View_layout, (jint)l, (jint)t, (jint)r, (jint)b);
+}
+
+void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
+    AeuiWidget* p = live_widget(parent_handle);
+    AeuiWidget* c = live_widget(child_handle);
+    if (!p || !c || parent_handle == child_handle) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    if ((*env)->IsInstanceOf(env, aeui_content_of(p), jcls(env, &C_ViewGroup)) && aeui_is_container(p->type)) {
+        for (int i = 0; i < widget_count; i++) {
+            if (widgets[i].parent == parent_handle && widgets[i].view && i + 1 != child_handle) {
+                aeui_detach(env, i + 1);
+                aeui_retire_tree(env, i + 1);
+            }
+        }
+        c = widget_at(child_handle);
+        if (c->parent != parent_handle) aeui_attach(env, parent_handle, child_handle, -1);
+        aeui_match_parent(child_handle, 0);
+        aeui_match_parent(child_handle, 1);
+    } else {
+        jobject vp = JO(p->view, M_View_getParent);
+        if (vp && (*env)->IsInstanceOf(env, vp, jcls(env, &C_ViewGroup))) {
+            if (c->parent) aeui_detach(env, child_handle);
+            c = widget_at(child_handle);
+            jobject ov = JO(vp, M_VG_getOverlay);
+            if (ov) JV(ov, M_VGO_add, c->view);
+            c->parent = parent_handle;
+            p = widget_at(parent_handle);
+            p->face = child_handle;
+            if (!(p->listeners & LST_LAYOUT)) {
+                jobject l = aeui_listener(env, parent_handle, AEUI_EV_LAYOUT);
+                if (l) { JV(p->view, M_View_addOnLayoutChangeListener, l); p->listeners |= LST_LAYOUT; }
+            }
+            aeui_place_face(env, parent_handle);
+        }
+    }
+    aeui_unframe(env);
+}
+
+// ===========================================================================
+// Windows. Handle 1 is the activity. 2.. are extra windows, each an
+// android.app.Dialog whose content is a frame (the overlay host) holding the
+// body; the same record serves sheets, which are dialogs as well.
+// ===========================================================================
+JCLASS(C_Dialog, "android/app/Dialog");
+JCLASS(C_Window, "android/view/Window");
+JMETHOD(M_Dlg_init, C_Dialog, "<init>", "(Landroid/content/Context;)V");
+JMETHOD(M_Dlg_setTitle, C_Dialog, "setTitle", "(Ljava/lang/CharSequence;)V");
+JMETHOD(M_Dlg_setContentView, C_Dialog, "setContentView", "(Landroid/view/View;)V");
+JMETHOD(M_Dlg_show, C_Dialog, "show", "()V");
+JMETHOD(M_Dlg_dismiss, C_Dialog, "dismiss", "()V");
+JMETHOD(M_Dlg_getWindow, C_Dialog, "getWindow", "()Landroid/view/Window;");
+JMETHOD(M_Dlg_setOnDismissListener, C_Dialog, "setOnDismissListener",
+        "(Landroid/content/DialogInterface$OnDismissListener;)V");
+JMETHOD(M_Win_setLayout, C_Window, "setLayout", "(II)V");
+JMETHOD(M_Act_setTitle, C_Activity, "setTitle", "(Ljava/lang/CharSequence;)V");
+JMETHOD(M_Act_invalidateOptionsMenu, C_Activity, "invalidateOptionsMenu", "()V");
+JMETHOD(M_Act_finishAndRemoveTask, C_Activity, "finishAndRemoveTask", "()V");
+
+enum { WREC_WINDOW = 1, WREC_SHEET = 2 };
+
+typedef struct {
+    int kind;            // WREC_WINDOW / WREC_SHEET
+    jobject dialog;      // global ref (Dialog), NULL until made
+    jobject host;        // global ref: the dialog's content frame
+    jobject menubar;     // global ref: a window's menu-bar row, once attached
+    int root;            // the body's handle
+    char* title;
+    int w, h;            // dp asked for
+    int live;            // shown and not closed
+} AeuiWinRec;
+static AeuiWinRec* wrecs = NULL;   // extra windows: id = index + 2
+static int nwrecs = 0;
+static AeuiWinRec* sheetrecs = NULL;   // sheets: id = index + 1
+static int nsheetrecs = 0;
+
+static AeuiWinRec* win_rec(int win_handle) {
+    int i = win_handle - 2;
+    return (i >= 0 && i < nwrecs) ? &wrecs[i] : NULL;
+}
+
+static int g_win_w = 0, g_win_h = 0;   // the primary window's size, once the driver set one
+
+static AeuiWinRec* aeui_wrec_new(AeuiWinRec** arr, int* n, int kind, const char* title, int w, int h) {
+    AeuiWinRec* na = (AeuiWinRec*)realloc(*arr, sizeof(AeuiWinRec) * (size_t)(*n + 1));
+    if (!na) return NULL;
+    *arr = na;
+    AeuiWinRec* r = &na[(*n)++];
+    memset(r, 0, sizeof(*r));
+    r->kind = kind;
+    r->title = strdup(title ? title : "");
+    r->w = w; r->h = h;
+    return r;
+}
+
+// Make the record's Dialog (once): a titled platform window whose content is
+// a FrameLayout, the host its body and its overlays mount in.
+static int aeui_wrec_realize(JNIEnv* env, AeuiWinRec* r, int id) {
+    if (r->dialog) return 1;
+    if (!g_activity) return 0;
+    jobject d = JNEW(M_Dlg_init, g_activity);
+    jobject host = NULL;
+    if (g_host_init) {
+        host = (*env)->NewObject(env, g_host_class, g_host_init, g_activity);
+        if (aeui_check(env, "new AetherHost")) host = NULL;
+    }
+    if (!host) host = aeui_frame_layout(env);
+    if (!d || !host) return 0;
+    jstring t = aeui_jstring(env, r->title);
+    JV(d, M_Dlg_setTitle, t);
+    JV(d, M_Dlg_setContentView, host);
+    jobject l = aeui_listener3(env, id, AEUI_EV_DISMISS, r->kind);
+    if (l) JV(d, M_Dlg_setOnDismissListener, l);
+    r->dialog = (*env)->NewGlobalRef(env, d);
+    r->host = (*env)->NewGlobalRef(env, host);
+    return 1;
+}
+
+// The body in the host, inset as the activity's body is.
+static void aeui_wrec_mount(JNIEnv* env, AeuiWinRec* r) {
+    AeuiWidget* b = live_widget(r->root);
+    if (!b || !r->host) return;
+    jobject vp = JO(b->view, M_View_getParent);
+    if (vp) {
+        if ((*env)->IsSameObject(env, vp, r->host)) return;
+        if ((*env)->IsInstanceOf(env, vp, jcls(env, &C_ViewGroup))) JV(vp, M_VG_removeView, b->view);
+    }
+    jobject lp = JNEW(M_FP_init, (jint)LP_MATCH_PARENT, (jint)LP_MATCH_PARENT);
+    int pad = aeui_dp(16);
+    if (lp) JV(lp, M_MP_setMargins, pad, pad, pad, pad);
+    JV(r->host, M_VG_addView, b->view, lp);
+}
+
+static void aeui_wrec_size(JNIEnv* env, AeuiWinRec* r) {
+    if (!r->dialog || r->w <= 0 || r->h <= 0) return;
+    jobject win = JO(r->dialog, M_Dlg_getWindow);
+    if (win) JV(win, M_Win_setLayout, (jint)aeui_dp(r->w), (jint)aeui_dp(r->h));
+}
+
+// Close: the body's widgets leave the registry (the census falls back), and
+// the dialog goes. Its own dismiss event then finds the record closed.
+static void aeui_wrec_close(JNIEnv* env, AeuiWinRec* r) {
+    if (!r->live && !r->root) return;
+    int was_live = r->live;
+    r->live = 0;
+    if (r->root) {
+        aeui_unhost_and_retire(env, r->root);
+        r->root = 0;
+    }
+    if (was_live && r->dialog) JV(r->dialog, M_Dlg_dismiss);
+}
+
+int aether_ui_window_create_impl(const char* title, int width, int height) {
+    AeuiWinRec* r = aeui_wrec_new(&wrecs, &nwrecs, WREC_WINDOW, title, width, height);
+    return r ? nwrecs + 1 : 0;
+}
+
+void aether_ui_window_set_body_impl(int win_handle, int root_handle) {
+    if (win_handle <= 1) {
+        // The activity's body: what app_set_body sets, mounted now if the
+        // app is already running.
+        g_root_handle = root_handle;
+        JNIEnv* env = aeui_frame(16);
+        if (env) { if (g_mounted) aeui_mount_body(env); aeui_unframe(env); }
+        return;
+    }
+    AeuiWinRec* r = win_rec(win_handle);
+    if (!r) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    r->root = root_handle;
+    if (aeui_wrec_realize(env, r, win_handle)) aeui_wrec_mount(env, r);
+    aeui_unframe(env);
+}
+
+void aether_ui_window_show_impl(int win_handle) {
+    AeuiWinRec* r = win_rec(win_handle);
+    if (!r) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    if (aeui_wrec_realize(env, r, win_handle)) {
+        aeui_wrec_mount(env, r);
+        JV(r->dialog, M_Dlg_show);
+        aeui_wrec_size(env, r);
+        r->live = 1;
+    }
+    aeui_unframe(env);
+}
+
+// The primary window closing ends the app, as on the desktop; an extra
+// window closes alone.
+void aether_ui_window_close_impl(int win_handle) {
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    if (win_handle == 1) {
+        if (g_activity) JV(g_activity, M_Act_finishAndRemoveTask);
+    } else {
+        AeuiWinRec* r = win_rec(win_handle);
+        if (r) aeui_wrec_close(env, r);
+    }
+    aeui_unframe(env);
+}
+
+void aether_ui_close_window_by_handle_impl(int win_handle) {
+    aether_ui_window_close_impl(win_handle);
+}
+
+void aether_ui_window_set_title_impl(int win_handle, const char* title) {
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    jstring t = aeui_jstring(env, title ? title : "");
+    if (win_handle <= 1) {
+        free(g_title);
+        g_title = strdup(title ? title : "");
+        if (g_activity) JV(g_activity, M_Act_setTitle, t);
+    } else {
+        AeuiWinRec* r = win_rec(win_handle);
+        if (r) {
+            free(r->title);
+            r->title = strdup(title ? title : "");
+            if (r->dialog) JV(r->dialog, M_Dlg_setTitle, t);
+        }
+    }
+    aeui_unframe(env);
+}
+
+// Which window a widget is in: the one whose body its tree hangs from, or
+// whose overlay it is; 0 when it is in none (built and not yet placed).
+static int aeui_overlay_window_of(int handle);
+int aether_ui_widget_window_impl(int widget_handle) {
+    if (!view_of(widget_handle)) return 0;
+    int top = aeui_top_of(widget_handle);
+    if (top == g_root_handle) return 1;
+    for (int i = 0; i < nwrecs; i++)
+        if (wrecs[i].root && wrecs[i].root == top) return wrecs[i].live ? i + 2 : 0;
+    int ow = aeui_overlay_window_of(top);
+    if (ow) return ow;
+    if (top == aether_ui_test_server_banner_handle()) return 1;
+    return 0;
+}
+
+// The dialog went (Back, a tap outside, dismiss): a window's widgets retire,
+// as a closed desktop window's do; a sheet just stops showing -- the app's
+// sheet_dismiss is what retires its body.
+static void aeui_dialog_gone(JNIEnv* env, int id, int kind) {
+    if (kind == WREC_WINDOW) {
+        AeuiWinRec* r = win_rec(id);
+        if (r && r->live) aeui_wrec_close(env, r);
+    } else {
+        int i = id - 1;
+        if (i >= 0 && i < nsheetrecs) sheetrecs[i].live = 0;
+    }
+}
+
+// --- Sheets: a dialog over the window, presented and dismissed --------------
+int aether_ui_sheet_create_impl(const char* title, int width, int height) {
+    AeuiWinRec* r = aeui_wrec_new(&sheetrecs, &nsheetrecs, WREC_SHEET, title, width, height);
+    return r ? nsheetrecs : 0;
+}
+
+void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
+    int i = handle - 1;
+    if (i < 0 || i >= nsheetrecs) return;
+    sheetrecs[i].root = root_handle;
+}
+
+// Headless there is no one to see it: the body is registered (the DSL built
+// it) and nothing is shown, as AppKit's sheet does headless.
+void aether_ui_sheet_present_impl(int handle) {
+    int i = handle - 1;
+    if (i < 0 || i >= nsheetrecs || aeui_is_headless()) return;
+    AeuiWinRec* r = &sheetrecs[i];
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    if (aeui_wrec_realize(env, r, handle)) {
+        aeui_wrec_mount(env, r);
+        JV(r->dialog, M_Dlg_show);
+        aeui_wrec_size(env, r);
+        r->live = 1;
+    }
+    aeui_unframe(env);
+}
+
+// The body retires at once, so the driver never sees a dismissed sheet's
+// widgets, then the dialog goes.
+void aether_ui_sheet_dismiss_impl(int handle) {
+    int i = handle - 1;
+    if (i < 0 || i >= nsheetrecs) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    AeuiWinRec* r = &sheetrecs[i];
+    int was_live = r->live;
+    r->live = 0;
+    if (r->root) { aeui_unhost_and_retire(env, r->root); r->root = 0; }
+    if (was_live && r->dialog) JV(r->dialog, M_Dlg_dismiss);
+    aeui_unframe(env);
+}
+
+// --- The window count and its records, for /windows ------------------------
+int aether_ui_window_count_impl(void) { return 1 + nwrecs; }
+int aether_ui_window_is_open_impl(int win_handle) {
+    if (win_handle == 1) return g_mounted ? 1 : 0;
+    AeuiWinRec* r = win_rec(win_handle);
+    return r ? r->live : 0;
+}
+const char* aether_ui_window_title_impl(int win_handle) {
+    if (win_handle == 1) return g_title ? g_title : "";
+    AeuiWinRec* r = win_rec(win_handle);
+    return (r && r->title) ? r->title : "";
+}
+
+// The primary window's size, as the driver's /window/resize sets it: the
+// activity fills the screen, so a "window size" is the size of its content
+// -- the body (what a desktop window's content view is, edge to edge) is
+// given exactly that size, inside the activity's inset, and the layout runs
+// at it, wider than the screen if asked, as an app in a resizable (freeform
+// / desktop) window is. Extra windows are sized as dialogs.
+static void aeui_apply_window_size(JNIEnv* env) {
+    jobject root = view_of(g_root_handle);
+    if (!root || g_win_w <= 0 || g_win_h <= 0) return;
+    int pad = aeui_dp(16);
+    jobject lp = JNEW(M_FP_init, (jint)aeui_dp(g_win_w), (jint)aeui_dp(g_win_h));
+    if (!lp) return;
+    JV(lp, M_MP_setMargins, pad, pad, pad, pad);
+    JV(root, M_View_setLayoutParams, lp);
+}
+
+static void aeui_window_resize(JNIEnv* env, int win_handle, int w, int h) {
+    if (win_handle <= 1) {
+        g_win_w = w; g_win_h = h;
+        aeui_apply_window_size(env);
+    } else {
+        AeuiWinRec* r = win_rec(win_handle);
+        if (r) { r->w = w; r->h = h; aeui_wrec_size(env, r); }
+    }
+}
+
+// ===========================================================================
+// Overlays -- toasts, modals, tooltips: drawn INSIDE the window, above its
+// body, in the window's host frame (the activity's, or a dialog's). The table
+// is append-only, as on every backend: a closed overlay stays listed with
+// live 0, so "it expired" and "it never opened" read differently.
+// ===========================================================================
+JCLASS(C_RenderEffect, "android/graphics/RenderEffect");
+JCLASS(C_TileMode, "android/graphics/Shader$TileMode");
+JSTATIC(M_RE_blur, C_RenderEffect, "createBlurEffect",
+        "(FFLandroid/graphics/Shader$TileMode;)Landroid/graphics/RenderEffect;");
+JSFIELD(F_TM_CLAMP, C_TileMode, "CLAMP", "Landroid/graphics/Shader$TileMode;");
+
+typedef struct {
+    int window;          // the window it is drawn in
+    int content;         // the content widget
+    int scrim;           // the scrim widget (modal), 0 none
+    AeClosure* on_dismiss;
+    int modal, live, exiting, exit_played, trans_ms;
+    char* trans_kind;
+    char* material;      // effective: "dim" | "blur" | "tint"
+} AeuiOverlay;
+static AeuiOverlay* overlays = NULL;
+static int overlay_count = 0;
+
+static AeuiOverlay* overlay_at(int h) {
+    return (h >= 1 && h <= overlay_count) ? &overlays[h - 1] : NULL;
+}
+
+static int aeui_overlay_window_of(int handle) {
+    for (int i = 0; i < overlay_count; i++)
+        if (overlays[i].live && (overlays[i].content == handle || overlays[i].scrim == handle))
+            return overlays[i].window;
+    return 0;
+}
+
+static jobject aeui_window_host(int win_handle) {
+    if (win_handle <= 1) return g_host;
+    AeuiWinRec* r = win_rec(win_handle);
+    return (r && r->live) ? r->host : NULL;
+}
+
+// A real backdrop blur where the platform has one: from API 31 a View can
+// carry a RenderEffect, so a "blur" scrim blurs the window's body behind it
+// (and the dim on top stays faint). Below 31 it degrades to "tint" and
+// material_effective says so.
+static int aeui_any_blur_live(int window) {
+    for (int i = 0; i < overlay_count; i++)
+        if (overlays[i].live && overlays[i].window == window && overlays[i].material &&
+            strcmp(overlays[i].material, "blur") == 0) return 1;
+    return 0;
+}
+static void aeui_apply_blur(JNIEnv* env, int window) {
+    if (aeui_sdk_int(env) < 31) return;
+    int root = window <= 1 ? g_root_handle : (win_rec(window) ? win_rec(window)->root : 0);
+    AeuiWidget* r = live_widget(root);
+    if (!r) return;
+    jobject fx = NULL;
+    if (aeui_any_blur_live(window)) {
+        jobject clamp = JSFO(F_TM_CLAMP);
+        float radius = 12.0f * g_density;
+        fx = JSO(M_RE_blur, (jfloat)radius, (jfloat)radius, clamp);
+    }
+    JV(r->view, M_View_setRenderEffect, fx);
+}
+
+static unsigned int aeui_scrim_argb(const char* material) {
+    if (material && strcmp(material, "blur") == 0) return 0x14000000u;   // a faint veil over the frost
+    if (material && strcmp(material, "tint") == 0) return 0x59F2F2FAu;
+    return 0x73000000u;                                                  // 45% black
+}
+
+int aether_ui_overlay_open_impl(int win_handle, int content_handle,
+                                int anchor, int dx, int dy, int modal) {
+    if (win_handle < 1) win_handle = 1;
+    AeuiWidget* c = live_widget(content_handle);
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return 0;
+    jobject host = aeui_window_host(win_handle);
+    if (!c || !host) { aeui_unframe(env); return 0; }
+    AeuiOverlay* no = (AeuiOverlay*)realloc(overlays, sizeof(AeuiOverlay) * (size_t)(overlay_count + 1));
+    if (!no) { aeui_unframe(env); return 0; }
+    overlays = no;
+    int handle = overlay_count + 1;
+    AeuiOverlay* e = &overlays[overlay_count++];
+    memset(e, 0, sizeof(*e));
+    e->window = win_handle;
+    e->content = content_handle;
+    e->modal = modal ? 1 : 0;
+    e->live = 1;
+    e->material = strdup("dim");
+
+    // Scrim first, so it is below the content: a full-window View that takes
+    // every tap (input blocking is z-order, as on the other backends), and
+    // whose tap is the one path that runs on_dismiss.
+    if (modal) {
+        jobject sv = (*env)->NewObject(env, J.View, J.View_init, g_activity);
+        if (!aeui_check(env, "new scrim") && sv) {
+            (*env)->CallVoidMethod(env, sv, J.View_setBackgroundColor, (jint)aeui_scrim_argb("dim"));
+            aeui_check(env, "scrim colour");
+            jobject l = aeui_listener3(env, handle, AEUI_EV_SCRIM, 0);
+            if (l) JV(sv, M_View_setOnClickListener, l);
+            jobject lp = JNEW(M_FP_init, (jint)LP_MATCH_PARENT, (jint)LP_MATCH_PARENT);
+            JV(host, M_VG_addView, sv, lp);
+            e = overlay_at(handle);
+            e->scrim = register_widget_typed(env, sv, AUI_SCRIM);
+        }
+    }
+    // The content: detached from wherever it was built, placed by anchor
+    // (h + v*4: 0 start, 1 centre, 2 end), dx/dy signed insets from the
+    // start/top (positive) or end/bottom (negative), an offset when centred.
+    c = widget_at(content_handle);
+    if (c->parent) aeui_detach(env, content_handle);
+    c = widget_at(content_handle);
+    jobject vp = JO(c->view, M_View_getParent);
+    if (vp && (*env)->IsInstanceOf(env, vp, jcls(env, &C_ViewGroup))) JV(vp, M_VG_removeView, c->view);
+    int h = anchor & 3, v = (anchor >> 2) & 3;
+    int grav = (h == 0 ? GRAV_START : h == 2 ? GRAV_END : GRAV_CENTER_H) |
+               (v == 0 ? GRAV_TOP : v == 2 ? GRAV_BOTTOM : GRAV_CENTER_V);
+    jobject lp = JNEW(M_FP_init3, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_WRAP_CONTENT),
+                      (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_WRAP_CONTENT), (jint)grav);
+    if (lp) {
+        int ml = (h == 0 && dx > 0) ? aeui_dp(dx) : 0, mr = (h == 2 && dx < 0) ? aeui_dp(-dx) : 0;
+        int mt = (v == 0 && dy > 0) ? aeui_dp(dy) : 0, mb = (v == 2 && dy < 0) ? aeui_dp(-dy) : 0;
+        JV(lp, M_MP_setMargins, ml, mt, mr, mb);
+        JV(lp, M_MP_setMarginStart, ml);
+        JV(lp, M_MP_setMarginEnd, mr);
+    }
+    JV(c->view, M_View_setTranslationX, (jfloat)(h == 1 ? aeui_dp(dx) : 0));
+    JV(c->view, M_View_setTranslationY, (jfloat)(v == 1 ? aeui_dp(dy) : 0));
+    JV(c->view, M_View_setAlpha, (jfloat)1.0f);
+    JV(host, M_VG_addView, c->view, lp);
+    aeui_unframe(env);
+    return handle;
+}
+
+static void aeui_overlay_finalize(void* arg) {
+    int h = (int)(intptr_t)arg;
+    AeuiOverlay* e = overlay_at(h);
+    if (!e || !e->live) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    e->live = 0;
+    e->exiting = 0;
+    // UNREGISTERED, not just removed, as every backend's close does: a
+    // closed dialog's buttons must not stay clickable through the driver.
+    int content = e->content, scrim = e->scrim;
+    if (scrim) aeui_unhost_and_retire(env, scrim);
+    if (content) aeui_unhost_and_retire(env, content);
+    e = overlay_at(h);
+    if (e->material && strcmp(e->material, "blur") == 0) aeui_apply_blur(env, e->window);
+    aeui_unframe(env);
+}
+
+// Instant, unless the overlay has a transition and animation is on: then the
+// exit plays (a ViewPropertyAnimator: fade, plus the slide or scale the kind
+// names) and the overlay is removed when it ends; is_exiting reads 1 until
+// then, exit_played stays 1 for good.
+void aether_ui_overlay_close_impl(int overlay_handle) {
+    AeuiOverlay* e = overlay_at(overlay_handle);
+    if (!e || !e->live || e->exiting) return;
+    if (e->trans_ms > 0 && !aeui_animations_off()) {
+        JNIEnv* env = aeui_frame(16);
+        if (!env) return;
+        e->exiting = 1;
+        e->exit_played = 1;
+        int ids[2] = { e->content, e->scrim };
+        for (int k = 0; k < 2; k++) {
+            AeuiWidget* w = live_widget(ids[k]);
+            if (!w) continue;
+            jobject a = JO(w->view, M_View_animate);
+            if (!a) continue;
+            JO(a, M_VPA_setDuration, (jlong)e->trans_ms);
+            JO(a, M_VPA_alpha, (jfloat)0.0f);
+            if (k == 0 && e->trans_kind) {
+                int hh = JI(w->view, M_View_getHeight);
+                if (strcmp(e->trans_kind, "slide-up") == 0) JO(a, M_VPA_translationY, (jfloat)-hh);
+                else if (strcmp(e->trans_kind, "slide-down") == 0) JO(a, M_VPA_translationY, (jfloat)hh);
+                else if (strcmp(e->trans_kind, "scale") == 0) {
+                    JO(a, M_VPA_scaleX, (jfloat)0.0f);
+                    JO(a, M_VPA_scaleY, (jfloat)0.0f);
+                }
+            }
+            JV(a, M_VPA_start);
+        }
+        aeui_unframe(env);
+        aeui_after(e->trans_ms, aeui_overlay_finalize, (void*)(intptr_t)overlay_handle);
+        return;
+    }
+    aeui_overlay_finalize((void*)(intptr_t)overlay_handle);
+}
+
+void aether_ui_overlay_set_on_dismiss_impl(int h, void* boxed_closure) {
+    AeuiOverlay* e = overlay_at(h);
+    if (e) e->on_dismiss = (AeClosure*)boxed_closure;
+}
+int aether_ui_overlay_is_live_impl(int h)     { AeuiOverlay* e = overlay_at(h); return e ? e->live : 0; }
+int aether_ui_overlay_count_impl(void)        { return overlay_count; }
+int aether_ui_overlay_is_modal_impl(int h)    { AeuiOverlay* e = overlay_at(h); return e ? e->modal : 0; }
+int aether_ui_overlay_is_exiting_impl(int h)  { AeuiOverlay* e = overlay_at(h); return e ? e->exiting : 0; }
+int aether_ui_overlay_exit_played_impl(int h) { AeuiOverlay* e = overlay_at(h); return e ? e->exit_played : 0; }
+
+void aether_ui_overlay_set_transition_impl(int h, const char* kind, int ms) {
+    AeuiOverlay* e = overlay_at(h);
+    if (!e) return;
+    free(e->trans_kind);
+    e->trans_kind = (kind && *kind) ? strdup(kind) : NULL;
+    e->trans_ms = ms > 0 ? ms : 0;
+}
+
+// "blur" is real from API 31 (RenderEffect on the body) and reported as
+// such; below it, and for "tint", the scrim is a light tint; else dim.
+void aether_ui_overlay_set_material_impl(int h, const char* kind) {
+    AeuiOverlay* e = overlay_at(h);
+    if (!e) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    const char* eff = "dim";
+    if (kind && strcmp(kind, "blur") == 0) eff = aeui_sdk_int(env) >= 31 ? "blur" : "tint";
+    else if (kind && strcmp(kind, "tint") == 0) eff = "tint";
+    int was_blur = e->material && strcmp(e->material, "blur") == 0;
+    free(e->material);
+    e->material = strdup(eff);
+    AeuiWidget* s = live_widget(e->scrim);
+    if (s) {
+        (*env)->CallVoidMethod(env, s->view, J.View_setBackgroundColor, (jint)aeui_scrim_argb(eff));
+        aeui_check(env, "scrim material");
+    }
+    if (e->live && (was_blur || strcmp(eff, "blur") == 0)) aeui_apply_blur(env, e->window);
+    aeui_unframe(env);
+}
+const char* aether_ui_overlay_material_effective_impl(int h) {
+    AeuiOverlay* e = overlay_at(h);
+    return (e && e->material) ? e->material : "dim";
+}
+
+// Escape closes the topmost live overlay (1 if one closed).
+static int aeui_escape_overlays(void) {
+    for (int i = overlay_count - 1; i >= 0; i--) {
+        if (overlays[i].live && !overlays[i].exiting) {
+            aether_ui_overlay_close_impl(i + 1);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void aeui_scrim_tapped(int overlay_handle) {
+    AeuiOverlay* e = overlay_at(overlay_handle);
+    if (!e || !e->live) return;
+    AeClosure* c = e->on_dismiss;
+    if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
+    aether_ui_overlay_close_impl(overlay_handle);
+}
+
+// A label in the overlay layer: what the toast and the drawn tooltip show.
+static int aeui_overlay_label(JNIEnv* env, const char* text, unsigned int bg, float size) {
+    jobject tv = g_activity ? JNEW(M_TV_init, g_activity) : NULL;
+    if (!tv) return 0;
+    set_text_on(env, tv, text ? text : "");
+    JV(tv, M_TV_setTextColor, (jint)0xFFFFFFFF);
+    JV(tv, M_TV_setTextSize, (jint)1, (jfloat)size);
+    int ph = aeui_dp(12), pv = aeui_dp(8);
+    JV(tv, M_View_setPadding, ph, pv, ph, pv);
+    jobject gd = JNEW(M_GD_init);
+    if (gd) {
+        JV(gd, M_GD_setColor, (jint)bg);
+        JV(gd, M_GD_setCornerRadius, (jfloat)(8.0f * g_density));
+        JV(tv, M_View_setBackground, gd);
+    }
+    return register_widget_typed(env, tv, AUI_TEXT);
+}
+
+// --- Toast -------------------------------------------------------------------
+// A registered label in the overlay layer, bottom-centre and 24 dp up, that
+// closes itself after ms (AppKit's toast; Android's own Toast is a system
+// window the app cannot see into, so the driver could not find it).
+static void aeui_toast_expire(void* arg) { aether_ui_overlay_close_impl((int)(intptr_t)arg); }
+
+int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return 0;
+    int content = aeui_overlay_label(env, text, 0xF2262629u, 14.0f);
+    aeui_unframe(env);
+    if (!content) return 0;
+    int h = aether_ui_overlay_open_impl(win_handle, content, 9, 0, -24, 0);
+    if (!h) {
+        JNIEnv* e2 = aeui_frame(8);
+        if (e2) { aeui_retire_tree(e2, content); aeui_unframe(e2); }
+        return 0;
+    }
+    if (ms > 0) aeui_after(ms, aeui_toast_expire, (void*)(intptr_t)h);
+    return h;
+}
+
+// --- Drawn vg tooltip: one overlay label at the pointer ---------------------
+static int g_vg_tooltip = 0;
+extern int aether_ui_canvas_get_widget(int canvas_id);
+int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text, double cx, double cy) {
+    if (g_vg_tooltip && aether_ui_overlay_is_live_impl(g_vg_tooltip)) {
+        AeuiOverlay* e = overlay_at(g_vg_tooltip);
+        if (e) e->trans_ms = 0;
+        aether_ui_overlay_close_impl(g_vg_tooltip);
+    }
+    // The point is the canvas's; the overlay layer is the window's.
+    int ox = 0, oy = 0;
+    AeuiWidget* cw = live_widget(aether_ui_canvas_get_widget(canvas_id));
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return 0;
+    if (cw) {
+        int ww, hh;
+        int hx = 0, hy = 0, hw, hhh;
+        aeui_rect_dp(env, cw->view, &ox, &oy, &ww, &hh);
+        if (g_host) aeui_rect_dp(env, g_host, &hx, &hy, &hw, &hhh);
+        ox -= hx; oy -= hy;
+    }
+    int content = aeui_overlay_label(env, text, 0xD9000000u, 13.0f);
+    aeui_unframe(env);
+    if (!content) return 0;
+    g_vg_tooltip = aether_ui_overlay_open_impl(1, content, 0, ox + (int)cx + 12, oy + (int)cy + 12, 0);
+    return g_vg_tooltip;
+}
+void aether_ui_vg_tooltip_hide_impl(void) {
+    if (g_vg_tooltip) { aether_ui_overlay_close_impl(g_vg_tooltip); g_vg_tooltip = 0; }
+}
+int aether_ui_vg_tooltip_drawn_impl(void) {
+    return (g_vg_tooltip && aether_ui_overlay_is_live_impl(g_vg_tooltip)) ? 1 : 0;
+}
+
+// --- Alert -------------------------------------------------------------------
+// An AlertDialog with an OK button. Shown, not waited for: the ABI returns
+// nothing, and Android's dialogs are modeless to the caller (UIKit's alert
+// is presented the same way). Headless it is recorded, as everywhere.
+JCLASS(C_ADBuilder, "android/app/AlertDialog$Builder");
+JMETHOD(M_ADB_init, C_ADBuilder, "<init>", "(Landroid/content/Context;)V");
+JMETHOD(M_ADB_setTitle, C_ADBuilder, "setTitle", "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;");
+JMETHOD(M_ADB_setMessage, C_ADBuilder, "setMessage", "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;");
+JMETHOD(M_ADB_setPositiveButton, C_ADBuilder, "setPositiveButton",
+        "(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;");
+JMETHOD(M_ADB_show, C_ADBuilder, "show", "()Landroid/app/AlertDialog;");
+
+void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) {
+        free(aether_ui_prompt_headless(AEUI_PROMPT_ALERT, title, message));
+        return;
+    }
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return; }
+    jobject b = JNEW(M_ADB_init, g_activity);
+    if (b) {
+        JO(b, M_ADB_setTitle, aeui_jstring(env, title ? title : ""));
+        JO(b, M_ADB_setMessage, aeui_jstring(env, message ? message : ""));
+        JO(b, M_ADB_setPositiveButton, aeui_jstring(env, "OK"), (jobject)NULL);
+        JO(b, M_ADB_show);
+    }
+    aeui_unframe(env);
+}
+
+// --- File pickers --------------------------------------------------------
+// Headless: the shared scripted-answer queue, exactly as every backend.
+// Otherwise the Storage Access Framework picker as a modal
+// (AetherActivity.pick, the nested loop described there). Off the UI thread
+// the call waits for the UI thread to run it.
+typedef struct { int kind; const char* title; const char* detail; char* out; } AeuiPick;
+static jmethodID g_activity_pick = NULL;
+
+static void aeui_pick_run(void* arg) {
+    AeuiPick* p = (AeuiPick*)arg;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    if (g_activity && g_activity_pick) {
+        jstring t = aeui_jstring(env, p->title ? p->title : "");
+        jstring d = aeui_jstring(env, p->detail ? p->detail : "");
+        jobject r = (*env)->CallObjectMethod(env, g_activity, g_activity_pick, (jint)p->kind, t, d);
+        if (!aeui_check(env, "AetherActivity.pick") && r) p->out = aeui_charseq_dup(env, r);
+    }
+    aeui_unframe(env);
+}
+
+static char* aeui_pick(int prompt_kind, int kind, const char* title, const char* detail) {
+    if (aeui_is_headless()) return aether_ui_prompt_headless(prompt_kind, title, detail);
+    AeuiPick p = { kind, title, detail, NULL };
+    aeui_android_run_sync(aeui_pick_run, &p);
+    return p.out ? p.out : strdup("");
+}
+
+char* aether_ui_file_open(const char* title, const char* start_dir) {
+    return aeui_pick(AEUI_PROMPT_OPEN, 0, title, start_dir);
+}
+char* aether_ui_file_save(const char* title, const char* default_name) {
+    return aeui_pick(AEUI_PROMPT_SAVE, 1, title, default_name);
+}
+char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
+    return aeui_pick(AEUI_PROMPT_FOLDER, 2, title, start_dir);
+}
+
+// ===========================================================================
+// System: clipboard, URLs, appearance, quitting
+// ===========================================================================
+JCLASS(C_Context2, "android/content/Context");
+JCLASS(C_ClipboardManager, "android/content/ClipboardManager");
+JCLASS(C_ClipData, "android/content/ClipData");
+JCLASS(C_ClipItem, "android/content/ClipData$Item");
+JMETHOD(M_Ctx_getSystemService, C_Context2, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+JMETHOD(M_Ctx_getResources, C_Context2, "getResources", "()Landroid/content/res/Resources;");
+JMETHOD(M_Ctx_startActivity, C_Context2, "startActivity", "(Landroid/content/Intent;)V");
+JMETHOD(M_Ctx_getPackageManager, C_Context2, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+JMETHOD(M_Ctx_checkSelfPermission, C_Context2, "checkSelfPermission", "(Ljava/lang/String;)I");
+JMETHOD(M_CM_setPrimaryClip, C_ClipboardManager, "setPrimaryClip", "(Landroid/content/ClipData;)V");
+JMETHOD(M_CM_getPrimaryClip, C_ClipboardManager, "getPrimaryClip", "()Landroid/content/ClipData;");
+JSTATIC(M_CD_newPlainText, C_ClipData, "newPlainText",
+        "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;");
+JMETHOD(M_CD_getItemCount, C_ClipData, "getItemCount", "()I");
+JMETHOD(M_CD_getItemAt, C_ClipData, "getItemAt", "(I)Landroid/content/ClipData$Item;");
+JMETHOD(M_CI_coerceToText, C_ClipItem, "coerceToText", "(Landroid/content/Context;)Ljava/lang/CharSequence;");
+
+static jobject aeui_service(JNIEnv* env, const char* name) {
+    if (!g_activity) return NULL;
+    return JO(g_activity, M_Ctx_getSystemService, aeui_jstring(env, name));
+}
+
+typedef struct { const char* text; char* out; } AeuiClip;
+static void aeui_clip_write_run(void* arg) {
+    AeuiClip* c = (AeuiClip*)arg;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    jobject cm = aeui_service(env, "clipboard");
+    jobject cd = JSO(M_CD_newPlainText, aeui_jstring(env, "aether-ui"), aeui_jstring(env, c->text ? c->text : ""));
+    if (cm && cd) JV(cm, M_CM_setPrimaryClip, cd);
+    aeui_unframe(env);
+}
+static void aeui_clip_read_run(void* arg) {
+    AeuiClip* c = (AeuiClip*)arg;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    jobject cm = aeui_service(env, "clipboard");
+    jobject cd = cm ? JO(cm, M_CM_getPrimaryClip) : NULL;
+    if (cd && JI(cd, M_CD_getItemCount) > 0) {
+        jobject it = JO(cd, M_CD_getItemAt, (jint)0);
+        jobject cs = it ? JO(it, M_CI_coerceToText, g_activity) : NULL;
+        if (cs) c->out = aeui_charseq_dup(env, cs);
+    }
+    aeui_unframe(env);
+}
+
+// ClipboardManager, on the UI thread (the service is the app's own).
+void aether_ui_clipboard_write_impl(const char* text) {
+    AeuiClip c = { text, NULL };
+    aeui_android_run_sync(aeui_clip_write_run, &c);
+}
+char* aether_ui_clipboard_read_impl(void) {
+    AeuiClip c = { NULL, NULL };
+    aeui_android_run_sync(aeui_clip_read_run, &c);
+    return c.out ? c.out : strdup("");
+}
+
+// An ACTION_VIEW intent: the browser for a web URL, whatever the user's
+// apps handle for anything else. Headless it is recorded, never opened.
+JCLASS(C_Intent, "android/content/Intent");
+JCLASS(C_Uri, "android/net/Uri");
+JMETHOD(M_Intent_init2, C_Intent, "<init>", "(Ljava/lang/String;Landroid/net/Uri;)V");
+JMETHOD(M_Intent_addFlags, C_Intent, "addFlags", "(I)Landroid/content/Intent;");
+JSTATIC(M_Uri_parse, C_Uri, "parse", "(Ljava/lang/String;)Landroid/net/Uri;");
+
+typedef struct { const char* url; } AeuiUrl;
+static void aeui_open_url_run(void* arg) {
+    const char* url = ((AeuiUrl*)arg)->url;
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return; }
+    jobject uri = JSO(M_Uri_parse, aeui_jstring(env, url));
+    jobject in = uri ? JNEW(M_Intent_init2, aeui_jstring(env, "android.intent.action.VIEW"), uri) : NULL;
+    if (in) {
+        JO(in, M_Intent_addFlags, (jint)0x10000000 /* FLAG_ACTIVITY_NEW_TASK */);
+        // No app for the scheme raises ActivityNotFoundException, which the
+        // call reports and clears: nothing opens, as on a desktop with no
+        // handler.
+        JV(g_activity, M_Ctx_startActivity, in);
+    }
+    aeui_unframe(env);
+}
+void aether_ui_open_url_impl(const char* url) {
+    if (!url) return;
+    if (aeui_is_headless()) { aether_ui_opened_url_record(url); return; }
+    AeuiUrl u = { url };
+    aeui_android_run_sync(aeui_open_url_run, &u);
+}
+
+// Dark mode is the configuration's night bit (Configuration.uiMode), which
+// follows the system theme; the driver's override comes first.
+JCLASS(C_Resources, "android/content/res/Resources");
+JCLASS(C_Configuration, "android/content/res/Configuration");
+JMETHOD(M_Res_getConfiguration, C_Resources, "getConfiguration", "()Landroid/content/res/Configuration;");
+JFIELD(F_Cfg_uiMode, C_Configuration, "uiMode", "I");
+
+static int aeui_system_dark(void) {
+    JNIEnv* env = aeui_frame(8);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return 0; }
+    int dark = 0;
+    jobject res = JO(g_activity, M_Ctx_getResources);
+    jobject cfg = res ? JO(res, M_Res_getConfiguration) : NULL;
+    jfieldID f = cfg ? (jfieldID)jmem(env, &F_Cfg_uiMode) : NULL;
+    if (f) dark = (((*env)->GetIntField(env, cfg, f)) & 0x30) == 0x20;   // UI_MODE_NIGHT_YES
+    aeui_unframe(env);
+    return dark;
+}
+
+int aether_ui_dark_mode_check(void) {
+    int ov = aether_ui_appearance_override_get();
+    if (ov >= 0) return ov;
+    return aeui_system_dark();
+}
+
+// The OS path: the manifest claims uiMode changes, so a theme switch arrives
+// as a configuration change (native_lifecycle) instead of a restart; when
+// the night bit flipped, the registered closures run with the new value.
+static int g_appearance_watched = 0;
+static int g_appearance_last = -1;
+void aether_ui_watch_appearance_impl(void) {
+    if (g_appearance_watched) return;
+    g_appearance_watched = 1;
+    g_appearance_last = aeui_system_dark();
+}
+static void aeui_appearance_config_changed(void) {
+    if (!g_appearance_watched) return;
+    int dark = aeui_system_dark();
+    if (dark == g_appearance_last) return;
+    g_appearance_last = dark;
+    if (aether_ui_appearance_override_get() < 0) aether_ui_appearance_invoke(dark);
+}
+
+// The driver's path (already on the UI thread: the server runs every
+// request there): override, then the closures, as AppKit does.
+int aether_ui_fire_appearance(int dark) {
+    aether_ui_appearance_override_set(dark ? 1 : 0);
+    aether_ui_appearance_invoke(dark ? 1 : 0);
+    return 1;
+}
+
+// Undo and redo through the shared stack; the driver calls these on the UI
+// thread, where the edit closures belong.
+int aether_ui_fire_undo(void) { return aether_ui_undo_step_impl(); }
+int aether_ui_fire_redo(void) { return aether_ui_redo_step_impl(); }
+
+// An app quitting itself: the activity finishes and leaves the recents list,
+// and its destroy ends the process (native_lifecycle), which is the
+// desktop's "the loop returned and main ended".
+static void aeui_quit_run(void* arg) {
+    (void)arg;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    if (g_activity) JV(g_activity, M_Act_finishAndRemoveTask);
+    aeui_unframe(env);
+}
+void aether_ui_app_quit_impl(void) {
+    aether_ui_request_quit();
+    if (g_bridge[1] >= 0) aeui_android_post(aeui_quit_run, NULL);
+}
+
+// ===========================================================================
+// Menus. A menu is a record of (label, closure) items, also recorded in the
+// shared side-store the driver's /menus and /menu/{h}/activate read. A menu
+// BAR is a record of menus. Shown as:
+//   - window 1's bar: the action bar's options menu, rebuilt from the
+//     records whenever the activity asks (AetherActivity.onPrepareOptionsMenu
+//     -> nativeOptionsMenu); each menu a SubMenu, each item a MenuItem whose
+//     id names (menu, item); separators start a new group, with the group
+//     dividers on;
+//   - a dialog window's bar: a row of the menus' titles at its top, each
+//     opening its menu as a PopupMenu;
+//   - menu_popup: a PopupMenu anchored to the widget.
+// ===========================================================================
+JCLASS(C_PopupMenu, "android/widget/PopupMenu");
+JCLASS(C_Menu, "android/view/Menu");
+JCLASS(C_MenuItem, "android/view/MenuItem");
+JMETHOD(M_PM_init, C_PopupMenu, "<init>", "(Landroid/content/Context;Landroid/view/View;)V");
+JMETHOD(M_PM_getMenu, C_PopupMenu, "getMenu", "()Landroid/view/Menu;");
+JMETHOD(M_PM_setOnMenuItemClickListener, C_PopupMenu, "setOnMenuItemClickListener",
+        "(Landroid/widget/PopupMenu$OnMenuItemClickListener;)V");
+JMETHOD(M_PM_show, C_PopupMenu, "show", "()V");
+JMETHOD(M_Menu_add, C_Menu, "add", "(IIILjava/lang/CharSequence;)Landroid/view/MenuItem;");
+JMETHOD(M_Menu_addSubMenu, C_Menu, "addSubMenu", "(IIILjava/lang/CharSequence;)Landroid/view/SubMenu;");
+JMETHOD(M_Menu_setGroupDividerEnabled, C_Menu, "setGroupDividerEnabled", "(Z)V");
+JMETHOD(M_Menu_size, C_Menu, "size", "()I");
+JMETHOD(M_Menu_getItem, C_Menu, "getItem", "(I)Landroid/view/MenuItem;");
+JMETHOD(M_Menu_performIdentifierAction, C_Menu, "performIdentifierAction", "(II)Z");
+JMETHOD(M_MI_getItemId, C_MenuItem, "getItemId", "()I");
+JMETHOD(M_MI_getSubMenu, C_MenuItem, "getSubMenu", "()Landroid/view/SubMenu;");
+JMETHOD(M_MI_getTitle, C_MenuItem, "getTitle", "()Ljava/lang/CharSequence;");
+JMETHOD(M_MI_setAlphabeticShortcut, C_MenuItem, "setAlphabeticShortcut", "(CI)Landroid/view/MenuItem;");
+
+#define AEUI_MENU_ID(menu, index) ((menu) * 1000 + (index) + 1)
+
+typedef struct { char* label; AeClosure* closure; int is_sep; } AeuiMenuItem;
+typedef struct {
+    char* label;
+    AeuiMenuItem* items; int count;
+    int is_bar;
+    int* menus; int nmenus;      // a bar's menus
+} AeuiMenuRec;
+static AeuiMenuRec* menurecs = NULL;
+static int nmenurecs = 0;
+static int g_window1_bar = 0;    // the bar the activity shows
+static jobject g_options_menu = NULL;   // global ref: the activity's options Menu, once built
+
+static AeuiMenuRec* menu_rec(int h) { return (h >= 1 && h <= nmenurecs) ? &menurecs[h - 1] : NULL; }
+
+static int aeui_menu_new(const char* label, int is_bar) {
+    AeuiMenuRec* nm = (AeuiMenuRec*)realloc(menurecs, sizeof(AeuiMenuRec) * (size_t)(nmenurecs + 1));
+    if (!nm) return 0;
+    menurecs = nm;
+    AeuiMenuRec* m = &menurecs[nmenurecs++];
+    memset(m, 0, sizeof(*m));
+    m->label = strdup(label ? label : "");
+    m->is_bar = is_bar;
+    return nmenurecs;
+}
+
+static void aeui_menu_push(int h, const char* label, AeClosure* c, int is_sep) {
+    AeuiMenuRec* m = menu_rec(h);
+    if (!m) return;
+    AeuiMenuItem* ni = (AeuiMenuItem*)realloc(m->items, sizeof(AeuiMenuItem) * (size_t)(m->count + 1));
+    if (!ni) return;
+    m->items = ni;
+    m->items[m->count].label = strdup(label ? label : "");
+    m->items[m->count].closure = c;
+    m->items[m->count].is_sep = is_sep;
+    m->count++;
+}
+
+static void aeui_refresh_options_menu(void) {
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    if (g_activity) JV(g_activity, M_Act_invalidateOptionsMenu);
+    aeui_unframe(env);
+}
+
+int aether_ui_menu_create(const char* label) { return aeui_menu_new(label, 0); }
+int aether_ui_menu_bar_create(void) { return aeui_menu_new("", 1); }
+
+void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) {
+    if (!menu_rec(menu_handle)) return;
+    aeui_menu_push(menu_handle, label, (AeClosure*)boxed_closure, 0);
+    aether_ui_menu_item_record(menu_handle, label ? label : "", boxed_closure);
+    aeui_refresh_options_menu();
+}
+
+void aether_ui_menu_add_separator(int menu_handle) {
+    aeui_menu_push(menu_handle, "", NULL, 1);
+    aeui_refresh_options_menu();
+}
+
+void aether_ui_menu_item_set_label(int menu_handle, const char* old_label, const char* new_label) {
+    if (!old_label || !new_label) return;
+    aether_ui_menu_item_relabel(menu_handle, old_label, new_label);
+    AeuiMenuRec* m = menu_rec(menu_handle);
+    if (!m) return;
+    for (int i = 0; i < m->count; i++) {
+        if (m->items[i].is_sep || strcmp(m->items[i].label, old_label) != 0) continue;
+        free(m->items[i].label);
+        m->items[i].label = strdup(new_label);
+        break;
+    }
+    aeui_refresh_options_menu();
+}
+
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
+    AeuiMenuRec* b = menu_rec(bar_handle);
+    if (!b || !menu_rec(menu_handle)) return;
+    int* nm = (int*)realloc(b->menus, sizeof(int) * (size_t)(b->nmenus + 1));
+    if (!nm) return;
+    b->menus = nm;
+    b->menus[b->nmenus++] = menu_handle;
+    aeui_refresh_options_menu();
+}
+
+// Fill a Menu with one menu's items (ids from AEUI_MENU_ID; a separator
+// starts the next group, drawn with a divider).
+static void aeui_fill_menu(JNIEnv* env, jobject menu, int menu_handle) {
+    AeuiMenuRec* m = menu_rec(menu_handle);
+    if (!m || !menu) return;
+    int group = 0;
+    for (int i = 0; i < m->count; i++) {
+        if (m->items[i].is_sep) { group++; continue; }
+        JO(menu, M_Menu_add, (jint)group, (jint)AEUI_MENU_ID(menu_handle, i), (jint)i,
+           aeui_jstring(env, m->items[i].label));
+    }
+    if (group) JV(menu, M_Menu_setGroupDividerEnabled, JNI_TRUE);
+}
+
+// AetherActivity.onCreate/PrepareOptionsMenu: the bar attached to window 1.
+static jboolean JNICALL native_options_menu(JNIEnv* env, jclass cls, jobject menu) {
+    (void)cls;
+    AeuiMenuRec* b = menu_rec(g_window1_bar);
+    if (!b || !menu) return JNI_FALSE;
+    if ((*env)->PushLocalFrame(env, 64) != 0) return JNI_FALSE;
+    if (g_options_menu) (*env)->DeleteGlobalRef(env, g_options_menu);
+    g_options_menu = (*env)->NewGlobalRef(env, menu);
+    for (int i = 0; i < b->nmenus; i++) {
+        AeuiMenuRec* m = menu_rec(b->menus[i]);
+        if (!m) continue;
+        jobject sub = JO(menu, M_Menu_addSubMenu, (jint)0, (jint)AEUI_MENU_ID(b->menus[i], 998),
+                         (jint)i, aeui_jstring(env, m->label));
+        aeui_fill_menu(env, sub, b->menus[i]);
+    }
+    (*env)->PopLocalFrame(env, NULL);
+    return b->nmenus > 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
+    (void)app_handle;
+    g_window1_bar = bar_handle;
+    aeui_refresh_options_menu();
+}
+
+// A dialog window has no action bar: its bar is a row of buttons at the top,
+// one per menu, each opening its menu (MENU_OPEN).
+void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
+    if (win_handle <= 1) { aether_ui_menu_bar_attach(0, bar_handle); return; }
+    AeuiWinRec* r = win_rec(win_handle);
+    AeuiMenuRec* b = menu_rec(bar_handle);
+    if (!r || !b) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    if (aeui_wrec_realize(env, r, win_handle)) {
+        if (r->menubar) {
+            JV(r->host, M_VG_removeView, r->menubar);
+            (*env)->DeleteGlobalRef(env, r->menubar);
+            r->menubar = NULL;
+        }
+        jobject row = JNEW(M_LL_init, g_activity);
+        if (row) {
+            JV(row, M_LL_setOrientation, (jint)LL_HORIZONTAL);
+            for (int i = 0; i < b->nmenus; i++) {
+                AeuiMenuRec* m = menu_rec(b->menus[i]);
+                jobject btn = m ? make_button(env, m->label) : NULL;
+                if (!btn) continue;
+                jobject l = aeui_listener3(env, b->menus[i], AEUI_EV_MENU_OPEN, 0);
+                if (l) JV(btn, M_View_setOnClickListener, l);
+                jobject blp = JNEW(M_LLP_init, (jint)LP_WRAP_CONTENT, (jint)LP_WRAP_CONTENT, (jfloat)0.0f);
+                JV(row, M_VG_addView, btn, blp);
+            }
+            jobject lp = JNEW(M_FP_init3, (jint)LP_MATCH_PARENT, (jint)LP_WRAP_CONTENT, (jint)GRAV_TOP);
+            JV(r->host, M_VG_addView, row, lp);
+            r->menubar = (*env)->NewGlobalRef(env, row);
+        }
+    }
+    aeui_unframe(env);
+}
+
+static void aeui_popup_menu(JNIEnv* env, int menu_handle, jobject anchor) {
+    if (!anchor || !g_activity || !menu_rec(menu_handle)) return;
+    jobject pm = JNEW(M_PM_init, g_activity, anchor);
+    if (!pm) return;
+    aeui_fill_menu(env, JO(pm, M_PM_getMenu), menu_handle);
+    jobject l = aeui_listener3(env, menu_handle, AEUI_EV_MENU, 0);
+    if (l) JV(pm, M_PM_setOnMenuItemClickListener, l);
+    JV(pm, M_PM_show);
+}
+
+// The menu as a PopupMenu at the widget (a pull-down from it). Headless
+// nothing is shown: there is no one to choose (UIKit does the same).
+void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (aeui_is_headless()) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    AeuiWidget* a = live_widget(anchor_widget);
+    aeui_popup_menu(env, menu_handle, a ? a->view : g_host);
+    aeui_unframe(env);
+}
+
+// A chosen item: (menu, index) from its id.
+static int aeui_menu_fire_id(int id) {
+    int menu = (id - 1) / 1000, index = (id - 1) % 1000;
+    AeuiMenuRec* m = menu_rec(menu);
+    if (!m || index < 0 || index >= m->count || m->items[index].is_sep) return 0;
+    AeClosure* c = m->items[index].closure;
+    if (c && c->fn) { ((void (*)(void*))c->fn)(c->env); return 1; }
+    return 0;
+}
+
+// The driver's /menu/{h}/native_activate: through the platform's own
+// binding -- the options menu's MenuItem, performed as a tap performs it
+// (Menu.performIdentifierAction -> Activity.onOptionsItemSelected). 0 fired,
+// 2 no such item; -1 = this menu is not in the options menu (a popup's or a
+// dialog's), which has no performable native item: the route says 501.
+static int aeui_menu_native_activate(JNIEnv* env, int menu_handle, const char* label) {
+    AeuiMenuRec* bar = menu_rec(g_window1_bar);
+    int in_bar = 0;
+    for (int i = 0; bar && i < bar->nmenus; i++) if (bar->menus[i] == menu_handle) in_bar = 1;
+    if (!in_bar || !g_options_menu) return -1;
+    int n = JI(g_options_menu, M_Menu_size);
+    for (int i = 0; i < n; i++) {
+        jobject top = JO(g_options_menu, M_Menu_getItem, (jint)i);
+        if (!top || JI(top, M_MI_getItemId) != AEUI_MENU_ID(menu_handle, 998)) continue;
+        jobject sub = JO(top, M_MI_getSubMenu);
+        int k = sub ? JI(sub, M_Menu_size) : 0;
+        for (int j = 0; j < k; j++) {
+            jobject it = JO(sub, M_Menu_getItem, (jint)j);
+            char t[512];
+            aeui_charseq_into(env, it ? JO(it, M_MI_getTitle) : NULL, t, (int)sizeof(t));
+            if (strcmp(t, label ? label : "") != 0) continue;
+            return JZ(sub, M_Menu_performIdentifierAction, (jint)JI(it, M_MI_getItemId), (jint)0) ? 0 : 4;
+        }
+    }
+    return 2;
+}
+
+// --- Context menus -----------------------------------------------------------
+// Items kept on the widget; a long press (or a secondary click) opens them
+// as a PopupMenu at the widget. An accelerator is shown on the item, as the
+// platform shows a menu item's keyboard shortcut.
+static int aeui_accel_split(const char* accel, char* key) {
+    int meta = 0;
+    *key = 0;
+    if (!accel) return 0;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s", accel);
+    for (char* tok = strtok(buf, "+"); tok; tok = strtok(NULL, "+")) {
+        if (!strcasecmp(tok, "Ctrl") || !strcasecmp(tok, "Control") || !strcasecmp(tok, "Primary")) meta |= 0x1000;
+        else if (!strcasecmp(tok, "Shift")) meta |= 0x1;
+        else if (!strcasecmp(tok, "Alt")) meta |= 0x2;
+        else if (!strcasecmp(tok, "Cmd") || !strcasecmp(tok, "Meta") || !strcasecmp(tok, "Super")) meta |= 0x10000;
+        else if (strlen(tok) == 1) *key = tok[0];
+    }
+    return meta;
+}
+
+static void aeui_ctx_add(int handle, const char* label, const char* accel, void* closure) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !label) return;
+    AeuiCtxItem* ni = (AeuiCtxItem*)realloc(w->ctx, sizeof(AeuiCtxItem) * (size_t)(w->nctx + 1));
+    if (!ni) return;
+    w->ctx = ni;
+    w->ctx[w->nctx].label = strdup(label);
+    w->ctx[w->nctx].accel = accel ? strdup(accel) : NULL;
+    w->ctx[w->nctx].closure = (AeClosure*)closure;
+    w->nctx++;
+    if (w->nctx == 1) {
+        JNIEnv* env = aeui_frame(8);
+        if (!env) return;
+        jobject l = aeui_listener(env, handle, AEUI_EV_CONTEXT);
+        if (l) {
+            JV(w->view, M_View_setOnLongClickListener, l);
+            JV(w->view, M_View_setOnContextClickListener, l);
+        }
+        aeui_unframe(env);
+    }
+}
+
+void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) {
+    aeui_ctx_add(handle, label, NULL, boxed_closure);
+}
+void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel,
+                                            void* boxed_closure) {
+    aeui_ctx_add(handle, label, accel, boxed_closure);
+}
+
+static void aeui_ctx_open(JNIEnv* env, int handle) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->nctx == 0 || !g_activity) return;
+    jobject pm = JNEW(M_PM_init, g_activity, w->view);
+    if (!pm) return;
+    jobject menu = JO(pm, M_PM_getMenu);
+    for (int i = 0; i < w->nctx; i++) {
+        jobject it = JO(menu, M_Menu_add, (jint)0, (jint)(i + 1), (jint)i, aeui_jstring(env, w->ctx[i].label));
+        char key;
+        int meta = aeui_accel_split(w->ctx[i].accel, &key);
+        if (it && key) JO(it, M_MI_setAlphabeticShortcut, (jchar)key, (jint)meta);
+    }
+    jobject l = aeui_listener3(env, handle, AEUI_EV_MENU, 1);
+    if (l) JV(pm, M_PM_setOnMenuItemClickListener, l);
+    JV(pm, M_PM_show);
+}
+
+static int aeui_ctx_fire(int handle, int index) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || index < 0 || index >= w->nctx) return 0;
+    AeClosure* c = w->ctx[index].closure;
+    if (c && c->fn) { ((void (*)(void*))c->fn)(c->env); return 1; }
+    return 0;
+}
+
+// ===========================================================================
+// Keyboard: shortcuts, chords, the any-key handlers.
+//
+// Combos are matched in one canonical spelling, "ctrl+alt+shift+cmd+key"
+// (modifiers in that order, key lower-cased), which "Ctrl+Shift+R",
+// "<Control><Shift>r" and a real keypress all reduce to. "Primary" is Ctrl
+// here -- Android's own keyboard accelerators (Ctrl+C/V/Z) -- as on GTK4 and
+// Win32. A real key arrives from AetherActivity.dispatchKeyEvent; the
+// driver's /window/key arrives as a combo; both take the same path:
+// chords, then shortcuts (which consume the key), then the any-key
+// handlers (which do not).
+// ===========================================================================
+#define KM_CTRL 1
+#define KM_ALT 2
+#define KM_SHIFT 4
+#define KM_CMD 8
+
+typedef struct { char combo[64]; AeClosure* closure; AeClosure* enabled; } AeuiShortcut;
+static AeuiShortcut* shortcuts = NULL;
+static int nshortcuts = 0;
+typedef struct { char first[64]; char second[64]; AeClosure* closure; } AeuiChord;
+static AeuiChord* chords = NULL;
+static int nchords = 0;
+static char chord_pending[64] = "";
+static double chord_armed_at = 0;
+static AeClosure** key_handlers = NULL;
+static int nkey_handlers = 0;
+
+static void combo_canonical(int mods, const char* key, char* out, int outsize) {
+    char low[32];
+    int i = 0;
+    for (; key && key[i] && i < (int)sizeof(low) - 1; i++) {
+        unsigned char ch = (unsigned char)key[i];
+        low[i] = (char)((ch >= 'A' && ch <= 'Z') ? ch + 32 : ch);
+    }
+    low[i] = 0;
+    snprintf(out, (size_t)outsize, "%s%s%s%s%s", (mods & KM_CTRL) ? "ctrl+" : "",
+             (mods & KM_ALT) ? "alt+" : "", (mods & KM_SHIFT) ? "shift+" : "",
+             (mods & KM_CMD) ? "cmd+" : "", low);
+}
+
+static int combo_mod(const char* name) {
+    if (!strcasecmp(name, "Ctrl") || !strcasecmp(name, "Control") || !strcasecmp(name, "Primary")) return KM_CTRL;
+    if (!strcasecmp(name, "Shift")) return KM_SHIFT;
+    if (!strcasecmp(name, "Alt") || !strcasecmp(name, "Option")) return KM_ALT;
+    if (!strcasecmp(name, "Cmd") || !strcasecmp(name, "Command") || !strcasecmp(name, "Meta") ||
+        !strcasecmp(name, "Super")) return KM_CMD;
+    return 0;
+}
+
+static void combo_normalize(const char* combo, char* out, int outsize) {
+    out[0] = 0;
+    if (!combo || !*combo) return;
+    int mods = 0;
+    char key[32] = "";
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s", combo);
+    if (strchr(buf, '<')) {
+        const char* p = buf;
+        while (*p == '<') {
+            const char* close = strchr(p, '>');
+            if (!close) break;
+            char name[32];
+            size_t n = (size_t)(close - p - 1);
+            if (n >= sizeof(name)) n = sizeof(name) - 1;
+            memcpy(name, p + 1, n);
+            name[n] = 0;
+            mods |= combo_mod(name);
+            p = close + 1;
+        }
+        snprintf(key, sizeof(key), "%s", p);
+    } else {
+        // "Ctrl++" names the plus key: a trailing empty token after '+'.
+        size_t L = strlen(buf);
+        int plus_key = L >= 2 && buf[L - 1] == '+' && buf[L - 2] == '+';
+        if (plus_key) buf[L - 1] = 0;
+        for (char* tok = strtok(buf, "+"); tok; tok = strtok(NULL, "+")) {
+            int m = combo_mod(tok);
+            if (m) mods |= m; else snprintf(key, sizeof(key), "%s", tok);
+        }
+        if (plus_key) snprintf(key, sizeof(key), "+");
+    }
+    combo_canonical(mods, key, out, outsize);
+}
+
+static double aeui_mono_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static int shortcut_fire(const char* canonical) {
+    for (int i = 0; i < nshortcuts; i++) {
+        if (strcmp(shortcuts[i].combo, canonical) != 0) continue;
+        AeClosure* en = shortcuts[i].enabled;
+        if (en && en->fn && !((int (*)(void*))en->fn)(en->env)) continue;   // inert: keep looking
+        AeClosure* c = shortcuts[i].closure;
+        if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
+        return 1;
+    }
+    return 0;
+}
+
+// Two-key chords: the first combo arms, the second (within 1.5 s) fires.
+static int chord_feed(const char* canonical) {
+    if (chord_pending[0] && aeui_mono_now() - chord_armed_at > 1.5) chord_pending[0] = 0;
+    if (chord_pending[0]) {
+        for (int i = 0; i < nchords; i++) {
+            if (strcmp(chords[i].first, chord_pending) == 0 && strcmp(chords[i].second, canonical) == 0) {
+                chord_pending[0] = 0;
+                AeClosure* c = chords[i].closure;
+                if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
+                return 1;
+            }
+        }
+        chord_pending[0] = 0;
+    }
+    for (int i = 0; i < nchords; i++) {
+        if (strcmp(chords[i].first, canonical) == 0) {
+            snprintf(chord_pending, sizeof(chord_pending), "%s", canonical);
+            chord_armed_at = aeui_mono_now();
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int shortcut_dispatch(const char* canonical) {
+    if (!canonical || !*canonical) return 0;
+    if (chord_feed(canonical)) return 1;
+    return shortcut_fire(canonical);
+}
+
+void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) {
+    if (!combo || !boxed_closure) return;
+    AeuiShortcut* ns = (AeuiShortcut*)realloc(shortcuts, sizeof(AeuiShortcut) * (size_t)(nshortcuts + 1));
+    if (!ns) return;
+    shortcuts = ns;
+    combo_normalize(combo, shortcuts[nshortcuts].combo, (int)sizeof(shortcuts[0].combo));
+    shortcuts[nshortcuts].closure = (AeClosure*)boxed_closure;
+    shortcuts[nshortcuts].enabled = (AeClosure*)enabled_closure;
+    nshortcuts++;
+}
+void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
+    aether_ui_shortcut_when_impl(combo, boxed_closure, NULL);
+}
+void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_combo, void* boxed_closure) {
+    if (!first_combo || !second_combo || !boxed_closure) return;
+    AeuiChord* nc = (AeuiChord*)realloc(chords, sizeof(AeuiChord) * (size_t)(nchords + 1));
+    if (!nc) return;
+    chords = nc;
+    combo_normalize(first_combo, chords[nchords].first, (int)sizeof(chords[0].first));
+    combo_normalize(second_combo, chords[nchords].second, (int)sizeof(chords[0].second));
+    chords[nchords].closure = (AeClosure*)boxed_closure;
+    nchords++;
+}
+
+// Every handler registered, in order (a second window_on_key must not
+// silence the first: on_key() per widget is built on this).
+void aether_ui_window_on_key_impl(void* boxed_closure) {
+    if (!boxed_closure) return;
+    AeClosure** nk = (AeClosure**)realloc(key_handlers, sizeof(AeClosure*) * (size_t)(nkey_handlers + 1));
+    if (!nk) return;
+    key_handlers = nk;
+    key_handlers[nkey_handlers++] = (AeClosure*)boxed_closure;
+}
+
+int aether_ui_window_key_deliver(const char* key_name, int mods) {
+    if (!key_name) return 0;
+    int fired = 0, n = nkey_handlers;
+    for (int i = 0; i < n; i++) {
+        AeClosure* c = key_handlers[i];
+        if (!c || !c->fn) continue;
+        ((void (*)(void*, const char*, intptr_t))c->fn)(c->env, key_name, (intptr_t)mods);
+        fired = 1;
+    }
+    return fired;
+}
+
+// The ABI's mods bits (1 shift, 2 ctrl, 4 alt, 8 super) from ours.
+static int aeui_abi_mods(int km) {
+    return ((km & KM_SHIFT) ? 1 : 0) | ((km & KM_CTRL) ? 2 : 0) | ((km & KM_ALT) ? 4 : 0) | ((km & KM_CMD) ? 8 : 0);
+}
+
+// A canonical combo back into (key name, ABI mods), with the key spelled as
+// a real keypress spells it ("BackSpace", "Return", "Left"), so a spec drives
+// the same strings the app receives from a keyboard.
+static int aeui_combo_split(const char* canonical, char* name, int namesize) {
+    int km = 0;
+    const char* p = canonical;
+    for (;;) {
+        const char* plus = strchr(p, '+');
+        if (!plus || plus == p) break;
+        size_t n = (size_t)(plus - p);
+        int m = (n == 4 && !strncmp(p, "ctrl", 4)) ? KM_CTRL : (n == 3 && !strncmp(p, "alt", 3)) ? KM_ALT
+              : (n == 5 && !strncmp(p, "shift", 5)) ? KM_SHIFT : (n == 3 && !strncmp(p, "cmd", 3)) ? KM_CMD : 0;
+        if (!m) break;
+        km |= m;
+        p = plus + 1;
+    }
+    static const char* canon[] = {
+        "left", "Left", "right", "Right", "up", "Up", "down", "Down", "return", "Return",
+        "enter", "Return", "escape", "Escape", "esc", "Escape", "tab", "Tab", "space", "space",
+        "backspace", "BackSpace", "delete", "Delete", "home", "Home", "end", "End",
+        "page_up", "Page_Up", "page_down", "Page_Down", "insert", "Insert", NULL };
+    for (int i = 0; canon[i]; i += 2) {
+        if (!strcmp(p, canon[i])) { snprintf(name, (size_t)namesize, "%s", canon[i + 1]); return aeui_abi_mods(km); }
+    }
+    if (p[0] == 'f' && p[1] >= '1' && p[1] <= '9') { snprintf(name, (size_t)namesize, "F%s", p + 1); return aeui_abi_mods(km); }
+    snprintf(name, (size_t)namesize, "%s", p);
+    return aeui_abi_mods(km);
+}
+
+// Tab / Shift+Tab move focus through the focusable widgets, as a desktop
+// window's do (View.focusSearch, the platform's own focus order).
+static int aeui_focus_step(JNIEnv* env, int backward) {
+    jobject f = g_activity ? JO(g_activity, M_Act_getCurrentFocus) : NULL;
+    if (!f) return 0;
+    jobject next = JO(f, M_View_focusSearch, (jint)(backward ? 1 /* FOCUS_BACKWARD */ : 2 /* FOCUS_FORWARD */));
+    return next ? (JZ(next, M_View_requestFocus) ? 1 : 0) : 0;
+}
+
+// One key, as a canonical combo plus the name and mods the any-key
+// handlers get. Returns 1 when something consumed or handled it.
+static int aeui_key_route(const char* canonical, const char* name, int abi_mods, int* consumed) {
+    *consumed = 0;
+    if (shortcut_dispatch(canonical)) { *consumed = 1; return 1; }
+    return aether_ui_window_key_deliver(name, abi_mods);
+}
+
+// Android key codes -> the key names the DSL speaks (GDK's, as every
+// backend reports them).
+static const char* aeui_key_name(int code) {
+    switch (code) {
+        case 19: return "Up";        case 20: return "Down";
+        case 21: return "Left";      case 22: return "Right";
+        case 66: case 160: return "Return";
+        case 111: return "Escape";   case 61: return "Tab";
+        case 62: return "space";     case 67: return "BackSpace";
+        case 112: return "Delete";   case 122: return "Home";
+        case 123: return "End";      case 92: return "Page_Up";
+        case 93: return "Page_Down"; case 124: return "Insert";
+        default: return NULL;
+    }
+}
+
+static jboolean JNICALL native_key(JNIEnv* env, jclass cls, jint code, jint meta, jint unicode, jint repeat) {
+    (void)cls; (void)repeat;
+    // A modifier on its own is not a key the app hears about.
+    if ((code >= 57 && code <= 60) || code == 113 || code == 114 || code == 117 || code == 118 ||
+        code == 115 || code == 119) return JNI_FALSE;
+    int km = ((meta & 0x1000) ? KM_CTRL : 0) | ((meta & 0x2) ? KM_ALT : 0) |
+             ((meta & 0x1) ? KM_SHIFT : 0) | ((meta & 0x10000) ? KM_CMD : 0);
+    char name[16] = "", base[16] = "";
+    const char* named = aeui_key_name(code);
+    if (named) {
+        snprintf(name, sizeof(name), "%s", named);
+        snprintf(base, sizeof(base), "%s", named);
+    } else if (code >= 131 && code <= 142) {
+        snprintf(name, sizeof(name), "F%d", code - 130);
+        snprintf(base, sizeof(base), "%s", name);
+    } else if (code >= 29 && code <= 54) {
+        // A letter: the combo names the key (shift stays a modifier, so
+        // Ctrl+Shift+C is not Ctrl+C); the handler gets the character typed.
+        snprintf(base, sizeof(base), "%c", 'a' + (code - 29));
+        if (unicode > 0 && unicode < 128) snprintf(name, sizeof(name), "%c", (char)unicode);
+        else snprintf(name, sizeof(name), "%s", base);
+    } else if (unicode > 0) {
+        // Anything else printable is its character, shift folded into it.
+        char u[8] = "";
+        if (unicode < 0x80) { u[0] = (char)unicode; }
+        else if (unicode < 0x800) { u[0] = (char)(0xC0 | (unicode >> 6)); u[1] = (char)(0x80 | (unicode & 63)); }
+        else { u[0] = (char)(0xE0 | (unicode >> 12)); u[1] = (char)(0x80 | ((unicode >> 6) & 63)); u[2] = (char)(0x80 | (unicode & 63)); }
+        snprintf(name, sizeof(name), "%s", u);
+        snprintf(base, sizeof(base), "%s", u);
+        km &= ~KM_SHIFT;
+    } else {
+        return JNI_FALSE;
+    }
+    char canonical[64];
+    combo_canonical(km, base, canonical, (int)sizeof(canonical));
+    int consumed = 0;
+    if ((*env)->PushLocalFrame(env, 16) != 0) return JNI_FALSE;
+    aeui_key_route(canonical, name, aeui_abi_mods(km), &consumed);
+    // Escape with nothing bound to it closes the topmost overlay.
+    if (!consumed && code == 111 && aeui_escape_overlays()) consumed = 1;
+    (*env)->PopLocalFrame(env, NULL);
+    return consumed ? JNI_TRUE : JNI_FALSE;
+}
+
+// The driver's /window/key?combo=: the same route, then the window's own
+// keys (Escape closes an overlay, Tab moves focus) when nothing took it.
+static int aeui_driver_key(JNIEnv* env, const char* combo) {
+    char canonical[64], name[64];
+    combo_normalize(combo, canonical, (int)sizeof(canonical));
+    int mods = aeui_combo_split(canonical, name, (int)sizeof(name));
+    int consumed = 0;
+    int fired = aeui_key_route(canonical, name, mods, &consumed);
+    if (!fired) {
+        if (!strcmp(name, "Escape")) fired = aeui_escape_overlays();
+        else if (!strcmp(name, "Tab")) fired = aeui_focus_step(env, mods & 1);
+    }
+    return fired;
+}
+
+// ===========================================================================
+// Notifications -- NotificationManager on a channel of the app's own
+// ("aether-ui", API 26+). A tap brings the app back (a PendingIntent to the
+// activity, singleTop) and runs the notification's closure through the
+// shared registry, which also keeps what the driver's /notifications lists.
+// Headless nothing is posted (no one to see it); the record is made either
+// way, as on every backend.
+// ===========================================================================
+JCLASS(C_NotificationManager, "android/app/NotificationManager");
+JCLASS(C_NotificationChannel, "android/app/NotificationChannel");
+JCLASS(C_NotifBuilder, "android/app/Notification$Builder");
+JCLASS(C_PendingIntent, "android/app/PendingIntent");
+JCLASS(C_Object, "java/lang/Object");
+JCLASS(C_BitmapFactory2, "android/graphics/BitmapFactory");
+JMETHOD(M_NC_init, C_NotificationChannel, "<init>", "(Ljava/lang/String;Ljava/lang/CharSequence;I)V");
+JMETHOD(M_NM_createChannel, C_NotificationManager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V");
+JMETHOD(M_NM_notify, C_NotificationManager, "notify", "(Ljava/lang/String;ILandroid/app/Notification;)V");
+JMETHOD(M_NB_init, C_NotifBuilder, "<init>", "(Landroid/content/Context;Ljava/lang/String;)V");
+JMETHOD(M_NB_setSmallIcon, C_NotifBuilder, "setSmallIcon", "(I)Landroid/app/Notification$Builder;");
+JMETHOD(M_NB_setLargeIcon, C_NotifBuilder, "setLargeIcon", "(Landroid/graphics/Bitmap;)Landroid/app/Notification$Builder;");
+JMETHOD(M_NB_setContentTitle, C_NotifBuilder, "setContentTitle", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;");
+JMETHOD(M_NB_setContentText, C_NotifBuilder, "setContentText", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;");
+JMETHOD(M_NB_setAutoCancel, C_NotifBuilder, "setAutoCancel", "(Z)Landroid/app/Notification$Builder;");
+JMETHOD(M_NB_setContentIntent, C_NotifBuilder, "setContentIntent", "(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;");
+JMETHOD(M_NB_build, C_NotifBuilder, "build", "()Landroid/app/Notification;");
+JSTATIC(M_PI_getActivity, C_PendingIntent, "getActivity",
+        "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;");
+JMETHOD(M_Obj_getClass, C_Object, "getClass", "()Ljava/lang/Class;");
+JMETHOD(M_Intent_initCls, C_Intent, "<init>", "(Landroid/content/Context;Ljava/lang/Class;)V");
+JMETHOD(M_Intent_putExtraI, C_Intent, "putExtra", "(Ljava/lang/String;I)Landroid/content/Intent;");
+JSTATIC(M_BF_decodeFile, C_BitmapFactory2, "decodeFile", "(Ljava/lang/String;)Landroid/graphics/Bitmap;");
+JMETHOD(M_Act_requestPermissions, C_Activity, "requestPermissions", "([Ljava/lang/String;I)V");
+
+typedef struct { int id; const char* title; const char* body; const char* icon; const char* tag; } AeuiNotif;
+
+static void aeui_notify_run(void* arg) {
+    AeuiNotif* n = (AeuiNotif*)arg;
+    JNIEnv* env = aeui_frame(32);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return; }
+    jobject nm = aeui_service(env, "notification");
+    static int channel_made = 0;
+    if (nm && !channel_made) {
+        jobject ch = JNEW(M_NC_init, aeui_jstring(env, "aether-ui"),
+                          aeui_jstring(env, g_title && *g_title ? g_title : "Notifications"),
+                          (jint)3 /* IMPORTANCE_DEFAULT */);
+        if (ch) { JV(nm, M_NM_createChannel, ch); channel_made = 1; }
+    }
+    jobject b = nm ? JNEW(M_NB_init, g_activity, aeui_jstring(env, "aether-ui")) : NULL;
+    if (b) {
+        JO(b, M_NB_setSmallIcon, (jint)aeui_android_r(env, "drawable", "ic_dialog_info"));
+        JO(b, M_NB_setContentTitle, aeui_jstring(env, n->title ? n->title : ""));
+        JO(b, M_NB_setContentText, aeui_jstring(env, n->body ? n->body : ""));
+        JO(b, M_NB_setAutoCancel, JNI_TRUE);
+        if (n->icon && *n->icon) {
+            jobject bmp = JSO(M_BF_decodeFile, aeui_jstring(env, n->icon));
+            if (bmp) JO(b, M_NB_setLargeIcon, bmp);
+        }
+        jobject cls = JO(g_activity, M_Obj_getClass);
+        jobject in = cls ? JNEW(M_Intent_initCls, g_activity, cls) : NULL;
+        if (in) {
+            JO(in, M_Intent_putExtraI, aeui_jstring(env, "aeui_notification"), (jint)n->id);
+            JO(in, M_Intent_addFlags, (jint)0x20000000 /* FLAG_ACTIVITY_SINGLE_TOP */);
+            jobject pi = JSO(M_PI_getActivity, g_activity, (jint)n->id, in,
+                             (jint)(0x04000000 | 0x08000000) /* IMMUTABLE | UPDATE_CURRENT */);
+            if (pi) JO(b, M_NB_setContentIntent, pi);
+        }
+        jobject notif = JO(b, M_NB_build);
+        // A tag names the slot: a second notification with it replaces the
+        // first, as the registry's tag reuse does.
+        int has_tag = n->tag && *n->tag;
+        if (notif) JV(nm, M_NM_notify, has_tag ? aeui_jstring(env, n->tag) : (jstring)NULL,
+                      (jint)(has_tag ? 0 : n->id), notif);
+    }
+    aeui_unframe(env);
+}
+
+static int aeui_post_notification(int id, const char* title, const char* body, const char* icon, const char* tag) {
+    if (id <= 0 || aeui_is_headless()) return id;
+    AeuiNotif n = { id, title, body, icon, tag };
+    aeui_android_run_sync(aeui_notify_run, &n);
+    return id;
+}
+
+int aether_ui_notify_impl(const char* title, const char* body) {
+    int id = aether_ui_notify_register(title, body);
+    return aeui_post_notification(id, title, body, NULL, NULL);
+}
+int aether_ui_notify_full_impl(const char* title, const char* body, const char* icon_path,
+                               const char* tag, void* boxed_click) {
+    int id = aether_ui_notify_register_full(title, body, icon_path ? icon_path : "",
+                                            tag ? tag : "", boxed_click);
+    return aeui_post_notification(id, title, body, icon_path, tag);
+}
+
+static void JNICALL native_notification_tap(JNIEnv* env, jclass cls, jint id) {
+    (void)env; (void)cls;
+    aether_ui_notif_emit_click((int)id);
+}
+
+// POST_NOTIFICATIONS is a runtime permission from API 33: 1 when granted;
+// otherwise the system's permission dialog is asked for and 0 returned (the
+// grant, if the user gives it, arrives later; the next call answers 1).
+// Below 33, and headless, it is granted as the shared registry records.
+typedef struct { int granted; } AeuiPerm;
+static void aeui_perm_run(void* arg) {
+    AeuiPerm* p = (AeuiPerm*)arg;
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return; }
+    jstring perm = aeui_jstring(env, "android.permission.POST_NOTIFICATIONS");
+    if (JI(g_activity, M_Ctx_checkSelfPermission, perm) == 0) {
+        p->granted = 1;
+    } else {
+        jobjectArray arr = (*env)->NewObjectArray(env, 1, J.String, perm);
+        if (arr) JV(g_activity, M_Act_requestPermissions, arr, (jint)0xAE02);
+        p->granted = 0;
+    }
+    aeui_unframe(env);
+}
+int aether_ui_notify_request_permission_impl(void) {
+    JNIEnv* env = aeui_env();
+    if (aeui_is_headless() || !env || aeui_sdk_int(env) < 33) return aether_ui_notify_request_permission();
+    AeuiPerm p = { 0 };
+    aeui_android_run_sync(aeui_perm_run, &p);
+    return p.granted;
+}
+
+// ===========================================================================
+// CSS classes, weight, inline CSS, the census
+// ===========================================================================
+
+// Classes are the widget's own list (space-separated, no duplicates), which
+// the stylesheet layer above the ABI matches and the driver reports.
+static int aeui_has_class(const char* list, const char* cls) {
+    size_t n = strlen(cls);
+    for (const char* p = list; p && *p; ) {
+        while (*p == ' ') p++;
+        const char* e = strchr(p, ' ');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len == n && strncmp(p, cls, n) == 0) return 1;
+        if (!e) break;
+        p = e + 1;
+    }
+    return 0;
+}
+
+void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !cls || !*cls || strchr(cls, ' ') || aeui_has_class(w->classes, cls)) return;
+    size_t old = w->classes ? strlen(w->classes) : 0;
+    char* nc = (char*)malloc(old + strlen(cls) + 2);
+    if (!nc) return;
+    if (old) { memcpy(nc, w->classes, old); nc[old] = ' '; strcpy(nc + old + 1, cls); }
+    else strcpy(nc, cls);
+    free(w->classes);
+    w->classes = nc;
+}
+
+void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !cls || !w->classes || !aeui_has_class(w->classes, cls)) return;
+    char* out = (char*)malloc(strlen(w->classes) + 1);
+    if (!out) return;
+    out[0] = 0;
+    char* dup = strdup(w->classes);
+    char* save = NULL;
+    for (char* t = strtok_r(dup, " ", &save); t; t = strtok_r(NULL, " ", &save)) {
+        if (!strcmp(t, cls)) continue;
+        if (out[0]) strcat(out, " ");
+        strcat(out, t);
+    }
+    free(dup);
+    free(w->classes);
+    w->classes = out[0] ? out : (free(out), (char*)NULL);
+}
+
+const char* aether_ui_widget_classes_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    return (w && w->classes) ? w->classes : "";
+}
+
+static void hook_widget_classes_into(int handle, char* buf, int bufsize) {
+    buf[0] = 0;
+    AeuiWidget* w = live_widget(handle);
+    if (w && w->classes) snprintf(buf, (size_t)bufsize, "%s", w->classes);
+}
+
+int aether_ui_widget_count_impl(void) { return widget_count; }
+
+// A share of the stack's slack in proportion to n (a stated size stays as
+// the floor: aeui_apply_lp); 0 takes the widget back to its natural size.
+void aether_ui_widget_weight_impl(int handle, int n) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    w->weight = n > 0 ? n : 0;
+    aeui_apply_lp(env, handle);
+    aeui_unframe(env);
+}
+
+// "prop: value; ..." through the typed setters -- there is no stylesheet
+// engine under Android Views, so a declaration is the setter it names (the
+// UIKit backend's reading). Transitions travel this way too: "transition:
+// opacity 300ms" makes the next set_opacity tween (ViewPropertyAnimator)
+// instead of snapping, as AppKit honours it.
+static int aeui_css_color(const char* v, double* r, double* g, double* b) {
+    unsigned int rr, gg, bb;
+    if (!v) return 0;
+    if (v[0] == '#' && strlen(v) == 7 && sscanf(v + 1, "%2x%2x%2x", &rr, &gg, &bb) == 3) {
+        *r = rr / 255.0; *g = gg / 255.0; *b = bb / 255.0; return 1;
+    }
+    if (v[0] == '#' && strlen(v) == 4 && sscanf(v + 1, "%1x%1x%1x", &rr, &gg, &bb) == 3) {
+        *r = rr / 15.0; *g = gg / 15.0; *b = bb / 15.0; return 1;
+    }
+    static const struct { const char* n; double r, g, b; } names[] = {
+        { "white", 1, 1, 1 }, { "black", 0, 0, 0 }, { "red", 1, 0, 0 },
+        { "green", 0, 0.5, 0 }, { "blue", 0, 0, 1 }, { "gray", 0.5, 0.5, 0.5 }, { "grey", 0.5, 0.5, 0.5 } };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (!strcmp(v, names[i].n)) { *r = names[i].r; *g = names[i].g; *b = names[i].b; return 1; }
+    return 0;
+}
+
+static char* aeui_trim(char* s) {
+    while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+    char* e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n')) *--e = 0;
+    return s;
+}
+
+static int* g_opacity_ms = NULL;   // by handle: a declared opacity transition (ms), 0 none
+static int g_opacity_cap = 0;
+
+static void aeui_apply_css_decl(int handle, const char* prop, const char* val) {
+    double r, g, b;
+    if ((!strcmp(prop, "background") || !strcmp(prop, "background-color")) && aeui_css_color(val, &r, &g, &b))
+        aether_ui_set_bg_color(handle, r, g, b, 1.0);
+    else if (!strcmp(prop, "color") && aeui_css_color(val, &r, &g, &b))
+        aether_ui_set_text_color(handle, r, g, b);
+    else if (!strcmp(prop, "opacity"))
+        aether_ui_set_opacity(handle, atof(val));
+    else if (!strcmp(prop, "border-radius") || !strcmp(prop, "corner-radius"))
+        aether_ui_set_corner_radius(handle, atof(val));
+    else if (!strcmp(prop, "font-size"))
+        aether_ui_set_font_size(handle, atof(val));
+    else if (!strcmp(prop, "font-weight"))
+        aether_ui_set_font_bold(handle, strstr(val, "bold") ? 1 : 0);
+    else if (!strcmp(prop, "font-family"))
+        aether_ui_set_font_family(handle, val);
+    else if (!strcmp(prop, "border")) {
+        const char* hash = strchr(val, '#');
+        if (hash && aeui_css_color(hash, &r, &g, &b)) aether_ui_set_border(handle, atof(val), r, g, b);
+    } else if (!strcmp(prop, "transition") && strstr(val, "opacity")) {
+        int ms = 0;
+        const char* d = val + strcspn(val, "0123456789");
+        if (*d) ms = atoi(d);
+        if (handle > g_opacity_cap) {
+            int cap = g_opacity_cap ? g_opacity_cap : 64;
+            while (cap < handle) cap *= 2;
+            int* n = (int*)realloc(g_opacity_ms, sizeof(int) * (size_t)cap);
+            if (!n) return;
+            memset(n + g_opacity_cap, 0, sizeof(int) * (size_t)(cap - g_opacity_cap));
+            g_opacity_ms = n; g_opacity_cap = cap;
+        }
+        g_opacity_ms[handle - 1] = ms;
+    }
+}
+
+static int aeui_opacity_transition_ms(int handle) {
+    return (handle >= 1 && handle <= g_opacity_cap && !aeui_animations_off()) ? g_opacity_ms[handle - 1] : 0;
+}
+
+void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
+    if (!property_css || !live_widget(handle)) return;
+    char* dup = strdup(property_css);
+    char* save = NULL;
+    for (char* decl = strtok_r(dup, ";", &save); decl; decl = strtok_r(NULL, ";", &save)) {
+        char* colon = strchr(decl, ':');
+        if (!colon) continue;
+        *colon = 0;
+        aeui_apply_css_decl(handle, aeui_trim(decl), aeui_trim(colon + 1));
+    }
+    free(dup);
+}
+
+// ===========================================================================
+// Sealing (the driver's "not automatable" mark), recursively by registry.
+// ===========================================================================
+void aether_ui_seal_widget_impl(int handle) {
+    if (live_widget(handle)) aether_ui_test_server_seal_widget(handle);
+}
+void aether_ui_seal_subtree_impl(int handle) {
+    if (!live_widget(handle)) return;
+    aether_ui_seal_widget_impl(handle);
+    for (int i = 0; i < widget_count; i++)
+        if (widgets[i].parent == handle && widgets[i].view) aether_ui_seal_subtree_impl(i + 1);
+}
+
+// ===========================================================================
+// Drag and drop, scrolling hooks
+// ===========================================================================
+JCLASS(C_ShadowBuilder, "android/view/View$DragShadowBuilder");
+JMETHOD(M_SB2_init, C_ShadowBuilder, "<init>", "(Landroid/view/View;)V");
+JMETHOD(M_View_startDragAndDrop, C_View, "startDragAndDrop",
+        "(Landroid/content/ClipData;Landroid/view/View$DragShadowBuilder;Ljava/lang/Object;I)Z");
+
+// A drag of plain text (a row's index, a file's path) with the view as its
+// shadow. DRAG_FLAG_GLOBAL (256) lets a file path leave the app.
+static void aeui_start_drag(JNIEnv* env, int handle, const char* label, const char* text, int global) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    jobject cd = JSO(M_CD_newPlainText, aeui_jstring(env, label), aeui_jstring(env, text));
+    jobject sb = JNEW(M_SB2_init, w->view);
+    if (cd && sb) JZ(w->view, M_View_startDragAndDrop, cd, sb, (jobject)NULL, (jint)(global ? 256 : 0));
+}
+
+// A reorderable row: a long press lifts it (its index travels as the
+// drag's text), and a row it is dropped on runs its on_drop(src) -- the
+// platform's own drag and drop, inside the list.
+void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) {
+    AeuiWidget* w = live_widget(row_handle);
+    if (!w) return;
+    w->row_drop = (AeClosure*)on_drop_closure;
+    w->row_index = index;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    jobject drag = aeui_listener(env, row_handle, AEUI_EV_ROW_DRAG);
+    jobject drop = aeui_listener(env, row_handle, AEUI_EV_ROW_DROP);
+    if (drag) JV(w->view, M_View_setOnLongClickListener, drag);
+    if (drop) JV(w->view, M_View_setOnDragListener, drop);
+    aeui_unframe(env);
+}
+
+int aether_ui_fire_row_drop(int row_handle, int src_index) {
+    AeuiWidget* w = live_widget(row_handle);
+    AeClosure* c = w ? w->row_drop : NULL;
+    if (!c || !c->fn) return 0;
+    ((void (*)(void*, intptr_t))c->fn)(c->env, (intptr_t)src_index);
+    return 1;
+}
+
+// A drag SOURCE carrying a file path: a long press drags the path out (to
+// another app in split screen), as plain text -- Android shares files
+// between apps as content URIs through a provider, which an app without one
+// cannot mint, so the path is what travels. The driver reads the payload.
+void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    free(w->drag_path);
+    w->drag_path = (path && *path) ? strdup(path) : NULL;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    jobject l = w->drag_path ? aeui_listener(env, handle, AEUI_EV_FILE_DRAG) : NULL;
+    JV(w->view, M_View_setOnLongClickListener, l);
+    aeui_unframe(env);
+}
+const char* aether_ui_widget_drag_payload_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    return (w && w->drag_path) ? w->drag_path : "";
+}
+
+// Files dropped on the window: the activity's host frame takes drops (from
+// another app in split screen, or a desktop-mode file manager), and the
+// listener turns each item into a path (see AetherListener.onDrag).
+static AeClosure* g_file_drop = NULL;
+void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
+    g_file_drop = (AeClosure*)boxed_closure;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    jobject l = g_host ? aeui_listener(env, 0, AEUI_EV_FILE_DROP) : NULL;
+    if (l) JV(g_host, M_View_setOnDragListener, l);
+    aeui_unframe(env);
+}
+int aether_ui_window_file_drop_deliver(const char* paths) {
+    AeClosure* c = g_file_drop;
+    if (!c || !c->fn) return 0;
+    ((void (*)(void*, const char*))c->fn)(c->env, paths ? paths : "");
+    return 1;
+}
+
+// A composed vlist's native scroll: a mouse wheel or a trackpad's two-finger
+// scroll over the container, in rows (AetherListener WHEEL). A native list
+// (below) scrolls itself.
+void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
+    AeuiWidget* w = live_widget(container_handle);
+    if (!w) return;
+    w->scroll_cb = (AeClosure*)on_scroll;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    jobject l = aeui_listener(env, container_handle, AEUI_EV_WHEEL);
+    if (l) JV(w->view, M_View_setOnGenericMotionListener, l);
+    aeui_unframe(env);
+}
+int aether_ui_fire_scroll(int container_handle, int dy) {
+    AeuiWidget* w = live_widget(container_handle);
+    AeClosure* c = w ? w->scroll_cb : NULL;
+    if (!c || !c->fn) return 0;
+    ((void (*)(void*, intptr_t))c->fn)(c->env, (intptr_t)dy);
+    return 1;
+}
+
+// ===========================================================================
+// Native list -- a ListView over AetherListAdapter. The ListView asks for
+// the rows its viewport shows; each is a registered container the app's row
+// closure fills (so the driver sees rows exactly as in a composed list), and
+// a row it scraps leaves the registry. Rows are 24 dp, the viewport
+// window_rows of them, as AppKit's table sizes itself. Vertical only: a
+// horizontal list keeps the DSL's composed path, as on AppKit.
+// ===========================================================================
+JCLASS(C_ListView, "android/widget/ListView");
+JMETHOD(M_LV_init, C_ListView, "<init>", "(Landroid/content/Context;)V");
+JMETHOD(M_LV_setAdapter, C_ListView, "setAdapter", "(Landroid/widget/ListAdapter;)V");
+JMETHOD(M_LV_setRecyclerListener, C_ListView, "setRecyclerListener", "(Landroid/widget/AbsListView$RecyclerListener;)V");
+JMETHOD(M_LV_setSelectionFromTop, C_ListView, "setSelectionFromTop", "(II)V");
+JMETHOD(M_LV_getFirstVisiblePosition, C_ListView, "getFirstVisiblePosition", "()I");
+JMETHOD(M_LV_setDividerHeight, C_ListView, "setDividerHeight", "(I)V");
+static jclass g_adapter_class = NULL;
+static jmethodID g_adapter_init = NULL, g_adapter_setCount = NULL;
+
+typedef struct { int handle; jobject adapter; AeClosure* builder; int count; } AeuiList;
+static AeuiList* lists = NULL;
+static int nlists = 0;
+static AeuiList* list_of(int handle) {
+    for (int i = 0; i < nlists; i++) if (lists[i].handle == handle) return &lists[i];
+    return NULL;
+}
+
+int aether_ui_native_list_available_impl(void) { return g_adapter_init ? 1 : 0; }
+
+int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
+    if (horizontal || !g_adapter_init) return 0;
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return 0; }
+    int h = 0;
+    jobject lv = JNEW(M_LV_init, g_activity);
+    AeuiList* nl = (AeuiList*)realloc(lists, sizeof(AeuiList) * (size_t)(nlists + 1));
+    if (lv && nl) {
+        lists = nl;
+        h = register_widget_typed(env, lv, AUI_LIST);
+        jobject ad = (*env)->NewObject(env, g_adapter_class, g_adapter_init, (jint)h);
+        if (!aeui_check(env, "new AetherListAdapter") && ad) {
+            JV(lv, M_LV_setDividerHeight, (jint)0);
+            JV(lv, M_LV_setAdapter, ad);
+            JV(lv, M_LV_setRecyclerListener, ad);
+            AeuiList* l = &lists[nlists++];
+            l->handle = h;
+            l->adapter = (*env)->NewGlobalRef(env, ad);
+            l->builder = NULL;
+            l->count = 0;
+            AeuiWidget* w = widget_at(h);
+            w->fixed_h = 24 * (window_rows > 0 ? window_rows : 10);
+            w->own_hexp = w->hexp = 1;
+        }
+    }
+    aeui_unframe(env);
+    return h;
+}
+
+void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
+    AeuiList* l = list_of(handle);
+    if (l) l->builder = (AeClosure*)builder;
+}
+
+void aether_ui_native_list_set_count_impl(int handle, int count) {
+    AeuiList* l = list_of(handle);
+    if (!l) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    l->count = count < 0 ? 0 : count;
+    (*env)->CallVoidMethod(env, l->adapter, g_adapter_setCount, (jint)l->count);
+    aeui_check(env, "AetherListAdapter.setCount");
+    aeui_unframe(env);
+}
+
+// Lay the list out now at the size it has, so the rows for its new position
+// are realized (and the old ones scrapped) before the caller reads it back.
+static void aeui_list_settle(JNIEnv* env, AeuiWidget* w) {
+    int l = JI(w->view, M_View_getLeft), t = JI(w->view, M_View_getTop);
+    int r = JI(w->view, M_View_getRight), b = JI(w->view, M_View_getBottom);
+    if (r <= l || b <= t) return;
+    JV(w->view, M_View_measure, (jint)(0x40000000 | (r - l)), (jint)(0x40000000 | (b - t)));
+    JV(w->view, M_View_layout, (jint)l, (jint)t, (jint)r, (jint)b);
+}
+
+// The row at the top of the viewport (vlist_scroll_to names the first row).
+void aether_ui_native_list_scroll_to_impl(int handle, int index) {
+    AeuiList* lst = list_of(handle);
+    AeuiWidget* w = live_widget(handle);
+    if (!lst || !w || lst->count <= 0) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    int i = index < 0 ? 0 : index >= lst->count ? lst->count - 1 : index;
+    JV(w->view, M_LV_setSelectionFromTop, (jint)i, (jint)0);
+    aeui_list_settle(env, w);
+    aeui_unframe(env);
+}
+
+int aether_ui_native_list_first_visible_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_LIST) return 0;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return 0;
+    int f = JI(w->view, M_LV_getFirstVisiblePosition);
+    aeui_unframe(env);
+    return f;
+}
+
+// AetherListAdapter.getView: build row `position` into a fresh container.
+static jobject JNICALL native_list_row(JNIEnv* env, jclass cls, jint handle, jint position) {
+    (void)cls;
+    AeuiList* l = list_of(handle);
+    if (!l || !live_widget(handle)) return NULL;
+    int row = aether_ui_vstack_create(0);
+    AeuiWidget* rw = live_widget(row);
+    if (!rw) return NULL;
+    rw->parent = handle;   // a row of the list, for the driver and for retiring
+    aeui_apply_lp(env, row);
+    AeClosure* b = l->builder;
+    if (b && b->fn) ((void (*)(void*, intptr_t, intptr_t))b->fn)(b->env, (intptr_t)position, (intptr_t)row);
+    rw = live_widget(row);
+    return rw ? (*env)->NewLocalRef(env, rw->view) : NULL;
+}
+
+// A row the list let go of: out of the registry with everything in it.
+static void JNICALL native_list_scrap(JNIEnv* env, jclass cls, jint handle, jobject view) {
+    (void)cls; (void)handle;
+    int row = aether_ui_handle_for_widget(view);
+    if (row) aeui_retire_tree(env, row);
+}
+
+// ===========================================================================
+// Native view -- a SurfaceView. Its handle is the ANativeWindow* of its
+// Surface (kind 5, ANativeWindow), what an engine makes a Vulkan surface
+// (VK_KHR_android_surface) or an EGL window surface from. Realize and resize
+// report the Surface's size in pixels, from SurfaceHolder.Callback.
+// ===========================================================================
+#include <android/native_window_jni.h>
+JCLASS(C_SurfaceView, "android/view/SurfaceView");
+JCLASS(C_SurfaceHolder, "android/view/SurfaceHolder");
+JMETHOD(M_SV2_init, C_SurfaceView, "<init>", "(Landroid/content/Context;)V");
+JMETHOD(M_SV2_getHolder, C_SurfaceView, "getHolder", "()Landroid/view/SurfaceHolder;");
+JMETHOD(M_SH_addCallback, C_SurfaceHolder, "addCallback", "(Landroid/view/SurfaceHolder$Callback;)V");
+JMETHOD(M_SH_getSurface, C_SurfaceHolder, "getSurface", "()Landroid/view/Surface;");
+
+typedef struct {
+    int widget;
+    ANativeWindow* window;
+    AeClosure* on_realize; AeClosure* on_resize;
+    int realized, w, h;
+} AeuiNativeView;
+static AeuiNativeView* nviews = NULL;
+static int nnviews = 0;
+static AeuiNativeView* nview_at(int id) { return (id >= 1 && id <= nnviews) ? &nviews[id - 1] : NULL; }
+
+int aether_ui_native_view_available_impl(void) { return 1; }
+int aether_ui_native_view_kind_impl(void) { return 5; }
+
+int aether_ui_native_view_create_impl(int width, int height) {
+    JNIEnv* env = aeui_frame(16);
+    if (!env || !g_activity) { if (env) aeui_unframe(env); return 0; }
+    int id = 0;
+    jobject sv = JNEW(M_SV2_init, g_activity);
+    AeuiNativeView* nn = (AeuiNativeView*)realloc(nviews, sizeof(AeuiNativeView) * (size_t)(nnviews + 1));
+    if (sv && nn) {
+        nviews = nn;
+        int h = register_widget_typed(env, sv, AUI_NATIVE_VIEW);
+        AeuiNativeView* v = &nviews[nnviews++];
+        memset(v, 0, sizeof(*v));
+        v->widget = h;
+        id = nnviews;
+        // The size asked for is where the panel starts, a floor, not a cage:
+        // fill_width/fill_height grow it with the window, as an engine's
+        // viewport does.
+        if (width > 0) aether_ui_set_min_width_impl(h, width);
+        if (height > 0) aether_ui_set_min_height_impl(h, height);
+        jobject holder = JO(sv, M_SV2_getHolder);
+        jobject l = aeui_listener(env, h, AEUI_EV_SURFACE);
+        if (holder && l) JV(holder, M_SH_addCallback, l);
+    }
+    aeui_unframe(env);
+    return id;
+}
+
+int aether_ui_native_view_get_widget(int view_id) {
+    AeuiNativeView* v = nview_at(view_id);
+    return v ? v->widget : 0;
+}
+void* aether_ui_native_view_handle_impl(int view_id) {
+    AeuiNativeView* v = nview_at(view_id);
+    return v ? (void*)v->window : NULL;
+}
+void aether_ui_native_view_on_realize_impl(int view_id, void* boxed_closure) {
+    AeuiNativeView* v = nview_at(view_id);
+    if (!v) return;
+    v->on_realize = (AeClosure*)boxed_closure;
+    // Already real: report it now, as a realize hook installed late expects.
+    if (v->realized && v->on_realize && v->on_realize->fn)
+        ((void (*)(void*, intptr_t, intptr_t))v->on_realize->fn)(v->on_realize->env, (intptr_t)v->w, (intptr_t)v->h);
+}
+void aether_ui_native_view_on_resize_impl(int view_id, void* boxed_closure) {
+    AeuiNativeView* v = nview_at(view_id);
+    if (v) v->on_resize = (AeClosure*)boxed_closure;
+}
+
+static void aeui_native_view_surface(JNIEnv* env, int widget, int w, int h) {
+    AeuiNativeView* v = NULL;
+    for (int i = 0; i < nnviews; i++) if (nviews[i].widget == widget) v = &nviews[i];
+    AeuiWidget* sw = live_widget(widget);
+    if (!v || !sw) return;
+    if (w <= 0 || h <= 0) {   // the Surface is going: its window with it
+        if (v->window) { ANativeWindow_release(v->window); v->window = NULL; }
+        return;
+    }
+    if (!v->window) {
+        jobject holder = JO(sw->view, M_SV2_getHolder);
+        jobject surface = holder ? JO(holder, M_SH_getSurface) : NULL;
+        if (surface) v->window = ANativeWindow_fromSurface(env, surface);
+    }
+    int first = !v->realized;
+    if (!first && w == v->w && h == v->h) return;
+    v->realized = 1;
+    v->w = w; v->h = h;
+    AeClosure* c = first ? v->on_realize : v->on_resize;
+    if (c && c->fn) ((void (*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+}
+
+// ===========================================================================
+// File icons -- an ImageView showing the icon for a path: an image file is
+// its own picture; anything else gets the icon of the app that opens its
+// type (PackageManager, as a file manager shows it), else a framework glyph
+// for the kind of thing it is. The path need not exist (named by its
+// extension, as on every backend); "" is an empty image.
+// ===========================================================================
+JCLASS(C_MimeTypeMap, "android/webkit/MimeTypeMap");
+JCLASS(C_PackageManager, "android/content/pm/PackageManager");
+JCLASS(C_ResolveInfo, "android/content/pm/ResolveInfo");
+JSTATIC(M_MTM_getSingleton, C_MimeTypeMap, "getSingleton", "()Landroid/webkit/MimeTypeMap;");
+JMETHOD(M_MTM_getMime, C_MimeTypeMap, "getMimeTypeFromExtension", "(Ljava/lang/String;)Ljava/lang/String;");
+JMETHOD(M_Intent_setDataAndType, C_Intent, "setDataAndType", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/Intent;");
+JMETHOD(M_PM_resolveActivity, C_PackageManager, "resolveActivity",
+        "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;");
+JMETHOD(M_RI_loadIcon, C_ResolveInfo, "loadIcon",
+        "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;");
+JMETHOD(M_IV_setImageDrawable, C_ImageView, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V");
+JMETHOD(M_IV_setImageResource, C_ImageView, "setImageResource", "(I)V");
+JSTATIC(M_BF_decodeFile2, C_BitmapFactory, "decodeFile", "(Ljava/lang/String;)Landroid/graphics/Bitmap;");
+
+static void aeui_set_file_icon(JNIEnv* env, AeuiWidget* w, const char* path) {
+    JV(w->view, M_IV_setImageDrawable, (jobject)NULL);
+    if (!path || !*path) return;
+    struct stat st;
+    int is_dir = (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) || path[strlen(path) - 1] == '/';
+    const char* dot = strrchr(path, '.');
+    const char* slash = strrchr(path, '/');
+    char ext[32] = "";
+    if (!is_dir && dot && (!slash || dot > slash)) {
+        snprintf(ext, sizeof(ext), "%s", dot + 1);
+        for (char* p = ext; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
+    }
+    char mime[128] = "";
+    if (is_dir) snprintf(mime, sizeof(mime), "inode/directory");
+    else if (ext[0]) {
+        jobject mtm = JSO(M_MTM_getSingleton);
+        jobject m = mtm ? JO(mtm, M_MTM_getMime, aeui_jstring(env, ext)) : NULL;
+        if (m) aeui_charseq_into(env, m, mime, (int)sizeof(mime));
+    }
+    if (!strncmp(mime, "image/", 6)) {
+        jobject bmp = JSO(M_BF_decodeFile2, aeui_jstring(env, path));
+        if (bmp) { JV(w->view, M_IV_setImageBitmap, bmp); return; }
+    }
+    if (mime[0] && !is_dir && g_activity) {
+        jobject pm = JO(g_activity, M_Ctx_getPackageManager);
+        jobject uri = JSO(M_Uri_parse, aeui_jstring(env, "file:///aeui-icon"));
+        jobject in = uri ? JNEW(M_Intent_init2, aeui_jstring(env, "android.intent.action.VIEW"), uri) : NULL;
+        if (pm && in) {
+            JO(in, M_Intent_setDataAndType, uri, aeui_jstring(env, mime));
+            jobject ri = JO(pm, M_PM_resolveActivity, in, (jint)0x00010000 /* MATCH_DEFAULT_ONLY */);
+            jobject icon = ri ? JO(ri, M_RI_loadIcon, pm) : NULL;
+            if (icon) { JV(w->view, M_IV_setImageDrawable, icon); return; }
+        }
+    }
+    // The framework's own glyphs, by kind (it has no folder icon): a
+    // listing for a directory, a picture, a play mark for media, a page for
+    // anything else.
+    const char* glyph = is_dir ? "ic_menu_view"
+                      : !strncmp(mime, "image/", 6) ? "ic_menu_gallery"
+                      : (!strncmp(mime, "audio/", 6) || !strncmp(mime, "video/", 6)) ? "ic_media_play"
+                      : "ic_menu_agenda";
+    int res = aeui_android_r(env, "drawable", glyph);
+    if (res) JV(w->view, M_IV_setImageResource, (jint)res);
+}
+
+int aether_ui_file_icon_create(const char* path) {
+    int h = image_register(NULL, 0);
+    AeuiWidget* w = live_widget(h);
+    JNIEnv* env = aeui_frame(32);
+    if (w && env) aeui_set_file_icon(env, w, path);
+    if (env) aeui_unframe(env);
+    return h;
+}
+
+void aether_ui_file_icon_set(int handle, const char* path) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_IMAGE) return;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return;
+    aeui_set_file_icon(env, w, path);
+    aeui_unframe(env);
+}
+
+// ===========================================================================
+// System tray -- NOT AVAILABLE on Android. There is no status-area tray: an
+// app's persistent presence there is an ongoing notification, which is
+// notify's job, not a menu-bearing icon. As on UIKit these are documented
+// no-ops so the ABI links; tray_create answers 0 (no tray), and the driver's
+// /tray routes find nothing.
+// ===========================================================================
+int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) {
+    (void)name; (void)boxed_left_click;
+    return 0;
+}
+void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) { (void)tray_id; (void)menu_handle; }
+void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) { (void)tray_id; (void)text; }
+void aether_ui_tray_set_icon_template_impl(int tray_id, int is_template) { (void)tray_id; (void)is_template; }
+void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle, const char* icon_clean,
+                                            const char* icon_busy, const char* icon_alert) {
+    (void)tray_id; (void)state_handle; (void)icon_clean; (void)icon_busy; (void)icon_alert;
+}
+void aether_ui_tray_seal_impl(int tray_id) { (void)tray_id; }
+
+// ===========================================================================
+// Driver: window-level hit testing (/window/pick).
+// ===========================================================================
+// The deepest visible View under (x, y) window px, as the platform's touch
+// dispatch would find it (children last-drawn first).
+static jobject aeui_hit(JNIEnv* env, jobject v, int x, int y, int depth) {
+    if (!v || depth > 64 || JI(v, M_View_getVisibility) != 0) return NULL;
+    int rx, ry, rw, rh;
+    jintArray loc = (*env)->NewIntArray(env, 2);
+    if (!loc) return NULL;
+    JV(v, M_View_getLocationInWindow, loc);
+    jint xy[2] = { 0, 0 };
+    (*env)->GetIntArrayRegion(env, loc, 0, 2, xy);
+    (*env)->DeleteLocalRef(env, loc);
+    rx = xy[0]; ry = xy[1];
+    rw = JI(v, M_View_getWidth); rh = JI(v, M_View_getHeight);
+    if (x < rx || y < ry || x >= rx + rw || y >= ry + rh) return NULL;
+    if ((*env)->IsInstanceOf(env, v, jcls(env, &C_ViewGroup))) {
+        int n = JI(v, M_VG_getChildCount);
+        for (int i = n - 1; i >= 0; i--) {
+            jobject c = JO(v, M_VG_getChildAt, (jint)i);
+            jobject hit = aeui_hit(env, c, x, y, depth + 1);
+            if (c) (*env)->DeleteLocalRef(env, c);
+            if (hit) return hit;
+        }
+    }
+    return (*env)->NewLocalRef(env, v);
+}
+
+static void aeui_driver_pick(AetherDriverActionCtx* ctx) {
+    int px = ctx->ival, py = ctx->ival2;   // window dp, as /widgets reports
+    ctx->retval = 0;
+    ctx->ival2 = 0;
+    JNIEnv* env = aeui_frame(256);
+    if (!env) return;
+    jobject hit = g_host ? aeui_hit(env, g_host, aeui_dp(px), aeui_dp(py), 0) : NULL;
+    for (jobject v = hit; v; ) {
+        int h = aether_ui_handle_for_widget(v);
+        if (h) {
+            if (get_widget_type(h) == AUI_SCRIM) ctx->ival2 = 1;
+            else ctx->retval = h;
+            break;
+        }
+        jobject p = JO(v, M_View_getParent);
+        v = (p && (*env)->IsInstanceOf(env, p, jcls(env, &C_View))) ? p : NULL;
+    }
+    aeui_unframe(env);
+}
+
+// ===========================================================================
 // AetherUIDriver hooks. The whole request is serviced on the UI thread
 // (run_on_ui_thread), so every hook below runs there and may touch Views.
 // ===========================================================================
@@ -3737,6 +6626,62 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             fflush(stdout);
             fflush(stderr);
             exit(0);
+        case AETHER_DRV_WIN_RESIZE: {
+            JNIEnv* env = aeui_frame(16);
+            if (env) { aeui_window_resize(env, ctx->handle > 1 ? ctx->handle : 1, ctx->ival, ctx->ival2); aeui_unframe(env); }
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_WIN_KEY: {
+            JNIEnv* env = aeui_frame(32);
+            ctx->retval = env ? aeui_driver_key(env, ctx->sval) : 0;
+            if (env) aeui_unframe(env);
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_PICK:
+            aeui_driver_pick(ctx);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_SPLIT_POS:
+            if (get_widget_type(ctx->handle) != AUI_SPLITVIEW || !live_widget(ctx->handle)) { ctx->result = 3; return; }
+            if (ctx->ival >= 0) aether_ui_split_set_position_impl(ctx->handle, ctx->ival);
+            ctx->retval = aether_ui_split_position_impl(ctx->handle);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_TAB_SELECT:
+            if (!tabs_of(ctx->handle)) { ctx->result = 3; return; }
+            aether_ui_tabs_select(ctx->handle, ctx->ival);
+            ctx->retval = aether_ui_tabs_selected(ctx->handle);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_CTX_MENU: {
+            AeuiWidget* w = live_widget(ctx->handle);
+            ctx->retval = (w && w->nctx > 0) ? 1 : 0;
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_CTX_ACTIVATE:
+            ctx->retval = aeui_ctx_fire(ctx->handle, ctx->ival);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_MENU_ACTIVATE:
+            // The shared side-store: 0 fired, 3 no such item, 4 no closure.
+            ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            return;
+        case AETHER_DRV_MENU_NATIVE_ACTIVATE: {
+            JNIEnv* env = aeui_frame(64);
+            int r = env ? aeui_menu_native_activate(env, ctx->handle, ctx->sval) : -1;
+            if (env) aeui_unframe(env);
+            if (r < 0) { ctx->result = 3; return; }
+            ctx->retval = r;
+            ctx->result = 0;
+            return;
+        }
+        case AETHER_DRV_TRAY_ACTIVATE:
+            ctx->result = 3;   // no tray on Android
+            return;
         case AETHER_DRV_CLICK:
         case AETHER_DRV_SET_TEXT:
         case AETHER_DRV_TOGGLE:
@@ -3747,8 +6692,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_RELEASE:
             break;   // handled below, against the widget
         default:
-            // The rest (canvas, split, tabs, menus, window) arrive with the
-            // passes that bring those widgets: 404 honestly rather than pretend.
+            // The canvas events arrive with the canvas (pass C): 404
+            // honestly rather than pretend.
             ctx->result = 3;
             return;
     }
@@ -3852,7 +6797,7 @@ static const AetherDriverHooks android_driver_hooks = {
     .widget_children      = hook_widget_children,
     .widget_enabled       = hook_widget_enabled,
     .widget_rect          = hook_widget_rect,
-    .widget_classes_into  = NULL,
+    .widget_classes_into  = hook_widget_classes_into,
     .focused_widget       = hook_focused_widget,
     .widget_a11y          = hook_widget_a11y,
     .screenshot_png       = hook_screenshot_png,
@@ -4022,7 +6967,10 @@ static void JNICALL native_lifecycle(JNIEnv* env, jclass cls, jint event, jboole
     switch (event) {
         case 1: AEUI_LOGI("lifecycle: pause"); break;
         case 2: AEUI_LOGI("lifecycle: resume"); break;
-        case 3: AEUI_LOGI("lifecycle: configuration change"); break;
+        case 3:
+            AEUI_LOGI("lifecycle: configuration change");
+            aeui_appearance_config_changed();
+            break;
         case 4:
             AEUI_LOGI("lifecycle: destroy (finishing=%d)", finishing ? 1 : 0);
             if (finishing) {
@@ -4082,6 +7030,41 @@ static int aeui_radio_settle(JNIEnv* env, int handle, int on) {
 static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind,
                                  jint a, jint b, jstring s) {
     (void)cls;
+    // Events whose handle is not a widget's: a menu's, an overlay's, a
+    // window's, the activity's.
+    switch (kind) {
+        case AEUI_EV_MENU:
+            if (b == 1) aeui_ctx_fire(handle, a - 1);   // a context menu: handle = the widget
+            else aeui_menu_fire_id(a);                 // the options menu, a popup
+            return;
+        case AEUI_EV_MENU_OPEN: {
+            // A dialog window's menu-bar title: its menu, anchored to the
+            // bar it is in.
+            if ((*env)->PushLocalFrame(env, 16) != 0) return;
+            jobject anchor = NULL;
+            for (int i = 0; i < nwrecs && !anchor; i++)
+                if (wrecs[i].live && wrecs[i].menubar) anchor = wrecs[i].menubar;
+            aeui_popup_menu(env, handle, anchor ? anchor : g_host);
+            (*env)->PopLocalFrame(env, NULL);
+            return;
+        }
+        case AEUI_EV_SCRIM:
+            aeui_scrim_tapped(handle);
+            return;
+        case AEUI_EV_DISMISS:
+            if ((*env)->PushLocalFrame(env, 32) != 0) return;
+            aeui_dialog_gone(env, handle, a);
+            (*env)->PopLocalFrame(env, NULL);
+            return;
+        case AEUI_EV_FILE_DROP: {
+            char* paths = aeui_charseq_dup(env, s);
+            aether_ui_window_file_drop_deliver(paths);
+            free(paths);
+            return;
+        }
+        default:
+            break;
+    }
     AeuiWidget* w = live_widget(handle);
     if (!w) return;
     switch (kind) {
@@ -4130,6 +7113,7 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
             break;
         }
         case AEUI_EV_LAYOUT: {
+            if (w->face) aeui_place_face(env, handle);
             int wd = aeui_px_to_dp(a), ht = aeui_px_to_dp(b);
             if (!w->layout_cb || (wd == w->layout_w && ht == w->layout_h)) break;
             w->layout_w = wd;
@@ -4140,6 +7124,43 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
         }
         case AEUI_EV_DOUBLE:
             aeui_call0(w->dbl);
+            break;
+        case AEUI_EV_TAB:
+            aether_ui_tabs_select(handle, a);
+            break;
+        case AEUI_EV_CONTEXT:
+            if ((*env)->PushLocalFrame(env, 32) != 0) break;
+            aeui_ctx_open(env, handle);
+            (*env)->PopLocalFrame(env, NULL);
+            break;
+        case AEUI_EV_DRAG:
+            if ((*env)->PushLocalFrame(env, 32) != 0) break;
+            aeui_split_drag(env, handle, a, b);
+            (*env)->PopLocalFrame(env, NULL);
+            break;
+        case AEUI_EV_WHEEL:
+            aether_ui_fire_scroll(handle, a);
+            break;
+        case AEUI_EV_SURFACE:
+            if ((*env)->PushLocalFrame(env, 16) != 0) break;
+            aeui_native_view_surface(env, handle, a, b);
+            (*env)->PopLocalFrame(env, NULL);
+            break;
+        case AEUI_EV_ROW_DRAG: {
+            if ((*env)->PushLocalFrame(env, 16) != 0) break;
+            char idx[16];
+            snprintf(idx, sizeof(idx), "%d", w->row_index);
+            aeui_start_drag(env, handle, "aeui-row", idx, 0);
+            (*env)->PopLocalFrame(env, NULL);
+            break;
+        }
+        case AEUI_EV_ROW_DROP:
+            aether_ui_fire_row_drop(handle, a);
+            break;
+        case AEUI_EV_FILE_DRAG:
+            if (!w->drag_path || (*env)->PushLocalFrame(env, 16) != 0) break;
+            aeui_start_drag(env, handle, "aeui-file", w->drag_path, 1);
+            (*env)->PopLocalFrame(env, NULL);
             break;
         default:
             break;
@@ -4207,6 +7228,28 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     J.Listener_init            = M(J.Listener, "<init>", "(II)V");
     J.Listener_initDouble      = M(J.Listener, "<init>", "(Landroid/content/Context;I)V");
     J.A11y_init                = M(J.A11y, "<init>", "()V");
+    g_listener_init3           = M(J.Listener, "<init>", "(III)V");
+    g_activity_pick            = M(shim, "pick", "(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    // The shim's other classes, while the app's class loader is in effect.
+    g_scroll_class = aeui_find_class(env, "dev/aether/ui/AetherScroll");
+    if (g_scroll_class) g_scroll_init = M(g_scroll_class, "<init>", "(Landroid/content/Context;)V");
+    g_host_class = aeui_find_class(env, "dev/aether/ui/AetherHost");
+    if (g_host_class) g_host_init = M(g_host_class, "<init>", "(Landroid/content/Context;)V");
+    g_wrap_class = aeui_find_class(env, "dev/aether/ui/AetherWrap");
+    if (g_wrap_class) g_wrap_init = M(g_wrap_class, "<init>", "(Landroid/content/Context;II)V");
+    g_adapter_class = aeui_find_class(env, "dev/aether/ui/AetherListAdapter");
+    if (g_adapter_class) {
+        g_adapter_init = M(g_adapter_class, "<init>", "(I)V");
+        g_adapter_setCount = M(g_adapter_class, "setCount", "(I)V");
+        static const JNINativeMethod list_natives[] = {
+            { "nativeListRow", "(II)Landroid/view/View;", (void*)native_list_row },
+            { "nativeListScrap", "(ILandroid/view/View;)V", (void*)native_list_scrap },
+        };
+        if ((*env)->RegisterNatives(env, g_adapter_class, list_natives, 2) != JNI_OK) {
+            aeui_check(env, "RegisterNatives(AetherListAdapter)");
+            g_adapter_init = NULL;   // no native list: vlist composes its own window
+        }
+    }
     J.Bitmap                = aeui_find_class(env, "android/graphics/Bitmap");
     J.Canvas                = aeui_find_class(env, "android/graphics/Canvas");
     J.ByteArrayOutputStream = aeui_find_class(env, "java/io/ByteArrayOutputStream");
@@ -4252,6 +7295,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
         { "nativeStart", "(Landroid/app/Activity;Landroid/view/ViewGroup;F)V", (void*)native_start },
         { "nativeLifecycle", "(IZ)V", (void*)native_lifecycle },
         { "nativeEvent", "(IIIILjava/lang/String;)V", (void*)native_event },
+        { "nativeKey", "(IIII)Z", (void*)native_key },
+        { "nativeOptionsMenu", "(Landroid/view/Menu;)Z", (void*)native_options_menu },
+        { "nativeNotificationTap", "(I)V", (void*)native_notification_tap },
     };
     if ((*env)->RegisterNatives(env, shim, natives,
                                 (jint)(sizeof(natives) / sizeof(natives[0]))) != JNI_OK) {
@@ -4266,13 +7312,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 
 // ===========================================================================
 // STUBS -- every remaining ABI function, so the backend links. Each is
-// replaced by a real implementation in a stage-2 pass; the list in STATUS at
+// replaced by a real implementation in pass C (the canvas, the GPU view,
+// fire_double_click); the list in STATUS at
 // the top is the same set.
 // ===========================================================================
-void aether_ui_alert_impl(const char* title, const char* message) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_app_quit_impl(void) { aeui_android_unimplemented(__func__); }
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius, double start_angle, double end_angle) {
     aeui_android_unimplemented(__func__);
 }
@@ -4379,39 +7422,7 @@ void aether_ui_canvas_stroke_text_impl(int canvas_id, const char* text, double x
 int aether_ui_canvas_write_png_impl(int canvas_id, const char* path, int width, int height) {
     aeui_android_unimplemented(__func__); return 0;
 }
-char* aether_ui_clipboard_read_impl(void) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-void aether_ui_clipboard_write_impl(const char* text) { aeui_android_unimplemented(__func__); }
-void aether_ui_close_window_by_handle_impl(int win_handle) { aeui_android_unimplemented(__func__); }
-void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_dark_mode_check(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_file_icon_create(const char* path) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_file_icon_set(int handle, const char* path) { aeui_android_unimplemented(__func__); }
-char* aether_ui_file_open(const char* title, const char* start_dir) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-char* aether_ui_file_save(const char* title, const char* default_name) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-int aether_ui_fire_appearance(int dark) { aeui_android_unimplemented(__func__); return 0; }
 int aether_ui_fire_double_click(int handle) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_fire_redo(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_fire_row_drop(int row_handle, int src_index) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_fire_scroll(int container_handle, int dy) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_fire_undo(void) { aeui_android_unimplemented(__func__); return 0; }
 int aether_ui_gpuview_available_impl(void) { aeui_android_unimplemented(__func__); return 0; }
 int aether_ui_gpuview_create_impl(int width, int height) {
     aeui_android_unimplemented(__func__); return 0;
@@ -4430,203 +7441,3 @@ int aether_ui_gpuview_read_pixel_impl(int gpu_id, int px, int py) {
     aeui_android_unimplemented(__func__); return 0;
 }
 void aether_ui_gpuview_request_render_impl(int gpu_id) { aeui_android_unimplemented(__func__); }
-void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_menu_add_separator(int menu_handle) { aeui_android_unimplemented(__func__); }
-void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_menu_bar_create(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_menu_create(const char* label) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_menu_item_set_label(int menu_handle, const char* old_label, const char* new_label) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_native_list_available_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_native_list_create_impl(int horizontal, int window_rows) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_native_list_first_visible_impl(int handle) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_native_list_scroll_to_impl(int handle, int index) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_native_list_set_count_impl(int handle, int count) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_native_list_set_row_builder_impl(int handle, void* builder) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_native_view_available_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_native_view_create_impl(int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_native_view_get_widget(int view_id) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void* aether_ui_native_view_handle_impl(int view_id) {
-    aeui_android_unimplemented(__func__); return NULL;
-}
-int aether_ui_native_view_kind_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_native_view_on_realize_impl(int view_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_native_view_on_resize_impl(int view_id, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_navstack_create(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_navstack_depth(int handle) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_navstack_pop(int handle) { aeui_android_unimplemented(__func__); }
-void aether_ui_navstack_push(int handle, const char* title, int body_handle) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_notify_full_impl(const char* title, const char* body, const char* icon_path, const char* tag, void* boxed_click) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_notify_impl(const char* title, const char* body) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_notify_request_permission_impl(void) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_open_url_impl(const char* url) { aeui_android_unimplemented(__func__); }
-void aether_ui_overlay_close_impl(int overlay_handle) { aeui_android_unimplemented(__func__); }
-int aether_ui_overlay_count_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_overlay_exit_played_impl(int h) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_overlay_is_exiting_impl(int h) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_overlay_is_live_impl(int h) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_overlay_is_modal_impl(int h) { aeui_android_unimplemented(__func__); return 0; }
-const char* aether_ui_overlay_material_effective_impl(int h) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-int aether_ui_overlay_open_impl(int win_handle, int content_handle, int anchor, int dx, int dy, int modal) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_overlay_set_material_impl(int h, const char* kind) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_overlay_set_on_dismiss_impl(int h, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_overlay_set_transition_impl(int h, const char* kind, int ms) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_seal_subtree_impl(int handle) { aeui_android_unimplemented(__func__); }
-void aether_ui_seal_widget_impl(int handle) { aeui_android_unimplemented(__func__); }
-int aether_ui_sheet_create_impl(const char* title, int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_sheet_dismiss_impl(int handle) { aeui_android_unimplemented(__func__); }
-void aether_ui_sheet_present_impl(int handle) { aeui_android_unimplemented(__func__); }
-void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_shortcut_chord_impl(const char* first_combo, const char* second_combo, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_shortcut_impl(const char* combo, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_shortcut_when_impl(const char* combo, void* boxed_closure, void* enabled_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_split_position_impl(int handle) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_split_set_position_impl(int handle, int px) { aeui_android_unimplemented(__func__); }
-int aether_ui_splitview_create(int vertical) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_tab_add(int tabs_handle, const char* title) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_tabs_count(int tabs_handle) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_tabs_create(void* boxed_closure) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_tabs_select(int tabs_handle, int index) { aeui_android_unimplemented(__func__); }
-int aether_ui_tabs_selected(int tabs_handle) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_toast_impl(int win_handle, const char* text, int ms) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_tray_create_impl(const char* name, void* boxed_left_click) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_tray_seal_impl(int tray_id) { aeui_android_unimplemented(__func__); }
-void aether_ui_tray_set_icon_for_state_impl(int tray_id, int state_handle, const char* icon_clean, const char* icon_busy, const char* icon_alert) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_tray_set_icon_template_impl(int tray_id, int is_template) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_tray_set_menu_impl(int tray_id, int menu_handle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_tray_set_tooltip_impl(int tray_id, const char* text) {
-    aeui_android_unimplemented(__func__);
-}
-int aether_ui_vg_tooltip_drawn_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-void aether_ui_vg_tooltip_hide_impl(void) { aeui_android_unimplemented(__func__); }
-int aether_ui_vg_tooltip_show_impl(int canvas_id, const char* text, double cx, double cy) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_vlist_attach_scroll_impl(int container_handle, void* on_scroll) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_watch_appearance_impl(void) { aeui_android_unimplemented(__func__); }
-void aether_ui_widget_add_css_class_impl(int handle, const char* cls) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_widget_apply_css_impl(int handle, const char* property_css) {
-    aeui_android_unimplemented(__func__);
-}
-const char* aether_ui_widget_classes_impl(int handle) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-int aether_ui_widget_count_impl(void) { aeui_android_unimplemented(__func__); return 0; }
-const char* aether_ui_widget_drag_payload_impl(int handle) {
-    aeui_android_unimplemented(__func__); return aeui_empty_string();
-}
-void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_widget_remove_css_class_impl(int handle, const char* cls) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_widget_weight_impl(int handle, int n) { aeui_android_unimplemented(__func__); }
-void aether_ui_window_close_impl(int win_handle) { aeui_android_unimplemented(__func__); }
-int aether_ui_window_create_impl(const char* title, int width, int height) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_window_file_drop_deliver(const char* paths) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-int aether_ui_window_key_deliver(const char* key_name, int mods) {
-    aeui_android_unimplemented(__func__); return 0;
-}
-void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_window_on_key_impl(void* boxed_closure) { aeui_android_unimplemented(__func__); }
-void aether_ui_window_set_body_impl(int win_handle, int root_handle) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_window_set_title_impl(int win_handle, const char* title) {
-    aeui_android_unimplemented(__func__);
-}
-void aether_ui_window_show_impl(int win_handle) { aeui_android_unimplemented(__func__); }
-int aether_ui_wrap_create(void) { aeui_android_unimplemented(__func__); return 0; }
-int aether_ui_zstack_create(void) { aeui_android_unimplemented(__func__); return 0; }

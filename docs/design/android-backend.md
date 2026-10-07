@@ -1,6 +1,7 @@
 # An Android backend
 
-Status: **stage 2, pass A done** (2026-10-07); passes B and C next. The fifth
+Status: **stage 2, pass B done** (2026-10-07); pass C (canvas, GPU view)
+next. The fifth
 native implementation of the backend ABI (`backend/aether_ui_backend.h`),
 beside GTK4, AppKit, Win32 and UIKit.
 
@@ -48,7 +49,11 @@ multi-window, file pickers), which the backend's log names.
   geometry the driver reports, `get_width`, `on_layout`, font sizes and text
   metrics. That is what points are on AppKit and UIKit, so a spec's numbers
   mean the same on all of them.
-- `backend/android/` — the Java shim: `AetherActivity`, `AetherListener`
+- `backend/android/` — the Java shim (pass B added `AetherWrap`,
+  `AetherListAdapter`, `AetherHost` and `AetherScroll`, the objects a flow
+  layout, a `ListView` and the window's minimum size need,
+  and the key, menu, picker and notification hooks on the activity):
+  `AetherActivity`, `AetherListener`
   (every View event — click, text change, check change, seek, item
   selection, hover, layout change, double tap — carried to one native
   dispatch with the widget's handle; what the event means is decided in C)
@@ -71,6 +76,58 @@ multi-window, file pickers), which the backend's log names.
   `-Wall -Werror` for bionic and builds the counter's `libapp.so` when
   `AETHER_ANDROID_SYSROOT` is set; Phase 4a runs the counter spec on the
   desktop; `check_backend_parity.py` counts five backends.
+
+Stage 2 pass B brought everything around the widgets: 104 more ABI
+functions real, plus the tray family as documented no-ops (no status-area
+tray on Android, as on iOS). What is left is pass C's: the 40 canvas
+functions, the 8 GPU-view functions and `fire_double_click`. The mappings:
+
+- **Containers.** zstack is a `FrameLayout`; wrap is `AetherWrap`, a flow
+  layout (the shim's one `ViewGroup`: `android.widget` has none); tabs are a
+  strip of buttons over a frame of pages, the unselected ones `GONE` but
+  registered; a navstack keeps every pushed page, hides the one below and
+  shows it again on pop (a phone's back stack), retiring the popped page's
+  widgets; a splitview is `[pane, divider, pane]` with a real drag handle.
+- **Windows.** Window 1 is the activity. An extra window is an
+  `android.app.Dialog` (a real platform window with a title and its own
+  view tree; Back closes it), so `/windows`, per-widget `window` and the
+  close path are what they are on the desktop. Sheets are dialogs too.
+  `/window/resize` sizes the activity's content (wider than the screen if
+  asked, as a freeform window is) or the dialog.
+- **Overlays** are drawn in the window's host frame above the body; a
+  modal's scrim is a registered widget; "blur" is a real `RenderEffect`
+  blur of the body from API 31 (else "tint", and `material_effective` says
+  so); exit transitions are `ViewPropertyAnimator` tweens. Toasts and drawn
+  tooltips are overlay labels, so the driver finds them.
+- **Menus.** Window 1's menu bar is the action bar's options menu (each
+  menu a submenu); a dialog window's is a row of menu titles opening
+  `PopupMenu`s; `menu_popup` and context menus (long press, or a secondary
+  click) are `PopupMenu`s. `/menu/{h}/native_activate` performs the real
+  `MenuItem` through the options menu.
+- **Keys.** `AetherActivity.dispatchKeyEvent` hands every hardware-keyboard
+  key to native code first: chords, then shortcuts (which consume the key),
+  then the any-key handlers (which do not), Escape closing the top overlay.
+  `Primary` is Ctrl, as on GTK4 and Win32.
+- **Pickers** are the Storage Access Framework's, run as a modal (a nested
+  `Looper.loop()` until `onActivityResult`), answering a path C can open
+  (`/proc/self/fd/N`; a folder is its tree's `content://` URI). Headless,
+  the shared `/prompts` queue answers, as everywhere.
+- **System.** Alerts are `AlertDialog`s; notifications post on the app's
+  own channel, with `POST_NOTIFICATIONS` requested at API 33+ and a tap
+  coming back through `onNewIntent`; clipboard, `ACTION_VIEW` URLs and the
+  configuration's night bit (watched through configuration changes) are
+  the platform's.
+- **Window minimum size.** `LinearLayout` squeezes children that overflow a
+  full stack to height 0 (and a zero-sized View cannot take focus); a
+  desktop window instead grows to what its content needs. `AetherHost`, the
+  frame every window's body mounts in, measures the body's natural height
+  (`AetherScroll` scroll areas reporting their minimum, as a
+  `GtkScrolledWindow` does) and lays it out at that or the window's height,
+  whichever is more: overflow is clipped, not collapsed.
+- **Lists and views.** A native list is a `ListView` over
+  `AetherListAdapter`: rows are built on demand and retired when scrapped.
+  A native view is a `SurfaceView` whose handle is its `ANativeWindow*`
+  (native-view kind 5).
 
 Found on the way: `--emit=lib` drops a program's `main()`, so the packaging
 script compiles a copy with `main()` renamed to `aeui_app_main()` (exported as

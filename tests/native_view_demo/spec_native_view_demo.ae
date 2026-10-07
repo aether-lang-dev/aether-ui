@@ -12,6 +12,23 @@
 import std.spec
 import uidriver
 import std.string
+import std.os
+
+// The pixel width the demo's label reports ("size: WxH"), or -1. The label
+// is in PIXELS (what a swapchain needs) and /widgets in logical units, which
+// are one unit only at a scale of 1 (Win32 at 100%); on a HiDPI or Android
+// screen the two differ by the backing scale.
+reported_px_width() -> int {
+    body = uidriver.get_body("/widgets")
+    at = string.index_of(body, "size: ")
+    if at < 0 { return 0 - 1 }
+    rest = string.string_substring(body, at + 6, string.length(body))
+    x = string.index_of(rest, "x")
+    if x <= 0 { return 0 - 1 }
+    v, err = string.to_int(string.string_substring(rest, 0, x))
+    if string.length(err) > 0 { return 0 - 1 }
+    return v
+}
 
 main() {
     fw = spec.init()
@@ -61,9 +78,23 @@ main() {
                 spec.assert_gt(vid, 0, "the view is in the widget tree")
                 w0 = uidriver.widget_int_field_by_id(vid, "w")
                 spec.assert_gt(w0, 300, "it took the width of its pane (${w0})")
+                px0 = reported_px_width()
                 uidriver.resize_window(680, 520)
-                ok = uidriver.wait_body_contains("/widgets", "size: ${w0 + 160}x", 30)
+                _moved = uidriver.wait_int_field_change(vid, "w", w0, 30)
                 w1 = uidriver.widget_int_field_by_id(vid, "w")
+                // The view's new width in pixels is its new width in units
+                // at its backing scale (px0 / w0): w0+160 exactly where the
+                // window opened at the size asked for and the scale is 1
+                // (win32 at 100%); within a pixel of rounding on a HiDPI or
+                // Android screen, where neither holds.
+                want = w1 * px0 / w0
+                ok = 0
+                tries = 0
+                while tries < 30 && ok == 0 {
+                    got = reported_px_width()
+                    if got >= want - 2 && got <= want + 2 { ok = 1 } else { sleep(200) }
+                    tries = tries + 1
+                }
                 spec.assert_gt(w1, w0,
                     "the view grew with the window (${w0} -> ${w1})")
                 spec.assert_true(ok,

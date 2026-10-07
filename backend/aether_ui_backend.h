@@ -478,7 +478,8 @@ int   aether_ui_native_view_get_widget(int view_id);
  * realize hook. What it points at is said by _kind_impl. */
 void* aether_ui_native_view_handle_impl(int view_id);
 /* What _native_handle_impl returns on this backend: 0 none, 1 Win32 HWND,
- * 2 NSView*, 3 X11 Window (as an intptr), 4 wl_surface*. */
+ * 2 NSView*, 3 X11 Window (as an intptr), 4 wl_surface*, 5 ANativeWindow*
+ * (Android: a SurfaceView's Surface, for VK_KHR_android_surface or EGL). */
 int   aether_ui_native_view_kind_impl(void);
 /* Fired once, on the UI thread, when the handle is real and the panel has a
  * size: create the swapchain here. Closure takes (w: int, h: int) in PIXELS. */

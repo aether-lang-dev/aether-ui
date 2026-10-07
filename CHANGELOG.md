@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Android backend, stage 2 pass B: navigation and system.** 104 more ABI
+  functions are real (272 of 327; only canvas, gpuview and
+  `fire_double_click` remain, for pass C): tabs, navstack, split view,
+  sheets and extra windows (as `Dialog`s), overlays with real `RenderEffect`
+  blur, menus (the action bar's options menu, `PopupMenu` for dialogs and
+  context menus), shortcuts and key handling through `dispatchKeyEvent`,
+  alert, the Storage Access Framework file pickers (modal; the shared
+  `/prompts` queue when headless), clipboard, `open_url`, notifications on an
+  app channel, dark mode, a virtualised `native_list` (`ListView`),
+  `native_view` (a `SurfaceView`, new native-view kind 5), drag-reorder, file
+  drop, CSS classes and seals. The tray family is a documented no-op, as on
+  UIKit. On the emulator lane 57 example suites pass with none failing.
+
 - **Android backend, stage 2 pass A: the everyday widgets and styling.** 102
   more ABI functions are real (168 of 327): text fields, secure fields, text
   areas, toggles and radio groups, sliders, pickers (`Spinner`), progress
