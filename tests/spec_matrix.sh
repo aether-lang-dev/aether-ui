@@ -100,6 +100,7 @@ SUITES=(
   "barfill|examples/barfill_demo|barfill_demo/spec_barfill_demo|"
   "filedrop|examples/filedrop_demo|filedrop_demo/spec_filedrop_demo|"
   "svgimage|examples/svgimage_demo|svgimage_demo/spec_svgimage_demo|"
+  "vgimage|examples/vg_image_demo|vg_image_demo/spec_vg_image_demo|"
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
   "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
   "frametick|examples/frametick_demo|frametick_demo/spec_frametick_demo|"

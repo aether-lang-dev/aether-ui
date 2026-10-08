@@ -424,6 +424,40 @@ a bitmap, so `image_fill` and `image_tint` have nothing to act on; size it at
 the call. A file that cannot be read returns handle 0 rather than taking the
 window down.
 
+### Pixels in a scene: `vg.image`
+
+The other way round from `ui.svg`: a buffer of pixels a program computes,
+drawn into an AeVG scene as an element. `image(x, y, w, h)` is an SVG
+`<image>`-alike: its box is in viewBox units, and it is transformable,
+hit-testable (`on_click`, `tooltip`), hideable (`visible_when`) and has
+`opacity` like any shape. What it draws is set in its block, or later by
+the node it returned, and the scene is presented again with
+`scene_present` (or any flush: a click, a resize, the live loop).
+
+```aether
+buf = malloc(64 * 64 * 4)                 // RGBA8, straight alpha, row-major
+img = image(10, 10, 80, 80) {
+    image_pixels(buf, 64, 64)             // BORROWED: you own it, update it in place
+    image_fit("contain")                  // stretch (default) / contain / cover / original
+    on_click() callback |x, y| { ... }
+}
+image(0, 0, 100, 100) { image_bytes_str(png, png_len) }   // decoded by the toolkit, OWNED
+... write into buf, then scene_present(node_scene(img))
+image_set_pixels(img, other_buf, 128, 128)   // or a new buffer, or new dims
+```
+
+`image_pixels` borrows: the buffer must outlive the element, and every flush
+re-reads it; the canvas copies it into the frame, so it may be freed or
+resized the moment a flush returns. `image_bytes` / `image_bytes_str`
+(PNG, JPEG, GIF, BMP: GdkTexture, ImageIO, GDI+, UIImage, BitmapFactory,
+through `aether_ui_image_decode_rgba_impl`) decode into pixels the element
+owns. The blit is each backend's scaled image draw with its default
+filtering, so a small buffer scaled up is smoothed, not blocky. A transform
+maps the box's corners and draws into their axis-aligned bounds: translate
+and scale are exact, a rotation draws the unrotated image into the rotated
+box's bounds. `examples/vg_image_demo` and `tests/vg_image_demo` are the
+example and the pixel-reading spec; sae's `vg.raster` / `vg.image` sit on it.
+
 ## Reactive state
 
 ```aether
@@ -719,6 +753,7 @@ when a bind, unbind or register changes it.
 | [`examples/keyhandler_demo`](examples/keyhandler_demo) | window_on_key type-ahead, and accelerator priority |
 | [`examples/filedrop_demo`](examples/filedrop_demo) | on_file_drop, files dropped from another app |
 | [`examples/svgimage_demo`](examples/svgimage_demo) | ui.svg: an SVG file as a widget, drawn through vg |
+| [`examples/vg_image_demo`](examples/vg_image_demo) | vg.image: a program's RGBA buffer, a decoded PNG, fit modes, opacity and transform in a scene |
 | [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
 | [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
 | [`examples/frametick_demo`](examples/frametick_demo) | on_frame (the display-synced frame clock), frame_source, timer_once |

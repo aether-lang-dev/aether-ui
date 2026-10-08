@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`vg.image(x, y, w, h)`: a raster element in an AeVG scene, on all five
+  backends.** `image_pixels(buf, pw, ph)` draws an RGBA8 buffer the caller
+  owns and updates in place; `image_bytes` / `image_bytes_str` decode PNG,
+  JPEG, GIF or BMP through the platform (`aether_ui_image_decode_rgba_impl`,
+  new on GTK4, AppKit, Win32, UIKit and Android); `image_fit` takes
+  `image_fill`'s vocabulary (stretch, contain, cover, original). The element
+  is transformable, hit-testable and has opacity like any shape; the blit is
+  each backend's existing scaled image draw. `vg.backend.dispatch` gains an
+  image closure (`backend_set_image`, `dispatch_image`) beside the op switch.
+  Shared helpers `aether_ui_image_from_bytes_ptr`, `aether_ui_string_ptr`
+  and `aether_ui_rgba_unpremultiply`; `ui.image_from_bytes_ptr`.
+  `vg/test/test_vg_image.ae` (Phase 0) and `tests/vg_image_demo` (pixels
+  read back through the driver).
+
 - **`tools/ios-app.sh`: an aether-ui app on a real iPhone/iPad.** Builds the
   app for arm64 iOS with the UIKit backend, links it in a throwaway Xcode
   project that Xcode signs with automatic signing (a free personal team

@@ -1311,8 +1311,7 @@ int aether_ui_image_from_bytes(const char* data, int length) {
 }
 
 // The same decoders to pixels (aether_ui_backend.h): UIImage's CGImage drawn
-// into a premultiplied-RGBA bitmap context, unpremultiplied, rows flipped to
-// top-down (CoreGraphics draws bottom-up).
+// into a premultiplied-RGBA bitmap context, then unpremultiplied.
 unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
                                                 int* out_w, int* out_h) {
     if (out_w) *out_w = 0;
@@ -1333,17 +1332,9 @@ unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int l
     if (!ctx) { free(out); return NULL; }
     CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), cg);
     CGContextRelease(ctx);
+    // A bitmap context's first row is the TOP of the image drawn into it
+    // (the buffer is top-down, as every RGBA the canvas takes): no flip.
     aether_ui_rgba_unpremultiply(out, w * h);
-    size_t stride = w * 4;
-    unsigned char* row = (unsigned char*)malloc(stride);
-    if (row) {
-        for (size_t y = 0; y < h / 2; y++) {
-            unsigned char* a = out + y * stride;
-            unsigned char* b = out + (h - 1 - y) * stride;
-            memcpy(row, a, stride); memcpy(a, b, stride); memcpy(b, row, stride);
-        }
-        free(row);
-    }
     if (out_w) *out_w = (int)w;
     if (out_h) *out_h = (int)h;
     return out;
