@@ -1,0 +1,130 @@
+// spec_frametick_demo.ae — drives the frametick_demo example over the
+// AetherUIDriver: the frame clock (on_frame, frame_cancel, frame_source,
+// frame_count) and the one-shot timer (timer_once).
+//
+// The frame clock's assertions are rates and spans over about half a second,
+// with wide bounds: the question is "does it tick at a display-like rate with
+// real millisecond timestamps", not how loaded the machine is. A clock that
+// is not running gives 0; a clock spinning unthrottled gives thousands.
+//
+// AETHER_UI_EXPECT_FRAME_SOURCE=<name> pins the clock a lane must have used
+// ("gtk-frame-clock", "cadisplaylink", "choreographer", "dwm-flush",
+// "timer"), so a lane that should be native cannot pass on the fallback.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/frametick_demo &
+//   UI_SPEC=frametick_demo/spec_frametick_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+// The value of the "name: value" label, "" if there is none.
+label(name: string) -> string {
+    b = uidriver.get_body("/widgets")
+    key = "\"text\":\"${name}: "
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + string.length(key), string.length(b))
+    j = string.string_index_of(rest, "\"")
+    if j < 0 { return "" }
+    return string.string_substring(rest, 0, j)
+}
+
+label_int(name: string) -> int {
+    v, err = string.to_int(label(name))
+    if err != "" { return -1 }
+    return v
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "the frame clock and timer_once over AetherUIDriver") {
+        spec.it("finds the labels") callback {
+            body = uidriver.get_body("/widgets")
+            spec.assert_contains(body, "\"text\":\"frames: ", "frames label")
+            spec.assert_contains(body, "\"text\":\"once: ", "once label")
+        }
+
+        spec.it("timer_once fires exactly once") callback {
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "once: 1", 40), "it fired")
+            sleep(300)
+            spec.assert_str_eq(label("once"), "1", "and never again")
+        }
+
+        spec.it("a timer_once whose block is slower than its delay still fires once") callback {
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "slow: 1", 40), "it fired")
+            sleep(400)
+            spec.assert_str_eq(label("slow"), "1", "the slow block did not let a second tick in")
+        }
+
+        spec.it("a timer_once cancelled before its time never fires") callback {
+            sleep(300)   // it was due 150 ms after start
+            spec.assert_str_eq(label("cancelled"), "0", "never ran")
+        }
+
+        spec.it("frames arrive at a display-like rate with real millisecond timestamps") callback {
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "source: ", 40), "frames started")
+            f1 = label_int("frames")
+            s1 = label_int("span")
+            sleep(500)
+            f2 = label_int("frames")
+            s2 = label_int("span")
+            df = f2 - f1
+            ds = s2 - s1
+            src = label("source")
+            print("    frame clock: ${df} frames, ${ds} ms of timestamps over a 500 ms sleep, source ${src}\n")
+            spec.assert_true(df >= 10, "at least 10 frames in 0.5 s (got ${df})")
+            spec.assert_true(df <= 150, "at most 150 frames in 0.5 s, so not spinning (got ${df})")
+            spec.assert_true(ds >= 300 && ds <= 1500, "the timestamps advanced like wall time: ${ds} ms")
+            spec.assert_str_eq(label("order"), "ok", "every timestamp later than the one before")
+        }
+
+        spec.it("frame_source names a real clock, the pinned one if the lane pins it") callback {
+            src = label("source")
+            known = 0
+            if src == "gtk-frame-clock" || src == "cadisplaylink" || src == "cvdisplaylink" { known = 1 }
+            if src == "choreographer" || src == "dwm-flush" || src == "timer" { known = 1 }
+            spec.assert_true(known == 1, "a known source: ${src}")
+            want = os.getenv("AETHER_UI_EXPECT_FRAME_SOURCE")
+            if want != null && want != "" {
+                spec.assert_str_eq(src, want, "the lane's expected clock")
+            }
+        }
+
+        spec.it("a subscriber that cancels itself in its own frame stops there") callback {
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "self: 5", 40), "five frames")
+            sleep(300)
+            spec.assert_str_eq(label("self"), "5", "and no sixth")
+        }
+
+        spec.it("the clock stops when the last subscriber goes, and starts again for a new one") callback {
+            s = uidriver.widget_id_by_text("stop frames")
+            spec.assert_gt(s, 0, "stop button")
+            uidriver.post_ok("/widget/${s}/click", "cancel the main subscriber")
+            sleep(300)
+            stopped = label_int("frames")
+            t1 = label_int("total")
+            sleep(400)
+            spec.assert_eq(label_int("frames"), stopped, "the cancelled subscriber got no more frames")
+            spec.assert_eq(label_int("total"), t1, "no frames at all with nobody subscribed")
+            spec.assert_eq(uidriver.frame_clock_subscribers(), 0, "GET /frame_clock: no subscribers")
+            spec.assert_eq(uidriver.frame_clock_running(), 0, "GET /frame_clock: no clock running, native or fallback")
+            fc = uidriver.frame_clock_frames()
+            sleep(300)
+            spec.assert_eq(uidriver.frame_clock_frames(), fc, "GET /frame_clock: the clock delivered nothing more")
+
+            r = uidriver.widget_id_by_text("restart frames")
+            spec.assert_gt(r, 0, "restart button")
+            uidriver.post_ok("/widget/${r}/click", "subscribe again")
+            sleep(400)
+            spec.assert_true(label_int("restart") >= 5, "the new subscriber gets frames: ${label(\"restart\")}")
+            spec.assert_true(label_int("total") > t1, "the clock runs again")
+            spec.assert_eq(uidriver.frame_clock_subscribers(), 1, "GET /frame_clock: one subscriber again")
+            spec.assert_eq(uidriver.frame_clock_running(), 1, "GET /frame_clock: a clock runs again")
+            spec.assert_str_eq(uidriver.frame_clock_source(), label("source"), "GET /frame_clock names the same clock as frame_source()")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -223,7 +223,14 @@ jobs:
           # whole family (bootstrap.sh's MIN_AE too); no aether-ui source
           # change. ./ci.sh, all phases passed against the released 0.778.0
           # toolchain (macOS arm64).
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.778.0' }}
+          # v0.791.0 (2026-10-08): a real floor move. The Android shim now
+          # starts an app through the --emit=lib entry aether_main /
+          # aether_main_exit (aether#2489, 0.789.0+) instead of renaming its
+          # main(), so the Aether start-up (args, actor scheduler) runs on
+          # Android; 0.791.0 also carries #2511 (pure-Aether TLS for
+          # std.http.client without OpenSSL, and the aether_main rerun
+          # actor-leak fix).
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.791.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the

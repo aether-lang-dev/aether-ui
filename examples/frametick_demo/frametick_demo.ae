@@ -1,0 +1,128 @@
+// Aether UI frame clock and one-shot timer example: on_frame(), frame_cancel(),
+// frame_source(), frame_count(), timer_once().
+//
+// on_frame is a display-synced tick (GTK4's frame clock, CADisplayLink,
+// Choreographer, DwmFlush), with a timer standing in when the display stops
+// delivering; frame_source() says which one ran the last frame. timer_once is
+// timer()'s one-shot twin. tests/frametick_demo/spec_frametick_demo.ae drives
+// it, and AETHER_UI_EXPECT_FRAME_SOURCE there pins which clock a lane must use.
+//
+// Every label is "name: value", so the spec reads them back from /widgets.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, btn, root_vstack, timer, timer_cancel,
+    timer_once, on_frame, frame_cancel, frame_source, frame_count,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    frames = 0
+    t0 = 0.0
+    last = 0.0
+    backwards = 0
+    once_n = 0
+    slow_n = 0
+    cancelled_n = 0
+    self_n = 0
+    self_id = 0
+    restart_n = 0
+    frames_label = 0
+    span_label = 0
+    order_label = 0
+    source_label = 0
+    once_label = 0
+    slow_label = 0
+    cancelled_label = 0
+    self_label = 0
+    total_label = 0
+    restart_label = 0
+
+    main_root = root_vstack(6) {
+        text("Frame clock demo")
+        frames_label = text("frames: 0")
+        span_label = text("span: 0")
+        order_label = text("order: ok")
+        source_label = text("source: none")
+        total_label = text("total: 0")
+        self_label = text("self: 0")
+        restart_label = text("restart: 0")
+        once_label = text("once: 0")
+        slow_label = text("slow: 0")
+        cancelled_label = text("cancelled: 0")
+    }
+
+    // The main subscriber: counts frames, and the span of their timestamps
+    // since the first, which the spec compares with wall time.
+    sub = on_frame() callback |t: float| {
+        frames = frames + 1
+        if frames == 1 { t0 = t }
+        if frames > 1 && t <= last {
+            backwards = backwards + 1
+            aether_ui_text_set_string(order_label, "order: backwards ${backwards}")
+        }
+        last = t
+        span = (t - t0) as int
+        aether_ui_text_set_string(frames_label, "frames: ${frames}")
+        aether_ui_text_set_string(span_label, "span: ${span}")
+        aether_ui_text_set_string(source_label, "source: ${frame_source()}")
+    }
+
+    // Cancels itself in its fifth frame, from inside that frame.
+    self_id = on_frame() callback |t: float| {
+        self_n = self_n + 1
+        if self_n >= 5 {
+            mine = self_id
+            frame_cancel(mine)
+            frame_cancel(mine)   // twice: a second cancel is a no-op
+            // Assigned in this closure, so captured by reference: read by
+            // value, it would still be the 0 it held when the closure was made.
+            self_id = 0
+        }
+        aether_ui_text_set_string(self_label, "self: ${self_n}")
+    }
+
+    // Frames delivered by anyone, read on a plain timer, so the spec can see
+    // the clock STOP when the last subscriber goes.
+    _total = timer(50) callback {
+        aether_ui_text_set_string(total_label, "total: ${frame_count()}")
+    }
+
+    // One-shots. once: plain. slow: its block takes far longer than its delay,
+    // which on a repeating timer would let the next tick in. cancelled: never
+    // runs, cancelled before its time.
+    _once = timer_once(30) callback {
+        once_n = once_n + 1
+        aether_ui_text_set_string(once_label, "once: ${once_n}")
+    }
+    _slow = timer_once(5) callback {
+        slow_n = slow_n + 1
+        sleep(120)
+        aether_ui_text_set_string(slow_label, "slow: ${slow_n}")
+    }
+    doomed = timer_once(150) callback {
+        cancelled_n = cancelled_n + 1
+        aether_ui_text_set_string(cancelled_label, "cancelled: ${cancelled_n}")
+    }
+    timer_cancel(doomed)
+
+    _stop = btn(main_root, "stop frames") callback {
+        frame_cancel(sub)
+    }
+    // A subscriber added after the clock has stopped starts it again.
+    _restart = btn(main_root, "restart frames") callback {
+        _again = on_frame() callback |t: float| {
+            restart_n = restart_n + 1
+            aether_ui_text_set_string(restart_label, "restart: ${restart_n}")
+        }
+    }
+
+    app = ui.app_create("Frame clock demo", 320, 360)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

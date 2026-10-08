@@ -12,6 +12,7 @@
 #else
 #include <unistd.h>
 #include <pthread.h>
+#include <time.h>   // clock_gettime: the frame clock's monotonic time
 #endif
 
 // Backend-supplied: read a reactive-state cell. Used by tray_current_icon
@@ -904,3 +905,252 @@ void* aether_ui_chrome_face_get_impl(void) { return g_aeui_chrome_face; }
 static void* g_aeui_chrome_toggle = 0;
 void aether_ui_chrome_toggle_set_impl(void* boxed) { g_aeui_chrome_toggle = boxed; }
 void* aether_ui_chrome_toggle_get_impl(void) { return g_aeui_chrome_toggle; }
+
+// ─── One-shot timer and the frame clock ──────────────────────────────────
+// The contract is in aether_ui_backend.h ("One-shot timer and the frame
+// clock"). Both are shared so a backend supplies only what is native to it:
+// the repeating timer it already has, and its display clock
+// (aether_ui_frame_clock_*_impl).
+//
+// Closure boxes made here: a C box is {fn, env} like the compiler's, and a
+// backend releases a timer's box with aether_closure_env_free(env) + free.
+// That function reads the env's first field as its destructor, so an env
+// made here starts with one (AeuiCEnv), and a box with no env passes NULL.
+extern int  aether_ui_timer_create_impl(int interval_ms, void* boxed_closure);
+extern void aether_ui_timer_cancel_impl(int timer_id);
+extern int  aether_ui_frame_clock_start_impl(void);
+extern void aether_ui_frame_clock_stop_impl(void);
+extern const char* aether_ui_frame_clock_name_impl(void);
+extern int  aether_ui_frame_clock_hz_impl(void);
+
+static void aeui_box_release(void* boxed) {
+    if (!boxed) return;
+    aether_closure_env_free(((AeClosureLocal*)boxed)->env);
+    free(boxed);
+}
+
+static void* aeui_c_box(void* fn, void* env) {
+    AeClosureLocal* b = (AeClosureLocal*)malloc(sizeof(AeClosureLocal));
+    if (!b) return NULL;
+    b->fn = fn;
+    b->env = env;
+    return b;
+}
+
+// Milliseconds on the shared monotonic clock.
+static double aeui_mono_ms(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER hz;
+    LARGE_INTEGER now;
+    if (hz.QuadPart == 0) QueryPerformanceFrequency(&hz);
+    QueryPerformanceCounter(&now);
+    return (double)now.QuadPart * 1000.0 / (double)hz.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+#endif
+}
+
+// timer_once(ms, fn). The env owns the caller's box; the backend releases the
+// wrapper box (and so, through the destructor, the env and the caller's box)
+// when the timer is cancelled -- which the first tick does, before it calls
+// fn. Every backend releases a cancelled timer's box only after the tick that
+// cancelled it has returned (GLib's notify, a deferred main-queue release, the
+// Win32 graveyard), so the env outlives the call.
+typedef struct {
+    void (*dtor)(void*);
+    void* user_box;
+    int   timer_id;
+    int   fired;
+} AeuiAfterEnv;
+
+static void aeui_after_env_free(void* env) {
+    AeuiAfterEnv* a = (AeuiAfterEnv*)env;
+    aeui_box_release(a->user_box);
+    free(a);
+}
+
+static void aeui_after_tick(void* env) {
+    AeuiAfterEnv* a = (AeuiAfterEnv*)env;
+    if (!a || a->fired) return;
+    a->fired = 1;
+    aether_ui_timer_cancel_impl(a->timer_id);   // before fn: exactly once
+    invoke_closure(a->user_box);
+}
+
+int aether_ui_timer_once_impl(int delay_ms, void* boxed_closure) {
+    if (!boxed_closure) return 0;
+    if (delay_ms < 1) delay_ms = 1;   // the soonest a timer can fire
+    AeuiAfterEnv* a = (AeuiAfterEnv*)calloc(1, sizeof(AeuiAfterEnv));
+    if (!a) { aeui_box_release(boxed_closure); return 0; }
+    a->dtor = aeui_after_env_free;
+    a->user_box = boxed_closure;
+    void* box = aeui_c_box((void*)aeui_after_tick, a);
+    if (!box) { aeui_after_env_free(a); return 0; }
+    int id = aether_ui_timer_create_impl(delay_ms, box);
+    if (id <= 0) { aeui_box_release(box); return 0; }
+    a->timer_id = id;
+    return id;
+}
+
+// The frame clock. Subscribers are {id, box}; a cancelled one is marked dead
+// and swept when no dispatch is running, so a subscriber may cancel itself
+// (or another) from inside its own frame.
+typedef struct { int id; void* box; int alive; } AeuiFrameSub;
+static AeuiFrameSub* g_frame_subs = NULL;
+static int g_frame_n = 0, g_frame_cap = 0, g_frame_next_id = 1, g_frame_live = 0;
+static int g_frame_dispatching = 0;
+static int g_frame_native = 0;            // a native clock was started
+static double g_frame_native_seen = -1e18; // shared-clock time of its last frame
+static double g_frame_last_ts = 0.0;      // strictly increasing
+static const char* g_frame_source = "none";
+static int g_frame_count = 0;
+// The fallback timer: WATCH (every 100 ms, is the native clock alive?) or
+// DRIVE (at the display rate, deliver frames itself).
+#define AEUI_FRAME_WATCH 1
+#define AEUI_FRAME_DRIVE 2
+#define AEUI_FRAME_STALL_MS 100.0
+static int g_frame_timer = 0, g_frame_mode = 0, g_frame_retry = 0;
+
+static void aeui_frame_sweep(void) {
+    int w = 0;
+    for (int i = 0; i < g_frame_n; i++) {
+        if (g_frame_subs[i].alive) g_frame_subs[w++] = g_frame_subs[i];
+        else aeui_box_release(g_frame_subs[i].box);
+    }
+    g_frame_n = w;
+}
+
+static void aeui_frame_fallback_set(int mode);
+
+static void aeui_frame_stop_all(void) {
+    if (g_frame_native) { aether_ui_frame_clock_stop_impl(); g_frame_native = 0; }
+    if (g_frame_timer) { aether_ui_timer_cancel_impl(g_frame_timer); g_frame_timer = 0; }
+    g_frame_mode = 0;
+}
+
+// Deliver one frame at shared-clock time ts to every live subscriber.
+static void aeui_frame_deliver(double ts, const char* source) {
+    if (ts <= g_frame_last_ts) ts = g_frame_last_ts + 0.001;
+    g_frame_last_ts = ts;
+    g_frame_source = source;
+    g_frame_count++;
+    g_frame_dispatching++;
+    int n = g_frame_n;   // one added during this frame waits for the next
+    for (int i = 0; i < n; i++) {
+        if (!g_frame_subs[i].alive) continue;
+        AeClosureLocal* c = (AeClosureLocal*)g_frame_subs[i].box;
+        if (c && c->fn) ((void (*)(void*, double))c->fn)(c->env, ts);
+    }
+    g_frame_dispatching--;
+    if (g_frame_dispatching == 0) {
+        aeui_frame_sweep();
+        if (g_frame_live == 0) aeui_frame_stop_all();
+    }
+}
+
+void aether_ui_frame_dispatch(double native_ts_ms, double native_now_ms) {
+    double now = aeui_mono_ms();
+    g_frame_native_seen = now;
+    if (g_frame_live == 0) return;
+    // The frame's age on the native clock carried onto the shared one. A
+    // frame time in the future (a display link's target time) counts as now.
+    double age = native_now_ms - native_ts_ms;
+    if (age < 0 || age > 1000.0) age = 0;
+    aeui_frame_deliver(now - age, aether_ui_frame_clock_name_impl());
+}
+
+static double aeui_frame_period_ms(void) {
+    int hz = aether_ui_frame_clock_hz_impl();
+    if (hz < 1 || hz > 1000) hz = 60;
+    return 1000.0 / (double)hz;
+}
+
+static void aeui_frame_fallback_tick(void* env) {
+    (void)env;
+    if (g_frame_live == 0) { aeui_frame_stop_all(); return; }
+    double now = aeui_mono_ms();
+    double period = aeui_frame_period_ms();
+    if (g_frame_mode == AEUI_FRAME_WATCH) {
+        if (now - g_frame_native_seen <= AEUI_FRAME_STALL_MS) return;
+        aeui_frame_fallback_set(AEUI_FRAME_DRIVE);   // the native clock stalled
+        aeui_frame_deliver(now, "timer");
+        return;
+    }
+    // DRIVE. Native frames are back: hand over to them.
+    if (g_frame_native && now - g_frame_native_seen < 2.0 * period + 1.0) {
+        aeui_frame_fallback_set(AEUI_FRAME_WATCH);
+        return;
+    }
+    // None running (no window yet, no compositor): try again about once a
+    // second, so one that becomes possible later takes over.
+    if (!g_frame_native && ++g_frame_retry * period >= 1000.0) {
+        g_frame_retry = 0;
+        g_frame_native = aether_ui_frame_clock_start_impl();
+    }
+    aeui_frame_deliver(now, "timer");
+}
+
+static void aeui_frame_fallback_set(int mode) {
+    if (g_frame_mode == mode && g_frame_timer) return;
+    if (g_frame_timer) aether_ui_timer_cancel_impl(g_frame_timer);
+    g_frame_timer = 0;
+    g_frame_mode = mode;
+    g_frame_retry = 0;
+    int ms = 100;
+    if (mode == AEUI_FRAME_DRIVE) {
+        ms = (int)(aeui_frame_period_ms() + 0.5);
+        if (ms < 1) ms = 1;
+    }
+    void* box = aeui_c_box((void*)aeui_frame_fallback_tick, NULL);
+    if (!box) return;
+    g_frame_timer = aether_ui_timer_create_impl(ms, box);
+    if (g_frame_timer <= 0) { g_frame_timer = 0; aeui_box_release(box); }
+}
+
+int aether_ui_frame_add_impl(void* boxed_closure) {
+    if (!boxed_closure) return 0;
+    if (g_frame_n >= g_frame_cap) {
+        int cap = g_frame_cap ? g_frame_cap * 2 : 8;
+        AeuiFrameSub* ns = (AeuiFrameSub*)realloc(g_frame_subs, sizeof(AeuiFrameSub) * (size_t)cap);
+        if (!ns) { aeui_box_release(boxed_closure); return 0; }
+        g_frame_subs = ns;
+        g_frame_cap = cap;
+    }
+    int id = g_frame_next_id++;
+    g_frame_subs[g_frame_n].id = id;
+    g_frame_subs[g_frame_n].box = boxed_closure;
+    g_frame_subs[g_frame_n].alive = 1;
+    g_frame_n++;
+    g_frame_live++;
+    if (g_frame_live == 1 && !g_frame_dispatching) {
+        g_frame_native = aether_ui_frame_clock_start_impl();
+        g_frame_native_seen = aeui_mono_ms();   // give it one stall window
+        aeui_frame_fallback_set(g_frame_native ? AEUI_FRAME_WATCH : AEUI_FRAME_DRIVE);
+    } else if (!g_frame_timer && !g_frame_native) {
+        // Added from inside the frame that was about to stop the clock.
+        g_frame_native = aether_ui_frame_clock_start_impl();
+        g_frame_native_seen = aeui_mono_ms();
+        aeui_frame_fallback_set(g_frame_native ? AEUI_FRAME_WATCH : AEUI_FRAME_DRIVE);
+    }
+    return id;
+}
+
+void aether_ui_frame_cancel_impl(int frame_id) {
+    for (int i = 0; i < g_frame_n; i++) {
+        if (g_frame_subs[i].id != frame_id || !g_frame_subs[i].alive) continue;
+        g_frame_subs[i].alive = 0;
+        g_frame_live--;
+        if (!g_frame_dispatching) {
+            aeui_frame_sweep();
+            if (g_frame_live == 0) aeui_frame_stop_all();
+        }
+        return;
+    }
+}
+
+const char* aether_ui_frame_source_impl(void) { return g_frame_source; }
+int aether_ui_frame_count_impl(void) { return g_frame_count; }
+int aether_ui_frame_subscribers_impl(void) { return g_frame_live; }
+int aether_ui_frame_running_impl(void) { return (g_frame_native || g_frame_timer) ? 1 : 0; }

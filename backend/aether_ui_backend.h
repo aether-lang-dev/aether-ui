@@ -287,6 +287,66 @@ char* aether_ui_clipboard_read_impl(void);
 int aether_ui_timer_create_impl(int interval_ms, void* boxed_closure);
 void aether_ui_timer_cancel_impl(int timer_id);
 
+/* --- One-shot timer and the frame clock --------------------------------
+ *
+ * timer_once(ms, fn): fn runs ONCE, ms from now, on the UI thread. Built above the
+ * ABI (aether_ui_system_extras.c) on the repeating timer every backend has:
+ * the first tick cancels the timer before it calls fn, so a slow or failing
+ * fn cannot be called twice. The id is a timer id; timer_cancel takes it.
+ *
+ * on_frame(fn): fn(t_ms) runs once per display frame, on the UI thread, until
+ * frame_cancel(id). t_ms is milliseconds on a monotonic clock (CLOCK_MONOTONIC,
+ * QueryPerformanceCounter on Windows), the frame's own vsync time where the
+ * platform reports one, and strictly increasing from one frame to the next.
+ * Every subscriber in one frame gets the same t_ms.
+ *
+ * The subscriber list, the timestamp and the fallback are shared (system
+ * extras). Each backend supplies only its native display clock:
+ *
+ *   GTK4     gtk_widget_add_tick_callback on the main window (GdkFrameClock)
+ *   AppKit   CADisplayLink from NSScreen (macOS 14+), CVDisplayLink before
+ *   UIKit    CADisplayLink
+ *   Android  AChoreographer_postFrameCallback64 (the NDK's Choreographer)
+ *   Win32    DwmFlush on a helper thread, posting each frame to the UI thread
+ *
+ * A native clock follows the display, so it can stop: a GTK window that is
+ * not mapped (AETHER_UI_HEADLESS realizes but never presents), a display
+ * that sleeps, a Win32 session with no compositor (an SSH or service
+ * session). The shared layer watches for that: when no native frame has
+ * arrived for 100 ms it drives the subscribers from a timer at the display's
+ * nominal rate (frame_clock_hz_impl) until native frames come back, and
+ * frame_source_impl says which one delivered the last frame ("timer" for the
+ * fallback). So on_frame never silently stops, and the effective source is
+ * always reported, never the requested one. */
+int  aether_ui_timer_once_impl(int delay_ms, void* boxed_closure);
+int  aether_ui_frame_add_impl(void* boxed_closure);   /* fn(env, double t_ms) */
+void aether_ui_frame_cancel_impl(int frame_id);
+/* The source of the last frame delivered: the backend's clock name (below),
+ * "timer" (the fallback), or "none" before the first frame. */
+const char* aether_ui_frame_source_impl(void);
+/* Frames delivered since the process started, by any source. */
+int  aether_ui_frame_count_impl(void);
+/* Live subscribers. */
+int  aether_ui_frame_subscribers_impl(void);
+/* 1 while a clock runs (the native one, or the fallback timer), else 0: with
+ * no subscribers it must be 0, or an idle app is still taking frames. */
+int  aether_ui_frame_running_impl(void);
+/* Called by a backend's native clock, on the UI thread, once per frame:
+ * native_ts_ms is the frame's time on the platform's own clock and
+ * native_now_ms the time now on that same clock, so the shared layer can
+ * carry the frame time onto its own clock without a common epoch. */
+void aether_ui_frame_dispatch(double native_ts_ms, double native_now_ms);
+/* Per backend. start: begin native frames (idempotent); 1 when a native
+ * display clock is running, 0 when there is none to run right now (no
+ * window yet, no compositor), in which case the fallback drives and start is
+ * retried about once a second. stop: end them; idempotent. name: the native
+ * clock's name. hz: the display's nominal refresh rate (60 when unknown),
+ * the fallback's rate. */
+int  aether_ui_frame_clock_start_impl(void);
+void aether_ui_frame_clock_stop_impl(void);
+const char* aether_ui_frame_clock_name_impl(void);
+int  aether_ui_frame_clock_hz_impl(void);
+
 /* --- Background work (std.worker) --------------------------------------
  *
  * Aether's std.worker runs a closure on a pool thread and hands its result
@@ -299,9 +359,13 @@ void aether_ui_timer_cancel_impl(int timer_id);
  * Each backend installs its own poster (g_idle_add / PostMessage to a
  * message-only window / dispatch_async to the main queue) at app_create and
  * again, idempotently, from ui.background(). Under AETHER_UI_HEADLESS the
- * GTK4, Win32 and AppKit backends do NOT install one: their headless run
- * parks the process with no loop, so a posted job would never land; the
- * completions stay on std.worker's drain queue for worker.drain(). UIKit's
+ * GTK4, Win32 and AppKit backends do NOT install one there: a headless
+ * program with no loop (the UI-logic tests) would never see a posted job
+ * land, so its completions stay on std.worker's drain queue for
+ * worker.drain(). Win32 and AppKit DO still run their loop under headless
+ * when the app reaches app_start (hidden window, live timers and driver), so
+ * they install at that point and drain whatever queued before it; without
+ * that a headless driver run never delivered a single completion. UIKit's
  * headless run spins a CFRunLoop that services the main queue, so it installs
  * either way.
  *
@@ -312,6 +376,7 @@ void aether_ui_timer_cancel_impl(int timer_id);
 typedef struct { void (*fn)(void); void* env; } AetherUiWorkerClosure;
 void aether_worker_set_main_poster(AetherUiWorkerClosure poster);
 void aether_worker_deliver(void* job);
+int  aether_worker_drain(int max);   /* run queued completions here; 0 = all */
 /* Install this backend's poster once. Safe to call repeatedly and from the
  * UI thread only (app_create, ui.background). */
 void aether_ui_worker_poster_install_impl(void);

@@ -3203,6 +3203,83 @@ void aether_ui_timer_cancel_impl(int timer_id) {
     }
 }
 
+/* Frame clock (aether_ui_backend.h, "One-shot timer and the frame clock"):
+   GdkFrameClock, through a tick callback on the primary window. A tick
+   callback runs in the frame clock's update phase, once per frame, paced by
+   the compositor (Wayland frame callbacks, _NET_WM_FRAME_DRAWN under a
+   compositing X11 window manager) or, with none (Xvfb), by GDK's own
+   throttle at the monitor's refresh rate. A window that is realized but never
+   mapped -- AETHER_UI_HEADLESS -- has a frame clock that never ticks; the
+   shared fallback notices and drives frames from a timer instead.
+
+   Stopping from inside a tick (the last subscriber cancelling in its own
+   frame) is deferred to the tick's return value: the callback reports
+   G_SOURCE_REMOVE, which is GTK's own way to end a tick callback. */
+static GtkWidget* aeui_frame_widget = NULL;
+static guint aeui_frame_tick_id = 0;
+static int aeui_frame_in_tick = 0, aeui_frame_stop_req = 0;
+
+static gboolean aeui_frame_unref_idle(gpointer o) {
+    g_object_unref(o);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean aeui_frame_tick(GtkWidget* w, GdkFrameClock* clock, gpointer data) {
+    (void)w; (void)data;
+    double ts = (double)gdk_frame_clock_get_frame_time(clock) / 1000.0;
+    double now = (double)g_get_monotonic_time() / 1000.0;   // the frame clock's clock
+    aeui_frame_in_tick = 1;
+    aether_ui_frame_dispatch(ts, now);
+    aeui_frame_in_tick = 0;
+    if (aeui_frame_stop_req) {
+        aeui_frame_stop_req = 0;
+        aeui_frame_tick_id = 0;
+        GtkWidget* fw = aeui_frame_widget;
+        aeui_frame_widget = NULL;
+        if (fw) g_idle_add(aeui_frame_unref_idle, fw);   // not mid-callback
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+int aether_ui_frame_clock_start_impl(void) {
+    if (aeui_frame_tick_id) { aeui_frame_stop_req = 0; return 1; }
+    if (!primary_window) return 0;   // no window yet: retried by the fallback
+    aeui_frame_widget = GTK_WIDGET(primary_window);
+    g_object_ref(aeui_frame_widget);
+    aeui_frame_tick_id = gtk_widget_add_tick_callback(aeui_frame_widget, aeui_frame_tick, NULL, NULL);
+    return aeui_frame_tick_id ? 1 : 0;
+}
+
+void aether_ui_frame_clock_stop_impl(void) {
+    if (!aeui_frame_tick_id) return;
+    if (aeui_frame_in_tick) { aeui_frame_stop_req = 1; return; }
+    gtk_widget_remove_tick_callback(aeui_frame_widget, aeui_frame_tick_id);
+    aeui_frame_tick_id = 0;
+    g_object_unref(aeui_frame_widget);
+    aeui_frame_widget = NULL;
+}
+
+const char* aether_ui_frame_clock_name_impl(void) { return "gtk-frame-clock"; }
+
+int aether_ui_frame_clock_hz_impl(void) {
+    GdkDisplay* d = gdk_display_get_default();
+    if (!d) return 60;
+    GdkMonitor* m = NULL;
+    GdkSurface* s = primary_window ? gtk_native_get_surface(GTK_NATIVE(primary_window)) : NULL;
+    if (s) m = gdk_display_get_monitor_at_surface(d, s);
+    if (!m) {
+        GListModel* ms = gdk_display_get_monitors(d);
+        if (ms && g_list_model_get_n_items(ms) > 0) {
+            m = GDK_MONITOR(g_list_model_get_item(ms, 0));
+            if (m) g_object_unref(m);   // the model keeps it alive
+        }
+    }
+    int mhz = m ? gdk_monitor_get_refresh_rate(m) : 0;   // millihertz, 0 unknown
+    int hz = (mhz + 500) / 1000;
+    return hz >= 1 ? hz : 60;
+}
+
 // Open URL in default browser
 void aether_ui_open_url_impl(const char* url) {
     if (!url) return;

@@ -499,6 +499,42 @@ otherwise `dropped` runs instead, so the result is still freed and nothing
 touches a dead widget. Cancelling is cooperative: `work` polls
 `background_cancelled(job)`.
 
+## Timers and the frame clock
+
+```aether
+t = ui.timer(250) callback { refresh() }          // repeats until timer_cancel(t)
+o = ui.timer_once(1500) callback { hide_toast() }  // runs once; timer_cancel(o) first stops it
+f = ui.on_frame() callback |t_ms: float| {        // once per display frame
+    angle = angle + spin * (t_ms - last_ms)
+    last_ms = t_ms
+    redraw()
+}
+ui.frame_cancel(f)
+```
+
+All three run on the UI thread. `timer_once` cancels its timer before it runs
+the block, so a block slower than its own delay still runs once. (`after` is an
+Aether keyword, hence the name.)
+
+`on_frame` is the display-synced tick, requestAnimationFrame-shaped: GTK4's
+frame clock (a tick callback on the main window), a `CADisplayLink` from the
+screen on macOS 14+ (`CVDisplayLink` before) and on iOS, Android's
+Choreographer, and `DwmFlush` on a helper thread on Windows, which has no vsync
+callback. `t_ms` is milliseconds on a monotonic clock (the frame's vsync time
+where the platform gives one), the same for every subscriber in one frame and
+strictly increasing. The clock runs only while something is subscribed.
+
+A display can stop delivering frames: a GTK window that is realized but never
+mapped (`AETHER_UI_HEADLESS`), a display that sleeps, a backgrounded mobile
+app, a Windows session with no compositor (SSH, services). After 100 ms without
+a native frame a timer at the display's refresh rate stands in until native
+frames resume, so `on_frame` throttles but never silently stops.
+`ui.frame_source()` reports the effective clock of the last frame
+(`gtk-frame-clock`, `cadisplaylink`, `cvdisplaylink`, `choreographer`,
+`dwm-flush`, or `timer`), and `ui.frame_count()` the frames delivered so far.
+[`examples/frametick_demo`](examples/frametick_demo) and its spec count frames
+over half a second and check their timestamps against wall time.
+
 ## Widget accessors
 
 ```aether
@@ -685,6 +721,7 @@ when a bind, unbind or register changes it.
 | [`examples/svgimage_demo`](examples/svgimage_demo) | ui.svg: an SVG file as a widget, drawn through vg |
 | [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
 | [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
+| [`examples/frametick_demo`](examples/frametick_demo) | on_frame (the display-synced frame clock), frame_source, timer_once |
 
 ## AetherUIDriver — automated UI testing, baked in
 

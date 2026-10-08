@@ -28,7 +28,9 @@ exports(
     wait_root_height_change,
     menus_body, menu_handle_with, menu_activate, menu_activate_item,
     menu_native_activate,
-    answer_prompt, answer_prompt_status, prompts, opened_urls
+    answer_prompt, answer_prompt_status, prompts, opened_urls,
+    frame_clock_source, frame_clock_frames, frame_clock_subscribers,
+    frame_clock_running
 )
 
 import std.string
@@ -41,9 +43,19 @@ import std.http.client
 import std.spec
 import std.http.client.httptest
 
-const BASE: string = "http://127.0.0.1:9222"
+// The driver's port: AETHER_UI_TEST_PORT when the harness set it (the same
+// variable that arms the app's server, which binds that port -- see
+// aether_ui_test_server_start), else 9222. Read per request, so a spec needs
+// no setup call; run_spec.sh exports it from its numeric port argument.
+base_url() -> string {
+    p = os.getenv("AETHER_UI_TEST_PORT")
+    if p != null {
+        if string.length(p) > 0 { return string.concat("http://127.0.0.1:", p) }
+    }
+    return "http://127.0.0.1:9222"
+}
 
-url_of(path: string) -> string { return string.concat(BASE, path) }
+url_of(path: string) -> string { return string.concat(base_url(), path) }
 
 // ─── HTTP primitives ─────────────────────────────────────────────
 
@@ -582,3 +594,50 @@ prompts() -> string { return get_body("/prompts") }
 
 // The raw GET /opened_urls body: ["url", …] in the order open_url was called.
 opened_urls() -> string { return get_body("/opened_urls") }
+
+// ─── The frame clock (GET /frame_clock) ──────────────────────────
+// {"source":S,"frames":N,"subscribers":K,"running":R}: the clock that
+// delivered the last ui.on_frame frame, frames delivered so far, live
+// subscribers, 1 while a clock (native or fallback) runs.
+
+frame_clock_field_(name: string) -> string {
+    b = get_body("/frame_clock")
+    key = "\"${name}\":"
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + string.length(key), string.length(b))
+    if string.starts_with(rest, "\"") == 1 {
+        rest = string.string_substring(rest, 1, string.length(rest))
+        j = string.string_index_of(rest, "\"")
+        if j < 0 { return "" }
+        return string.string_substring(rest, 0, j)
+    }
+    j = 0
+    n = string.length(rest)
+    while j < n {
+        c = string.char_at(rest, j)
+        if c < 48 || c > 57 { break }
+        j = j + 1
+    }
+    return string.string_substring(rest, 0, j)
+}
+
+frame_clock_source() -> string { return frame_clock_field_("source") }
+
+frame_clock_frames() -> int {
+    v, err = string.to_int(frame_clock_field_("frames"))
+    if err != "" { return 0 - 1 }
+    return v
+}
+
+frame_clock_subscribers() -> int {
+    v, err = string.to_int(frame_clock_field_("subscribers"))
+    if err != "" { return 0 - 1 }
+    return v
+}
+
+frame_clock_running() -> int {
+    v, err = string.to_int(frame_clock_field_("running"))
+    if err != "" { return 0 - 1 }
+    return v
+}

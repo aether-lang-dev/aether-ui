@@ -48,6 +48,19 @@ SHARED = ("backend/aether_ui_system_extras.c",
           "backend/aether_ui_test_server.c",
           "backend/aether_ui_sni.c")
 
+# Entry points that are the backend's OWN platform work and must not be
+# satisfied by a shared source: the frame clock's native display clock (GTK4's
+# frame clock, CADisplayLink / CVDisplayLink, Choreographer, DwmFlush). The
+# shared layer (system extras) owns the subscribers and the timer fallback, so
+# a shared definition of one of these would compile, link and quietly turn
+# every backend's frames into the fallback timer.
+NATIVE_ONLY = (
+    "aether_ui_frame_clock_start_impl",
+    "aether_ui_frame_clock_stop_impl",
+    "aether_ui_frame_clock_name_impl",
+    "aether_ui_frame_clock_hz_impl",
+)
+
 def main():
     decl = declared_in("backend/aether_ui_backend.h")
     shared = set()
@@ -61,10 +74,34 @@ def main():
         who = sorted(b for b, d in have.items() if name in d)
         if who and len(who) != len(BACKENDS):
             gaps.append((name, who))
+    # Declared and defined NOWHERE: the check above passes it (no backend has
+    # it, so none is "missing" it), and the first app to call it fails to
+    # link on every platform.
+    for name in sorted(decl):
+        if name in shared or any(name in d for d in have.values()):
+            continue
+        gaps.append((name, []))
+    native_errs = []
+    for name in NATIVE_ONLY:
+        if name not in decl:
+            native_errs.append("  %s: not declared in aether_ui_backend.h" % name)
+        if name in shared:
+            native_errs.append("  %s: defined in a shared source; it must be "
+                               "each backend's own native implementation" % name)
+        missing = sorted(b for b, d in have.items() if name not in d)
+        if missing and name not in [g[0] for g in gaps]:
+            gaps.append((name, sorted(set(BACKENDS) - set(missing))))
+    for line in native_errs:
+        print(line)
     for name, who in gaps:
         missing = sorted(set(BACKENDS) - set(who))
         print("  %s: implemented on %s, MISSING on %s"
-              % (name, ", ".join(who), ", ".join(missing)))
+              % (name, ", ".join(who) or "no backend", ", ".join(missing)))
+    if native_errs and not gaps:
+        print()
+        print("backend parity: a native-only entry point is declared wrong or "
+              "defined in a shared source.")
+        return 1
     if gaps:
         print()
         print("backend parity: %d function(s) implemented on some backends but not "

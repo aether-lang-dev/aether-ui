@@ -104,6 +104,8 @@
 //              GET /screenshot (the decor view drawn to a PNG)
 //   loop       worker_poster_install_impl on_ui_thread_impl
 //              timer_create_impl timer_cancel_impl
+//              frame_clock_start_impl frame_clock_stop_impl
+//              frame_clock_name_impl frame_clock_hz_impl (Choreographer)
 //
 // Real, pass B (104, + the 6 tray no-ops):
 //   containers zstack_create wrap_create tabs_create tab_add tabs_select
@@ -3686,6 +3688,87 @@ void aether_ui_timer_cancel_impl(int timer_id) {
     close(t->fd);
     t->fd = -1;
     t->closure = NULL;
+}
+
+// The frame clock (aether_ui_backend.h, "One-shot timer and the frame
+// clock"): Choreographer, through the NDK's AChoreographer -- the same
+// android.view.Choreographer instance the UI thread's Views animate on,
+// reached without a Java hop. A frame callback is one-shot, so each frame
+// posts the next while the clock runs. frameTimeNanos is CLOCK_MONOTONIC
+// (System.nanoTime), the vsync the frame is for. A callback cannot be
+// unposted: stop bumps a generation, and a callback from an older one
+// neither dispatches nor reposts. Android stops vsync for a stopped
+// activity; the shared fallback drives frames from a timer meanwhile.
+#include <android/choreographer.h>
+
+static int aeui_frame_running = 0;
+static intptr_t aeui_frame_gen = 0;
+
+static double aeui_mono_ms_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
+
+static void aeui_frame_cb(int64_t frame_time_nanos, void* data) {
+    if (!aeui_frame_running || (intptr_t)data != aeui_frame_gen) return;
+    // Post the next one first: a subscriber that stops the clock in this
+    // frame bumps the generation, which makes that post a no-op.
+    AChoreographer* ch = AChoreographer_getInstance();
+    if (ch) AChoreographer_postFrameCallback64(ch, aeui_frame_cb, (void*)aeui_frame_gen);
+    aether_ui_frame_dispatch((double)frame_time_nanos / 1e6, aeui_mono_ms_now());
+}
+
+int aether_ui_frame_clock_start_impl(void) {
+    if (aeui_frame_running) return 1;
+    if (!aeui_on_ui_thread()) return 0;   // AChoreographer is per looper thread
+    AChoreographer* ch = AChoreographer_getInstance();
+    if (!ch) return 0;
+    aeui_frame_gen++;
+    aeui_frame_running = 1;
+    AChoreographer_postFrameCallback64(ch, aeui_frame_cb, (void*)aeui_frame_gen);
+    return 1;
+}
+
+void aether_ui_frame_clock_stop_impl(void) {
+    if (!aeui_frame_running) return;
+    aeui_frame_running = 0;
+    aeui_frame_gen++;
+}
+
+const char* aether_ui_frame_clock_name_impl(void) { return "choreographer"; }
+
+// The display's refresh rate, from the Java side (Display.getRefreshRate is
+// not in the NDK before API 30's AChoreographer refresh callbacks). Read once:
+// it is only the fallback timer's rate.
+static int aeui_display_refresh_hz(void) {
+    static int cached = 0;
+    if (cached) return cached;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    float rate = 0.0f;
+    if (g_activity) {
+        jclass ac = (*env)->GetObjectClass(env, g_activity);
+        jmethodID gwm = (*env)->GetMethodID(env, ac, "getWindowManager", "()Landroid/view/WindowManager;");
+        jobject wm = gwm ? (*env)->CallObjectMethod(env, g_activity, gwm) : NULL;
+        aeui_check(env, "getWindowManager");
+        jclass wmc = wm ? (*env)->GetObjectClass(env, wm) : NULL;
+        jmethodID gdd = wmc ? (*env)->GetMethodID(env, wmc, "getDefaultDisplay", "()Landroid/view/Display;") : NULL;
+        jobject d = gdd ? (*env)->CallObjectMethod(env, wm, gdd) : NULL;
+        aeui_check(env, "getDefaultDisplay");
+        jclass dc = d ? (*env)->GetObjectClass(env, d) : NULL;
+        jmethodID grr = dc ? (*env)->GetMethodID(env, dc, "getRefreshRate", "()F") : NULL;
+        if (grr) rate = (*env)->CallFloatMethod(env, d, grr);
+        aeui_check(env, "getRefreshRate");
+    }
+    aeui_unframe(env);
+    cached = rate >= 1.0f ? (int)(rate + 0.5f) : 60;
+    return cached;
+}
+
+int aether_ui_frame_clock_hz_impl(void) {
+    int hz = aeui_display_refresh_hz();
+    return hz >= 1 ? hz : 60;
 }
 
 
@@ -8633,16 +8716,23 @@ void aether_ui_enable_test_server_ctx(int port, void* ctx) {
 // The Java side's natives (registered in JNI_OnLoad)
 // ===========================================================================
 
-// The app's entry point. `ae build --emit=lib` drops an Aether program's
-// main(), so tools/android-apk.sh compiles the app with main() renamed to
-// aeui_app_main(); --emit=lib exports it as aether_aeui_app_main. Weak, so a
-// library built without it still loads and says why it shows nothing.
+// The app's entry point. `ae build --emit=lib` (aether >= 0.789, #2489) keeps
+// an Aether program's main() as aether_main(argc, argv) -- the executable's
+// prologue (argv, sandbox, the actor scheduler with this thread marked as not
+// a scheduler thread) and main()'s body, returning with the actors running --
+// and aether_main_exit(), the executable's epilogue. A library from an older
+// ae has neither: tools/android-apk.sh then renamed main() to aeui_app_main(),
+// exported as aether_aeui_app_main, which skipped the prologue. All weak, so a
+// library built without any of them still loads and says why it shows nothing.
+extern int aether_main(int argc, char** argv) __attribute__((weak));
+extern void aether_main_exit(void) __attribute__((weak));
 extern void aether_aeui_app_main(void) __attribute__((weak));
 
 JCLASS(C_Context, "android/content/Context");
 JCLASS(C_File, "java/io/File");
 JMETHOD(M_Ctx_getFilesDir, C_Context, "getFilesDir", "()Ljava/io/File;");
 JMETHOD(M_Ctx_getAssets, C_Context, "getAssets", "()Landroid/content/res/AssetManager;");
+JMETHOD(M_Ctx_getPackageName, C_Context, "getPackageName", "()Ljava/lang/String;");
 JMETHOD(M_File_getAbsolutePath, C_File, "getAbsolutePath", "()Ljava/lang/String;");
 
 static void aeui_mkdirs(char* path) {   // mkdir -p of path's directories
@@ -8728,11 +8818,31 @@ static void JNICALL native_start(JNIEnv* env, jclass cls, jobject activity,
     aeui_redirect_stdio();
     if (!aeui_bridge_install()) return;
     aeui_install_files(env, activity);
-    if (!aether_aeui_app_main) {
-        AEUI_LOGE("no aether_aeui_app_main in libapp.so: build it with tools/android-apk.sh");
+    if (aether_main) {
+        // argv[0] is the package name, where a desktop run has the program's
+        // path: one argument, as there, so args_count() agrees across
+        // platforms. Static: aether_main keeps the pointer for args_get.
+        static char argv0[256] = "app";
+        static char* argv[2] = { argv0, NULL };
+        if ((*env)->PushLocalFrame(env, 4) == 0) {
+            jobject pkg = JO(activity, M_Ctx_getPackageName);
+            if (pkg) aeui_charseq_into(env, pkg, argv0, (int)sizeof(argv0));
+            (*env)->PopLocalFrame(env, NULL);
+        }
+        AEUI_LOGI("running the app's main() via aether_main (density %.2f)", (double)g_density);
+        int rc = aether_main(1, argv);
+        AEUI_LOGI("main() returned %d; %d widgets, body %s", rc, widget_count,
+                  g_mounted ? "mounted" : "NOT mounted");
         return;
     }
-    AEUI_LOGI("running the app's main() (density %.2f)", (double)g_density);
+    if (!aether_aeui_app_main) {
+        AEUI_LOGE("no aether_main in libapp.so: build it with tools/android-apk.sh "
+                  "and an ae >= 0.789");
+        return;
+    }
+    AEUI_LOGI("running the app's main() as aeui_app_main (an older ae: no "
+              "aether_main, so no argv or scheduler prologue) (density %.2f)",
+              (double)g_density);
     aether_aeui_app_main();
     AEUI_LOGI("main() returned; %d widgets, body %s", widget_count,
               g_mounted ? "mounted" : "NOT mounted");
@@ -8755,9 +8865,19 @@ static void JNICALL native_lifecycle(JNIEnv* env, jclass cls, jint event, jboole
                 // the process the same way, so the next launch is a fresh
                 // run of main() rather than a half-alive one.
                 aeui_retire_all(env);
+                // The executable's epilogue: main() has "returned" (the
+                // window closed), so drain the program's actors and join the
+                // scheduler before the process ends, as a desktop run does.
+                if (aether_main_exit) aether_main_exit();
                 fflush(stdout);
                 fflush(stderr);
-                exit(0);
+                // _exit, not exit: exit() runs the process's C++ static
+                // destructors while Android's render threads (hwuiTask*)
+                // are still running, and one of them then locks a mutex a
+                // destructor has destroyed -- FORTIFY aborts the process
+                // with SIGABRT on every finish. The program's own shutdown
+                // is the aether_main_exit above; nothing else is owed.
+                _exit(0);
             }
             g_mounted = 0;   // the host is going; a recreated activity re-mounts
             break;

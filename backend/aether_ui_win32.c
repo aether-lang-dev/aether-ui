@@ -3153,8 +3153,11 @@ static int app_capacity = 0;
 // time; a finished job is PostMessage'd to it from the pool thread and its
 // window procedure delivers on the UI thread. AE_WM_WORKER_DELIVER sits in
 // the WM_USER range beside the driver's (+0x42), flush-layout (+0x43) and
-// retheme (+0x44) messages. Not installed under AETHER_UI_HEADLESS: that run
-// parks without a message loop. See the header for the contract.
+// retheme (+0x44) messages. Under AETHER_UI_HEADLESS it is installed only
+// once the message loop starts (aeui_worker_poster_install(1) in app_start):
+// a headless app_start still pumps (SW_HIDE, timers, driver), but a headless
+// program that never reaches it -- the UI-logic tests -- has no loop, and its
+// completions must stay on std.worker's drain queue. See the header.
 #define AE_WM_WORKER_DELIVER (WM_USER + 0x45)
 static HWND  aeui_worker_hwnd = NULL;
 static DWORD aeui_ui_thread_id = 0;
@@ -3176,9 +3179,9 @@ static void aeui_worker_post(void* env, void* job) {
     if (aeui_worker_hwnd) PostMessageW(aeui_worker_hwnd, AE_WM_WORKER_DELIVER, 0, (LPARAM)job);
 }
 
-void aether_ui_worker_poster_install_impl(void) {
+static void aeui_worker_poster_install(int loop_running) {
     if (!aeui_ui_thread_id) aeui_ui_thread_id = GetCurrentThreadId();
-    if (aeui_worker_hwnd || aeui_is_headless()) return;
+    if (aeui_worker_hwnd || (aeui_is_headless() && !loop_running)) return;
     static int registered = 0;
     if (!registered) {
         WNDCLASSW wc;
@@ -3196,6 +3199,13 @@ void aether_ui_worker_poster_install_impl(void) {
     poster.fn = (void (*)(void))aeui_worker_post;
     poster.env = NULL;
     aether_worker_set_main_poster(poster);
+    // Anything that finished before the poster existed sits on the drain
+    // queue; this is the UI thread, so hand it over now.
+    aether_worker_drain(0);
+}
+
+void aether_ui_worker_poster_install_impl(void) {
+    aeui_worker_poster_install(0);
 }
 
 int aether_ui_on_ui_thread_impl(void) {
@@ -3395,6 +3405,10 @@ void aether_ui_app_run_raw(int app_handle) {
             aether_ui_enable_test_server_impl(port, e->root_handle);
         }
     }
+
+    // The loop is about to run, headless or not: completions can be posted
+    // to it now (a no-op when app_create already installed the poster).
+    aeui_worker_poster_install(1);
 
     // Message loop with Tab/Enter/Esc dialog-navigation support.
     // IsDialogMessageW routes Tab between WS_TABSTOP controls, Shift+Tab
@@ -6627,6 +6641,123 @@ void aether_ui_timer_cancel_impl(int timer_id) {
     }
     LeaveCriticalSection(&timer_lock);
     SetEvent(timer_wake);
+}
+
+/* Frame clock (aether_ui_backend.h, "One-shot timer and the frame clock").
+ *
+ * Win32 has no vsync callback. The honest thing closest to one is DwmFlush:
+ * it blocks until the Desktop Window Manager's next composition pass, which
+ * DWM paces to the display's refresh. A helper thread loops on it and posts
+ * each frame to a message-only window on the UI thread, at most one in
+ * flight, so a busy UI thread drops frames instead of queueing them. The
+ * frame time is the QueryPerformanceCounter reading as DwmFlush returned.
+ *
+ * Where there is no compositor for this session -- an SSH or service logon
+ * (session 0 has no DWM), a VM console with composition off -- DwmFlush fails
+ * or returns at once. The thread then gives up and records it, start reports
+ * 0, and the shared fallback drives frames from a timer at the monitor's
+ * refresh rate (DwmGetCompositionTimingInfo, else EnumDisplaySettings, else
+ * 60), with frame_source() saying "timer". It does not pretend: a DwmFlush
+ * that did not wait is not a vsync, so it is not reported as one. */
+#define WM_AEUI_FRAME (WM_APP + 0x3A2)
+static HWND frame_sink = NULL;
+static volatile LONG frame_gen = 0;        // the running thread's generation
+static volatile LONG frame_posted = 0;     // a frame is waiting on the UI thread
+static volatile LONG frame_no_dwm = 0;     // DwmFlush did not wait: no compositor
+static int frame_running = 0;
+
+static double frame_qpc_ms(LONGLONG q) {
+    static LARGE_INTEGER hz;
+    if (hz.QuadPart == 0) QueryPerformanceFrequency(&hz);
+    return (double)q * 1000.0 / (double)hz.QuadPart;
+}
+
+static DWORD WINAPI frame_thread_main(LPVOID arg) {
+    LONG gen = (LONG)(intptr_t)arg;
+    int quick = 0;
+    while (frame_gen == gen) {
+        LARGE_INTEGER t0, t1;
+        QueryPerformanceCounter(&t0);
+        HRESULT hr = DwmFlush();
+        QueryPerformanceCounter(&t1);
+        if (FAILED(hr)) { InterlockedExchange(&frame_no_dwm, 1); break; }
+        // A composition pass is at least a few ms apart even at 240 Hz; a
+        // DwmFlush that returns in under half a millisecond, time after
+        // time, waited for nothing.
+        if (frame_qpc_ms(t1.QuadPart - t0.QuadPart) < 0.5) {
+            if (++quick >= 8) { InterlockedExchange(&frame_no_dwm, 1); break; }
+            continue;
+        }
+        quick = 0;
+        if (frame_gen != gen) break;
+        if (InterlockedCompareExchange(&frame_posted, 1, 0) == 0) {
+            if (!PostMessageW(frame_sink, WM_AEUI_FRAME, (WPARAM)gen, (LPARAM)t1.QuadPart))
+                InterlockedExchange(&frame_posted, 0);
+        }
+    }
+    return 0;
+}
+
+static LRESULT CALLBACK frame_sink_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_AEUI_FRAME) {
+        InterlockedExchange(&frame_posted, 0);
+        if (!frame_running || (LONG)wp != frame_gen) return 0;   // stale
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        aether_ui_frame_dispatch(frame_qpc_ms((LONGLONG)lp), frame_qpc_ms(now.QuadPart));
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+int aether_ui_frame_clock_start_impl(void) {
+    if (frame_running) return 1;
+    if (frame_no_dwm) return 0;   // measured: this session has no compositor
+    BOOL on = FALSE;
+    if (FAILED(DwmIsCompositionEnabled(&on)) || !on) return 0;
+    if (!frame_sink) {
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = frame_sink_proc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.lpszClassName = L"AetherUIFrameSink";
+        RegisterClassExW(&wc);
+        frame_sink = CreateWindowExW(0, L"AetherUIFrameSink", L"", 0, 0, 0, 0, 0,
+                                     HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+        if (!frame_sink) return 0;
+    }
+    LONG gen = InterlockedIncrement(&frame_gen);
+    HANDLE th = CreateThread(NULL, 0, frame_thread_main, (LPVOID)(intptr_t)gen, 0, NULL);
+    if (!th) return 0;
+    CloseHandle(th);
+    frame_running = 1;
+    return 1;
+}
+
+void aether_ui_frame_clock_stop_impl(void) {
+    if (!frame_running) return;
+    frame_running = 0;
+    InterlockedIncrement(&frame_gen);   // the thread exits after its current flush
+}
+
+const char* aether_ui_frame_clock_name_impl(void) { return "dwm-flush"; }
+
+int aether_ui_frame_clock_hz_impl(void) {
+    DWM_TIMING_INFO ti;
+    memset(&ti, 0, sizeof(ti));
+    ti.cbSize = sizeof(ti);
+    if (SUCCEEDED(DwmGetCompositionTimingInfo(NULL, &ti)) && ti.rateRefresh.uiDenominator) {
+        int hz = (int)((ti.rateRefresh.uiNumerator + ti.rateRefresh.uiDenominator / 2)
+                       / ti.rateRefresh.uiDenominator);
+        if (hz >= 1) return hz;
+    }
+    DEVMODEW dm;
+    memset(&dm, 0, sizeof(dm));
+    dm.dmSize = sizeof(dm);
+    if (EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+        return (int)dm.dmDisplayFrequency;
+    return 60;
 }
 
 void aether_ui_open_url_impl(const char* url) {
@@ -12059,7 +12190,17 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                         else if (strncmp(rest, "Super+", 6) == 0) { kmods |= 8; rest += 6; }
                         else break;
                     }
-                    ctx->retval = aether_ui_window_key_deliver(rest, kmods);
+                    // Spell the key the way a REAL keystroke reaches the
+                    // handler (w32_key_from_msg): a letter is lower-case.
+                    // The combo says "Ctrl+K" because that is how an app
+                    // writes a shortcut, but on_key compares k == "k" -- and
+                    // was handed "K" from here alone, so a driven Ctrl+K never
+                    // matched what a typed one does.
+                    char kname[64];
+                    snprintf(kname, sizeof(kname), "%s", rest);
+                    if (kname[0] >= 'A' && kname[0] <= 'Z' && kname[1] == '\0')
+                        kname[0] = (char)(kname[0] + 32);
+                    ctx->retval = aether_ui_window_key_deliver(kname, kmods);
                     // Then on to the focused control, as a real key goes on
                     // through IsDialogMessage: an arrow reaches a control
                     // that asks for arrows (WM_GETDLGCODE) -- a tab strip

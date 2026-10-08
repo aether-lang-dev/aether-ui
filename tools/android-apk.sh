@@ -15,12 +15,14 @@
 #      libGLESv3 (the GPU view's context, and the GL an app calls in it) from
 #      the sysroot. Two things --emit=lib needs that an
 #      executable build does not:
-#        * main() is RENAMED to aeui_app_main() in a generated copy of the
-#          source. --emit=lib drops a program's main() (aether's codegen:
-#          "a future Shape B extension could emit an aether_main() wrapper");
-#          a renamed top-level function is exported as aether_aeui_app_main,
-#          which the backend calls from AetherActivity.onCreate. See
-#          asks/aether-emit-lib-keeps-main.md.
+#        * the program's main() is kept: --emit=lib (aether >= 0.789, #2489)
+#          exports it as aether_main(argc, argv), which runs the executable's
+#          prologue (argv, sandbox, the actor scheduler) and main()'s body,
+#          and aether_main_exit(), the epilogue. The backend calls the first
+#          from AetherActivity.onCreate and the second when the activity
+#          finishes. (It used to rename main() to aeui_app_main(), which
+#          skipped the prologue; the backend still runs that symbol when a
+#          library from an older ae has no aether_main.)
 #        * --with=fs,net,os: an --emit=lib library is capability-empty by
 #          default, and ui/module.ae imports std.fs and std.os. An app IS
 #          the host, so it grants them.
@@ -47,9 +49,19 @@
 #   ANDROID_LABEL    launcher label (default: <app>)
 #   ANDROID_LIB_ONLY non-empty: stop after libapp.so (no SDK or JDK needed;
 #                    ci.sh's build check)
-#   AETHER_UI_WITH_DRIVER  non-empty: link the AetherUIDriver and request
-#                    INTERNET (the driver listens on 127.0.0.1); else the
-#                    no-control stub, and no permission.
+#   ANDROID_EXTRA_SOURCES  space-separated C sources (or libraries) the app
+#                    links beyond the backend's, each passed as --extra: the C
+#                    half of an app whose source is not all Aether (sae's
+#                    src/sae_rom.c).
+#   AETHER_UI_WITH_DRIVER  non-empty: link the AetherUIDriver (it listens on
+#                    127.0.0.1); else the no-control stub.
+#   ANDROID_NO_INTERNET  non-empty: leave out the INTERNET permission. It is
+#                    requested by default, as a desktop app can open sockets
+#                    without asking: without it every socket() fails with
+#                    EACCES, so an app that fetches (std.http.client, sae's
+#                    pages) or runs the driver would be cut off. INTERNET is
+#                    an Android "normal" permission -- granted at install, no
+#                    prompt. Opting out fails with the driver, which needs it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -83,9 +95,13 @@ SYSLIB="$AETHER_SYSROOT/usr/lib/aarch64-linux-android/$MIN_SDK"
 
 if [ -n "${AETHER_UI_WITH_DRIVER:-}" ]; then
     CONTROL="aether_ui_test_server.c"
-    INTERNET='<uses-permission android:name="android.permission.INTERNET" />'
 else
     CONTROL="aether_ui_no_control.c"
+fi
+INTERNET='<uses-permission android:name="android.permission.INTERNET" />'
+if [ -n "${ANDROID_NO_INTERNET:-}" ]; then
+    [ -z "${AETHER_UI_WITH_DRIVER:-}" ] || {
+        echo "error: AETHER_UI_WITH_DRIVER needs the INTERNET permission; unset ANDROID_NO_INTERNET" >&2; exit 1; }
     INTERNET=''
 fi
 
@@ -96,11 +112,16 @@ mkdir -p "$STAGE/lib/arm64-v8a" "$OUT/gen" "$OUT/classes"
 
 # --- 1. the app as libapp.so ------------------------------------------------
 GEN="$OUT/gen/$APP.ae"
-sed -E 's/^main\(\)/aeui_app_main()/' "$SRC" > "$GEN"
-if [ "$(grep -c '^aeui_app_main()' "$GEN")" -ne 1 ]; then
-    echo "error: $SRC needs exactly one top-level 'main()' to rename" >&2
+cp "$SRC" "$GEN"
+if [ "$(grep -c '^main()' "$GEN")" -ne 1 ]; then
+    echo "error: $SRC needs exactly one top-level 'main()' (it becomes aether_main)" >&2
     exit 1
 fi
+EXTRA_SRCS=()
+for f in ${ANDROID_EXTRA_SOURCES:-}; do
+    [ -f "$f" ] || { echo "error: ANDROID_EXTRA_SOURCES names a missing file: $f" >&2; exit 1; }
+    EXTRA_SRCS+=(--extra "$f")
+done
 echo "[1/4] libapp.so  ($AE build --target=aarch64-linux-android --emit=lib)"
 AETHER_SYSROOT="$AETHER_SYSROOT" AETHER_ANDROID_API="$MIN_SDK" \
 "$AE" build "$GEN" --target=aarch64-linux-android --emit=lib --with=fs,net,os \
@@ -113,6 +134,7 @@ AETHER_SYSROOT="$AETHER_SYSROOT" AETHER_ANDROID_API="$MIN_SDK" \
     --extra "$SYSLIB/libjnigraphics.so" \
     --extra "$SYSLIB/libEGL.so" \
     --extra "$SYSLIB/libGLESv3.so" \
+    ${EXTRA_SRCS[@]+"${EXTRA_SRCS[@]}"} \
     -o "$STAGE/lib/arm64-v8a/libapp.so"
 
 if [ -n "${ANDROID_LIB_ONLY:-}" ]; then

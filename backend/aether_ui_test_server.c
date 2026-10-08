@@ -1440,6 +1440,21 @@ static void handle_request_inner(aether_sock_t client_fd,
         aether_ui_tray_set_tooltip_reg(id, text);
         send_http(client_fd, 200, "OK", "text/plain", "set");
 
+    // --- /frame_clock ---
+    // GET /frame_clock → {"source":S,"frames":N,"subscribers":K,"running":R}:
+    // the clock that delivered the last on_frame frame ("timer" for the
+    // fallback, "none" before any), frames delivered so far, live
+    // subscribers, and whether a clock (native or fallback) is running. A
+    // spec reads it to prove the clock STOPS when nothing subscribes
+    // (running 0, frames unchanged), which no label can show.
+    } else if (method == 0 && strcmp(path, "/frame_clock") == 0) {
+        char body[192];
+        snprintf(body, sizeof(body),
+                 "{\"source\":\"%s\",\"frames\":%d,\"subscribers\":%d,\"running\":%d}",
+                 aether_ui_frame_source_impl(), aether_ui_frame_count_impl(),
+                 aether_ui_frame_subscribers_impl(), aether_ui_frame_running_impl());
+        send_http(client_fd, 200, "OK", "application/json", body);
+
     // --- /opened_urls ---
     // GET /opened_urls → every URL the app passed to open_url while headless,
     // in order. Headless open_url records instead of launching a browser
@@ -1655,6 +1670,18 @@ static void* server_thread(void* arg) {
 }
 
 void aether_ui_test_server_start(int port, const AetherDriverHooks* hooks) {
+    // AETHER_UI_TEST_PORT, when it names a port, is the launcher's choice and
+    // wins over the literal an app passes. Apps arm the driver with
+    // `if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }`,
+    // so without this the variable only switched the server ON, and a box
+    // whose 9222 was taken (an `adb forward tcp:9222`, a second checkout's
+    // run) could not run the specs at all: the app bound 9222 whatever port
+    // the harness asked for. tests/lib/uidriver.ae reads the same variable.
+    const char* env_port = getenv("AETHER_UI_TEST_PORT");
+    if (env_port && env_port[0]) {
+        int p = atoi(env_port);
+        if (p > 0 && p < 65536) port = p;
+    }
     ServerArgs* args = (ServerArgs*)malloc(sizeof(ServerArgs));
     args->port = port;
     args->hooks = hooks;

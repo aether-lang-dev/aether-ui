@@ -7,8 +7,8 @@
 #
 # Which spec: $UI_SPEC as "<app-dir>/<spec-name>" (ci.sh sets it per
 # iteration), e.g. UI_SPEC=calculator/spec_calculator — or $1. ci.sh's
-# run_server_test passes the port as the first arg; the driver's port is
-# fixed at 9222, so a numeric $1 is ignored.
+# run_server_test passes the port as the first arg: a numeric $1 is exported
+# as AETHER_UI_TEST_PORT, which tests/lib/uidriver.ae talks to (default 9222).
 #
 # NB: the module-search env var is AETHER_LIB_DIR (aether #413),
 # multi-entry with the platform path separator.
@@ -20,6 +20,10 @@
 # and no hard failure when a box lacks the repo — one less thing to install
 # on every new platform.
 set -e
+case "${1:-}" in
+    ''|*[!0-9]*) ;;
+    *) export AETHER_UI_TEST_PORT="$1" ;;
+esac
 SPEC="${UI_SPEC:-$1}"
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$TESTS_DIR/$(dirname "$SPEC")"

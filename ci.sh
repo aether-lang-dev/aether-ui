@@ -41,7 +41,12 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$SCRIPT_DIR"
-PORT="${1:-9222}"
+# The driver port: $1, else $AETHER_UI_TEST_PORT, else 9222 (a box whose 9222
+# is taken -- an `adb forward tcp:9222` to a phone -- picks another). Apps
+# bind the AETHER_UI_TEST_PORT they are launched with, whatever port they
+# pass enable_test_server (aether_ui_test_server_start), and the specs talk
+# to it (run_spec.sh exports its numeric $1 for tests/lib/uidriver.ae).
+PORT="${1:-${AETHER_UI_TEST_PORT:-9222}}"
 
 cd "$ROOT"
 mkdir -p build
@@ -70,7 +75,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo frametick_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -845,92 +850,109 @@ else
     else
         echo "  OK   runtime archive for $SIM_AE_TARGET"
     fi
-    # 2. The example's portable C, exactly as build.sh emits it for the host.
-    if [ "$sim_fail" -eq 0 ] && ! aetherc "$ROOT/examples/listbox_demo/listbox_demo.ae" \
-            "$SIM_DIR/listbox_demo.c" > /tmp/ci_ios_sim_aetherc.log 2>&1; then
-        echo "  FAIL aetherc listbox_demo"
-        tail -15 /tmp/ci_ios_sim_aetherc.log | sed 's/^/       /'
-        sim_fail=1
-    fi
-    # 3. Link it for the simulator: the app, the UIKit backend, the driver, the
-    #    runtime archive, the frameworks. The same clang line as Phase 1e's
-    #    link check, with the real runtime where tests/ios/link_stub.c stood.
-    if [ "$sim_fail" -eq 0 ]; then
-        if "$IOS_CLANG" -fobjc-arc -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
-                $(ae cflags | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ') -Ibackend \
-                "$SIM_DIR/listbox_demo.c" \
-                "$ROOT/backend/aether_ui_uikit.m" \
-                "$ROOT/backend/aether_ui_test_server.c" \
-                "$ROOT/backend/aether_ui_system_extras.c" \
-                "$SIM_DIR/libaether_sim.a" \
-                -framework UIKit -framework Foundation -framework QuartzCore \
-                -framework CoreGraphics -framework CoreText -framework ImageIO \
-                -framework UserNotifications -lpthread -lm \
-                -o "$SIM_APP/AetherUIProbe" > /tmp/ci_ios_sim_link.log 2>&1; then
-            echo "  OK   listbox_demo links against the simulator runtime"
-        else
-            echo "  FAIL link listbox_demo for the simulator"
-            grep -iE "undefined|error:" /tmp/ci_ios_sim_link.log | head -15 | sed 's/^/       /'
+    # 2-5 for each example: listbox_demo (#22's acceptance: rows rendered by
+    # UIKit, a tap selecting one, selection surviving an update), then
+    # frametick_demo (the frame clock on CADisplayLink, pinned so a silent
+    # fallback to the timer fails, and timer_once).
+    for SIM_EX in listbox_demo frametick_demo; do
+        [ "$sim_fail" -eq 0 ] || break
+        SIM_FRAME_SOURCE=""
+        if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
+        rm -f "$SIM_APP/AetherUIProbe"
+        # 2. The example's portable C, exactly as build.sh emits it for the host.
+        if [ "$sim_fail" -eq 0 ] && ! aetherc "$ROOT/examples/$SIM_EX/$SIM_EX.ae" \
+                "$SIM_DIR/$SIM_EX.c" > /tmp/ci_ios_sim_aetherc.log 2>&1; then
+            echo "  FAIL aetherc $SIM_EX"
+            tail -15 /tmp/ci_ios_sim_aetherc.log | sed 's/^/       /'
             sim_fail=1
         fi
-    fi
-    # 4. The bundle, and a simulator to put it in.
-    if [ "$sim_fail" -eq 0 ]; then
-        cp "$ROOT/tests/ios/Info.plist" "$SIM_APP/Info.plist"
-        IOS_SIM_UDID="$(ios_sim_pick)"
-        if [ -z "$IOS_SIM_UDID" ]; then
-            echo "  FAIL no available iPhone simulator on this host"
-            xcrun simctl list devices available 2>&1 | head -20 | sed 's/^/       /'
-            sim_fail=1
-        fi
-    fi
-    if [ "$sim_fail" -eq 0 ]; then
-        xcrun simctl boot "$IOS_SIM_UDID" > /tmp/ci_ios_sim_boot.log 2>&1 || true
-        if ! xcrun simctl bootstatus "$IOS_SIM_UDID" -b >> /tmp/ci_ios_sim_boot.log 2>&1; then
-            echo "  FAIL simulator $IOS_SIM_UDID did not boot"
-            tail -10 /tmp/ci_ios_sim_boot.log | sed 's/^/       /'
-            sim_fail=1
-        elif ! xcrun simctl install "$IOS_SIM_UDID" "$SIM_APP" > /tmp/ci_ios_sim_install.log 2>&1; then
-            echo "  FAIL install into the simulator"
-            tail -10 /tmp/ci_ios_sim_install.log | sed 's/^/       /'
-            sim_fail=1
-        else
-            echo "  OK   booted $IOS_SIM_UDID and installed the bundle"
-        fi
-    fi
-    # 5. Launch with the driver armed, then run the listbox spec against it as
-    #    Phase 5f does on the desktop.
-    if [ "$sim_fail" -eq 0 ]; then
-        if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets" 2>/dev/null; then
-            echo "  FAIL port $PORT already answering (stray app?)"
-            sim_fail=1
-        elif ! SIMCTL_CHILD_AETHER_UI_TEST_PORT="$PORT" \
-                SIMCTL_CHILD_AETHER_UI_NO_ANIMATION=1 \
-                xcrun simctl launch --stdout=/tmp/ci_ios_sim.app.log --stderr=/tmp/ci_ios_sim.app.err \
-                    "$IOS_SIM_UDID" dev.aether.ui.simprobe > /tmp/ci_ios_sim_launch.log 2>&1; then
-            echo "  FAIL launch"
-            tail -10 /tmp/ci_ios_sim_launch.log | sed 's/^/       /'
-            sim_fail=1
-        else
-            up=0
-            for _ in $(seq 1 200); do
-                if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then up=1; break; fi
-                sleep 0.2
-            done
-            if [ "$up" -ne 1 ]; then
-                echo "  FAIL the app's driver server never answered from the simulator"
-                ios_sim_diagnose
-                sim_fail=1
-            elif UI_SPEC=listbox_demo/spec_listbox_demo "$SCRIPT_DIR/tests/run_spec.sh" "$PORT"; then
-                echo "  OK   listbox_demo spec passes on the iOS simulator"
+        # 3. Link it for the simulator: the app, the UIKit backend, the driver, the
+        #    runtime archive, the frameworks. The same clang line as Phase 1e's
+        #    link check, with the real runtime where tests/ios/link_stub.c stood.
+        if [ "$sim_fail" -eq 0 ]; then
+            if "$IOS_CLANG" -fobjc-arc -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
+                    $(ae cflags | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ') -Ibackend \
+                    "$SIM_DIR/$SIM_EX.c" \
+                    "$ROOT/backend/aether_ui_uikit.m" \
+                    "$ROOT/backend/aether_ui_test_server.c" \
+                    "$ROOT/backend/aether_ui_system_extras.c" \
+                    "$SIM_DIR/libaether_sim.a" \
+                    -framework UIKit -framework Foundation -framework QuartzCore \
+                    -framework CoreGraphics -framework CoreText -framework ImageIO \
+                    -framework UserNotifications -lpthread -lm \
+                    -o "$SIM_APP/AetherUIProbe" > /tmp/ci_ios_sim_link.log 2>&1; then
+                echo "  OK   $SIM_EX links against the simulator runtime"
             else
-                echo "  FAIL listbox_demo spec on the iOS simulator"
-                ios_sim_diagnose
+                echo "  FAIL link $SIM_EX for the simulator"
+                grep -iE "undefined|error:" /tmp/ci_ios_sim_link.log | head -15 | sed 's/^/       /'
                 sim_fail=1
             fi
-            curl -sf -m 2 -X POST "http://127.0.0.1:$PORT/shutdown" > /dev/null 2>&1 || true
         fi
-    fi
+        # 4. The bundle, and a simulator to put it in.
+        if [ "$sim_fail" -eq 0 ]; then
+            cp "$ROOT/tests/ios/Info.plist" "$SIM_APP/Info.plist"
+            [ -n "$IOS_SIM_UDID" ] || IOS_SIM_UDID="$(ios_sim_pick)"
+            if [ -z "$IOS_SIM_UDID" ]; then
+                echo "  FAIL no available iPhone simulator on this host"
+                xcrun simctl list devices available 2>&1 | head -20 | sed 's/^/       /'
+                sim_fail=1
+            fi
+        fi
+        if [ "$sim_fail" -eq 0 ]; then
+            xcrun simctl boot "$IOS_SIM_UDID" > /tmp/ci_ios_sim_boot.log 2>&1 || true
+            if ! xcrun simctl bootstatus "$IOS_SIM_UDID" -b >> /tmp/ci_ios_sim_boot.log 2>&1; then
+                echo "  FAIL simulator $IOS_SIM_UDID did not boot"
+                tail -10 /tmp/ci_ios_sim_boot.log | sed 's/^/       /'
+                sim_fail=1
+            elif ! xcrun simctl install "$IOS_SIM_UDID" "$SIM_APP" > /tmp/ci_ios_sim_install.log 2>&1; then
+                echo "  FAIL install into the simulator"
+                tail -10 /tmp/ci_ios_sim_install.log | sed 's/^/       /'
+                sim_fail=1
+            else
+                echo "  OK   booted $IOS_SIM_UDID and installed the bundle"
+            fi
+        fi
+        # 5. Launch with the driver armed, then run the listbox spec against it as
+        #    Phase 5f does on the desktop.
+        if [ "$sim_fail" -eq 0 ]; then
+            if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets" 2>/dev/null; then
+                echo "  FAIL port $PORT already answering (stray app?)"
+                sim_fail=1
+            elif ! SIMCTL_CHILD_AETHER_UI_TEST_PORT="$PORT" \
+                    SIMCTL_CHILD_AETHER_UI_NO_ANIMATION=1 \
+                    xcrun simctl launch --stdout=/tmp/ci_ios_sim.app.log --stderr=/tmp/ci_ios_sim.app.err \
+                        "$IOS_SIM_UDID" dev.aether.ui.simprobe > /tmp/ci_ios_sim_launch.log 2>&1; then
+                echo "  FAIL launch"
+                tail -10 /tmp/ci_ios_sim_launch.log | sed 's/^/       /'
+                sim_fail=1
+            else
+                up=0
+                for _ in $(seq 1 200); do
+                    if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then up=1; break; fi
+                    sleep 0.2
+                done
+                if [ "$up" -ne 1 ]; then
+                    echo "  FAIL the app's driver server never answered from the simulator"
+                    ios_sim_diagnose
+                    sim_fail=1
+                elif AETHER_UI_EXPECT_FRAME_SOURCE="$SIM_FRAME_SOURCE" \
+                        UI_SPEC="$SIM_EX/spec_$SIM_EX" "$SCRIPT_DIR/tests/run_spec.sh" "$PORT"; then
+                    echo "  OK   $SIM_EX spec passes on the iOS simulator"
+                else
+                    echo "  FAIL $SIM_EX spec on the iOS simulator"
+                    ios_sim_diagnose
+                    sim_fail=1
+                fi
+                curl -sf -m 2 -X POST "http://127.0.0.1:$PORT/shutdown" > /dev/null 2>&1 || true
+                xcrun simctl terminate "$IOS_SIM_UDID" dev.aether.ui.simprobe > /dev/null 2>&1 || true
+                # The driver must be gone before the next example binds the port.
+                for _ in $(seq 1 25); do
+                    curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets" 2>/dev/null || break
+                    sleep 0.2
+                done
+            fi
+        fi
+    done
     ios_sim_cleanup
     [ "$sim_fail" -eq 0 ] || FAIL=$((FAIL + 1))
 fi
@@ -945,7 +967,9 @@ echo "=== Phase 1e3: Android backend (examples/counter as libapp.so) ==="
 # --target=aarch64-linux-android --emit=lib`, via tools/android-apk.sh), and
 # that library exports what AetherActivity binds (JNI_OnLoad) and calls (the
 # renamed main). Running it on a phone is tools/android-install.sh, then
-# `adb forward tcp:9222 tcp:9222` and tests/counter/spec_counter.ae.
+# `adb forward tcp:<host port> tcp:9222` and tests/counter/spec_counter.ae with
+# AETHER_UI_TEST_PORT=<host port> -- a host port other than 9222, so desktop
+# runs on this box keep theirs.
 # Opt-in: AETHER_ANDROID_SYSROOT=<aether-crossbuild bases/aarch64-android29>.
 if [ -z "${AETHER_ANDROID_SYSROOT:-}" ] || [ ! -f "$AETHER_ANDROID_SYSROOT/usr/include/jni.h" ]; then
     echo "  SKIP set AETHER_ANDROID_SYSROOT to an Android sysroot (aether-crossbuild fetch-android-sysroot.sh) to enable"
@@ -1335,6 +1359,26 @@ if [ "$SPEC_OK" -eq 1 ]; then
     run_server_test "$(EX_BIN timer_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" timer_demo || FAIL=$((FAIL + 1))
     unset G_DEBUG
+fi
+
+echo "=== Phase 5e11a: AetherUIDriver frame clock + timer_once spec ==="
+# on_frame is the display-synced tick (GTK4 frame clock, CADisplayLink,
+# Choreographer, DwmFlush) and timer_once the one-shot timer. The spec counts
+# frames over half a second and checks their timestamps against wall time.
+# Pinned on Linux/FreeBSD, so a frame clock that silently fell back to the
+# timer fails here: GTK4 under Xvfb is mapped, and its frame clock ticks. Not
+# pinned on macOS (the screen's CADisplayLink stops while the display sleeps,
+# and an unattended ci.sh can run then) or Windows (an SSH or service session
+# has no compositor); the spec prints the source either way.
+if [ "$SPEC_OK" -eq 1 ]; then
+    case "$(uname -s)" in
+        Linux|FreeBSD) export AETHER_UI_EXPECT_FRAME_SOURCE=gtk-frame-clock ;;
+    esac
+    export G_DEBUG=fatal-criticals
+    UI_SPEC=frametick_demo/spec_frametick_demo \
+    run_server_test "$(EX_BIN frametick_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" frametick_demo || FAIL=$((FAIL + 1))
+    unset G_DEBUG AETHER_UI_EXPECT_FRAME_SOURCE
 fi
 
 echo "=== Phase 5e11b: AetherUIDriver background-work spec (std.worker completions land on the UI thread) ==="

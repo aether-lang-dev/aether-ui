@@ -26,7 +26,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PORT=9222
+# The driver port: $AETHER_UI_TEST_PORT if set (a box whose 9222 is taken --
+# an `adb forward tcp:9222` to a phone -- picks another), else 9222. Exported
+# so the specs (tests/lib/uidriver.ae) talk to the port the apps bind.
+PORT="${AETHER_UI_TEST_PORT:-9222}"
+export AETHER_UI_TEST_PORT="$PORT"
 # HEADLESS only where a hidden window still LAYS OUT: win32 (SW_HIDE children
 # get real rects) and macOS (Auto Layout runs unmapped). On GTK4, headless
 # realizes-but-never-presents, so NO allocation pass runs — every geometry
@@ -98,6 +102,7 @@ SUITES=(
   "svgimage|examples/svgimage_demo|svgimage_demo/spec_svgimage_demo|"
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
   "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
+  "frametick|examples/frametick_demo|frametick_demo/spec_frametick_demo|"
   "background|examples/background_demo|background_demo/spec_background_demo|"
   "canvasscroll|examples/canvasscroll_demo|canvasscroll_demo/spec_canvasscroll_demo|"
   "canvasclip|examples/canvasclip_demo|canvasclip_demo/spec_canvasclip_demo|"

@@ -18,6 +18,9 @@
 #import <OpenGL/gl3.h>            // gpuview (#92)
 #import <objc/runtime.h>          // objc_setAssociatedObject (dbl-click fire)
 #include <time.h>                  // clock_gettime (chord timeout)
+#import <CoreVideo/CoreVideo.h>   // frame clock before macOS 14 (CVDisplayLink)
+#include <mach/mach_time.h>         // frame clock: CVTimeStamp host time
+#include <stdatomic.h>
 #include "aether_ui_backend.h"  // cross-platform backend ABI
 #include "aether_ui_system_extras.h"
 #include <stdint.h>
@@ -819,13 +822,22 @@ static void aeui_worker_post(void* env, void* job) {
     });
 }
 
-void aether_ui_worker_poster_install_impl(void) {
-    if (aeui_worker_poster_installed || aeui_is_headless()) return;
+// loop_running: app_run_raw is about to [app run], which services the main
+// queue even under AETHER_UI_HEADLESS. Before that, a headless program may
+// never run a loop (the UI-logic tests), so completions stay on std.worker's
+// drain queue. See the header.
+static void aeui_worker_poster_install(int loop_running) {
+    if (aeui_worker_poster_installed || (aeui_is_headless() && !loop_running)) return;
     AetherUiWorkerClosure poster;
     poster.fn = (void (*)(void))aeui_worker_post;
     poster.env = NULL;
     aether_worker_set_main_poster(poster);
     aeui_worker_poster_installed = 1;
+    aether_worker_drain(0);   // completions that queued before the poster existed
+}
+
+void aether_ui_worker_poster_install_impl(void) {
+    aeui_worker_poster_install(0);
 }
 
 int aether_ui_on_ui_thread_impl(void) {
@@ -874,6 +886,7 @@ void aether_ui_app_run_raw(int app_handle) {
         [appMenuItem setSubmenu:appMenu];
         [app setMainMenu:menubar];
 
+        aeui_worker_poster_install(1);   // the loop runs, headless or not
         [app run];
     }
 }
@@ -1529,6 +1542,11 @@ void aether_ui_shortcut_chord_impl(const char* first_combo,
    as before, and set_focusable is what turns it on. */
 @interface AetherStackView : NSStackView
 @property (assign) BOOL aeuiFocusable;
+// Box packing (vstack/hstack only; see aeui_stack_enable_packing).
+@property (strong) NSView* aeuiSlack;
+@property (weak) NSView* aeuiSlackCut;
+@property (strong) NSLayoutConstraint* aeuiSlackLen;
+- (void)aeuiRepack;
 @end
 
 void aether_ui_set_focusable_impl(int handle, int on) {
@@ -1606,9 +1624,12 @@ static void aeui_own_helper(id owner, const char* key, id helper) {
     objc_setAssociatedObject(owner, key, helper, OBJC_ASSOCIATION_RETAIN);
 }
 
-// Default low content-hugging priority so buttons fill horizontal space in
-// hstacks (matching GTK4's grid-like look on single-char button rows).
-// NSBezelStyleRegularSquare also makes the button render edge-to-edge inside
+// Hugging 200, below a label's 250, so a button FILLS a space it is given:
+// a grid cell (the calculator's keypad) or the full height of its row, as a
+// GtkBox fills its children across. It does not make a button take a
+// stack's leftover along the stack: the packing slack is cheaper still
+// (AEUI_SLACK_BASE, aeui_stack_enable_packing), so in an hstack a button
+// keeps its natural width, as in GTK. NSBezelStyleRegularSquare also makes the button render edge-to-edge inside
 // its frame — AppKit's default rounded bezel has a fixed intrinsic height and
 // refuses to stretch, leaving wasted space in tall cells (calculator grid).
 static void configure_button(NSButton* btn) {
@@ -1658,20 +1679,192 @@ void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure) {
     }
 }
 
+// ── Box packing: where a stack's slack goes ──────────────────────────────
+// GTK's boxes give a box's leftover main-axis space to the children that ask
+// to expand -- spacer(), a canvas, a weighted child, a scroll area -- and
+// leave it EMPTY at the end when none does; each child keeps its natural
+// size, packed at the start. Android's LinearLayout (weight 0 = wrap) and
+// the Win32 layout (spacers and "greedy" kinds take the flex, the rest is
+// left over) do the same, and so does the UIKit backend.
+//
+// NSStackView's Fill distribution has no "empty" option: the slack always
+// goes to the lowest-hugging arranged view. Buttons hug at 200 (so they fill
+// a grid cell), below a label's 250, so a row of buttons with nothing else
+// to grow STRETCHED to fill the row: rubiks_cube's Reset / Shuffle / Solve
+// came out 169/170/169 across a 520px window where GTK lays them 71/79/70
+// at the start. (The equal-width chain buttons used to get only made the
+// stretching even.)
+//
+// So the vstack/hstack a program builds carries one backend-owned,
+// unregistered trailing view: the "slack". It wants a zero length at a
+// priority (AEUI_SLACK_BASE + depth) that sits BETWEEN the expanders and
+// everything else:
+//   - a spacer, a weighted child, a match_parent axis (hugging 1) and a
+//     canvas (natural size held at only 150) are cheaper to grow, so they
+//     take the slack first, as GTK's expanding children do;
+//   - a button (hugging 200), a label (250) and every other leaf is dearer,
+//     so when no child expands the slack takes the space and the children
+//     keep their natural size, packed at the start.
+// A nested stack holding an expander grows in its parent at that child's
+// price, so expansion propagates up as GTK's computed expand does (canvases
+// and scroll areas also mark their ancestors -- aeui_mark_expand). One
+// holding none must NOT absorb its parent's slack: its own slack would
+// otherwise tie with the parent's, so the price rises by 1 per stack level
+// and the OUTERMOST box takes the leftover, as in GTK (where an inner box
+// without expanding children is simply allocated its natural size). A
+// stack that was itself told to expand (fill_height/fill_width, weight(),
+// aeui_mark_expand) drops below every default box instead
+// (AEUI_SLACK_EXPANDING), so it takes its parent's leftover.
+//
+// The slack is never a widget: no handle, so the driver's children/indices
+// skip it, and clear_children leaves it in place. It takes no spacing
+// (custom spacing 0 after the last real child), and is hidden -- detached,
+// out of the layout -- under any distribution but Fill, so set_distribution's
+// "fill equally" still divides the row among the real children only.
+#define AEUI_SLACK_BASE 160.0f   // > canvas natural size (150), < button hugging (200)
+#define AEUI_SLACK_MAX_DEPTH 30  // keeps the deepest box below 200
+#define AEUI_SLACK_EXPANDING 155.0f  // a stack asked to expand: under every default box
+
+static BOOL aeui_is_slack(NSView* v) {
+    NSView* p = v ? [v superview] : nil;
+    return p && [p isKindOfClass:[AetherStackView class]]
+        && ((AetherStackView*)p).aeuiSlack == v;
+}
+
+static NSLayoutPriority aeui_slack_priority(NSView* stack) {
+    // A stack that was itself asked to expand along its own axis -- fill_
+    // height on a vstack body, weight() on a row, a canvas inside it
+    // (aeui_mark_expand) all drop its hugging to 1 -- must take its PARENT's
+    // leftover and keep it as its own empty tail (GTK: a vexpand box below a
+    // toolbar gets every new pixel, its children still packed at the top).
+    // Its slack is therefore cheaper than any box's default one; a stack has
+    // no intrinsic size, so the hugging alone never did this.
+    BOOL vertical = [stack isKindOfClass:[NSStackView class]]
+        && [(NSStackView*)stack orientation] == NSUserInterfaceLayoutOrientationVertical;
+    NSLayoutPriority hug = [stack contentHuggingPriorityForOrientation:vertical
+        ? NSLayoutConstraintOrientationVertical : NSLayoutConstraintOrientationHorizontal];
+    if (hug < AEUI_SLACK_BASE) return AEUI_SLACK_EXPANDING;
+    int depth = 0;
+    for (NSView* p = [stack superview]; p && depth < AEUI_SLACK_MAX_DEPTH; p = [p superview]) {
+        if ([p isKindOfClass:[NSStackView class]]) depth++;
+    }
+    return AEUI_SLACK_BASE + (NSLayoutPriority)depth;
+}
+
+static void aeui_stack_enable_packing(AetherStackView* sv) {
+    NSView* slack = [[NSView alloc] init];
+    [slack setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [slack setAccessibilityElement:NO];
+    BOOL vertical = [sv orientation] == NSUserInterfaceLayoutOrientationVertical;
+    // A plain NSView has no intrinsic size, so hugging alone would leave the
+    // slack FREE to grow, ahead of every child. The zero length at the
+    // slack's own priority is what makes it the space-taker of last resort.
+    NSLayoutConstraint* len = vertical
+        ? [slack.heightAnchor constraintEqualToConstant:0]
+        : [slack.widthAnchor constraintEqualToConstant:0];
+    len.priority = aeui_slack_priority(sv);
+    [len setIdentifier:@"aeui-slack"];
+    len.active = YES;
+    // Across, it is nothing: zero, weakly, so its cross size is not ambiguous.
+    NSLayoutConstraint* cross = vertical
+        ? [slack.widthAnchor constraintEqualToConstant:0]
+        : [slack.heightAnchor constraintEqualToConstant:0];
+    cross.priority = 1;
+    cross.active = YES;
+    sv.aeuiSlackLen = len;
+    sv.aeuiSlack = slack;
+    [sv aeuiRepack];
+}
+
 @implementation AetherStackView
 - (BOOL)acceptsFirstResponder { return self.aeuiFocusable; }
+// Real children go before the slack, at their index among real children.
+- (void)addArrangedSubview:(NSView*)view {
+    NSView* slack = self.aeuiSlack;
+    if (slack && view != slack && [slack superview] == self) {
+        NSUInteger at = [[self arrangedSubviews] indexOfObject:slack];
+        if (at != NSNotFound) {
+            [super insertArrangedSubview:view atIndex:at];
+            [self aeuiRepack];
+            return;
+        }
+    }
+    [super addArrangedSubview:view];
+    [self aeuiRepack];
+}
+- (void)insertArrangedSubview:(NSView*)view atIndex:(NSInteger)index {
+    NSView* slack = self.aeuiSlack;
+    if (slack && view != slack && [slack superview] == self) {
+        NSUInteger at = [[self arrangedSubviews] indexOfObject:slack];
+        if (at != NSNotFound && index > (NSInteger)at) index = (NSInteger)at;
+    }
+    [super insertArrangedSubview:view atIndex:index];
+    [self aeuiRepack];
+}
+- (void)setDistribution:(NSStackViewDistribution)distribution {
+    [super setDistribution:distribution];
+    [self aeuiRepack];
+}
+- (void)setContentHuggingPriority:(NSLayoutPriority)priority
+                   forOrientation:(NSLayoutConstraintOrientation)orientation {
+    [super setContentHuggingPriority:priority forOrientation:orientation];
+    // A stack has no intrinsic size: what holds it to its content is
+    // NSStackView's OWN hugging (default 250), which outranks the parent's
+    // packing slack (AEUI_SLACK_BASE+). A stack asked to expand (weight(),
+    // fill_*, aeui_mark_expand) must let go of its content too, or the
+    // parent's slack wins and it stays at its natural size / floor.
+    if (self.aeuiSlack && priority < AEUI_SLACK_BASE
+        && [self huggingPriorityForOrientation:orientation] > priority)
+        [self setHuggingPriority:priority forOrientation:orientation];
+    if (self.aeuiSlack) [self setNeedsUpdateConstraints:YES];   // expanding or not
+}
+- (void)viewDidMoveToSuperview {
+    [super viewDidMoveToSuperview];
+    if (self.aeuiSlack) [self setNeedsUpdateConstraints:YES];   // depth changed
+}
+- (void)updateConstraints {
+    if (self.aeuiSlackLen) {
+        NSLayoutPriority p = aeui_slack_priority(self);
+        if (self.aeuiSlackLen.priority != p) self.aeuiSlackLen.priority = p;
+    }
+    [super updateConstraints];
+}
+// Idempotent: slack present and last, hidden unless Fill, no spacing before it.
+- (void)aeuiRepack {
+    NSView* slack = self.aeuiSlack;
+    if (!slack) return;
+    if ([slack superview] != self) {
+        [super addArrangedSubview:slack];
+    } else if ([[self arrangedSubviews] lastObject] != slack) {
+        [super removeArrangedSubview:slack];
+        [super addArrangedSubview:slack];
+    }
+    BOOL fill = [self distribution] == NSStackViewDistributionFill;
+    if ([slack isHidden] == fill) [slack setHidden:!fill];
+    NSArray* kids = [self arrangedSubviews];
+    NSView* last = [kids count] >= 2 ? kids[[kids count] - 2] : nil;
+    if (last != self.aeuiSlackCut) {
+        NSView* old = self.aeuiSlackCut;
+        if (old && [old superview] == self)
+            [self setCustomSpacing:NSStackViewSpacingUseDefault afterView:old];
+        if (last) [self setCustomSpacing:0 afterView:last];
+        self.aeuiSlackCut = last;
+    }
+}
 @end
 
 int aether_ui_vstack_create(int spacing) {
-    NSStackView* stack = [[AetherStackView alloc] init];
+    AetherStackView* stack = [[AetherStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationVertical];
     [stack setSpacing:spacing];
     [stack setAlignment:NSLayoutAttributeLeading];
-    // Fill distribution: vertical slack goes to children by hugging priority
-    // so spacer() absorbs most of it and hstack rows grow to fill leftover
-    // — matches GTK4's box behaviour.
+    // Fill distribution, with the packing slack (aeui_stack_enable_packing):
+    // vertical slack goes to the children that expand -- spacer(), a canvas,
+    // a weighted child -- and is left empty at the bottom when none does,
+    // as a GtkBox leaves it.
     [stack setDistribution:NSStackViewDistributionFill];
     [stack setTranslatesAutoresizingMaskIntoConstraints:NO];
+    aeui_stack_enable_packing(stack);
     return register_widget_typed((__bridge void*)stack, AUI_VSTACK);
 }
 
@@ -2222,19 +2415,22 @@ void aether_ui_tabs_set_on_change(int tabs_handle, void* boxed_closure) {
 }
 
 int aether_ui_hstack_create(int spacing) {
-    NSStackView* stack = [[AetherStackView alloc] init];
+    AetherStackView* stack = [[AetherStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationHorizontal];
     [stack setSpacing:spacing];
     [stack setAlignment:NSLayoutAttributeCenterY];
-    // Fill distribution matches GTK4's box behavior: children grow/shrink
-    // according to their content-hugging priority. Buttons (set to 200 at
-    // creation) absorb leftover space; spacers (priority 1) soak up the rest.
+    // Fill distribution, with the packing slack (aeui_stack_enable_packing):
+    // children keep their natural width, spacer()/weighted/canvas children
+    // take the leftover, and with none of those it stays empty at the end --
+    // GTK4's box behaviour. (Buttons used to absorb it: hugging 200 plus an
+    // equal-width chain stretched every button row across the window.)
     [stack setDistribution:NSStackViewDistributionFill];
     // Low vertical hugging so hstack rows can absorb vertical slack inside
     // a vstack with Fill distribution (grid-like rows in the calculator).
     [stack setContentHuggingPriority:200
                       forOrientation:NSLayoutConstraintOrientationVertical];
     [stack setTranslatesAutoresizingMaskIntoConstraints:NO];
+    aeui_stack_enable_packing(stack);
     return register_widget_typed((__bridge void*)stack, AUI_HSTACK);
 }
 
@@ -3166,15 +3362,6 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
     [sv setNeedsLayout:YES];
 }
 
-// Does this view carry its own width-to-constant constraint?
-static int aeui_has_explicit_width(NSView* v) {
-    for (NSLayoutConstraint* c in [v constraints]) {
-        if (c.firstAttribute == NSLayoutAttributeWidth
-            && c.secondItem == nil && [c isActive]) return 1;
-    }
-    return 0;
-}
-
 void aether_ui_set_width(int handle, int width) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
@@ -3610,6 +3797,110 @@ void aether_ui_timer_cancel_impl(int timer_id) {
         t.closure = NULL;
         dispatch_async(dispatch_get_main_queue(), ^{ aeui_release_boxed(c); });
     }
+}
+
+/* Frame clock (aether_ui_backend.h, "One-shot timer and the frame clock").
+ *
+ * macOS 14+: a CADisplayLink from the SCREEN (-[NSScreen displayLinkWithTarget:
+ * selector:]), the primary window's screen or else the main one, added to the
+ * main run loop in the common modes so it keeps ticking through a slider drag
+ * or a live resize, as ui.timer does (#97). A screen's link, not a view's:
+ * a view's link pauses while its window is hidden or occluded, and a headless
+ * run's window is never shown, but the display it would be on still refreshes.
+ * Older macOS: CVDisplayLink, whose callback runs on its own thread; each
+ * vsync is handed to the main queue, at most one in flight, so a busy main
+ * thread drops frames instead of queueing them.
+ *
+ * A display that sleeps stops both; the shared fallback then drives frames
+ * from a timer until it wakes. */
+static id aeui_frame_link = nil;                 // CADisplayLink (macOS 14+)
+static CVDisplayLinkRef aeui_frame_cv = NULL;    // older macOS
+static const char* aeui_frame_name = "cadisplaylink";
+static _Atomic int aeui_frame_cv_posted = 0;
+static int aeui_frame_cv_gen = 0;                // a stale post is dropped
+
+static double aeui_mach_ms(uint64_t t) {
+    static mach_timebase_info_data_t tb;
+    if (tb.denom == 0) mach_timebase_info(&tb);
+    return (double)t * (double)tb.numer / (double)tb.denom / 1e6;
+}
+
+@interface AetherFrameTarget : NSObject
+- (void)tick:(id)link;
+@end
+
+@implementation AetherFrameTarget
+- (void)tick:(id)link {
+    if (link != aeui_frame_link) return;
+    CADisplayLink* l = (CADisplayLink*)link;
+    aether_ui_frame_dispatch(l.timestamp * 1000.0, CACurrentMediaTime() * 1000.0);
+}
+@end
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+static CVReturn aeui_frame_cv_cb(CVDisplayLinkRef link, const CVTimeStamp* now,
+                                 const CVTimeStamp* out, CVOptionFlags fin,
+                                 CVOptionFlags* fout, void* ctx) {
+    (void)link; (void)out; (void)fin; (void)fout;
+    int gen = (int)(intptr_t)ctx;
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&aeui_frame_cv_posted, &expected, 1))
+        return kCVReturnSuccess;   // the last one has not run yet: drop this
+    uint64_t host = now->hostTime;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        atomic_store(&aeui_frame_cv_posted, 0);
+        if (!aeui_frame_cv || gen != aeui_frame_cv_gen) return;
+        aether_ui_frame_dispatch(aeui_mach_ms(host), aeui_mach_ms(mach_absolute_time()));
+    });
+    return kCVReturnSuccess;
+}
+
+int aether_ui_frame_clock_start_impl(void) {
+    if (aeui_frame_link || aeui_frame_cv) return 1;
+    if (@available(macOS 14.0, *)) {
+        NSScreen* scr = primary_window.screen ?: [NSScreen mainScreen];
+        if (!scr) return 0;   // no display at all
+        CADisplayLink* l = [scr displayLinkWithTarget:[[AetherFrameTarget alloc] init]
+                                             selector:@selector(tick:)];
+        if (!l) return 0;
+        [l addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        aeui_frame_link = l;
+        aeui_frame_name = "cadisplaylink";
+        return 1;
+    }
+    CVDisplayLinkRef cv = NULL;
+    if (CVDisplayLinkCreateWithActiveCGDisplays(&cv) != kCVReturnSuccess || !cv) return 0;
+    aeui_frame_cv_gen++;
+    CVDisplayLinkSetOutputCallback(cv, aeui_frame_cv_cb, (void*)(intptr_t)aeui_frame_cv_gen);
+    if (CVDisplayLinkStart(cv) != kCVReturnSuccess) { CVDisplayLinkRelease(cv); return 0; }
+    aeui_frame_cv = cv;
+    aeui_frame_name = "cvdisplaylink";
+    return 1;
+}
+
+void aether_ui_frame_clock_stop_impl(void) {
+    if (aeui_frame_link) {
+        // Safe from inside the link's own tick: invalidate only unschedules it.
+        [(CADisplayLink*)aeui_frame_link invalidate];
+        aeui_frame_link = nil;
+    }
+    if (aeui_frame_cv) {
+        CVDisplayLinkStop(aeui_frame_cv);   // waits out a running callback
+        CVDisplayLinkRelease(aeui_frame_cv);
+        aeui_frame_cv = NULL;
+        aeui_frame_cv_gen++;                // a frame already posted is stale
+    }
+}
+#pragma clang diagnostic pop
+
+const char* aether_ui_frame_clock_name_impl(void) { return aeui_frame_name; }
+
+int aether_ui_frame_clock_hz_impl(void) {
+    NSScreen* scr = primary_window.screen ?: [NSScreen mainScreen];
+    NSInteger hz = 0;
+    if (@available(macOS 12.0, *)) hz = scr ? scr.maximumFramesPerSecond : 0;
+    return hz >= 1 ? (int)hz : 60;
 }
 
 void aether_ui_open_url_impl(const char* url) {
@@ -7041,6 +7332,7 @@ void aether_ui_clear_children_impl(int handle) {
     if ([v isKindOfClass:[NSStackView class]]) {
         NSStackView* s = (NSStackView*)v;
         for (NSView* sub in [[s arrangedSubviews] copy]) {
+            if (aeui_is_slack(sub)) continue;   // the stack's own packing view stays
             [s removeArrangedSubview:sub];
             [sub removeFromSuperview];
             unregister_view_tree(sub);
@@ -7230,62 +7522,19 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
                 [child setContentCompressionResistancePriority:1
                                                 forOrientation:NSLayoutConstraintOrientationVertical];
             }
-            // Vertical peers: chain equal-height among hstack siblings in the
-            // same vstack — with Fill distribution this gives grid-like row
-            // heights (calculator) without affecting mixed vstacks whose
-            // slack is absorbed by spacer().
-            // Equal-height chain across hstack siblings — this is what gives
-            // the calculator its grid-like button rows.
-            //
-            // But it must NOT apply to a row that wants to expand. Grand
-            // Perspective is a toolbar row + a treemap-canvas row + a status
-            // row in one vstack; equalising them pins the canvas to the height
-            // of the toolbar (three rows of 207px in a 656px window) and the
-            // whole treemap below the fold becomes unclickable. Rows that
-            // absorb slack size themselves; only inert rows get chained.
-            if (ct == AUI_HSTACK
-                && !(widget_expand[child_handle - 1] & AEUI_EXPAND_V)) {
-                for (NSView* sib in [sv arrangedSubviews]) {
-                    if (sib == child) break;
-                    int sh = handle_for_view(sib);
-                    if (sh < 1 || get_widget_type(sh) != AUI_HSTACK) continue;
-                    if (widget_expand[sh - 1] & AEUI_EXPAND_V) continue;
-                    NSLayoutConstraint* eq =
-                        [child.heightAnchor constraintEqualToAnchor:sib.heightAnchor];
-                    // Tagged so it can be retracted if either row LATER gains an
-                    // expanding child — see aeui_mark_expand.
-                    [eq setIdentifier:@"aeui-roweq"];
-                    eq.active = YES;
-                    break;
-                }
-            }
-        } else {
-            // Horizontal stack: constrain all button children to equal width.
-            // NSStackViewDistributionFill with multiple low-hugging siblings
-            // lets autolayout give the slack to one child; an explicit
-            // width-equality chain forces grid-like button rows (calculator)
-            // without affecting label+textfield or button+spacer rows.
-            //
-            // Tagged, and skipped for any button that already carries an
-            // explicit width: a table header sets per-column widths (220, 90),
-            // and an equal-width chain on top of those is unsatisfiable —
-            // Auto Layout breaks one of the required constraints and both
-            // columns come out the same wrong size. set_width also RETRACTS
-            // this chain, because the width may be applied after the attach.
-            if ([child isKindOfClass:[NSButton class]]
-                && !aeui_has_explicit_width(child)) {
-                for (NSView* sib in [sv arrangedSubviews]) {
-                    if (sib == child) break;
-                    if (![sib isKindOfClass:[NSButton class]]) continue;
-                    if (aeui_has_explicit_width(sib)) continue;
-                    NSLayoutConstraint* eq =
-                        [child.widthAnchor constraintEqualToAnchor:sib.widthAnchor];
-                    [eq setIdentifier:@"aeui-btneq"];
-                    eq.active = YES;
-                    break;
-                }
-            }
+            // No equal-height chain across sibling rows: a GtkBox gives each
+            // row its natural height, and the packing slack now leaves a
+            // vstack's leftover empty instead of handing it to the rows (the
+            // chain made button rows grid-like for the old hstack-built
+            // calculator, which is a grid() now). aeui_mark_expand still
+            // retracts any "aeui-roweq" constraint, harmlessly.
         }
+        // Horizontal stack: no equal-width chain across buttons any more. GTK
+        // sizes each button to its own label (spec_flexround_demo says so);
+        // the chain plus the buttons' low hugging is what stretched a row of
+        // buttons across the window. Equal shares are still available, the
+        // same way on every backend: set_distribution(row, 1) (fill equally)
+        // or weight(). aeui_drop_btneq stays for constraints a caller built.
     } else if ([parent isKindOfClass:[NSScrollView class]]) {
         NSScrollView* sv = (NSScrollView*)parent;
         [sv setDocumentView:child];

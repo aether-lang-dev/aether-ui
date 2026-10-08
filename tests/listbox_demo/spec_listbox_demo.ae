@@ -8,7 +8,10 @@
 //
 // Run via ci.sh Phase 5f, or by hand:
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/listbox_demo/bin/listbox_demo &
-//   UI_SPEC=listbox_demo/spec_listbox_demo tests/run_spec.sh
+//   UI_SPEC=listbox_demo/spec_listbox_demo tests/run_spec.sh 9222
+// Any free port works (the default 9222 is often an `adb forward`): the app
+// binds AETHER_UI_TEST_PORT and the spec talks to it (tests/lib/uidriver.ae).
+// ci.sh Phase 1e2 runs this same spec against the iOS simulator on its $PORT.
 import std.spec
 import uidriver
 import std.string

@@ -162,6 +162,13 @@ case "$OS" in
         # archives (-laether_sqlite for LisMusic, ssl/pcre2/...). The
         # explicit -lssl/-lcrypto/-lpcre2-8 stay as a fallback for boxes
         # where `ae cflags` predates --libs.
+        #
+        # `ae cflags --libs` on MINGW ENDS in -Wl,-Bstatic (it switches to
+        # dynamic for -lfyaml and back). Anything after it resolves to a
+        # static archive, so -lavcodec picked MSYS2's libavcodec.a and then
+        # wanted every codec dependency it carries (iconv, zlib, ...):
+        # video_frame never linked on Windows. Contrib libraries go back to
+        # the default search (import library first, else the archive).
         AETHER_LIBS="$(ae_libs)"
         gcc -O2 -g -pipe \
             $AETHER_INCLUDES $EXTRA_INCLUDES \
@@ -173,7 +180,7 @@ case "$OS" in
             -luser32 -lgdi32 -lgdiplus -lmsimg32 -lcomctl32 -lcomdlg32 \
             -lshell32 -lole32 -loleaut32 -luuid -loleacc -ldwmapi -luxtheme \
             -lws2_32 -lbcrypt -lpcre2-8 -lssl -lcrypto -pthread -lm \
-            $AETHER_LIBS $CONTRIB_LIBS
+            $AETHER_LIBS ${CONTRIB_LIBS:+-Wl,-Bdynamic $CONTRIB_LIBS}
         OUTPUT="$ACTUAL_OUT"
         ;;
     *)

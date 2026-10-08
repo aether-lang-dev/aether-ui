@@ -49,6 +49,7 @@ double floatarr_get_raw(void* arr, int index) {
 // that starts calling a THIRD worker symbol fails to link here first.
 void aether_worker_set_main_poster(AetherUiWorkerClosure poster) { (void)poster; }
 void aether_worker_deliver(void* job) { (void)job; }
+int aether_worker_drain(int max) { (void)max; return 0; }
 
 // The undo/redo edit store reclaims a dropped edit's boxed closures through
 // the env's own destructor (aether_ui_system_extras.c: undo_edit_release).

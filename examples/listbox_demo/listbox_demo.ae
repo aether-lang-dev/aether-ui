@@ -6,7 +6,7 @@
 // REAL widgets: the driver clicks one via POST /widget/{row}/click and reads
 // selection from the row JSON's "classes" field.
 //
-//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server on that port.
 
 import ui
 import ui (content_inset, window, vstack, hstack, text, btn, divider, scrollview,
@@ -89,6 +89,12 @@ main() {
         }
         // The standard window gutter: content not flush against the frame.
         _ci = content_inset(root)
-        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+        // Arm the driver on the port AETHER_UI_TEST_PORT names (reorder_demo's
+        // shape): ci.sh's iOS phase passes its $PORT through SIMCTL_CHILD_.
+        port = os_getenv("AETHER_UI_TEST_PORT")
+        if string.length(port) > 0 {
+            pnum, _pe = string.to_int(port)
+            enable_test_server(pnum)
+        }
     }
 }

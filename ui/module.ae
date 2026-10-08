@@ -76,6 +76,7 @@ exports (
     pick_folder,
     is_dark_mode,
     timer, timer_cancel, backend_name,
+    timer_once, on_frame, frame_cancel, frame_source, frame_count,
     window_create, window_set_body, window_show, window_close, app_quit,
     set_width, set_height, set_min_width, set_min_height,
     get_width, get_height, get_min_width, get_min_height,
@@ -404,6 +405,11 @@ extern aether_ui_dark_mode_check() -> int
 extern aether_ui_backend_name_impl() -> string
 extern aether_ui_timer_create_impl(interval_ms: int, boxed_closure: ptr) -> int
 extern aether_ui_timer_cancel_impl(timer_id: int)
+extern aether_ui_timer_once_impl(delay_ms: int, boxed_closure: ptr) -> int
+extern aether_ui_frame_add_impl(boxed_closure: ptr) -> int
+extern aether_ui_frame_cancel_impl(frame_id: int)
+extern aether_ui_frame_source_impl() -> string
+extern aether_ui_frame_count_impl() -> int
 extern aether_ui_worker_poster_install_impl()
 extern aether_ui_bg_job_begin() -> int
 extern aether_ui_bg_job_cancel(job: int)
@@ -549,8 +555,11 @@ canvas_widget(canvas_id: int) -> int {
 // reaches as its own. `done` may. Returns 1 if the work was queued, 0 if no
 // thread could be had (neither closure runs then). The completion reaches the
 // UI thread through the backend's poster (installed here, idempotently, and
-// at app_create); under AETHER_UI_HEADLESS on GTK4/Win32/AppKit there is no
-// loop to reach, so completions wait on std.worker's drain queue instead.
+// at app_create). Under AETHER_UI_HEADLESS a program that never runs the
+// loop (a UI-logic test) has none to reach, so completions wait on
+// std.worker's drain queue; Win32 and AppKit still run their loop headless
+// once app_start is reached, and install the poster (draining the queue)
+// there.
 //
 // `done` runs whatever happened meanwhile: close the window that started a
 // scan and its `done` still runs, against widgets that are gone. When the
@@ -4119,6 +4128,45 @@ timer(interval_ms: int, on_tick: fn) {
 
 timer_cancel(timer_id: int) {
     aether_ui_timer_cancel_impl(timer_id)
+}
+
+// timer_once(delay_ms) callback { ... }: run the block ONCE, delay_ms from now
+// (at least 1), on the UI thread. timer() repeats; this is its one-shot twin.
+// The timer is cancelled before the block runs, so a slow block is never run
+// a second time. Returns a timer id: timer_cancel(id) before it fires stops
+// it. (Not `after`: that is an Aether keyword.)
+timer_once(delay_ms: int, on_fire: fn) {
+    return aether_ui_timer_once_impl(delay_ms, box_closure(on_fire))
+}
+
+// on_frame() callback |t_ms: float| { ... }: run the block once per display
+// frame, on the UI thread, until frame_cancel(id). t_ms is milliseconds on a
+// monotonic clock (the frame's vsync time where the platform gives one), the
+// same for every block in one frame, and strictly increasing. Native per
+// backend: GTK4's frame clock, CADisplayLink on macOS 14+ and iOS
+// (CVDisplayLink on older macOS), Android's Choreographer, DwmFlush on Win32.
+// A display can stop delivering (a hidden GTK window, a sleeping display, a
+// Windows session with no compositor); then a timer at the display's rate
+// stands in until it resumes, and frame_source() says so. The clock runs only
+// while something is subscribed.
+on_frame(on_tick: fn) {
+    return aether_ui_frame_add_impl(box_closure(on_tick))
+}
+
+frame_cancel(frame_id: int) {
+    aether_ui_frame_cancel_impl(frame_id)
+}
+
+// Which clock delivered the last frame: "gtk-frame-clock", "cadisplaylink",
+// "cvdisplaylink", "choreographer", "dwm-flush", "timer" (the fallback), or
+// "none" before the first frame.
+frame_source() -> string {
+    return aether_ui_frame_source_impl()
+}
+
+// Frames delivered since the process started.
+frame_count() -> int {
+    return aether_ui_frame_count_impl()
 }
 
 // Multi-window

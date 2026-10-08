@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tools/ios-app.sh`: an aether-ui app on a real iPhone/iPad.** Builds the
+  app for arm64 iOS with the UIKit backend, links it in a throwaway Xcode
+  project that Xcode signs with automatic signing (a free personal team
+  works; the team id is read from the signing certificate), installs with
+  `devicectl`, and launches with the driver's port when
+  `AETHER_UI_WITH_DRIVER=1`. The bundle carries the app's files under
+  `files/`, and the UIKit backend changes into that folder at start-up.
+
+- **`AETHER_UI_TEST_PORT` overrides the driver port everywhere**: the test
+  server, `tests/lib/uidriver.ae`, `tests/run_spec.sh`, `spec_matrix.sh` and
+  `ci.sh`, so several targets can be driven at once (an `adb forward` holding
+  9222 no longer breaks every desktop phase).
+
+- **The "Under Remote Control" banner on UIKit**, as AppKit and Android
+  already had: a real, sealed widget first in the window body.
+
+- **A display-synced frame clock, `ui.on_frame(fn |t_ms|)`, and a one-shot
+  timer, `ui.timer_once(ms, fn)`, on all five backends.** `on_frame` runs once
+  per display frame until `frame_cancel(id)`: GTK4's frame clock, a
+  `CADisplayLink` from the screen on macOS 14+ (`CVDisplayLink` before) and
+  iOS, Android's Choreographer (`AChoreographer_postFrameCallback64`), and
+  `DwmFlush` on a helper thread on Win32. The subscribers, the timestamps
+  (monotonic ms, strictly increasing) and a timer fallback for a display that
+  stops delivering (an unmapped GTK window, a sleeping display, a Windows
+  session with no compositor) are shared, above the ABI; `frame_source()`
+  reports the effective clock. `timer_once` cancels before it runs its block,
+  so it runs once however slow the block is. `examples/frametick_demo` and its
+  spec; the parity check now also fails an ABI entry point defined nowhere and
+  a native-only one (the frame clock's) defined in a shared source.
+
 - **Android backend, stage 2 pass C: drawing. The backend has no stubs left**
   (321 real functions plus the 6 documented tray no-ops). The canvas replays
   its command buffer through `android.graphics.Canvas` (Skia) in a new
@@ -23,6 +53,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Android (video_frame).
 
 ### Fixed
+
+- **UIKit layout:** canvas resize passed integer sizes where closures take
+  doubles (vg scenes kept a stale viewBox); opaque canvas views showed stale
+  frames; stacks gave spare space to the first child (a button row
+  stretched "Reset"); the page body did not fill the screen or respect the
+  system margins.
+- **AppKit stack packing now matches GTK4, Android and UIKit:** children keep
+  their natural size and pack at the start unless something expands
+  (spacers, weighted children, canvases); the equal-width button chain and
+  the equal-height row chain are gone (`distribution(row, 1)` or `weight()`
+  still give equal shares). A weighted stack still takes its parent's
+  leftover space (min_size).
+- **Background completions under `AETHER_UI_HEADLESS` on Win32 and macOS:**
+  the main-thread poster was never installed when headless, though both
+  backends run a loop there, so `ui.background` completions never arrived.
+- **Win32 driver keys** are lower-cased like real keystrokes, so a driven
+  Ctrl+K matches `on_key`'s `"k"`.
+- **Windows link of contrib libraries:** `build.sh` puts `-Wl,-Bdynamic`
+  before them, as `ae cflags --libs` ends in `-Wl,-Bstatic` on MINGW.
+- **Android starts an app through `aether_main`/`aether_main_exit`**
+  (`--emit=lib`, aether#2489) instead of renaming its `main()`, so the
+  Aether start-up (args, actor scheduler) runs; finishing uses `_exit(0)`,
+  fixing a FORTIFY abort in hwuiTask0 on every finish. `tools/android-apk.sh`
+  now requests INTERNET by default (`ANDROID_NO_INTERNET=1` opts out; refused
+  with the driver), and takes `ANDROID_EXTRA_SOURCES`.
 
 - **Chrome faces read "middle" on every backend:** `ui/chrome.ae` passed
   `text_anchored` its anchor and label in the wrong order.

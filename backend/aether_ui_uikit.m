@@ -84,6 +84,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <unistd.h>                 // chdir (bundle files/)
 #include "aether_ui_backend.h"
 #include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
 #include "aether_ui_system_extras.h" // headless open_url record (GET /opened_urls)
@@ -114,6 +115,25 @@ static int aeui_is_headless(void) {
     return v && v[0] && v[0] != '0';
 }
 
+// An app bundle packaged by tools/ios-app.sh carries the app's files (what
+// sits beside its source, the toolkit's fonts/, ...) under <bundle>/files at
+// their checkout-relative paths. Run the app from there, before its main()
+// opens anything, so the relative paths a desktop run opens from the checkout
+// (vg's fonts/DejaVuSans-Bold.ttf) resolve on the device too -- the iOS
+// counterpart of the Android backend's assets copy-out + chdir. A bundle
+// without files/ (ci.sh's simulator probe, Catalyst) keeps its working dir.
+__attribute__((constructor))
+static void aeui_chdir_to_bundle_files(void) {
+    @autoreleasepool {
+        NSString* res = [[NSBundle mainBundle] resourcePath];
+        if (!res) return;
+        NSString* files = [res stringByAppendingPathComponent:@"files"];
+        BOOL isDir = NO;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:files isDirectory:&isDir] && isDir)
+            chdir(files.fileSystemRepresentation);
+    }
+}
+
 // Widget type tags — mirror of the AppKit backend's, used at creation for
 // readability and by the (later) driver type-reporting. Pass 1 does not store
 // them; kept so widget factories read the same as their AppKit siblings.
@@ -124,7 +144,8 @@ enum {
     AUI_PROGRESSBAR, AUI_DIVIDER, AUI_SCROLLVIEW,
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
     AUI_CANVAS, AUI_IMAGE,
-    AUI_TABS, AUI_NAVSTACK, AUI_SPLITVIEW, AUI_WRAP, AUI_GRID, AUI_FORM
+    AUI_TABS, AUI_NAVSTACK, AUI_SPLITVIEW, AUI_WRAP, AUI_GRID, AUI_FORM,
+    AUI_BANNER
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +216,7 @@ static const char* aeui_kind_name(int type) {
         case AUI_WRAP:        return "wrap";
         case AUI_GRID:        return "grid";
         case AUI_FORM:        return "form";
+        case AUI_BANNER:      return "banner";
         default:              return "unknown";
     }
 }
@@ -308,12 +330,22 @@ static UIViewController* aeui_build_root_vc(void) {
     if (root) {
         root.translatesAutoresizingMaskIntoConstraints = NO;
         [vc.view addSubview:root];
-        UILayoutGuide* g = vc.view.safeAreaLayoutGuide;
+        // The body FILLS the window, as on every other backend (AppKit pins
+        // the root to the content view's four edges, GTK makes it the
+        // window's child, Android MATCH_PARENTs it), so its slack reaches
+        // the children that expand -- a canvas takes the screen's height as
+        // it takes a desktop window's. (It used to be pinned bottom <= the
+        // safe area: the body hugged its content and a canvas never grew.)
+        // Inset by the view's layout margins -- the safe area plus the
+        // system's side margins (16pt iPhone, 20pt iPad) -- the platform's
+        // own content inset, as Android insets its body 16dp: content flush
+        // to the glass edge reads as a layout bug on a phone.
+        UILayoutGuide* g = vc.view.layoutMarginsGuide;
         [NSLayoutConstraint activateConstraints:@[
             [root.topAnchor constraintEqualToAnchor:g.topAnchor],
             [root.leadingAnchor constraintEqualToAnchor:g.leadingAnchor],
             [root.trailingAnchor constraintEqualToAnchor:g.trailingAnchor],
-            [root.bottomAnchor constraintLessThanOrEqualToAnchor:g.bottomAnchor],
+            [root.bottomAnchor constraintEqualToAnchor:g.bottomAnchor],
         ]];
     }
     return vc;
@@ -595,6 +627,11 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 @interface AeuiStackView : UIStackView
 @property (nonatomic, strong) NSMutableArray<AeuiLayoutHook*>* layoutHooks;
 @property (nonatomic, assign) BOOL aeuiFocusable;
+// Box packing (vstack/hstack only; see aeui_stack_enable_packing).
+@property (nonatomic, strong) UIView* aeuiSlack;
+@property (nonatomic, weak) UIView* aeuiSlackCut;
+@property (nonatomic, assign) UILayoutPriority aeuiAutoHugH, aeuiAutoHugV;
+- (void)aeuiRepack;
 @end
 
 int aether_ui_window_key_deliver(const char* key_name, int mods);
@@ -637,8 +674,142 @@ static int aeui_press_key_name(UIPress* press, char* out, int outsz) API_AVAILAB
     return 1 | (mods << 1);
 }
 
+// ── Box packing: where a stack's slack goes ──────────────────────────────
+// GTK's boxes (and Android's LinearLayouts) give a box's leftover space to
+// the children that ask to expand -- spacer(), a canvas, a weighted child --
+// and leave it EMPTY at the end when none does; and a box that holds an
+// expanding child expands in its own parent (GTK propagates hexpand/vexpand
+// up the tree). AppKit gets the same outcome from NSStackView plus its
+// hugging priorities. UIStackView's Fill distribution has no "empty"
+// option: the slack always goes to the lowest-hugging arranged view, and on
+// a tie to the FIRST -- so a row of three buttons stretched "Reset" across
+// most of an iPhone (rubiks_cube on a real device) and, once the window body
+// filled the screen, the first plain child of a vstack would have grown to
+// the screen's height.
+//
+// The vstack/hstack a program builds therefore carries one backend-owned,
+// unregistered trailing view (the "slack") that resists growing just under
+// the default hugging (a zero length at priority 249.5): an expander -- a
+// spacer (free to grow), a weighted child (hugging 249), a canvas (natural
+// size held at only 150) -- still takes the space first; otherwise the
+// slack does, and the
+// children keep their natural size, packed at the start. It is never a
+// widget (no handle, so the driver's children/indices skip it), takes no
+// spacing (custom spacing 0 after the last real child), and is hidden --
+// out of layout entirely -- under any distribution but Fill. A stack's own
+// hugging follows its most eager child, so expansion propagates upward.
+#define AEUI_SLACK_HUG ((UILayoutPriority)249.5f)
+
+static UILayoutPriority aeui_child_min_hug(AeuiStackView* sv, UILayoutConstraintAxis ax) {
+    UILayoutPriority m = UILayoutPriorityRequired;
+    for (UIView* c in sv.arrangedSubviews) {
+        if (c == sv.aeuiSlack || c.hidden) continue;
+        UILayoutPriority h = [c contentHuggingPriorityForAxis:ax];
+        if (h < m) m = h;
+    }
+    return m;
+}
+
+static void aeui_stack_enable_packing(AeuiStackView* sv) {
+    UIView* slack = [[UIView alloc] init];
+    slack.translatesAutoresizingMaskIntoConstraints = NO;
+    slack.userInteractionEnabled = NO;
+    slack.isAccessibilityElement = NO;
+    for (int a = 0; a < 2; a++) {
+        UILayoutConstraintAxis ax = a ? UILayoutConstraintAxisVertical : UILayoutConstraintAxisHorizontal;
+        [slack setContentHuggingPriority:AEUI_SLACK_HUG forAxis:ax];
+        [slack setContentCompressionResistancePriority:1 forAxis:ax];
+    }
+    // A plain UIView has no intrinsic size, so hugging alone would make the
+    // slack FREE to grow -- ahead of a canvas, whose natural size is only a
+    // priority-150 constraint. A zero length at the slack's own priority is
+    // what makes it the space-taker of last resort.
+    NSLayoutConstraint* z = sv.axis == UILayoutConstraintAxisVertical
+        ? [slack.heightAnchor constraintEqualToConstant:0]
+        : [slack.widthAnchor constraintEqualToConstant:0];
+    z.priority = AEUI_SLACK_HUG;
+    z.active = YES;
+    sv.aeuiAutoHugH = [sv contentHuggingPriorityForAxis:UILayoutConstraintAxisHorizontal];
+    sv.aeuiAutoHugV = [sv contentHuggingPriorityForAxis:UILayoutConstraintAxisVertical];
+    sv.aeuiSlack = slack;
+    [sv aeuiRepack];
+}
+
 @implementation AeuiStackView
 - (BOOL)canBecomeFirstResponder { return self.aeuiFocusable; }
+// Real children go before the slack, at their index among real children.
+- (void)addArrangedSubview:(UIView*)view {
+    UIView* slack = self.aeuiSlack;
+    if (slack && view != slack && slack.superview == self) {
+        NSUInteger at = [self.arrangedSubviews indexOfObject:slack];
+        if (at != NSNotFound) {
+            [super insertArrangedSubview:view atIndex:at];
+            [self aeuiRepack];
+            return;
+        }
+    }
+    [super addArrangedSubview:view];
+    [self aeuiRepack];
+}
+- (void)insertArrangedSubview:(UIView*)view atIndex:(NSUInteger)index {
+    UIView* slack = self.aeuiSlack;
+    if (slack && view != slack && slack.superview == self) {
+        NSUInteger at = [self.arrangedSubviews indexOfObject:slack];
+        if (at != NSNotFound && index > at) index = at;
+    }
+    [super insertArrangedSubview:view atIndex:index];
+    [self aeuiRepack];
+}
+- (void)setDistribution:(UIStackViewDistribution)distribution {
+    [super setDistribution:distribution];
+    [self aeuiRepack];
+}
+- (void)willRemoveSubview:(UIView*)subview {
+    [super willRemoveSubview:subview];
+    if (self.aeuiSlack && subview != self.aeuiSlack) [self setNeedsLayout];
+}
+// Idempotent: slack present and last, hidden unless Fill, no spacing before
+// it, and the stack's hugging following its most eager child.
+- (void)aeuiRepack {
+    UIView* slack = self.aeuiSlack;
+    if (!slack) return;
+    if (slack.superview != self) [super addArrangedSubview:slack];   // e.g. after clear_children
+    else if (self.arrangedSubviews.lastObject != slack) {
+        [super removeArrangedSubview:slack];
+        [super addArrangedSubview:slack];
+    }
+    BOOL fill = self.distribution == UIStackViewDistributionFill;
+    if (slack.hidden == fill) slack.hidden = !fill;
+    NSArray* kids = self.arrangedSubviews;
+    UIView* last = kids.count >= 2 ? kids[kids.count - 2] : nil;
+    if (last != self.aeuiSlackCut) {
+        UIView* old = self.aeuiSlackCut;
+        if (old && old.superview == self)
+            [self setCustomSpacing:UIStackViewSpacingUseDefault afterView:old];
+        if (last) [self setCustomSpacing:0 afterView:last];
+        self.aeuiSlackCut = last;
+    }
+    // Expansion propagates up -- unless the program set this stack's
+    // hugging itself (weight()), which is left alone.
+    for (int a = 0; a < 2; a++) {
+        UILayoutConstraintAxis ax = a ? UILayoutConstraintAxisVertical : UILayoutConstraintAxisHorizontal;
+        UILayoutPriority cur = [self contentHuggingPriorityForAxis:ax];
+        UILayoutPriority mine = a ? self.aeuiAutoHugV : self.aeuiAutoHugH;
+        if (cur != mine) continue;
+        UILayoutPriority m = aeui_child_min_hug(self, ax);
+        UILayoutPriority want = m < AEUI_SLACK_HUG ? m : UILayoutPriorityDefaultLow;
+        if (want != cur) {
+            [self setContentHuggingPriority:want forAxis:ax];
+            if (a) self.aeuiAutoHugV = want; else self.aeuiAutoHugH = want;
+            [self.superview setNeedsUpdateConstraints];
+            [self.superview setNeedsLayout];
+        }
+    }
+}
+- (void)updateConstraints {
+    [self aeuiRepack];   // bottom-up: children have settled their hugging
+    [super updateConstraints];
+}
 - (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
     BOOL handled = NO;
     if (@available(iOS 13.4, *)) {
@@ -652,6 +823,7 @@ static int aeui_press_key_name(UIPress* press, char* out, int outsz) API_AVAILAB
     if (!handled) [super pressesBegan:presses withEvent:event];
 }
 - (void)layoutSubviews {
+    [self aeuiRepack];   // a child removed or re-weighted since the last pass
     [super layoutSubviews];
     if (!self.layoutHooks) return;
     int w = (int)lround(self.bounds.size.width);
@@ -683,16 +855,19 @@ static UIStackView* make_stack(UILayoutConstraintAxis axis, int spacing) {
     return stack;
 }
 
+// vstack/hstack pack like GTK boxes (see aeui_stack_enable_packing); the
+// other stacks make_stack builds (grid rows, forms, tabs) keep plain Fill,
+// since they index their arranged views directly.
 int aether_ui_vstack_create(int spacing) {
-    return register_widget_typed(
-        (__bridge void*)make_stack(UILayoutConstraintAxisVertical, spacing),
-        AUI_VSTACK);
+    UIStackView* sv = make_stack(UILayoutConstraintAxisVertical, spacing);
+    aeui_stack_enable_packing((AeuiStackView*)sv);
+    return register_widget_typed((__bridge void*)sv, AUI_VSTACK);
 }
 
 int aether_ui_hstack_create(int spacing) {
-    return register_widget_typed(
-        (__bridge void*)make_stack(UILayoutConstraintAxisHorizontal, spacing),
-        AUI_HSTACK);
+    UIStackView* sv = make_stack(UILayoutConstraintAxisHorizontal, spacing);
+    aeui_stack_enable_packing((AeuiStackView*)sv);
+    return register_widget_typed((__bridge void*)sv, AUI_HSTACK);
 }
 
 int aether_ui_spacer_create(void) {
@@ -1956,7 +2131,6 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
 
 @implementation AetherCanvasView
 - (void)drawRect:(CGRect)rect {
-    (void)rect;
     CGContextRef cg = UIGraphicsGetCurrentContext();
     CanvasState* cs = get_canvas_state(self.canvasId);
     if (!cg) return;
@@ -1983,13 +2157,24 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     }
     // The drawRect context is already the current UIKit context, so text draws
     // correctly without an explicit push here.
+    //
+    // Start from transparent, every time (inside the paint clip when there is
+    // one, so the pixels outside it -- which canvas_redraw did not invalidate
+    // -- keep the last frame). The canvas is non-opaque (see canvas_create);
+    // without this a command buffer that does not cover the whole view (a vg
+    // scene re-mapped to a narrower allocation paints a smaller backdrop) left
+    // the previous frame showing around it: on an iPhone, rubiks_cube's first,
+    // unscaled frame peeked out below the re-mapped one, since the backing
+    // store is reused between draws.
     if (cs && cs->paint_clip_count > 0) {
         CGContextSaveGState(cg);
         canvas_apply_paint_clip(cg, cs);
+        CGContextClearRect(cg, rect);
         canvas_replay(cg, cs);
         CGContextRestoreGState(cg);
         cs->paint_clip_count = 0;
     } else {
+        CGContextClearRect(cg, rect);
         canvas_replay(cg, cs);
     }
 }
@@ -2038,7 +2223,13 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     cs->last_w = w; cs->last_h = h;
     AeClosure* c = cs->on_resize;
     dispatch_async(dispatch_get_main_queue(), ^{
-        ((void(*)(void*, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)w, (intptr_t)h);
+        /* DOUBLES, as AppKit/GTK4 pass them (#94) and as the closures declare
+           (vg.live's |rw: float, rh: float|). This used to pass intptr_t:
+           on arm64 the ints go in x1/x2 while the closure reads d0/d1, so
+           every vg scene re-mapped its viewBox to whatever stale floats sat
+           in those registers -- on an iPhone the cube kept a 393x393 map in
+           a 362x555 canvas (top-aligned, overflowing, never re-centred). */
+        ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
     });
 }
 @end
@@ -2048,6 +2239,14 @@ int aether_ui_canvas_create_impl(int width, int height) {
         initWithFrame:CGRectMake(0, 0, width, height)];
     v.translatesAutoresizingMaskIntoConstraints = NO;
     v.contentMode = UIViewContentModeRedraw;   // re-run drawRect on resize
+    // UIView is opaque by default, which promises drawRect fills every pixel;
+    // a canvas only paints what its commands cover (NSView is non-opaque, so
+    // the AppKit canvas never made that promise). Non-opaque, and drawRect
+    // clears what it is about to repaint itself (within the paint clip, if
+    // any), so uncovered pixels show the parent, never a stale frame.
+    v.opaque = NO;
+    v.backgroundColor = nil;
+    v.clearsContextBeforeDrawing = NO;
     v.aeuiLastSize = CGSizeZero;
     // Natural size, not a cage: low-priority size constraints + low hugging so
     // the canvas is the slack-taker (its vg scene rescales to fill), exactly as
@@ -2602,7 +2801,19 @@ void aether_ui_canvas_redraw_impl(int canvas_id) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs) return;
     UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
-    if (v) [v setNeedsDisplay];
+    if (!v) return;
+    // A one-shot paint clip (canvas_set_clip_rects) repaints only its rects:
+    // invalidate just those, so UIKit keeps the rest of the last frame (a full
+    // setNeedsDisplay hands drawRect a cleared whole view).
+    if (cs->paint_clip_count > 0 && cs->paint_clip_rects) {
+        for (int i = 0; i < cs->paint_clip_count; i++) {
+            double* r = &cs->paint_clip_rects[i * 4];
+            if (r[2] > 0.0 && r[3] > 0.0)
+                [v setNeedsDisplayInRect:CGRectMake(r[0], r[1], r[2], r[3])];
+        }
+        return;
+    }
+    [v setNeedsDisplay];
 }
 
 int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
@@ -2697,8 +2908,8 @@ static void aeui_prime_canvases(void) {
         UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
         if (v) { v.frame = CGRectMake(0, 0, w, h); [v layoutIfNeeded]; }
         if (cs->on_resize && cs->on_resize->fn)
-            ((void(*)(void*, intptr_t, intptr_t))cs->on_resize->fn)(
-                cs->on_resize->env, (intptr_t)w, (intptr_t)h);
+            ((void(*)(void*, double, double))cs->on_resize->fn)(   /* doubles: #94 */
+                cs->on_resize->env, (double)w, (double)h);
     }
 }
 
@@ -2760,6 +2971,49 @@ void aether_ui_timer_cancel_impl(int timer_id) {
     if (!g_timers || timer_id < 1 || timer_id > (int)g_timers.count) return;
     NSTimer* t = g_timers[timer_id - 1];
     if ((id)t != [NSNull null]) [t invalidate];
+}
+
+// --- Frame clock — CADisplayLink (aether_ui_backend.h, "One-shot timer and
+// the frame clock"). On the main run loop in the common modes, so it keeps
+// ticking while a scroll view tracks a finger. iOS pauses a display link while
+// the app is in the background; the shared fallback drives frames from a
+// timer then, as on the desktop. ProMotion screens report up to 120 Hz in
+// maximumFramesPerSecond; without a preferredFrameRateRange the link runs at
+// the display's default rate.
+static CADisplayLink* g_frame_link = nil;
+
+@interface AetherFrameTarget : NSObject
+- (void)tick:(CADisplayLink*)link;
+@end
+
+@implementation AetherFrameTarget
+- (void)tick:(CADisplayLink*)link {
+    if (link != g_frame_link) return;
+    aether_ui_frame_dispatch(link.timestamp * 1000.0, CACurrentMediaTime() * 1000.0);
+}
+@end
+
+int aether_ui_frame_clock_start_impl(void) {
+    if (g_frame_link) return 1;
+    CADisplayLink* l = [CADisplayLink displayLinkWithTarget:[[AetherFrameTarget alloc] init]
+                                                   selector:@selector(tick:)];
+    if (!l) return 0;
+    [l addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    g_frame_link = l;
+    return 1;
+}
+
+void aether_ui_frame_clock_stop_impl(void) {
+    if (!g_frame_link) return;
+    [g_frame_link invalidate];   // safe from inside its own tick
+    g_frame_link = nil;
+}
+
+const char* aether_ui_frame_clock_name_impl(void) { return "cadisplaylink"; }
+
+int aether_ui_frame_clock_hz_impl(void) {
+    NSInteger hz = [UIScreen mainScreen].maximumFramesPerSecond;
+    return hz >= 1 ? (int)hz : 60;
 }
 
 // --- Native list (NSTableView-backed on AppKit) -----------------------------
@@ -5431,11 +5685,35 @@ static const AetherDriverHooks uikit_driver_hooks = {
     .run_on_ui_thread      = hook_run_on_ui_thread,
 };
 
+// The "Under Remote Control" banner, first in the window's body: a REAL
+// registered widget, as on AppKit and Android, so it is in /widgets with
+// "banner":true and it moves everything below it (which is why specs read
+// geometry from the driver instead of hardcoding it). Sealed: not automatable.
+static void aeui_inject_banner(int root_handle) {
+    UIView* root = (__bridge UIView*)aether_ui_get_widget(root_handle);
+    if (![root isKindOfClass:[UIStackView class]] || aether_ui_test_server_banner_handle()) return;
+    UILabel* banner = [[UILabel alloc] init];
+    banner.text = @"Under Remote Control";
+    banner.textColor = [UIColor whiteColor];
+    banner.font = [UIFont boldSystemFontOfSize:12];
+    banner.textAlignment = NSTextAlignmentCenter;
+    banner.backgroundColor = [UIColor colorWithRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+    banner.translatesAutoresizingMaskIntoConstraints = NO;
+    [banner.heightAnchor constraintEqualToConstant:24].active = YES;
+    int bh = register_widget_typed((__bridge void*)banner, AUI_BANNER);
+    // Index 0 of the stack: AeuiStackView keeps its slack last either way. A
+    // vstack stretches it across; an hstack root gets it as its first cell.
+    [(UIStackView*)root insertArrangedSubview:banner atIndex:0];
+    aether_ui_test_server_set_banner(bh);
+    aether_ui_seal_widget_impl(bh);
+}
+
 static int uikit_test_server_started = 0;
 void aether_ui_enable_test_server_impl(int port, int root_handle) {
-    (void)root_handle;   // banner injection is a later pass
     if (uikit_test_server_started) return;   // idempotent (env + explicit call)
     uikit_test_server_started = 1;
+    if ([NSThread isMainThread]) aeui_inject_banner(root_handle);
+    else dispatch_sync(dispatch_get_main_queue(), ^{ aeui_inject_banner(root_handle); });
     aether_ui_test_server_start(port, &uikit_driver_hooks);
 }
 
