@@ -43,7 +43,7 @@ exports (
     // Raster element: image(x, y, w, h) { image_pixels(...) / image_bytes(...) / image_fit(...) }
     // and the same three from anywhere later, by the node image() returned.
     image, image_pixels, image_bytes, image_bytes_str, image_fit,
-    image_set_pixels, image_set_bytes, image_set_fit, image_pixel_w, image_pixel_h,
+    image_set_pixels, image_set_bytes, image_set_fit, image_pixel_w, image_pixel_h, image_box,
     use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
     text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
@@ -572,6 +572,35 @@ image_pixel_h(node: ptr) -> int {
     el = node_payload(node)
     if el == null { return 0 }
     return element.element_raster_h(el)
+}
+
+// image_box(node, x, y, w, h) — move or resize an image's box after
+// image() made it (a decoded picture whose size was not known until its
+// bytes were read; a page placing a raster). Deferred scenes only: the
+// box lives in the recorded attrs, so the next flush draws it there; an
+// eager scene has already drawn and keeps nothing to move.
+image_box(node: ptr, x: float, y: float, w: float, h: float) {
+    el = node_payload(node)
+    if el == null { return }
+    s = node_scene(node) as *VgScene
+    if s.pending == null { return }
+    n = list.size(s.pending)
+    i = 0
+    while i < n {
+        item, _ = list.get(s.pending, i)
+        pend = item as *VgPending
+        if pend.kind == 7 {
+            if pend.element == el {
+                put_f(pend.attrs, "x", x)
+                put_f(pend.attrs, "y", y)
+                put_f(pend.attrs, "width", w)
+                put_f(pend.attrs, "height", h)
+                element.element_set_shape_rect(el, x, y, w, h)
+                return
+            }
+        }
+        i = i + 1
+    }
 }
 
 // draw_image_el(ctx, be, attrs, el) — map the box through the current
