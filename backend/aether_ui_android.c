@@ -213,6 +213,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <android/bitmap.h>   // the image decoder below reads a Bitmap's pixels
 #include <math.h>
 #include <string.h>
 #include <sys/stat.h>
