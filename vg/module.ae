@@ -290,12 +290,24 @@ scene_new(ctx: ptr, backend: ptr) -> ptr {
 // block body is what declares the need, and it runs after vg() returns.)
 scene_set_arm_hook(p: ptr, cb: fn) {
     s = p as *VgScene
-    s.arm_cb = cb
+    // `kept = cb` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = cb` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = cb
+    s.arm_cb = kept
 }
 
 scene_set_present_hook(p: ptr, cb: fn) {
     s = p as *VgScene
-    s.present_cb = cb
+    // `kept = cb` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = cb` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = cb
+    s.present_cb = kept
 }
 
 scene_set_timer(p: ptr, t: int) { s = p as *VgScene; s.timer_id = t }

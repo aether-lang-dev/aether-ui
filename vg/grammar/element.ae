@@ -358,7 +358,13 @@ element_context(p: ptr) -> ptr {
 
 element_on_click(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.click_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.click_handler = kept
 }
 
 element_click_handler(p: ptr) -> ptr {
@@ -368,7 +374,13 @@ element_click_handler(p: ptr) -> ptr {
 
 element_on_hover(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.hover_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.hover_handler = kept
 }
 
 element_hover_handler(p: ptr) -> ptr {
@@ -378,7 +390,13 @@ element_hover_handler(p: ptr) -> ptr {
 
 element_on_drag(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.drag_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.drag_handler = kept
 }
 
 element_drag_handler(p: ptr) -> ptr {
@@ -388,7 +406,13 @@ element_drag_handler(p: ptr) -> ptr {
 
 element_on_drag_end(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.drag_end_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.drag_end_handler = kept
 }
 
 element_drag_end_handler(p: ptr) -> ptr {
@@ -398,7 +422,13 @@ element_drag_end_handler(p: ptr) -> ptr {
 
 element_on_scroll(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.scroll_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.scroll_handler = kept
 }
 
 element_scroll_handler(p: ptr) -> ptr {
@@ -408,7 +438,13 @@ element_scroll_handler(p: ptr) -> ptr {
 
 element_on_double_click(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.double_click_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.double_click_handler = kept
 }
 
 element_double_click_handler(p: ptr) -> ptr {
@@ -418,7 +454,13 @@ element_double_click_handler(p: ptr) -> ptr {
 
 element_on_right_click(p: ptr, h: fn) {
     e = p as *AevgElement
-    e.right_click_handler = h
+    // `kept = h` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = h` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = h
+    e.right_click_handler = kept
 }
 
 element_right_click_handler(p: ptr) -> ptr {
@@ -478,7 +520,13 @@ element_cursor(p: ptr) -> string {
 
 element_set_when(p: ptr, pred: fn) {
     e = p as *AevgElement
-    e.when_predicate = pred
+    // `kept = pred` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = pred` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = pred
+    e.when_predicate = kept
 }
 
 element_when_predicate(p: ptr) -> ptr {
@@ -520,7 +568,13 @@ element_destroy(p: ptr) {
 
 element_bind_fill(p: ptr, f: fn) {
     e = p as *AevgElement
-    e.fill_binding = f
+    // `kept = f` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = f` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = f
+    e.fill_binding = kept
 }
 
 element_fill_binding(p: ptr) -> ptr {
@@ -530,7 +584,13 @@ element_fill_binding(p: ptr) -> ptr {
 
 element_bind_stroke(p: ptr, f: fn) {
     e = p as *AevgElement
-    e.stroke_binding = f
+    // `kept = f` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = f` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = f
+    e.stroke_binding = kept
 }
 
 element_stroke_binding(p: ptr) -> ptr {
@@ -540,7 +600,13 @@ element_stroke_binding(p: ptr) -> ptr {
 
 element_bind_opacity(p: ptr, f: fn) {
     e = p as *AevgElement
-    e.opacity_binding = f
+    // `kept = f` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = f` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = f
+    e.opacity_binding = kept
 }
 
 element_opacity_binding(p: ptr) -> ptr {
@@ -550,7 +616,13 @@ element_opacity_binding(p: ptr) -> ptr {
 
 element_bind_text(p: ptr, f: fn) {
     e = p as *AevgElement
-    e.text_binding = f
+    // `kept = f` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = f` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = f
+    e.text_binding = kept
 }
 
 element_text_binding(p: ptr) -> ptr {
@@ -560,7 +632,13 @@ element_text_binding(p: ptr) -> ptr {
 
 element_bind_pos(p: ptr, f: fn) {
     e = p as *AevgElement
-    e.pos_binding = f
+    // `kept = f` before the store: an alias the compiler's escape walk
+    // sees. The fn->ptr coercion in `field = f` is a call it looks through
+    // as non-retaining, so without the alias it frees a capturing closure's
+    // env right after the setter returns (0.790/0.791) and the stored handler
+    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
+    kept = f
+    e.pos_binding = kept
 }
 
 element_pos_binding(p: ptr) -> ptr {
