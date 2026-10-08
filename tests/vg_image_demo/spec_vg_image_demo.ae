@@ -1,0 +1,134 @@
+// spec_vg_image_demo.ae — the AeVG image element draws the pixels it is
+// given, where its box says, through every fit and transform it claims.
+//
+// Pixels are read back through the driver's /canvas/{id}/pixel route (the
+// offscreen replay of the canvas's commands), which is what makes this a
+// check of the BLIT on this backend and not of the vg bookkeeping the
+// Phase 0 unit test (vg/test/test_vg_image.ae) already pins. Probes are in
+// viewBox units (0..100) and mapped to canvas pixels the way the scene maps
+// them: the viewBox scaled uniformly to fit the canvas's actual allocation
+// and centred, since a layout may hand the canvas more than it asked for.
+//
+// The blit is scaled with each backend's default filtering, which smooths
+// between a 2x2 buffer's cells, so every probe sits at a cell's centre.
+//
+// Click: the top-left image's on_click repaints its buffer yellow in place
+// and presents the scene again -- a sae page's raster path in miniature. It
+// is also the hit-test check: the handler is on the image element.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vg_image_demo/bin/vg_image_demo &
+//   UI_SPEC=vg_image_demo/spec_vg_image_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+// The canvas's allocation, read once.
+cw() -> int { return uidriver.canvas_w() }
+ch() -> int { return uidriver.canvas_h() }
+scale() -> float {
+    sx = cw() / 100.0
+    sy = ch() / 100.0
+    if sx < sy { return sx }
+    return sy
+}
+px_x(vx: float) -> int { return ((cw() - 100.0 * scale()) / 2.0 + vx * scale()) as int }
+px_y(vy: float) -> int { return ((ch() - 100.0 * scale()) / 2.0 + vy * scale()) as int }
+
+// The pixel at viewBox (vx, vy), 0xAARRGGBB.
+pixel_at(vx: float, vy: float) -> int {
+    x = px_x(vx)
+    y = px_y(vy)
+    body = uidriver.get_body("/canvas/1/pixel?x=${x}&y=${y}&w=${cw()}&h=${ch()}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+
+// Within tol of #rrggbb on every channel (the read is through a scaled
+// blit, so an edge or a filter may bleed a little; the probes sit mid-cell).
+near_rgb(p: int, rgb: int, tol: int) -> int {
+    if chan_near(p >> 16, rgb >> 16, tol) == 0 { return 0 }
+    if chan_near(p >> 8, rgb >> 8, tol) == 0 { return 0 }
+    return chan_near(p, rgb, tol)
+}
+chan_near(a: int, b: int, tol: int) -> int {
+    d = (a & 255) - (b & 255)
+    if d < 0 { d = 0 - d }
+    if d <= tol { return 1 }
+    return 0
+}
+
+assert_px(x: float, y: float, rgb: int, msg: string) {
+    p = pixel_at(x, y)
+    spec.assert_true(near_rgb(p, rgb, 24) == 1, "${msg}: pixel at viewBox (${x},${y}) is ${p}")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "vg image element over AetherUIDriver") {
+
+        spec.it("a 2x2 buffer stretches over its 50x50 box, one colour a quadrant") callback {
+            spec.assert_gt(cw(), 0, "the canvas has an allocation")
+            // Box (0,0)-(50,50); cell centres at 12.5 and 37.5.
+            assert_px(12.5, 12.5, 0xff0000, "top-left cell red")
+            assert_px(37.5, 12.5, 0x00ff00, "top-right cell green")
+            assert_px(12.5, 37.5, 0x0000ff, "bottom-left cell blue")
+            assert_px(37.5, 37.5, 0xffffff, "bottom-right cell white")
+        }
+
+        spec.it("image_fit(contain) letterboxes a 2:1 buffer to the middle band") callback {
+            // Box (50,0)-(100,50); a 2x1 source fits 50 wide, 25 tall, centred:
+            // y 12.5..37.5. Left half red, right half blue; backdrop above and below.
+            assert_px(62.5, 25.0, 0xff0000, "left half of the band is red")
+            assert_px(87.5, 25.0, 0x0000ff, "right half is blue")
+            assert_px(75.0, 5.0, 0xffffff, "above the band is the backdrop")
+            assert_px(75.0, 45.0, 0xffffff, "below the band too")
+        }
+
+        spec.it("image_bytes decodes a PNG through the toolkit: the same quad") callback {
+            // Box (0,50)-(50,100).
+            assert_px(12.5, 62.5, 0xff0000, "decoded top-left red")
+            assert_px(37.5, 62.5, 0x00ff00, "decoded top-right green")
+            assert_px(12.5, 87.5, 0x0000ff, "decoded bottom-left blue")
+            assert_px(37.5, 87.5, 0xffffff, "decoded bottom-right white")
+        }
+
+        spec.it("opacity(0.5) and transform(translate) apply to an image") callback {
+            // Box (50,50)-(100,100) moved 10 units left: x 40..90. Half red over
+            // white reads pink; where the untranslated box would have ended
+            // (x 90..100) is still backdrop.
+            p = pixel_at(52.5, 62.5)
+            spec.assert_true(near_rgb(p, 0xff8080, 40) == 1, "half-transparent red over white: ${p}")
+            assert_px(95.0, 62.5, 0xffffff, "past the translated box: backdrop")
+            assert_px(52.5, 87.5, 0x8080ff, "blue cell at half alpha, 10 units left")
+        }
+
+        spec.it("clicking the image runs its handler, which repaints the buffer in place") callback {
+            uidriver.post_ok("/canvas/1/click?x=${px_x(12.5)}&y=${px_y(12.5)}", "POST canvas click")
+            // The handler rewrote the 2x2 buffer yellow and presented the scene.
+            i = 0
+            ok = 0
+            while i < 30 {
+                if near_rgb(pixel_at(37.5, 37.5), 0xffff00, 24) == 1 { ok = 1; break }
+                sleep(100)
+                i = i + 1
+            }
+            spec.assert_true(ok == 1, "the image's pixels are yellow after the click")
+            assert_px(12.5, 37.5, 0xffff00, "every cell, from the same buffer")
+            // The bottom-right image borrows the SAME buffer: it changed too.
+            spec.assert_true(near_rgb(pixel_at(52.5, 62.5), 0xffff80, 40) == 1, "the other image of that buffer followed")
+        }
+
+        spec.it("a click beside the image does not reach its handler") callback {
+            uidriver.post_ok("/canvas/1/click?x=${px_x(75.0)}&y=${px_y(45.0)}", "POST canvas click")
+            b = uidriver.get_body("/widgets")
+            spec.assert_true(string.length(b) > 0, "the app is still up")
+        }
+    }
+    return spec.run_summary(fw)
+}

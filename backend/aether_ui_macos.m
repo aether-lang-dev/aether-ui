@@ -25,6 +25,7 @@
 #include "aether_ui_system_extras.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 #include <pthread.h>
@@ -5082,6 +5083,48 @@ int aether_ui_image_from_bytes(const char* data, int length) {
         if (img) [iv setImage:img];   // stays empty on decode failure
     }
     return register_widget_typed((__bridge void*)iv, AUI_IMAGE);
+}
+
+// The same decoders to pixels (aether_ui_backend.h): NSImage's CGImage drawn
+// into a premultiplied-RGBA bitmap context (CoreGraphics draws into no other
+// 32-bit RGBA layout), then unpremultiplied.
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!data || length <= 0) return NULL;
+    NSData* d = [NSData dataWithBytes:data length:(NSUInteger)length];
+    NSImage* img = [[NSImage alloc] initWithData:d];
+    if (!img) return NULL;
+    CGImageRef cg = [img CGImageForProposedRect:NULL context:nil hints:nil];
+    if (!cg) return NULL;
+    size_t w = CGImageGetWidth(cg), h = CGImageGetHeight(cg);
+    if (w == 0 || h == 0 || w * h > (size_t)(INT_MAX / 4)) return NULL;
+    unsigned char* out = (unsigned char*)calloc(w * h, 4);
+    if (!out) return NULL;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(out, w, h, 8, w * 4, cs,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cs);
+    if (!ctx) { free(out); return NULL; }
+    CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), cg);
+    CGContextRelease(ctx);
+    aether_ui_rgba_unpremultiply(out, w * h);
+    // CoreGraphics' origin is bottom-left; the buffer is top-down like every
+    // other RGBA the canvas takes, so flip the rows.
+    size_t stride = w * 4;
+    unsigned char* row = (unsigned char*)malloc(stride);
+    if (row) {
+        for (size_t y = 0; y < h / 2; y++) {
+            unsigned char* a = out + y * stride;
+            unsigned char* b = out + (h - 1 - y) * stride;
+            memcpy(row, a, stride); memcpy(a, b, stride); memcpy(b, row, stride);
+        }
+        free(row);
+    }
+    if (out_w) *out_w = (int)w;
+    if (out_h) *out_h = (int)h;
+    return out;
 }
 
 // NSWorkspace answers for a path that does not exist too: it falls back to

@@ -9,6 +9,7 @@
 #include "aether_ui_sni.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -4635,6 +4636,49 @@ int aether_ui_image_from_bytes(const char* data, int length) {
         }
     }
     return aether_ui_register_widget(img);
+}
+
+// The same decoders to pixels (aether_ui_backend.h): gdk_texture_download
+// hands out CAIRO_FORMAT_ARGB32 -- premultiplied, one native-endian 32-bit
+// word a pixel -- which is unpacked to straight RGBA8 bytes.
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!data || length <= 0) return NULL;
+    ensure_gtk_init();
+    GBytes* bytes = g_bytes_new(data, (gsize)length);
+    GError* err = NULL;
+    GdkTexture* tex = gdk_texture_new_from_bytes(bytes, &err);
+    g_bytes_unref(bytes);
+    if (!tex) {
+        if (err) g_clear_error(&err);
+        return NULL;
+    }
+    int w = gdk_texture_get_width(tex);
+    int h = gdk_texture_get_height(tex);
+    if (w <= 0 || h <= 0 || (size_t)w * (size_t)h > (size_t)(INT_MAX / 4)) {
+        g_object_unref(tex);
+        return NULL;
+    }
+    size_t n = (size_t)w * (size_t)h;
+    unsigned char* out = (unsigned char*)malloc(n * 4);
+    if (!out) { g_object_unref(tex); return NULL; }
+    gdk_texture_download(tex, out, (gsize)w * 4);
+    g_object_unref(tex);
+    unsigned char* p = out;
+    for (size_t i = 0; i < n; i++, p += 4) {
+        uint32_t px;
+        memcpy(&px, p, 4);
+        p[0] = (unsigned char)((px >> 16) & 0xff);
+        p[1] = (unsigned char)((px >> 8) & 0xff);
+        p[2] = (unsigned char)(px & 0xff);
+        p[3] = (unsigned char)(px >> 24);
+    }
+    aether_ui_rgba_unpremultiply(out, n);
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return out;
 }
 
 // The themed icon for a path. Query the file when it exists (so a directory

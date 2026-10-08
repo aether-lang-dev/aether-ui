@@ -1,0 +1,19 @@
+// vg_image_demo — the AeVG image element, built as its own cached aeb node.
+import bldr
+import aether
+import aether (source, output, no_closure_regen, lib)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("vg_image_demo.ae")
+            output("vg_image_demo")
+            lib("${root}")               // so `import vg.*` resolves at the repo root
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

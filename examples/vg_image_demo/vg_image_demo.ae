@@ -1,0 +1,99 @@
+// vg_image_demo — the AeVG image element: pixels a program owns, drawn into
+// a scene like any other shape.
+//
+// Four images in one 0..100 viewBox on a 300x300 canvas (3 px a unit):
+//
+//   top-left     image(0,0,50,50)   a 2x2 buffer (red, green / blue, white)
+//                                   stretched over the box; on_click paints
+//                                   the buffer yellow IN PLACE and presents
+//                                   the scene again -- the "page updates its
+//                                   raster" path (demos 13 and 14 in sae).
+//   top-right    image(50,0,50,50)  a 2x1 buffer (red | blue) with
+//                                   image_fit("contain"): letterboxed to the
+//                                   middle band of the box.
+//   bottom-left  image(0,50,50,50)  quad.png decoded by the toolkit
+//                                   (image_bytes_str): the same 2x2 colours.
+//   bottom-right image(50,50,50,50) the 2x2 buffer at opacity(0.5), and
+//                                   transform("translate(-10 0)"): 10 units
+//                                   left of where its x says.
+//
+// The spec (tests/vg_image_demo) reads pixels back through the driver's
+// /canvas/{id}/pixel route, clicks, and reads again. Run by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vg_image_demo/bin/vg_image_demo &
+//   UI_SPEC=vg_image_demo/spec_vg_image_demo tests/run_spec.sh
+
+import ui                                   // full — transitive canvas_* resolve
+import ui (window, vstack, text, enable_test_server)
+import vg.live (vg)
+import vg                                    // full — vg_live uses vg.scene_new
+import vg (view_box, rect, fill, image, image_pixels, image_bytes_str, image_fit,
+           opacity, transform, on_click, node_scene, scene_present)
+import std.mem
+import std.fs
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+
+// A w x h RGBA8 buffer filled from a flat list of bytes.
+px_buffer(bytes: ptr, n: int) -> ptr {
+    b = malloc(n)
+    _c = mem.copy(b, bytes, n as long)
+    return b
+}
+
+set_px(b: ptr, i: int, r: int, g: int, bl: int, a: int) {
+    _r = mem.set_byte(b, i * 4, r)
+    _g = mem.set_byte(b, i * 4 + 1, g)
+    _b = mem.set_byte(b, i * 4 + 2, bl)
+    _a = mem.set_byte(b, i * 4 + 3, a)
+}
+
+main() {
+    quad = malloc(16)
+    set_px(quad, 0, 255, 0, 0, 255)
+    set_px(quad, 1, 0, 255, 0, 255)
+    set_px(quad, 2, 0, 0, 255, 255)
+    set_px(quad, 3, 255, 255, 255, 255)
+    pair = malloc(8)
+    set_px(pair, 0, 255, 0, 0, 255)
+    set_px(pair, 1, 0, 0, 255, 255)
+    png, png_len, png_err = fs.read_binary("examples/vg_image_demo/quad.png")
+    if png_err != "" { println("vg_image_demo: quad.png: ${png_err}") }
+
+    window("vg image", 340, 380) {
+        vstack(4) {
+            text("vg.image: click the top-left square")
+            vg(view_box(0, 0, 100, 100), 300, 300) {
+                rect(0, 0, 100, 100) { fill("#ffffff") }
+                tl = image(0, 0, 50, 50) {
+                    image_pixels(quad, 2, 2)
+                    on_click() callback |x: float, y: float| {
+                        // The page's path: write the buffer, present again.
+                        set_px(quad, 0, 255, 255, 0, 255)
+                        set_px(quad, 1, 255, 255, 0, 255)
+                        set_px(quad, 2, 255, 255, 0, 255)
+                        set_px(quad, 3, 255, 255, 0, 255)
+                        println("clicked the raster at ${x},${y}")
+                    }
+                }
+                _tl = tl
+                image(50, 0, 50, 50) {
+                    image_pixels(pair, 2, 1)
+                    image_fit("contain")
+                }
+                image(0, 50, 50, 50) {
+                    if png_len > 0 {
+                        ok = image_bytes_str(png, png_len)
+                        if ok == 0 { println("vg_image_demo: quad.png did not decode") }
+                    }
+                }
+                image(50, 50, 50, 50) {
+                    image_pixels(quad, 2, 2)
+                    opacity(0.5)
+                    transform("translate(-10 0)")
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

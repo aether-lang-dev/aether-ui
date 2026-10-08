@@ -16,6 +16,8 @@
 //   canvas_text      → fill_text at baseline
 //   canvas_raster    → base64-decode rawPixels → canvas_draw_image blit
 //   canvas_tappable_raster → same as raster
+//   image (backend_set_image) → canvas_draw_image_scaled_ptr: the vg.image
+//                      element's RGBA pixels, scaled to its dest rect
 //
 // Shape factories emit canvas-space bounding boxes (x, y, x2, y2)
 // plus fillColor / strokeColor / strokeWidth (and for text: text,
@@ -75,6 +77,9 @@ extern aether_ui_canvas_stroke_text_impl(canvas_id: int, text: string,
 extern aether_ui_canvas_draw_image_impl(canvas_id: int, x: float, y: float,
                                         iw: int, ih: int,
                                         rgba: string, byte_len: int)
+extern aether_ui_canvas_draw_image_scaled_impl_ptr(canvas_id: int, x: float, y: float,
+                                                   dw: float, dh: float, iw: int, ih: int,
+                                                   rgba: ptr, byte_len: int)
 extern aether_ui_canvas_fill_linear_gradient_impl(canvas_id: int,
         x1: float, y1: float, x2: float, y2: float,
         n_stops: int, offsets: ptr, rgba: ptr, line_width: float, extend: int,
@@ -103,7 +108,7 @@ gtk_backend_new(canvas_id: int) -> ptr {
     b = malloc(sizeof(GtkBackend)) as *GtkBackend
     b.canvas_id = canvas_id
     b.raster_skipped = 0
-    return dispatch.backend_make(b) callback |be: ptr, op: int, opts: ptr| {
+    d = dispatch.backend_make(b) callback |be: ptr, op: int, opts: ptr| {
         if op == 0 { return canvas_circle(be, opts) }
         if op == 1 { return canvas_rectangle(be, opts) }
         if op == 2 { return canvas_line(be, opts) }
@@ -114,6 +119,37 @@ gtk_backend_new(canvas_id: int) -> ptr {
         if op == 8 { return canvas_group_end_op(be, opts) }
         return canvas_tappable_raster(be, opts)
     }
+    dispatch.backend_set_image(d) callback |be: ptr, opts: ptr, rgba: ptr, byte_len: int| {
+        canvas_image(be, opts, rgba, byte_len)
+    }
+    return d
+}
+
+// ─── image (vg.image) ────────────────────────────────────────────
+//
+// opts: x, y, w, h (canvas-px dest rect), pw, ph (the buffer's pixel dims);
+// rgba is pw*ph*4 bytes of straight RGBA8. The OWNING scaled blit: the
+// canvas copies the pixels into its command, so a page may free or resize
+// its buffer the moment this returns, and an expose between two flushes
+// replays a buffer the canvas still holds. (The borrowed blit would be a
+// use-after-free the first time a page reallocated its raster.)
+canvas_image(p: ptr, opts: ptr, rgba: ptr, byte_len: int) {
+    b = p as *GtkBackend
+    pw = opt_i(opts, "pw", 0)
+    ph = opt_i(opts, "ph", 0)
+    if pw <= 0 { return }
+    if ph <= 0 { return }
+    if byte_len < pw * ph * 4 { return }
+    if rgba == null { return }
+    // opacity(v) on an image: the blit composited through a group at alpha
+    // (the same offscreen pass group_begin/group_end use), since the blit
+    // itself takes no alpha.
+    alpha = opt_f(opts, "opacity", 1.0)
+    if alpha < 1.0 { aether_ui_canvas_group_begin_impl(b.canvas_id) }
+    aether_ui_canvas_draw_image_scaled_impl_ptr(b.canvas_id,
+        opt_f(opts, "x", 0.0), opt_f(opts, "y", 0.0),
+        opt_f(opts, "w", 0.0), opt_f(opts, "h", 0.0), pw, ph, rgba, byte_len)
+    if alpha < 1.0 { aether_ui_canvas_group_end_impl(b.canvas_id, alpha) }
 }
 
 // Group-opacity pair: composite following commands offscreen, paint once at

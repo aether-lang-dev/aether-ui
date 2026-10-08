@@ -18,6 +18,7 @@
 #define AETHER_UI_BACKEND_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // Widget registry
 int aether_ui_register_widget(void* widget);
@@ -570,6 +571,21 @@ int aether_ui_image_create(const char* filepath);
 // widget still exists so the tree is stable). For downloaded/generated/
 // embedded-art bytes that never touch disk.
 int aether_ui_image_from_bytes(const char* data, int length);
+// The same decoders, to PIXELS rather than a widget: `length` bytes of an
+// encoded image to a malloc'd width*height*4 buffer of straight
+// (non-premultiplied) RGBA8, row-major, which the caller frees. NULL (and
+// 0x0) when the bytes are not an image this platform reads. For the vg
+// image element (vg.image_bytes): a decoded photo drawn into a scene.
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h);
+// Shared helpers (system_extras.c): the ptr-taking twin of
+// image_from_bytes for a caller holding raw memory (a page's Uint8Array), an
+// identity cast so an Aether string can reach a ptr-taking entry (Aether has
+// no string->ptr cast), and premultiplied -> straight alpha in place, which
+// every decoder but GDI+'s needs.
+int aether_ui_image_from_bytes_ptr(const void* data, int length);
+void* aether_ui_string_ptr(const char* s);
+void aether_ui_rgba_unpremultiply(unsigned char* px, size_t n_pixels);
 void aether_ui_image_set_size(int handle, int width, int height);
 // The OS's icon FOR A PATH (folder / document / executable / by extension),
 // as opposed to image_create, which loads the file itself. NSWorkspace

@@ -1,0 +1,184 @@
+// vg/test/test_vg_image.ae — the image element (vg.image): pixels in a box.
+//
+// Headless, against the RECORDING backend, in deferred mode as the live
+// scene runs: image() records, the block's image_pixels/image_fit set what
+// it draws, vg_flush dispatches an "image" call whose opts carry the dest
+// rect in canvas px and the source dims. Checks: the box maps through the
+// viewBox mapping and a transform; each fit mode's dest rect and crop;
+// no pixels means no call; the element is hit-testable at its box; a
+// re-set buffer is what the next flush draws; a borrowed buffer is never
+// freed by the element, an owned one is.
+
+import std.string
+import std.mem
+import vg
+import vg.grammar.context
+import vg.grammar.element
+import vg.grammar.events
+import vg.backend.record
+import vg.geom.transform
+
+extern exit(code: int)
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+assert_near(label: string, got: float, want: float) {
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < 0.51 { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+opt_f(bk: ptr, i: int, key: string) -> float {
+    v, e = string.to_double(record.backend_opt_get(bk, i, key))
+    if e != "" { return -1.0 }
+    return v
+}
+opt_i(bk: ptr, i: int, key: string) -> int {
+    v, e = string.to_int(record.backend_opt_get(bk, i, key))
+    if e != "" { return -1 }
+    return v
+}
+
+// A 0..100 viewBox on a 200x200 canvas: scale 2.
+mk_ctx_2x() -> ptr {
+    sx = transform.affine_scale(2.0, 2.0)
+    m = context.mapping_new(0.0, 0.0, 100.0, 100.0, 200.0, 200.0, 2.0, 0.0, 0.0, sx)
+    return context.new_context(m)
+}
+
+// A deferred scene with an event state, as live.ae builds one.
+mk_scene(bk: ptr) -> ptr {
+    sc = vg.scene_new(mk_ctx_2x(), bk)
+    vg.scene_set_deferred(sc, 1)
+    vg.scene_set_event_state(sc, events.event_state_new())
+    return sc
+}
+
+main() {
+    println("test_vg_image: the image element")
+
+    // 1. A 4x2 buffer into a (10, 20, 40, 20) box: dest = (20, 40, 80, 40) px.
+    bk = record.backend_new()
+    sc = mk_scene(bk)
+    root = vg.vg_root(sc)
+    buf = malloc(4 * 2 * 4)
+    mem.set(buf, 255, 32)
+    img = vg.image(root, 10.0, 20.0, 40.0, 20.0)
+    vg.image_pixels(img, buf, 4, 2)
+    vg.vg_flush(sc)
+    assert_eq_int("one call", record.backend_call_count(bk), 1)
+    assert_eq_str("it is an image", record.backend_kind(bk, 0), "image")
+    assert_near("x maps through the viewBox", opt_f(bk, 0, "x"), 20.0)
+    assert_near("y", opt_f(bk, 0, "y"), 40.0)
+    assert_near("w", opt_f(bk, 0, "w"), 80.0)
+    assert_near("h", opt_f(bk, 0, "h"), 40.0)
+    assert_eq_int("source width", opt_i(bk, 0, "pw"), 4)
+    assert_eq_int("source height", opt_i(bk, 0, "ph"), 2)
+    assert_eq_int("byte length", opt_i(bk, 0, "byteLen"), 32)
+    assert_eq_int("pixel dims readable", vg.image_pixel_w(img), 4)
+
+    // 2. Hit-testable at its box (canvas px), like any element.
+    el = vg.node_element(img)
+    assert_eq_int("inside the box hits", element.element_hit_test(el, 30.0, 50.0), 1)
+    assert_eq_int("outside misses", element.element_hit_test(el, 10.0, 10.0), 0)
+
+    // 3. A transform moves the box: translate(10, 0) -> x = 40 px (its own
+    //    image: a transform once flushed stays in the attrs, as for every
+    //    shape, so it is not cleared and reused below).
+    bk3 = record.backend_new()
+    sc3 = mk_scene(bk3)
+    img3 = vg.image(vg.vg_root(sc3), 10.0, 20.0, 40.0, 20.0)
+    vg.image_pixels(img3, buf, 4, 2)
+    vg.transform(img3, "translate(10 0)")
+    vg.vg_flush(sc3)
+    assert_near("translate shifts x", opt_f(bk3, 0, "x"), 40.0)
+    assert_near("and keeps w", opt_f(bk3, 0, "w"), 80.0)
+    assert_eq_int("bounds followed", element.element_hit_test(vg.node_element(img3), 45.0, 50.0), 1)
+    assert_eq_int("old box no longer hits", element.element_hit_test(vg.node_element(img3), 25.0, 50.0), 0)
+
+    // 4. Fit modes. Box 40x20 vb = 80x40 px; source 4x2 (2:1, same aspect)
+    //    and 2x2 (square).
+    sq = malloc(2 * 2 * 4)
+    mem.set(sq, 128, 16)
+    vg.image_pixels(img, sq, 2, 2)
+    vg.image_fit(img, "contain")
+    record.backend_clear(bk)
+    vg.vg_flush(sc)
+    assert_near("contain: square fits the height", opt_f(bk, 0, "w"), 40.0)
+    assert_near("contain: full height", opt_f(bk, 0, "h"), 40.0)
+    assert_near("contain: centred in the box", opt_f(bk, 0, "x"), 40.0)
+    assert_eq_int("contain: whole source", opt_i(bk, 0, "pw"), 2)
+
+    vg.image_fit(img, "cover")
+    record.backend_clear(bk)
+    vg.vg_flush(sc)
+    assert_near("cover: fills the box", opt_f(bk, 0, "w"), 80.0)
+    assert_near("cover: full height", opt_f(bk, 0, "h"), 40.0)
+    assert_eq_int("cover: source width kept", opt_i(bk, 0, "pw"), 2)
+    assert_eq_int("cover: source cropped to the box's aspect", opt_i(bk, 0, "ph"), 1)
+    assert_eq_int("cover: the crop's bytes", opt_i(bk, 0, "byteLen"), 8)
+
+    vg.image_fit(img, "original")
+    record.backend_clear(bk)
+    vg.vg_flush(sc)
+    assert_near("original: one px per px", opt_f(bk, 0, "w"), 2.0)
+    assert_near("original: centred x", opt_f(bk, 0, "x"), 59.0)
+    assert_near("original: centred y", opt_f(bk, 0, "y"), 59.0)
+
+    vg.image_fit(img, "stretch")
+    record.backend_clear(bk)
+    vg.vg_flush(sc)
+    assert_near("stretch: the whole box again", opt_f(bk, 0, "w"), 80.0)
+
+    // 5. Opacity rides along for the blit to composite.
+    vg.opacity(img, 0.5)
+    record.backend_clear(bk)
+    vg.vg_flush(sc)
+    assert_near("opacity in the opts", opt_f(bk, 0, "opacity"), 0.5)
+    vg.opacity(img, 1.0)
+
+    // 6. No pixels: no call, but the element still has bounds.
+    bk2 = record.backend_new()
+    sc2 = mk_scene(bk2)
+    img2 = vg.image(vg.vg_root(sc2), 0.0, 0.0, 50.0, 50.0)
+    vg.vg_flush(sc2)
+    assert_eq_int("nothing drawn without pixels", record.backend_call_count(bk2), 0)
+    assert_eq_int("but it hit-tests", element.element_hit_test(vg.node_element(img2), 10.0, 10.0), 1)
+
+    // 7. A hidden image is not drawn; shown again, it is.
+    vg.visible_when(img) callback { return 0 }
+    _r = vg.scene_refresh(sc)
+    record.backend_clear(bk)
+    vg.vg_flush(sc)
+    assert_eq_int("when false: not drawn", record.backend_call_count(bk), 0)
+
+    // 8. Decoding bytes nobody can read fails cleanly and leaves the pixels.
+    bogus = malloc(8)
+    mem.set(bogus, 7, 8)
+    assert_eq_int("undecodable bytes refused", vg.image_bytes(img2, bogus, 8), 0)
+    assert_eq_int("and nothing changed", vg.image_pixel_w(img2), 0)
+    free(bogus)
+
+    // 9. A borrowed buffer is the caller's: releasing the element leaves it
+    //    (we write to it after), an owned one goes with the element.
+    el2 = element.element_new(null)
+    element.element_set_raster(el2, buf, 4, 2, 0)
+    element.element_release(el2)
+    mem.set(buf, 1, 32)
+    assert_eq_int("borrowed buffer still ours", mem.get_byte(buf, 5), 1)
+    el3 = element.element_new(null)
+    owned = malloc(16)
+    element.element_set_raster(el3, owned, 2, 2, 1)
+    element.element_release(el3)   // frees `owned`; a double free here would abort
+    free(buf)
+    free(sq)
+    println("test_vg_image: all passed")
+}

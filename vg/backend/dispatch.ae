@@ -20,11 +20,11 @@
 // trampoline stays env-aware.
 
 exports (
-    backend_make, backend_self,
+    backend_make, backend_self, backend_set_image,
     OP_CIRCLE, OP_RECT, OP_LINE, OP_PATH, OP_TEXT, OP_RASTER, OP_TAPPABLE,
     dispatch_circle, dispatch_rectangle, dispatch_line,
     dispatch_path, dispatch_text, dispatch_raster, dispatch_tappable_raster,
-    dispatch_group_begin, dispatch_group_end
+    dispatch_group_begin, dispatch_group_end, dispatch_image
 )
 
 import std.string
@@ -43,6 +43,11 @@ const OP_TAPPABLE: int = 6
 struct Dispatch {
     be: ptr        // concrete backend handle
     cb: ptr        // closure (be: ptr, op: int, opts: ptr) -> ptr
+    img_cb: ptr    // closure (be: ptr, opts: ptr, rgba: ptr, byte_len: int), or null:
+                   //   the image element's blit (vg.image). A second closure
+                   //   because the op-switch one takes opts only, and pixels
+                   //   are raw memory, not a string in a map (the OP_RASTER
+                   //   path base64-encodes; a page's 256 KB per frame cannot).
 }
 
 // Construct a dispatch table. `be` is the concrete backend's handle;
@@ -51,7 +56,17 @@ backend_make(be: ptr, cb: fn) -> ptr {
     d = malloc(sizeof(Dispatch)) as *Dispatch
     d.be = be
     d.cb = cb
+    d.img_cb = null
     return d
+}
+
+// backend_set_image(d, cb) — install the image blit: cb(be, opts, rgba,
+// byte_len). opts carries x, y, w, h (the canvas-px dest rect) and pw, ph
+// (the pixel dims of the rgba buffer). Optional: a backend without one
+// draws no images (dispatch_image is then a no-op).
+backend_set_image(p: ptr, cb: fn) {
+    d = p as *Dispatch
+    d.img_cb = cb
 }
 
 backend_self(p: ptr) -> ptr {
@@ -74,6 +89,18 @@ dispatch_raster(p: ptr, opts: ptr) -> ptr          { return run(p, 5, opts) }
 dispatch_tappable_raster(p: ptr, opts: ptr) -> ptr { return run(p, 6, opts) }
 dispatch_group_begin(p: ptr, opts: ptr) -> ptr     { return run(p, 7, opts) }
 dispatch_group_end(p: ptr, opts: ptr) -> ptr       { return run(p, 8, opts) }
+
+// dispatch_image(d, opts, rgba, byte_len) — blit an image element's pixels
+// (see backend_set_image). Returns 0 when the backend has no image blit.
+dispatch_image(p: ptr, opts: ptr, rgba: ptr, byte_len: int) -> int {
+    d = p as *Dispatch
+    if d.img_cb == null { return 0 }
+    run_image(d.img_cb, d.be, opts, rgba, byte_len)
+    return 1
+}
+run_image(cb: fn, be: ptr, opts: ptr, rgba: ptr, byte_len: int) {
+    cb(be, opts, rgba, byte_len)
+}
 
 run(p: ptr, op: int, opts: ptr) -> ptr {
     d = p as *Dispatch

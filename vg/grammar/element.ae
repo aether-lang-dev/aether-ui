@@ -111,7 +111,12 @@ exports (
     element_set_shape_circle, element_set_shape_rect, element_set_shape_line,
     element_shape_type,
     element_geo0, element_geo1, element_geo2, element_geo3,
-    element_set_geo
+    element_set_geo,
+    // Raster (image) elements: the RGBA8 pixels an image draws, and how
+    // they fit its box.
+    element_set_raster, element_raster_pixels, element_raster_w, element_raster_h,
+    element_set_raster_fit, element_raster_fit,
+    RASTER_STRETCH, RASTER_CONTAIN, RASTER_COVER, RASTER_ORIGINAL
 )
 
 import std.string
@@ -222,7 +227,23 @@ struct AevgElement {
     geo1: float
     geo2: float
     geo3: float
+
+    // Image elements (vg.image): a w x h RGBA8 buffer, straight (not
+    // premultiplied) alpha, row-major, 4 bytes a pixel. `rst_owned` 1 means
+    // the element frees it (decoded bytes); 0 means the caller owns it and
+    // updates it in place (a page's pixels), and it must outlive the element.
+    rst_pix: ptr
+    rst_w: int
+    rst_h: int
+    rst_owned: int
+    rst_fit: int            // RASTER_STRETCH (default) / CONTAIN / COVER / ORIGINAL
 }
+
+// How an image's pixels fill its (x, y, w, h) box, after ui.image_fill.
+const RASTER_STRETCH: int = 0
+const RASTER_CONTAIN: int = 1
+const RASTER_COVER: int = 2
+const RASTER_ORIGINAL: int = 3
 
 // ─── Construction ────────────────────────────────────────────────
 //
@@ -291,6 +312,11 @@ element_new(underlying: ptr) -> ptr {
     e.geo1 = 0.0
     e.geo2 = 0.0
     e.geo3 = 0.0
+    e.rst_pix = null
+    e.rst_w = 0
+    e.rst_h = 0
+    e.rst_owned = 0
+    e.rst_fit = 0
     return e
 }
 
@@ -614,6 +640,7 @@ extern free(p: ptr)
 // every live-region frame leaked its elements.
 element_release(p: ptr) {
     e = p as *AevgElement
+    if e.rst_owned == 1 { if e.rst_pix != null { free(e.rst_pix) } }
     string_release(e.last_fill)
     string_release(e.last_stroke_color)
     string_release(e.last_text)
@@ -622,6 +649,23 @@ element_release(p: ptr) {
     string_release(e.last_linejoin)
     free(p)
 }
+
+// element_set_raster(el, pix, w, h, owned) — the pixels an image element
+// draws. A buffer the element already owns is freed first; a borrowed one
+// (owned 0) is only forgotten, since whoever lent it still updates it.
+element_set_raster(p: ptr, pix: ptr, w: int, h: int, owned: int) {
+    e = p as *AevgElement
+    if e.rst_owned == 1 { if e.rst_pix != null { if e.rst_pix != pix { free(e.rst_pix) } } }
+    e.rst_pix = pix
+    e.rst_w = w
+    e.rst_h = h
+    e.rst_owned = owned
+}
+element_raster_pixels(p: ptr) -> ptr { e = p as *AevgElement; return e.rst_pix }
+element_raster_w(p: ptr) -> int      { e = p as *AevgElement; return e.rst_w }
+element_raster_h(p: ptr) -> int      { e = p as *AevgElement; return e.rst_h }
+element_set_raster_fit(p: ptr, fit: int) { e = p as *AevgElement; e.rst_fit = fit }
+element_raster_fit(p: ptr) -> int    { e = p as *AevgElement; return e.rst_fit }
 
 element_set_fill(p: ptr, color: string) {
     e = p as *AevgElement

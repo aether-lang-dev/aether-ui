@@ -81,6 +81,7 @@
 #import <objc/runtime.h>          // objc_setAssociatedObject (a11y strings)
 #import <UserNotifications/UserNotifications.h>  // local notifications
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
@@ -1307,6 +1308,45 @@ int aether_ui_image_from_bytes(const char* data, int length) {
         img = [UIImage imageWithData:d];
     }
     return image_register(img);
+}
+
+// The same decoders to pixels (aether_ui_backend.h): UIImage's CGImage drawn
+// into a premultiplied-RGBA bitmap context, unpremultiplied, rows flipped to
+// top-down (CoreGraphics draws bottom-up).
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!data || length <= 0) return NULL;
+    NSData* d = [NSData dataWithBytes:data length:(NSUInteger)length];
+    UIImage* img = [UIImage imageWithData:d];
+    CGImageRef cg = img ? img.CGImage : NULL;
+    if (!cg) return NULL;
+    size_t w = CGImageGetWidth(cg), h = CGImageGetHeight(cg);
+    if (w == 0 || h == 0 || w * h > (size_t)(INT_MAX / 4)) return NULL;
+    unsigned char* out = (unsigned char*)calloc(w * h, 4);
+    if (!out) return NULL;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(out, w, h, 8, w * 4, cs,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(cs);
+    if (!ctx) { free(out); return NULL; }
+    CGContextDrawImage(ctx, CGRectMake(0, 0, (CGFloat)w, (CGFloat)h), cg);
+    CGContextRelease(ctx);
+    aether_ui_rgba_unpremultiply(out, w * h);
+    size_t stride = w * 4;
+    unsigned char* row = (unsigned char*)malloc(stride);
+    if (row) {
+        for (size_t y = 0; y < h / 2; y++) {
+            unsigned char* a = out + y * stride;
+            unsigned char* b = out + (h - 1 - y) * stride;
+            memcpy(row, a, stride); memcpy(a, b, stride); memcpy(b, row, stride);
+        }
+        free(row);
+    }
+    if (out_w) *out_w = (int)w;
+    if (out_h) *out_h = (int)h;
+    return out;
 }
 
 void aether_ui_image_set_fill(int handle, int mode) {

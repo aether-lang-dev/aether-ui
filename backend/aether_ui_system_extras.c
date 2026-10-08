@@ -887,6 +887,32 @@ static void* g_aeui_vgfont = 0;
 void* aether_ui_vgfont_get(void) { return g_aeui_vgfont; }
 void aether_ui_vgfont_set(void* f) { g_aeui_vgfont = f; }
 
+// ---------------------------------------------------------------------------
+// Image bytes: shared pieces of the vg image element (aether_ui_backend.h).
+extern int aether_ui_image_from_bytes(const char* data, int length);
+
+int aether_ui_image_from_bytes_ptr(const void* data, int length) {
+    return aether_ui_image_from_bytes((const char*)data, length);
+}
+
+void* aether_ui_string_ptr(const char* s) { return (void*)s; }
+
+// Premultiplied RGBA8 -> straight, in place. a == 0 leaves the colour bytes
+// (they are 0 in a premultiplied pixel anyway); a == 255 is already straight.
+void aether_ui_rgba_unpremultiply(unsigned char* px, size_t n_pixels) {
+    if (!px) return;
+    for (size_t i = 0; i < n_pixels; i++, px += 4) {
+        unsigned a = px[3];
+        if (a == 0 || a == 255) continue;
+        unsigned r = (px[0] * 255u + a / 2) / a;
+        unsigned g = (px[1] * 255u + a / 2) / a;
+        unsigned b = (px[2] * 255u + a / 2) / a;
+        px[0] = (unsigned char)(r > 255 ? 255 : r);
+        px[1] = (unsigned char)(g > 255 ? 255 : g);
+        px[2] = (unsigned char)(b > 255 ? 255 : b);
+    }
+}
+
 // ─── chrome-drawn face renderer registry ─────────────────────────────────
 // vg-drawn controls phase 2: ui.chromed registers a face-renderer closure
 // here; ui/module.ae's btn() invokes it when AETHER_UI_CHROME=drawn. The

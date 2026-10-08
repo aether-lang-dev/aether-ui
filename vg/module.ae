@@ -40,6 +40,10 @@
 exports (
     view_box,
     circle, rect, rrect, line, path, text, text_sized, text_anchored, g,
+    // Raster element: image(x, y, w, h) { image_pixels(...) / image_bytes(...) / image_fit(...) }
+    // and the same three from anywhere later, by the node image() returned.
+    image, image_pixels, image_bytes, image_bytes_str, image_fit,
+    image_set_pixels, image_set_bytes, image_set_fit, image_pixel_w, image_pixel_h,
     use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
     text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
@@ -82,6 +86,9 @@ import vg.grammar.context
 import vg.grammar.shapes
 import vg.grammar.element
 import vg.grammar.events
+import vg.grammar.rendering
+import vg.geom.transform as xf
+import std.mem
 import std.os (os_getenv)
 import vg.raster.render_as_raster
 import vg.raster.rasterize
@@ -107,6 +114,12 @@ extern aether_ui_text_measure(size: float, text: string) -> float
 extern aether_ui_font_ascent(size: float) -> float
 extern aether_ui_font_descent(size: float) -> float
 extern aether_ui_font_height(size: float) -> float
+// Image decoding (vg.image_bytes): the backend's own decoder (GdkTexture,
+// ImageIO, GDI+, UIImage, BitmapFactory) to straight RGBA8, malloc'd; null
+// when the bytes are not an image it can read. aether_ui_string_ptr is the
+// shared identity cast an Aether string needs to reach a ptr-taking entry.
+extern aether_ui_image_decode_rgba_impl(data: ptr, length: int, out_w: ptr, out_h: ptr) -> ptr
+extern aether_ui_string_ptr(s: string) -> ptr
 
 // ─── VgScene: the shared drawing target ──────────────────────────
 //
@@ -154,7 +167,8 @@ struct VgScene {
 }
 
 // One deferred shape: enough to dispatch it after its style is known.
-// kind: 0=circle 1=rect 2=line 3=path 4=text. attrs holds the geometry
+// kind: 0=circle 1=rect 2=line 3=path 4=text 5/6=group markers 7=image.
+// attrs holds the geometry
 // (and, for path, "d"); element carries the final cached fill/stroke/opacity
 // that vg_flush folds back into attrs before dispatch.
 struct VgPending {
@@ -430,6 +444,247 @@ path(_ctx: ptr, d: string) -> ptr {
     }
     el = shapes.shape_path(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
+}
+
+// ─── image(x, y, w, h) — a raster element ────────────────────────────────────
+//
+// An SVG <image>-alike: pixels drawn into the viewBox box (x, y, w, h), and
+// otherwise an element like any other — transformable, hit-testable
+// (on_click, tooltip, cursor), hideable (visible_when), movable (bind_pos),
+// with opacity. What it draws is set in its block, or later by its node:
+//
+//   img = image(10, 10, 80, 60) {
+//       image_pixels(buf, 64, 48)       // a 64x48 RGBA8 buffer the CALLER owns
+//       image_fit("contain")            // stretch (default) / contain / cover / original
+//       on_click() callback |x, y| { ... }
+//   }
+//   ... later: write into buf, then scene_present(scene) (or vg_flush):
+//   image_set_pixels(img, buf, 64, 48)   // or a new buffer, or new dims
+//
+//   image(0, 0, 100, 100) { image_bytes_str(png, len) }   // decoded by the toolkit
+//
+// Pixels are straight (non-premultiplied) RGBA8, row-major, 4 bytes a pixel.
+// image_pixels BORROWS the buffer: the caller keeps it valid for as long as
+// the element lives, and updates it in place; every flush re-reads it, and
+// the canvas copies it into the frame, so the caller may free or resize it
+// the moment the flush returns. image_bytes decodes into a buffer the
+// element OWNS (freed with it). No pixels yet: the element draws nothing.
+//
+// A transform maps the box's corners and the image is drawn into their
+// axis-aligned bounds: translate and scale are exact; a rotation draws the
+// unrotated image into the rotated box's bounds (the backends' blit takes a
+// rect), which is the same answer a bitmap <image> gets from several SVG
+// renderers and is documented here so nobody expects otherwise.
+
+image(_ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
+    scene = node_scene(_ctx)
+    a = map.new()
+    put_f(a, "x", x)
+    put_f(a, "y", y)
+    put_f(a, "width",  w)
+    put_f(a, "height", h)
+    if scene_is_deferred(scene) == 1 {
+        return record_shape(scene, 7, a)
+    }
+    // Eager: draw now with whatever pixels the element has (none, before the
+    // block runs), and keep the attrs on the element's node for the test
+    // path's inspection. The recording tests use deferred mode (as the live
+    // scene does), where the block's image_pixels is seen before the flush.
+    el = element.element_new(null)
+    draw_image_el(scene_ctx(scene), scene_backend(scene), a, el)
+    map.free(a)
+    return mk_node(scene, el)
+}
+
+// image_pixels(rgba, pw, ph) — the buffer this image draws, BORROWED (see
+// image). Works in the block (_ctx is the image's node) and from anywhere
+// later with the node image() returned; image_set_pixels is that spelling.
+image_pixels(_ctx: ptr, rgba: ptr, pw: int, ph: int) {
+    el = node_payload(_ctx)
+    if el == null { return }
+    element.element_set_raster(el, rgba, pw, ph, 0)
+}
+image_set_pixels(node: ptr, rgba: ptr, pw: int, ph: int) { image_pixels(node, rgba, pw, ph) }
+
+// image_bytes(data, len) — decode PNG / JPEG / GIF / BMP bytes through the
+// toolkit's decoder into pixels the element owns. Returns 1 when decoded;
+// 0 leaves the element as it was (nothing drawn, or the previous pixels).
+image_bytes(_ctx: ptr, data: ptr, len: int) -> int {
+    el = node_payload(_ctx)
+    if el == null { return 0 }
+    if data == null { return 0 }
+    if len <= 0 { return 0 }
+    wh = malloc(8)
+    mem.set_int(wh, 0, 0)
+    mem.set_int(wh, 4, 0)
+    pix = aether_ui_image_decode_rgba_impl(data, len, wh, mem.long_to_ptr(mem.ptr_to_long(wh) + 4))
+    w = mem.get_int(wh, 0)
+    h = mem.get_int(wh, 4)
+    free(wh)
+    if pix == null { return 0 }
+    if w <= 0 || h <= 0 { free(pix); return 0 }
+    element.element_set_raster(el, pix, w, h, 1)
+    return 1
+}
+image_set_bytes(node: ptr, data: ptr, len: int) -> int { return image_bytes(node, data, len) }
+
+// The same for bytes held in an Aether string (std.fs.read, an http body):
+// the length is explicit because image bytes contain zeros.
+image_bytes_str(_ctx: ptr, data: string, len: int) -> int {
+    return image_bytes(_ctx, aether_ui_string_ptr(data), len)
+}
+
+// image_fit(mode) — how the pixels fill the box: "stretch" (the default:
+// the whole buffer into the whole box), "contain" (keep the aspect, fit
+// inside, centred), "cover" (keep the aspect, fill the box, crop the rest,
+// centred), "original" (one pixel per canvas pixel, centred, cropped to the
+// box). ui.image_fill's vocabulary.
+image_fit(_ctx: ptr, mode: string) {
+    el = node_payload(_ctx)
+    if el == null { return }
+    m = element.RASTER_STRETCH
+    if string.equals(mode, "contain") == 1  { m = element.RASTER_CONTAIN }
+    if string.equals(mode, "cover") == 1    { m = element.RASTER_COVER }
+    if string.equals(mode, "original") == 1 { m = element.RASTER_ORIGINAL }
+    element.element_set_raster_fit(el, m)
+}
+image_set_fit(node: ptr, mode: string) { image_fit(node, mode) }
+
+// The pixel dims of what an image node holds (0 before any pixels).
+image_pixel_w(node: ptr) -> int {
+    el = node_payload(node)
+    if el == null { return 0 }
+    return element.element_raster_w(el)
+}
+image_pixel_h(node: ptr) -> int {
+    el = node_payload(node)
+    if el == null { return 0 }
+    return element.element_raster_h(el)
+}
+
+// draw_image_el(ctx, be, attrs, el) — map the box through the current
+// transform, fit the pixels into it, blit, and give the element the box's
+// canvas bounds for hit-testing. Shared by the eager verb and the flush.
+draw_image_el(ctx: ptr, be: ptr, a: ptr, el: ptr) {
+    tf, _tfe = map.get(a, "transform")
+    did_push = 0
+    if tf != null { rendering.push_transform_str(ctx, tf); did_push = 1 }
+    x = attr_f(a, "x")
+    y = attr_f(a, "y")
+    w = attr_f(a, "width")
+    h = attr_f(a, "height")
+    // The box's four corners through the transform, then their bounds.
+    p1 = rendering.map_point(ctx, x, y)
+    p2 = rendering.map_point(ctx, x + w, y)
+    p3 = rendering.map_point(ctx, x, y + h)
+    p4 = rendering.map_point(ctx, x + w, y + h)
+    min_x = xf.pt_x(p1); max_x = min_x
+    min_y = xf.pt_y(p1); max_y = min_y
+    cx = xf.pt_x(p2); cy = xf.pt_y(p2)
+    if cx < min_x { min_x = cx }
+    if cx > max_x { max_x = cx }
+    if cy < min_y { min_y = cy }
+    if cy > max_y { max_y = cy }
+    cx = xf.pt_x(p3); cy = xf.pt_y(p3)
+    if cx < min_x { min_x = cx }
+    if cx > max_x { max_x = cx }
+    if cy < min_y { min_y = cy }
+    if cy > max_y { max_y = cy }
+    cx = xf.pt_x(p4); cy = xf.pt_y(p4)
+    if cx < min_x { min_x = cx }
+    if cx > max_x { max_x = cx }
+    if cy < min_y { min_y = cy }
+    if cy > max_y { max_y = cy }
+    if did_push == 1 { rendering.pop_transform(ctx) }
+    bx = min_x
+    by = min_y
+    bw = max_x - min_x
+    bh = max_y - min_y
+    element.element_set_bounds(el, bx, by, bw, bh)
+    if element.element_shape_type(el) == element.SHAPE_NONE {
+        element.element_set_shape_rect(el, x, y, w, h)
+    }
+    pix = element.element_raster_pixels(el)
+    pw = element.element_raster_w(el)
+    ph = element.element_raster_h(el)
+    if pix == null { return }
+    if pw <= 0 || ph <= 0 { return }
+    if bw <= 0.0 || bh <= 0.0 { return }
+    // Fit: the dest rect (dx, dy, dw, dh) and the source rect (sx, sy, sw, sh)
+    // in pixels; a source rect smaller than the buffer is cropped out first.
+    fit = element.element_raster_fit(el)
+    dx = bx; dy = by; dw = bw; dh = bh
+    sx = 0; sy = 0; sw = pw; sh = ph
+    fpw = pw / 1.0
+    fph = ph / 1.0
+    if fit == element.RASTER_CONTAIN {
+        sc = bw / fpw
+        if bh / fph < sc { sc = bh / fph }
+        dw = fpw * sc
+        dh = fph * sc
+        dx = bx + (bw - dw) / 2.0
+        dy = by + (bh - dh) / 2.0
+    }
+    if fit == element.RASTER_COVER {
+        sc = bw / fpw
+        if bh / fph > sc { sc = bh / fph }
+        sw = lrint(bw / sc) as int
+        sh = lrint(bh / sc) as int
+        if sw > pw { sw = pw }
+        if sh > ph { sh = ph }
+        if sw < 1 { sw = 1 }
+        if sh < 1 { sh = 1 }
+        sx = (pw - sw) / 2
+        sy = (ph - sh) / 2
+    }
+    if fit == element.RASTER_ORIGINAL {
+        if fpw <= bw {
+            dw = fpw
+            dx = bx + (bw - fpw) / 2.0
+        } else {
+            sw = lrint(bw) as int
+            if sw < 1 { sw = 1 }
+            sx = (pw - sw) / 2
+            dw = sw / 1.0
+        }
+        if fph <= bh {
+            dh = fph
+            dy = by + (bh - fph) / 2.0
+        } else {
+            sh = lrint(bh) as int
+            if sh < 1 { sh = 1 }
+            sy = (ph - sh) / 2
+            dh = sh / 1.0
+        }
+    }
+    opts = map.new()
+    put_f(opts, "x", dx)
+    put_f(opts, "y", dy)
+    put_f(opts, "w", dw)
+    put_f(opts, "h", dh)
+    _o1 = map.put(opts, "pw", string.from_int(sw))
+    _o2 = map.put(opts, "ph", string.from_int(sh))
+    ov = element.element_last_opacity(el)
+    if element.element_has_opacity(el) == 1 { if ov < 1.0 { put_f(opts, "opacity", ov) } }
+    if sw == pw && sh == ph {
+        _d1 = dispatch.dispatch_image(be, opts, pix, pw * ph * 4)
+    } else {
+        crop = crop_rgba(pix, pw, sx, sy, sw, sh)
+        _d2 = dispatch.dispatch_image(be, opts, crop, sw * sh * 4)
+        free(crop)
+    }
+    map.free(opts)
+}
+
+// A sw x sh window of a pw-wide RGBA8 buffer, at (sx, sy), as a new buffer.
+crop_rgba(src: ptr, pw: int, sx: int, sy: int, sw: int, sh: int) -> ptr {
+    out = malloc(sw * sh * 4)
+    row = 0
+    while row < sh {
+        _c = mem.copy_at(out, (row * sw * 4) as long, src, (((sy + row) * pw + sx) * 4) as long, (sw * 4) as long)
+        row = row + 1
+    }
+    return out
 }
 
 // ─── Text as paths: real type, first-class geometry ──────────────────────────
@@ -1355,6 +1610,12 @@ flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
         map.free(gopts2)
         return
     }
+    // Image: its own mapping + blit (no shape factory); bounds and the
+    // rect geometry a bind_pos needs are set on the placeholder directly.
+    if pend.kind == 7 {
+        draw_image_el(ctx, be, a, el)
+        return
+    }
     // Drop shadow (vg.shadow): draw the cached blurred mask UNDER the shape.
     // Rects (kind 1) and circles (kind 0) v1.
     if element.element_shadow_on(el) == 1 {
@@ -1450,7 +1711,7 @@ sync_attrs_from_geo(a: ptr, el: ptr, kind: int) {
         ig1 = map.put(a, "cy", string.from_float(g1))
         ig2 = map.put(a, "r",  string.from_float(g2))
     }
-    if kind == 1 {
+    if kind == 1 || kind == 7 {
         ig0 = map.put(a, "x",      string.from_float(g0))
         ig1 = map.put(a, "y",      string.from_float(g1))
         ig2 = map.put(a, "width",  string.from_float(g2))

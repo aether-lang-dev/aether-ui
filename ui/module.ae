@@ -109,7 +109,7 @@ exports (
     vlist_native,
     vlist_scrollable, vlist_container,
     sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
-    image, image_from_bytes, image_size, image_fill, image_tint, image_untint,
+    image, image_from_bytes, image_from_bytes_ptr, image_size, image_fill, image_tint, image_untint,
     file_icon, set_file_icon,
     canvas_widget, canvas_create, canvas_size,
     native_view, native_view_widget, native_view_available, native_view_handle, native_view_kind,
@@ -465,6 +465,7 @@ extern aether_ui_sheet_dismiss_impl(handle: int)
 
 extern aether_ui_image_create(filepath: string) -> int
 extern aether_ui_image_from_bytes(data: string, length: int) -> int
+extern aether_ui_image_from_bytes_ptr(data: ptr, length: int) -> int
 extern aether_ui_image_set_size(handle: int, width: int, height: int)
 extern aether_ui_image_set_fill(handle: int, mode: int)
 extern aether_ui_image_set_tint(handle: int, on: int, r: float, g: float, b: float)
@@ -6230,6 +6231,17 @@ image(_ctx: ptr, filepath: string) {
 // empty image (the widget still exists, so the tree is stable).
 image_from_bytes(_ctx: ptr, data: string, length: int) {
     handle = aether_ui_image_from_bytes(data, length)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    return handle
+}
+
+// image_from_bytes_ptr(data, length) — the same, for bytes held in raw
+// memory (a host's buffer, a page's Uint8Array), which Aether cannot cast
+// to a string.
+image_from_bytes_ptr(_ctx: ptr, data: ptr, length: int) {
+    handle = aether_ui_image_from_bytes_ptr(data, length)
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }

@@ -19,3 +19,17 @@ double aether_ui_font_height(double size)  { (void)size; return 0.0; }
 static void* g_aeui_vgfont = 0;
 void* aether_ui_vgfont_get(void) { return g_aeui_vgfont; }
 void aether_ui_vgfont_set(void* f) { g_aeui_vgfont = f; }
+
+/* The vg image element's decoder and the string->ptr cast (vg.image_bytes).
+ * A pure-vg test feeds pixels directly (image_pixels), never bytes, so the
+ * decoder answers "not an image"; the cast is the same identity the shared
+ * system_extras.c gives. */
+#include <stddef.h>
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h) {
+    (void)data; (void)length;
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    return 0;
+}
+void* aether_ui_string_ptr(const char* s) { return (void*)s; }

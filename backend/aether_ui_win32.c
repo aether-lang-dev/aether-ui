@@ -50,6 +50,7 @@
 #include <oleacc.h>     // MSAA Dynamic Annotation (accessible name/role override)
 
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -13058,6 +13059,63 @@ void aether_ui_app_run_headless_impl(void) {
 // hit once. A real port needs an alpha-capable backend here (GDI+, Direct2D,
 // or a DIB section the replay composites into by hand), not a wrapper around
 // canvas_replay_to_dc.
+// The same decoders to pixels (aether_ui_backend.h): GDI+ off an in-memory
+// stream, as image_from_bytes, then LockBits as 32bppARGB -- straight
+// alpha, B G R A in memory -- swizzled to RGBA8.
+typedef struct { UINT Width; UINT Height; INT Stride; INT PixelFormat;
+                 void* Scan0; UINT_PTR Reserved; } AeGdipBitmapData;
+typedef struct { INT X; INT Y; INT Width; INT Height; } AeGdipRect;
+__declspec(dllimport) int __stdcall GdipBitmapLockBits(void* bitmap, AeGdipRect* rect,
+                                                       UINT flags, INT format,
+                                                       AeGdipBitmapData* data);
+__declspec(dllimport) int __stdcall GdipBitmapUnlockBits(void* bitmap, AeGdipBitmapData* data);
+
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!data || length <= 0) return NULL;
+    ensure_gdiplus();
+    if (!gdiplus_started) return NULL;
+    unsigned char* out = NULL;
+    IStream* stream = NULL;
+    if (CreateStreamOnHGlobal(NULL, TRUE, &stream) != S_OK || !stream) return NULL;
+    ULONG wrote = 0;
+    stream->lpVtbl->Write(stream, data, (ULONG)length, &wrote);
+    LARGE_INTEGER zero; zero.QuadPart = 0;
+    stream->lpVtbl->Seek(stream, zero, STREAM_SEEK_SET, NULL);
+    void* bitmap = NULL;
+    if (GdipCreateBitmapFromStream(stream, &bitmap) == 0 && bitmap) {
+        UINT w = 0, h = 0;
+        GdipGetImageWidth(bitmap, &w);
+        GdipGetImageHeight(bitmap, &h);
+        if (w > 0 && h > 0 && (size_t)w * (size_t)h <= (size_t)(INT_MAX / 4)) {
+            AeGdipRect rc = { 0, 0, (INT)w, (INT)h };
+            AeGdipBitmapData bd;
+            memset(&bd, 0, sizeof(bd));
+            /* ImageLockModeRead = 1; PixelFormat32bppARGB = 0x26200A */
+            if (GdipBitmapLockBits(bitmap, &rc, 1, 0x26200A, &bd) == 0 && bd.Scan0) {
+                out = (unsigned char*)malloc((size_t)w * h * 4);
+                if (out) {
+                    for (UINT y = 0; y < h; y++) {
+                        const unsigned char* s = (const unsigned char*)bd.Scan0 + (ptrdiff_t)y * bd.Stride;
+                        unsigned char* d = out + (size_t)y * w * 4;
+                        for (UINT x = 0; x < w; x++, s += 4, d += 4) {
+                            d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = s[3];
+                        }
+                    }
+                    if (out_w) *out_w = (int)w;
+                    if (out_h) *out_h = (int)h;
+                }
+                GdipBitmapUnlockBits(bitmap, &bd);
+            }
+        }
+        GdipDisposeImage(bitmap);
+    }
+    stream->lpVtbl->Release(stream);
+    return out;
+}
+
 void aether_ui_canvas_draw_image_impl_ptr(int canvas_id, double x, double y,
                                           int iw, int ih,
                                           const unsigned char* rgba, int byte_len) {

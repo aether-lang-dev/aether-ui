@@ -212,6 +212,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -2316,6 +2317,44 @@ int aether_ui_image_create(const char* filepath) {
 
 int aether_ui_image_from_bytes(const char* data, int length) {
     return image_register((const unsigned char*)data, length);
+}
+
+// The same decoder to pixels (aether_ui_backend.h): BitmapFactory's Bitmap,
+// read through AndroidBitmap_lockPixels (premultiplied RGBA_8888, R G B A in
+// memory on every ABI), copied out row by row and unpremultiplied.
+unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int length,
+                                                int* out_w, int* out_h) {
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (!data || length <= 0) return NULL;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return NULL;
+    unsigned char* out = NULL;
+    jbyteArray bytes = (*env)->NewByteArray(env, length);
+    if (bytes) {
+        (*env)->SetByteArrayRegion(env, bytes, 0, length, (const jbyte*)data);
+        jobject bmp = JSO(M_BF_decodeByteArray, bytes, (jint)0, (jint)length);
+        AndroidBitmapInfo info;
+        void* px = NULL;
+        if (bmp && AndroidBitmap_getInfo(env, bmp, &info) == ANDROID_BITMAP_RESULT_SUCCESS &&
+            info.format == ANDROID_BITMAP_FORMAT_RGBA_8888 &&
+            info.width > 0 && info.height > 0 &&
+            (size_t)info.width * (size_t)info.height <= (size_t)(INT_MAX / 4) &&
+            AndroidBitmap_lockPixels(env, bmp, &px) == ANDROID_BITMAP_RESULT_SUCCESS && px) {
+            size_t w = info.width, h = info.height;
+            out = (unsigned char*)malloc(w * h * 4);
+            if (out) {
+                for (size_t y = 0; y < h; y++)
+                    memcpy(out + y * w * 4, (const unsigned char*)px + y * info.stride, w * 4);
+                aether_ui_rgba_unpremultiply(out, w * h);
+                if (out_w) *out_w = (int)w;
+                if (out_h) *out_h = (int)h;
+            }
+            AndroidBitmap_unlockPixels(env, bmp);
+        }
+    }
+    aeui_unframe(env);
+    return out;
 }
 
 void aether_ui_image_set_fill(int handle, int mode) {

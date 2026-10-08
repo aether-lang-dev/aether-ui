@@ -84,7 +84,7 @@ backend_new() -> ptr {
     // Wrap the recording handle in a dispatch table. The single
     // closure switches on the op selector and forwards to this
     // module's canvas_* recorders. `be` is the *Backend above.
-    return dispatch.backend_make(b) callback |be: ptr, op: int, opts: ptr| {
+    d = dispatch.backend_make(b) callback |be: ptr, op: int, opts: ptr| {
         if op == 0 { return canvas_circle(be, opts) }
         if op == 1 { return canvas_rectangle(be, opts) }
         if op == 2 { return canvas_line(be, opts) }
@@ -95,6 +95,14 @@ backend_new() -> ptr {
         if op == 8 { return canvas_group_end(be, opts) }
         return canvas_tappable_raster(be, opts)
     }
+    // The image element's blit records as "image" with its dest rect and
+    // pixel dims (opts), plus the byte count; the pixels themselves are not
+    // kept (a test checks geometry, and reads the buffer it passed in).
+    dispatch.backend_set_image(d) callback |be: ptr, opts: ptr, rgba: ptr, byte_len: int| {
+        _ = map.put(opts, "byteLen", string.from_int(byte_len))
+        _ = canvas_image(be, opts)
+    }
+    return d
 }
 
 // Inspection functions take the dispatch ptr returned by
@@ -181,5 +189,6 @@ canvas_path(p: ptr, opts: ptr) -> ptr            { return record_one(p, "path", 
 canvas_text(p: ptr, opts: ptr) -> ptr            { return record_one(p, "text", opts) }
 canvas_raster(p: ptr, opts: ptr) -> ptr          { return record_one(p, "raster", opts) }
 canvas_tappable_raster(p: ptr, opts: ptr) -> ptr { return record_one(p, "tappable_raster", opts) }
+canvas_image(p: ptr, opts: ptr) -> ptr           { return record_one(p, "image", opts) }
 canvas_group_begin(p: ptr, opts: ptr) -> ptr     { return record_one(p, "group_begin", opts) }
 canvas_group_end(p: ptr, opts: ptr) -> ptr       { return record_one(p, "group_end", opts) }
