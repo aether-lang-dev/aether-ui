@@ -854,7 +854,7 @@ else
     # UIKit, a tap selecting one, selection surviving an update), then
     # frametick_demo (the frame clock on CADisplayLink, pinned so a silent
     # fallback to the timer fails, and timer_once).
-    for SIM_EX in listbox_demo frametick_demo; do
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi

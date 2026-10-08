@@ -11,8 +11,8 @@
 //   top-right    image(50,0,50,50)  a 2x1 buffer (red | blue) with
 //                                   image_fit("contain"): letterboxed to the
 //                                   middle band of the box.
-//   bottom-left  image(0,50,50,50)  quad.png decoded by the toolkit
-//                                   (image_bytes_str): the same 2x2 colours.
+//   bottom-left  image(0,50,50,50)  quad.png (embedded) decoded by the
+//                                   toolkit (image_bytes): the same 2x2 colours.
 //   bottom-right image(50,50,50,50) the 2x2 buffer at opacity(0.5), and
 //                                   transform("translate(-10 0)"): 10 units
 //                                   left of where its x says.
@@ -26,19 +26,92 @@ import ui                                   // full — transitive canvas_* reso
 import ui (window, vstack, text, enable_test_server)
 import vg.live (vg)
 import vg                                    // full — vg_live uses vg.scene_new
-import vg (view_box, rect, fill, image, image_pixels, image_bytes_str, image_fit,
+import vg (view_box, rect, fill, image, image_pixels, image_bytes, image_fit,
            opacity, transform, on_click, node_scene, scene_present)
 import std.mem
-import std.fs
 import std.os (os_getenv)
 
 extern malloc(size: int) -> ptr
 
-// A w x h RGBA8 buffer filled from a flat list of bytes.
-px_buffer(bytes: ptr, n: int) -> ptr {
-    b = malloc(n)
-    _c = mem.copy(b, bytes, n as long)
-    return b
+// examples/vg_image_demo/quad.png, byte for byte (2x2 RGBA: red, green / blue, white).
+quad_png() -> ptr {
+    png = malloc(75)
+    _p0 = mem.set_byte(png, 0, 137)
+    _p1 = mem.set_byte(png, 1, 80)
+    _p2 = mem.set_byte(png, 2, 78)
+    _p3 = mem.set_byte(png, 3, 71)
+    _p4 = mem.set_byte(png, 4, 13)
+    _p5 = mem.set_byte(png, 5, 10)
+    _p6 = mem.set_byte(png, 6, 26)
+    _p7 = mem.set_byte(png, 7, 10)
+    _p8 = mem.set_byte(png, 8, 0)
+    _p9 = mem.set_byte(png, 9, 0)
+    _p10 = mem.set_byte(png, 10, 0)
+    _p11 = mem.set_byte(png, 11, 13)
+    _p12 = mem.set_byte(png, 12, 73)
+    _p13 = mem.set_byte(png, 13, 72)
+    _p14 = mem.set_byte(png, 14, 68)
+    _p15 = mem.set_byte(png, 15, 82)
+    _p16 = mem.set_byte(png, 16, 0)
+    _p17 = mem.set_byte(png, 17, 0)
+    _p18 = mem.set_byte(png, 18, 0)
+    _p19 = mem.set_byte(png, 19, 2)
+    _p20 = mem.set_byte(png, 20, 0)
+    _p21 = mem.set_byte(png, 21, 0)
+    _p22 = mem.set_byte(png, 22, 0)
+    _p23 = mem.set_byte(png, 23, 2)
+    _p24 = mem.set_byte(png, 24, 8)
+    _p25 = mem.set_byte(png, 25, 6)
+    _p26 = mem.set_byte(png, 26, 0)
+    _p27 = mem.set_byte(png, 27, 0)
+    _p28 = mem.set_byte(png, 28, 0)
+    _p29 = mem.set_byte(png, 29, 114)
+    _p30 = mem.set_byte(png, 30, 182)
+    _p31 = mem.set_byte(png, 31, 13)
+    _p32 = mem.set_byte(png, 32, 36)
+    _p33 = mem.set_byte(png, 33, 0)
+    _p34 = mem.set_byte(png, 34, 0)
+    _p35 = mem.set_byte(png, 35, 0)
+    _p36 = mem.set_byte(png, 36, 18)
+    _p37 = mem.set_byte(png, 37, 73)
+    _p38 = mem.set_byte(png, 38, 68)
+    _p39 = mem.set_byte(png, 39, 65)
+    _p40 = mem.set_byte(png, 40, 84)
+    _p41 = mem.set_byte(png, 41, 120)
+    _p42 = mem.set_byte(png, 42, 156)
+    _p43 = mem.set_byte(png, 43, 99)
+    _p44 = mem.set_byte(png, 44, 248)
+    _p45 = mem.set_byte(png, 45, 207)
+    _p46 = mem.set_byte(png, 46, 192)
+    _p47 = mem.set_byte(png, 47, 240)
+    _p48 = mem.set_byte(png, 48, 31)
+    _p49 = mem.set_byte(png, 49, 12)
+    _p50 = mem.set_byte(png, 50, 129)
+    _p51 = mem.set_byte(png, 51, 52)
+    _p52 = mem.set_byte(png, 52, 24)
+    _p53 = mem.set_byte(png, 53, 0)
+    _p54 = mem.set_byte(png, 54, 0)
+    _p55 = mem.set_byte(png, 55, 73)
+    _p56 = mem.set_byte(png, 56, 200)
+    _p57 = mem.set_byte(png, 57, 9)
+    _p58 = mem.set_byte(png, 58, 247)
+    _p59 = mem.set_byte(png, 59, 249)
+    _p60 = mem.set_byte(png, 60, 171)
+    _p61 = mem.set_byte(png, 61, 182)
+    _p62 = mem.set_byte(png, 62, 13)
+    _p63 = mem.set_byte(png, 63, 0)
+    _p64 = mem.set_byte(png, 64, 0)
+    _p65 = mem.set_byte(png, 65, 0)
+    _p66 = mem.set_byte(png, 66, 0)
+    _p67 = mem.set_byte(png, 67, 73)
+    _p68 = mem.set_byte(png, 68, 69)
+    _p69 = mem.set_byte(png, 69, 78)
+    _p70 = mem.set_byte(png, 70, 68)
+    _p71 = mem.set_byte(png, 71, 174)
+    _p72 = mem.set_byte(png, 72, 66)
+    _p73 = mem.set_byte(png, 73, 96)
+    _p74 = mem.set_byte(png, 74, 130)
+    return png
 }
 
 set_px(b: ptr, i: int, r: int, g: int, bl: int, a: int) {
@@ -57,8 +130,10 @@ main() {
     pair = malloc(8)
     set_px(pair, 0, 255, 0, 0, 255)
     set_px(pair, 1, 0, 0, 255, 255)
-    png, png_len, png_err = fs.read_binary("examples/vg_image_demo/quad.png")
-    if png_err != "" { println("vg_image_demo: quad.png: ${png_err}") }
+    // quad.png (the same 2x2 colours), embedded so the demo needs no file
+    // beside it on a simulator or a phone.
+    png_len = 75
+    png = quad_png()
 
     window("vg image", 340, 380) {
         vstack(4) {
@@ -82,10 +157,8 @@ main() {
                     image_fit("contain")
                 }
                 image(0, 50, 50, 50) {
-                    if png_len > 0 {
-                        ok = image_bytes_str(png, png_len)
-                        if ok == 0 { println("vg_image_demo: quad.png did not decode") }
-                    }
+                    ok = image_bytes(png, png_len)
+                    if ok == 0 { println("vg_image_demo: quad.png did not decode") }
                 }
                 image(50, 50, 50, 50) {
                     image_pixels(quad, 2, 2)
