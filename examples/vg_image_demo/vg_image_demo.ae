@@ -148,7 +148,14 @@ main() {
                         set_px(quad, 1, 255, 255, 0, 255)
                         set_px(quad, 2, 255, 255, 0, 255)
                         set_px(quad, 3, 255, 255, 0, 255)
-                        println("clicked the raster at ${x},${y}")
+                        // Not `"${x},${y}"`: interpolating the handler's own
+                        // parameters makes the compiler (0.790) treat this
+                        // capturing closure as transient and free its env
+                        // right after on_click returns, so the stored handler
+                        // reads a freed `quad` (a segfault on glibc; quietly
+                        // fine on macOS). A plain println keeps it stored.
+                        println("clicked the raster")
+                        _xy = x + y
                     }
                 }
                 _tl = tl

@@ -5129,7 +5129,21 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                             // Nearest/good filtering for scaled video frames.
                             cairo_pattern_set_filter(cairo_get_source(cr),
                                                      CAIRO_FILTER_GOOD);
-                            cairo_paint(cr);
+                            // Fill the image's OWN rect, padded at the edges,
+                            // rather than cairo_paint over the whole clip: with
+                            // EXTEND_NONE a scaled-up source fades out over
+                            // half a source pixel past each edge, which at a
+                            // 75x upscale (a 2x2 raster in a 150 px box) is a
+                            // 37 px halo of blended colour outside the box
+                            // and darkened edge cells inside it.
+                            cairo_pattern_set_extend(cairo_get_source(cr),
+                                                     CAIRO_EXTEND_PAD);
+                            if (have_dest) {
+                                cairo_rectangle(cr, 0, 0, c->iw, c->ih);
+                            } else {
+                                cairo_rectangle(cr, c->x, c->y, c->iw, c->ih);
+                            }
+                            cairo_fill(cr);
                             cairo_restore(cr);
                             cairo_set_source_rgba(cr, 0, 0, 0, 1); // reset source
                         }
