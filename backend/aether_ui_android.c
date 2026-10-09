@@ -169,7 +169,7 @@
 //   canvas     canvas_create_impl canvas_get_widget canvas_begin_path_impl
 //              canvas_move_to_impl canvas_line_to_impl canvas_arc_impl
 //              canvas_close_path_impl canvas_stroke_impl canvas_fill_impl
-//              canvas_fill_rect_impl canvas_clip_rect_impl
+//              canvas_fill_rect_impl canvas_clip_rect_impl canvas_clip_path_impl
 //              canvas_set_clip_rects_impl canvas_reset_clip_impl
 //              canvas_group_begin_impl canvas_group_end_impl
 //              canvas_fill_text_impl canvas_stroke_text_impl
@@ -182,6 +182,7 @@
 //              canvas_read_pixel_impl canvas_write_png_impl
 //              canvas_render_range_rgba_impl canvas_painted_pixels_impl
 //              canvas_on_click_impl canvas_on_move_impl canvas_on_release_impl
+//              canvas_on_right_click_impl canvas_on_double_click_impl
 //              canvas_on_key_impl canvas_on_key_release_impl
 //              canvas_on_scroll_impl canvas_on_resize_impl
 //              canvas_gesture_probe_impl                         (40)
@@ -6517,7 +6518,8 @@ typedef enum {
     CANVAS_BEGIN_PATH, CANVAS_MOVE_TO, CANVAS_LINE_TO, CANVAS_STROKE, CANVAS_FILL_RECT,
     CANVAS_CLEAR, CANVAS_ARC, CANVAS_CLOSE_PATH, CANVAS_FILL, CANVAS_FILL_TEXT,
     CANVAS_STROKE_TEXT, CANVAS_DRAW_IMAGE, CANVAS_FILL_LINEAR, CANVAS_FILL_RADIAL,
-    CANVAS_CLIP_RECT, CANVAS_GROUP_BEGIN, CANVAS_GROUP_END, CANVAS_RESET_CLIP
+    CANVAS_CLIP_RECT, CANVAS_GROUP_BEGIN, CANVAS_GROUP_END, CANVAS_RESET_CLIP,
+    CANVAS_CLIP_PATH   // clip to the current path (iw = even-odd), consuming it
 } CanvasCmdType;
 
 typedef struct {
@@ -6550,6 +6552,8 @@ typedef struct {
     AeClosure* on_click;      // press (x, y) in canvas units
     AeClosure* on_move;       // pointer move (x, y)
     AeClosure* on_release;    // release (x, y)
+    AeClosure* on_right_click;  // secondary click / long press (x, y)
+    AeClosure* on_double_click; // double tap (x, y)
     AeClosure* on_key;        // key down (name)
     AeClosure* on_key_release;
     AeClosure* on_resize;     // (w, h) on a change of size
@@ -7095,6 +7099,14 @@ static void canvas_replay_range(JNIEnv* env, jobject canvas, CanvasState* cs, in
                    (jfloat)(c->x + c->w), (jfloat)(c->y + c->h));
                 cv_path_reset(&r);
                 break;
+            case CANVAS_CLIP_PATH:
+                // vg clip-path: intersect with the current path. Scoped by the
+                // enclosing group, whose END restores past the save it made.
+                cv_fill_type(&r, c->iw);
+                JZ(canvas, M_GC_clipPath, r.path);
+                cv_path_reset(&r);
+                cv_fill_type(&r, 0);
+                break;
             case CANVAS_RESET_CLIP:
                 // Back to this compositing scope's baseline: the clip a
                 // platform canvas cannot widen is dropped by restoring.
@@ -7474,7 +7486,8 @@ static int cv_key_name(int code, int unicode, char* out, int n) {
 
 enum { AEUI_CV_DOWN = 1, AEUI_CV_MOVE = 2, AEUI_CV_UP = 3, AEUI_CV_CANCEL = 4,
        AEUI_CV_POINTER_DOWN = 5, AEUI_CV_POINTER_UP = 6, AEUI_CV_HOVER = 7,
-       AEUI_CV_SCROLL = 8, AEUI_CV_SIZE = 9, AEUI_CV_KEY_DOWN = 10, AEUI_CV_KEY_UP = 11 };
+       AEUI_CV_SCROLL = 8, AEUI_CV_SIZE = 9, AEUI_CV_KEY_DOWN = 10, AEUI_CV_KEY_UP = 11,
+       AEUI_CV_DOUBLE_TAP = 12, AEUI_CV_SECONDARY = 13 };
 
 static jboolean JNICALL native_canvas_event(JNIEnv* env, jclass cls, jint canvas_id, jint kind,
                                             jint count, jfloat x0, jfloat y0, jfloat x1, jfloat y1,
@@ -7484,7 +7497,8 @@ static jboolean JNICALL native_canvas_event(JNIEnv* env, jclass cls, jint canvas
     if (!cs) return JNI_FALSE;
     // Pixels in, canvas units (dp) out.
     double x = x0 / g_density, y = y0 / g_density;
-    int pointer = cs->on_click || cs->on_move || cs->on_release || cs->probe;
+    int pointer = cs->on_click || cs->on_move || cs->on_release || cs->probe
+                  || cs->on_right_click || cs->on_double_click;
     switch (kind) {
         case AEUI_CV_SIZE:
             cv_note_size(canvas_id, (int)x0, (int)y0);
@@ -7524,6 +7538,16 @@ static jboolean JNICALL native_canvas_event(JNIEnv* env, jclass cls, jint canvas
         case AEUI_CV_HOVER:
             cv_xy(cs->on_move, x, y);
             return cs->on_move ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_DOUBLE_TAP:
+            // GestureDetector's double tap (the platform's timing): the
+            // touch double click.
+            cv_xy(cs->on_double_click, x, y);
+            return cs->on_double_click ? JNI_TRUE : JNI_FALSE;
+        case AEUI_CV_SECONDARY:
+            // A right click: the mouse's secondary button released, or a
+            // long press (its touch spelling).
+            cv_xy(cs->on_right_click, x, y);
+            return cs->on_right_click ? JNI_TRUE : JNI_FALSE;
         case AEUI_CV_SCROLL: {
             // AXIS_VSCROLL is positive AWAY from the user, the DSL's dy is
             // negative away (the zoom-in direction); AXIS_HSCROLL is
@@ -7600,6 +7624,14 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (cs && boxed_closure) cs->on_click = (AeClosure*)boxed_closure;
 }
+void aether_ui_canvas_on_right_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->on_right_click = (AeClosure*)boxed_closure;
+}
+void aether_ui_canvas_on_double_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (cs && boxed_closure) cs->on_double_click = (AeClosure*)boxed_closure;
+}
 void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (cs && boxed_closure) cs->on_move = (AeClosure*)boxed_closure;
@@ -7668,6 +7700,9 @@ void aether_ui_canvas_group_begin_impl(int canvas_id) {
 }
 void aether_ui_canvas_group_end_impl(int canvas_id, double alpha) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_END, .x = alpha });
+}
+void aether_ui_canvas_clip_path_impl(int canvas_id, int even_odd) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLIP_PATH, .iw = even_odd ? 1 : 0 });
 }
 void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y, double w, double h) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_CLIP_RECT, .x = x, .y = y, .w = w, .h = h });
@@ -7830,6 +7865,8 @@ static int cv_driver_event(AetherDriverActionCtx* ctx) {
     if (!cs) return 3;
     AeClosure* c = ctx->action == AETHER_DRV_CANVAS_SCROLL  ? cs->on_scroll
                  : ctx->action == AETHER_DRV_CANVAS_CLICK   ? cs->on_click
+                 : ctx->action == AETHER_DRV_CANVAS_RIGHT_CLICK  ? cs->on_right_click
+                 : ctx->action == AETHER_DRV_CANVAS_DOUBLE_CLICK ? cs->on_double_click
                  : ctx->action == AETHER_DRV_CANVAS_MOVE    ? cs->on_move
                  : ctx->action == AETHER_DRV_CANVAS_RELEASE ? cs->on_release
                  : ctx->action == AETHER_DRV_CANVAS_KEYUP   ? cs->on_key_release
@@ -8585,6 +8622,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_RELEASE:
             break;   // handled below, against the widget
         case AETHER_DRV_CANVAS_CLICK:
+        case AETHER_DRV_CANVAS_RIGHT_CLICK:
+        case AETHER_DRV_CANVAS_DOUBLE_CLICK:
         case AETHER_DRV_CANVAS_MOVE:
         case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY:

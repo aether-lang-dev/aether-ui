@@ -5193,7 +5193,11 @@ typedef enum {
        (a <g opacity="0.5"> of three overlapping strokes).
        Appended at the END: the values are positional. */
     CANVAS_GROUP_BEGIN, CANVAS_GROUP_END,
-    CANVAS_RESET_CLIP
+    CANVAS_RESET_CLIP,
+    /* Intersect the clip with the current path (vg clip-path), consuming
+       it; iw = 1 for even-odd. Scoped like CLIP_RECT: the enclosing group's
+       END restores the gstate it saved, which drops it. */
+    CANVAS_CLIP_PATH
 } CanvasCmdType;
 
 typedef struct {
@@ -5232,6 +5236,8 @@ typedef struct {
     AeClosure* on_move;    // pointer-move hook (canvas-local x,y); null = none
     AeClosure* on_click;   // press   (canvas-local x,y)
     AeClosure* on_release; // release (canvas-local x,y) — completes a drag
+    AeClosure* on_right_click;  // secondary click, on its release (x,y)
+    AeClosure* on_double_click; // the second press of a double click (x,y)
     AeClosure* on_key;     // key-down (key name: "Left", "a", "space", …)
     AeClosure* on_key_release; // key-up (same key names; driver-driven for now)
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
@@ -5462,6 +5468,10 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                 // Intersects the current clip and persists until the scope
                 // ends or CANVAS_RESET_CLIP drops it (SVG overflow:hidden).
                 CGContextClipToRect(cg, CGRectMake(c->x, c->y, c->w, c->h));
+                break;
+            case CANVAS_CLIP_PATH:
+                if (c->iw) CGContextEOClip(cg);
+                else       CGContextClip(cg);
                 break;
             case CANVAS_RESET_CLIP:
                 // Drop every clip added since this compositing scope began.
@@ -5878,9 +5888,27 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     CanvasState* cs = get_canvas_state(self.canvasId);
     // Take key focus so keyDown: starts arriving (a canvas game needs this).
     [[self window] makeFirstResponder:self];
-    if (!cs || !cs->on_click || !cs->on_click->fn) return;
+    if (!cs) return;
     NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
-    ((void(*)(void*, double, double))cs->on_click->fn)(cs->on_click->env, p.x, p.y);
+    if (cs->on_click && cs->on_click->fn)
+        ((void(*)(void*, double, double))cs->on_click->fn)(cs->on_click->env, p.x, p.y);
+    // AppKit counts the clicks itself (system double-click interval and
+    // slop): the second press of a pair carries clickCount 2. The single
+    // click above still fires for both presses, as a DOM click does.
+    if ([event clickCount] == 2 && cs->on_double_click && cs->on_double_click->fn)
+        ((void(*)(void*, double, double))cs->on_double_click->fn)(cs->on_double_click->env, p.x, p.y);
+}
+
+// Secondary click: fired on the button's release, the context-menu convention
+// (a control-click is NOT a right click here: AppKit routes it to mouseDown).
+- (void)rightMouseUp:(NSEvent*)event {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || !cs->on_right_click || !cs->on_right_click->fn) {
+        [super rightMouseUp:event];
+        return;
+    }
+    NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+    ((void(*)(void*, double, double))cs->on_right_click->fn)(cs->on_right_click->env, p.x, p.y);
 }
 
 - (void)mouseUp:(NSEvent*)event {
@@ -6397,6 +6425,18 @@ void aether_ui_canvas_on_click_impl(int canvas_id, void* boxed_closure) {
     cs->on_click = (AeClosure*)boxed_closure;
 }
 
+void aether_ui_canvas_on_right_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_right_click = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_canvas_on_double_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_double_click = (AeClosure*)boxed_closure;
+}
+
 void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
@@ -6510,6 +6550,12 @@ void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n) {
         cs->paint_clip_rects[i] = floatarr_get_raw(rects, i);
     }
     cs->paint_clip_count = n;
+}
+
+// Intersect the clip with the current path, consuming it (vg clip-path).
+void aether_ui_canvas_clip_path_impl(int canvas_id, int even_odd) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_CLIP_PATH, .iw = even_odd ? 1 : 0 });
 }
 
 void aether_ui_canvas_reset_clip_impl(int canvas_id) {
@@ -8147,6 +8193,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_CANVAS_CLICK:
+        case AETHER_DRV_CANVAS_RIGHT_CLICK:
+        case AETHER_DRV_CANVAS_DOUBLE_CLICK:
         case AETHER_DRV_CANVAS_MOVE:
         case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY:
@@ -8157,6 +8205,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             if (cs) {
                 c = (ctx->action == AETHER_DRV_CANVAS_SCROLL)  ? cs->on_scroll
                   : (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
+                  : (ctx->action == AETHER_DRV_CANVAS_RIGHT_CLICK)  ? cs->on_right_click
+                  : (ctx->action == AETHER_DRV_CANVAS_DOUBLE_CLICK) ? cs->on_double_click
                   : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
                   : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
                   : (ctx->action == AETHER_DRV_CANVAS_KEYUP)   ? cs->on_key_release

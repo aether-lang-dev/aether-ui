@@ -75,6 +75,12 @@ typedef enum {
     // cannot see. retval: 0 fired, 2 no such item, 4 not bound. A backend
     // with no native menu sets result = 3.
     AETHER_DRV_MENU_NATIVE_ACTIVATE = 25, // handle=menu, sval=item label
+    // Canvas right click / double click: invoke the closures registered with
+    // canvas_on_right_click / canvas_on_double_click, the same ones a real
+    // secondary-button press or double click fires. result = 3 when the
+    // canvas has none (the route answers 404, as CANVAS_CLICK does).
+    AETHER_DRV_CANVAS_RIGHT_CLICK  = 26, // handle=canvas, dval=x, dval2=y
+    AETHER_DRV_CANVAS_DOUBLE_CLICK = 27, // handle=canvas, dval=x, dval2=y
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

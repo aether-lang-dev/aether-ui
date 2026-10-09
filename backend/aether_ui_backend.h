@@ -676,6 +676,13 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure);
 // Pointer-release: fires (x, y) canvas-local px when the button comes up.
 // Pairs with on_click + on_move to form a press→drag→release swipe.
 void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure);
+// Secondary-button click (fired on the button's release, the context-menu
+// convention; a long press on touch backends) and double click (a double tap
+// on touch), each (x, y) in canvas-local pixels. AeVG dispatches them to a
+// shape's on_right_click / on_double_click. The driver reaches the same
+// closures through POST /canvas/{id}/rightclick and /dblclick.
+void aether_ui_canvas_on_right_click_impl(int canvas_id, void* boxed_closure);
+void aether_ui_canvas_on_double_click_impl(int canvas_id, void* boxed_closure);
 void aether_ui_canvas_begin_path_impl(int canvas_id);
 void aether_ui_canvas_move_to_impl(int canvas_id, double x, double y);
 void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y);
@@ -694,6 +701,12 @@ void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
 // is clipped to their union and the debug paint-area metric reports their
 // summed area.
 void aether_ui_canvas_set_clip_rects_impl(int canvas_id, void* rects, int n);
+// Intersect the canvas clip region with the CURRENT PATH (begin_path/move_to/
+// line_to/arc/close_path), consuming the path; even_odd 1 = clip-rule
+// evenodd, 0 = nonzero. Like clip_rect it holds until the enclosing
+// group_begin/group_end pair ends (or reset_clip), which is how vg scopes a
+// clip-path to one shape or group.
+void aether_ui_canvas_clip_path_impl(int canvas_id, int even_odd);
 void aether_ui_canvas_reset_clip_impl(int canvas_id);
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
                                 double start_angle, double end_angle);

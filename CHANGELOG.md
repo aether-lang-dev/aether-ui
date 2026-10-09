@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`canvas_clip_path`, `canvas_on_right_click` and
+  `canvas_on_double_click`, on all five backends.** `canvas_clip_path(cid,
+  even_odd)` intersects the clip with the current path (scoped, like
+  `canvas_clip_rect`, by the enclosing `canvas_group_begin`/`end`): cairo
+  `cairo_clip`, CoreGraphics `CGContextClip`/`EOClip` (AppKit and UIKit),
+  Skia `clipPath` (Android), GDI+ `GdipSetClipPath` and, on the legacy GDI
+  renderer, a polygon region with the clip saved and restored around each
+  group. The click pair fires `(x, y)` canvas-local: a right click on the
+  secondary button's release (GTK4 legacy button-3 controller, AppKit
+  `rightMouseUp:`, Win32 `WM_RBUTTONUP`), or a long press / pointer secondary
+  click on touch (UIKit recognisers, Android `GestureDetector` and
+  `ACTION_BUTTON_RELEASE`); a double click by the platform's own count and
+  timing (GTK4 double-click time and distance, AppKit `clickCount`,
+  `WM_LBUTTONDBLCLK`, UIKit `tapCount`, Android `onDoubleTap`). The driver
+  reaches them with `POST /canvas/{id}/rightclick` and `/dblclick`
+  (`AETHER_DRV_CANVAS_RIGHT_CLICK` / `_DOUBLE_CLICK`). `ui.canvas_clip_path`,
+  `ui.canvas_on_right_click`, `ui.canvas_on_double_click`.
+
 - **`vg.image(x, y, w, h)`: a raster element in an AeVG scene, on all five
   backends.** `image_pixels(buf, pw, ph)` draws an RGBA8 buffer the caller
   owns and updates in place; `image_bytes` / `image_bytes_str` decode PNG,
@@ -67,6 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Android (video_frame).
 
 ### Fixed
+
+- **Win32 (GDI+): a gradient fill no longer escapes the clip it is drawn
+  in.** Both gradient fills clipped to their path with `REPLACE` and then
+  `GdipResetClip`, which threw away the scene's viewport clip (and now any
+  clip-path) for the fill and for everything after it. They intersect, and
+  put the previous clip region back.
 
 - **UIKit layout:** canvas resize passed integer sizes where closures take
   doubles (vg scenes kept a stale viewBox); opaque canvas views showed stale

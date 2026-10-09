@@ -13,7 +13,7 @@ exports (
     DIST_FILL, DIST_FILL_EQUALLY,
     root_vstack, root_hstack,
     window, window_run, render_to, record, surface_diagnostics,
-    register_deferred_flush, canvas_on_resize, canvas_on_click, canvas_on_move, canvas_on_key,
+    register_deferred_flush, canvas_on_resize, canvas_on_click, canvas_on_right_click, canvas_on_double_click, canvas_on_move, canvas_on_key,
     canvas_on_key_release, canvas_on_release,
     _surface_window_factory, _surface_render_factory, _surface_record_factory,
     app_run, app_create, app_start,
@@ -120,7 +120,7 @@ exports (
     gpuview_on_realize, gpuview_on_render, gpuview_on_resize,
     gpuview_request_render, gpuview_read_pixel, canvas_begin_path, canvas_move_to, canvas_line_to,
     canvas_stroke, canvas_stroke_cj, canvas_fill_rect, canvas_clip_rect,
-    canvas_set_clip_rects, canvas_reset_clip,
+    canvas_set_clip_rects, canvas_reset_clip, canvas_clip_path,
     canvas_clear, canvas_redraw, canvas_write_png,
     canvas_cmd_count, canvas_render_range_rgba, canvas_draw_image_ptr,
     canvas_draw_image_borrowed_ptr, canvas_draw_image_scaled_borrowed_ptr,
@@ -191,6 +191,8 @@ extern aether_ui_register_deferred_flush_impl(boxed_closure: ptr)
 extern aether_ui_surface_flush_deferred_impl()
 extern aether_ui_canvas_on_resize_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_click_impl(canvas_id: int, boxed_closure: ptr)
+extern aether_ui_canvas_on_right_click_impl(canvas_id: int, boxed_closure: ptr)
+extern aether_ui_canvas_on_double_click_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_move_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_key_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_key_release_impl(canvas_id: int, boxed_closure: ptr)
@@ -836,6 +838,7 @@ extern aether_ui_canvas_clip_rect_impl(canvas_id: int, x: float, y: float,
                                   w: float, h: float)
 extern aether_ui_canvas_set_clip_rects_impl(canvas_id: int, rects: ptr, n: int)
 extern aether_ui_canvas_reset_clip_impl(canvas_id: int)
+extern aether_ui_canvas_clip_path_impl(canvas_id: int, even_odd: int)
 extern aether_ui_canvas_clear_impl(canvas_id: int)
 extern aether_ui_canvas_redraw_impl(canvas_id: int)
 extern aether_ui_canvas_write_png_impl(canvas_id: int, path: string, width: int, height: int) -> int
@@ -997,6 +1000,24 @@ canvas_on_resize(cid: int, cb: fn) {
 canvas_on_click(cid: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_canvas_on_click_impl(cid, boxed)
+}
+
+// canvas_on_right_click(cid, cb) — fire cb(x, y) (canvas-local px) on a right
+// click: the secondary button's release on a desktop, a long press (or an
+// iPad/Android pointer's secondary click) on touch. The driver's
+// POST /canvas/{id}/rightclick fires the same closure.
+canvas_on_right_click(cid: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_canvas_on_right_click_impl(cid, boxed)
+}
+
+// canvas_on_double_click(cid, cb) — fire cb(x, y) on the second press of a
+// double click (a double tap on touch), by the platform's own double-click
+// time and distance. canvas_on_click still sees both presses. Driver:
+// POST /canvas/{id}/dblclick.
+canvas_on_double_click(cid: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_canvas_on_double_click_impl(cid, boxed)
 }
 
 // canvas_on_move(cid, cb) — fire cb(x, y) (canvas-local px) on every pointer
@@ -6389,6 +6410,15 @@ canvas_set_clip_rects(cid: int, rects: ptr, n: int) {
 // canvas_set_clip_rects(cid, 0, 0), or let the next paint clear it.
 canvas_reset_clip(cid: int) {
     aether_ui_canvas_reset_clip_impl(cid)
+}
+
+// canvas_clip_path — intersect the clip region with the current path (built
+// with canvas_begin_path / move_to / line_to / arc / close_path), consuming
+// it; even_odd 1 = the even-odd rule. Holds until the enclosing
+// canvas_group_begin/end pair ends (or canvas_reset_clip): bracket it with a
+// group to clip just what is drawn inside, as vg's clip_path does.
+canvas_clip_path(cid: int, even_odd: int) {
+    aether_ui_canvas_clip_path_impl(cid, even_odd)
 }
 
 // Append a circle/arc to the current path. For a full circle pass

@@ -4776,7 +4776,11 @@ typedef enum {
     CANVAS_GROUP_END,   // pop group, paint at alpha (x) — TRUE group opacity
     /* Drop the clips added since this compositing scope began, back to its
        baseline. Appended at the END: the values are positional. */
-    CANVAS_RESET_CLIP
+    CANVAS_RESET_CLIP,
+    /* Intersect the clip with the CURRENT PATH (vg clip-path), consuming
+       it; iw = 1 for the even-odd rule. Holds until the enclosing group
+       ends or RESET_CLIP, exactly like CLIP_RECT. */
+    CANVAS_CLIP_PATH
 } CanvasCmdType;
 
 typedef struct {
@@ -4840,6 +4844,11 @@ typedef struct {
     // Pointer-release hook — canvas-local (x, y) where the button came up.
     // Pairs with on_click + on_move to form a press→drag→release swipe.
     AeClosure* on_release;
+    // Secondary-button click (on its release, the context-menu convention)
+    // and double click, canvas-local (x, y): AeVG's on_right_click /
+    // on_double_click on shapes.
+    AeClosure* on_right_click;
+    AeClosure* on_double_click;
     // read_pixel replay cache: one rendered surface per (generation,
     // cmd-count, size). gen bumps on canvas_clear (each frame rebuild);
     // within a generation the command list only grows, so gen+count
@@ -5026,6 +5035,12 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 cairo_rectangle(cr, c->x, c->y, c->w, c->h);
                 cairo_clip(cr);
                 cairo_new_path(cr);  // clear the path the rectangle added
+                break;
+            case CANVAS_CLIP_PATH:
+                cairo_set_fill_rule(cr, c->iw ? CAIRO_FILL_RULE_EVEN_ODD
+                                              : CAIRO_FILL_RULE_WINDING);
+                cairo_clip(cr);          // consumes the path
+                cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
                 break;
             case CANVAS_RESET_CLIP:
                 // Drop every clip added since this compositing scope began,
@@ -5827,6 +5842,8 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->on_key_release = NULL;
     cs->on_release = NULL;
     cs->on_click = NULL;
+    cs->on_right_click = NULL;
+    cs->on_double_click = NULL;
     cs->replay_cache = NULL;
     cs->gen = 0;
     cs->cache_gen = 0;
@@ -6095,6 +6112,10 @@ typedef struct {
     GtkWidget* widget;
     AeClosure* closure;
     GdkEventType fires_on;   // GDK_BUTTON_PRESS (click) or _RELEASE (release)
+    guint button;            // 1 = primary (click/release), 3 = secondary
+    int double_only;         // 1 = fire only on the SECOND press of a double click
+    guint32 last_time;       // double_only: the previous press
+    double last_x, last_y;
 } CanvasButtonHook;
 
 static gboolean on_canvas_button_legacy(GtkEventControllerLegacy* c,
@@ -6103,7 +6124,7 @@ static gboolean on_canvas_button_legacy(GtkEventControllerLegacy* c,
     CanvasButtonHook* hook = (CanvasButtonHook*)data;
     GdkEventType t = gdk_event_get_event_type(ev);
     if (t != hook->fires_on) return FALSE;
-    if (gdk_button_event_get_button(ev) != 1) return FALSE;
+    if (gdk_button_event_get_button(ev) != (hook->button ? hook->button : 1)) return FALSE;
     if (aeui_ctx_debug()) {
         GdkDevice* dev = gdk_event_get_device(ev);
         fprintf(stderr, "aeui: canvas btn1 %s dev=%s src=%d time=%u\n",
@@ -6114,6 +6135,22 @@ static gboolean on_canvas_button_legacy(GtkEventControllerLegacy* c,
     }
     double x = 0, y = 0;
     event_widget_coords(hook->widget, ev, &x, &y);
+    if (hook->double_only) {
+        /* GTK4 events carry no click count (GDK_2BUTTON_PRESS is gone), so
+           pair presses by the toolkit's own double-click time and distance. */
+        guint32 now = gdk_event_get_time(ev);
+        int dbl_ms = 400, dbl_px = 5;
+        GtkSettings* st = gtk_widget_get_settings(hook->widget);
+        if (st) g_object_get(st, "gtk-double-click-time", &dbl_ms,
+                             "gtk-double-click-distance", &dbl_px, NULL);
+        int paired = hook->last_time != 0 && now - hook->last_time <= (guint32)dbl_ms
+                     && fabs(x - hook->last_x) <= dbl_px && fabs(y - hook->last_y) <= dbl_px;
+        if (!paired) {
+            hook->last_time = now; hook->last_x = x; hook->last_y = y;
+            return FALSE;
+        }
+        hook->last_time = 0;   // a third press starts a new pair
+    }
     if (aeui_ctx_debug())
         fprintf(stderr, "aeui: canvas %s px=(%.1f, %.1f)\n",
                 t == GDK_BUTTON_PRESS ? "press" : "release", x, y);
@@ -6133,6 +6170,7 @@ static void canvas_add_button_hook(GtkWidget* w, AeClosure* closure,
     hook->widget = w;
     hook->closure = closure;
     hook->fires_on = fires_on;
+    hook->button = 1;
     GtkEventController* legacy = gtk_event_controller_legacy_new();
     g_signal_connect_data(legacy, "event",
                           G_CALLBACK(on_canvas_button_legacy), hook,
@@ -6163,6 +6201,46 @@ void aether_ui_canvas_on_release_impl(int canvas_id, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
     if (!w) return;
     canvas_add_button_hook(w, cs->on_release, GDK_BUTTON_RELEASE);
+}
+
+// The same legacy-controller hook, for the secondary button or a double click.
+static void canvas_add_button_hook_ex(GtkWidget* w, AeClosure* closure,
+                                       GdkEventType fires_on, guint button,
+                                       int double_only) {
+    CanvasButtonHook* hook = g_new0(CanvasButtonHook, 1);
+    hook->widget = w;
+    hook->closure = closure;
+    hook->fires_on = fires_on;
+    hook->button = button;
+    hook->double_only = double_only;
+    GtkEventController* legacy = gtk_event_controller_legacy_new();
+    g_signal_connect_data(legacy, "event",
+                          G_CALLBACK(on_canvas_button_legacy), hook,
+                          (GClosureNotify)g_free, 0);
+    gtk_widget_add_controller(w, legacy);
+}
+
+// Right click: button 3, on RELEASE (the context-menu convention this file's
+// context_menu also follows). Canvas-local (x, y).
+void aether_ui_canvas_on_right_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_right_click = (AeClosure*)boxed_closure;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    canvas_add_button_hook_ex(w, cs->on_right_click, GDK_BUTTON_RELEASE, 3, 0);
+}
+
+// Double click: the second primary press inside the toolkit's double-click
+// time and distance. (The single-click hook still sees both presses, as a
+// DOM click listener does.)
+void aether_ui_canvas_on_double_click_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_double_click = (AeClosure*)boxed_closure;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    canvas_add_button_hook_ex(w, cs->on_double_click, GDK_BUTTON_PRESS, 1, 1);
 }
 
 // Pointer-move on the canvas: forward canvas-local (x, y) to the boxed closure.
@@ -6320,6 +6398,15 @@ void aether_ui_canvas_clip_rect_impl(int canvas_id, double x, double y,
                                 double w, double h) {
     canvas_add_cmd(canvas_id, (CanvasCmd){
         .type = CANVAS_CLIP_RECT, .x = x, .y = y, .w = w, .h = h
+    });
+}
+
+// Intersect the clip with the current path (begin_path/move_to/line_to/arc/
+// close_path), consuming it. vg brackets it with group_begin/group_end, which
+// is what scopes it: the clip ends with the group.
+void aether_ui_canvas_clip_path_impl(int canvas_id, int even_odd) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){
+        .type = CANVAS_CLIP_PATH, .iw = even_odd ? 1 : 0
     });
 }
 
@@ -8015,6 +8102,17 @@ static gboolean canvas_release_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// Right / double click from the driver: the same closures the gestures fire.
+static void canvas_fire_xy(CanvasClickAction* a, AeClosure* cl) {
+    if (cl && cl->fn) {
+        ((void(*)(void*, double, double))cl->fn)(cl->env, a->x, a->y);
+        a->result = 0;
+    } else {
+        a->result = 3;
+    }
+    a->done = 1;
+}
+
 // Canvas key press — fires on_key with a GDK key name ("Down", "Return",
 // "Escape", "a"), as the key controller would. No focus needed: the closure
 // is invoked directly, so tests can drive keyboard nav deterministically.
@@ -8631,6 +8729,17 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             CanvasClickAction ca = {0};
             ca.canvas_id = ctx->handle; ca.x = ctx->dval; ca.y = ctx->dval2;
             canvas_release_idle(&ca);
+            ctx->result = ca.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_RIGHT_CLICK:
+        case AETHER_DRV_CANVAS_DOUBLE_CLICK: {
+            CanvasClickAction ca = {0};
+            ca.canvas_id = ctx->handle; ca.x = ctx->dval; ca.y = ctx->dval2;
+            CanvasState* rcs = get_canvas_state(ctx->handle);
+            canvas_fire_xy(&ca, !rcs ? NULL
+                : ctx->action == AETHER_DRV_CANVAS_RIGHT_CLICK ? rcs->on_right_click
+                                                                : rcs->on_double_click);
             ctx->result = ca.result; ctx->done = 1;
             return;
         }

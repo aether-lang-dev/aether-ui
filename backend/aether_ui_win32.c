@@ -8455,7 +8455,13 @@ typedef enum {
     /* Drop the clips added since this scope began. Both replay paths have a
        real reset (SelectClipRgn(NULL) / GdipResetClip), so unlike the cairo
        and CoreGraphics backends this needs no saved baseline. */
-    CV_RESET_CLIP
+    CV_RESET_CLIP,
+    /* Intersect the clip with the current path (CV_BEGIN..here: its
+       MOVE/LINE figures and ARCs), even_odd = clip-rule. vg brackets it with
+       GROUP_BEGIN/END, and both replays end the clip with the group: GDI+
+       because the group's layer has its own Graphics, legacy GDI by saving
+       the clip region at BEGIN and selecting it back at END. */
+    CV_CLIP_PATH
 } CanvasCmdKind;
 
 typedef struct {
@@ -8499,6 +8505,8 @@ typedef struct {
     AeClosure* on_move;    // pointer-move hook (canvas-local x,y); null = none
     AeClosure* on_click;   // pointer-press hook (canvas-local x,y)
     AeClosure* on_release; // pointer-release hook (canvas-local x,y)
+    AeClosure* on_right_click;  // WM_RBUTTONUP (canvas-local x,y)
+    AeClosure* on_double_click; // WM_LBUTTONDBLCLK (canvas-local x,y)
     AeClosure* on_key;     // key-press hook (GDK key name string)
     AeClosure* on_key_release; // key-up hook (same key names)
     AeClosure* on_resize;  // |w, h| — fired from WM_SIZE (canvas rescale)
@@ -8591,6 +8599,8 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cv->on_move = NULL;
     cv->on_click = NULL;
     cv->on_release = NULL;
+    cv->on_right_click = NULL;
+    cv->on_double_click = NULL;
     cv->on_key = NULL;
     cv->on_resize = NULL;
     cv->paint_clip_rects = NULL;
@@ -8879,6 +8889,18 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     canvases[canvas_id - 1].on_move = (AeClosure*)boxed_closure;
 }
 
+// Right click (WM_RBUTTONUP) and double click (WM_LBUTTONDBLCLK; the canvas
+// class has CS_DBLCLKS), canvas-local (x, y).
+void aether_ui_canvas_on_right_click_impl(int canvas_id, void* boxed_closure) {
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    canvases[canvas_id - 1].on_right_click = (AeClosure*)boxed_closure;
+}
+
+void aether_ui_canvas_on_double_click_impl(int canvas_id, void* boxed_closure) {
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    canvases[canvas_id - 1].on_double_click = (AeClosure*)boxed_closure;
+}
+
 // Keyboard input on a canvas: WM_KEYDOWN → GDK-style key name string into
 // the closure (mirrors the GTK4 GtkEventControllerKey path — the app-side
 // key handlers compare against GDK names like "Left"/"Return"/"Escape").
@@ -9028,6 +9050,26 @@ void aether_ui_canvas_reset_clip_impl(int canvas_id) {
     CanvasCmd c = {0};
     c.k = CV_RESET_CLIP;
     canvas_add_cmd(canvas_id, c);
+}
+
+void aether_ui_canvas_clip_path_impl(int canvas_id, int even_odd) {
+    CanvasCmd c = {0};
+    c.k = CV_CLIP_PATH;
+    c.even_odd = even_odd ? 1 : 0;
+    canvas_add_cmd(canvas_id, c);
+}
+
+/* 1 when the path the command at index i belongs to ends in CV_CLIP_PATH
+   rather than being painted: its segments are an outline, not ink. */
+static int w32_path_feeds_clip(Canvas* cv, int i) {
+    for (int j = i + 1; j < cv->cmd_count; j++) {
+        CanvasCmdKind k = cv->cmds[j].k;
+        if (k == CV_BEGIN) return 0;
+        if (k == CV_CLIP_PATH) return 1;
+        if (k == CV_STROKE || k == CV_FILL ||
+            k == CV_FILL_LINEAR || k == CV_FILL_RADIAL) return 0;
+    }
+    return 0;
 }
 
 void aether_ui_canvas_arc_impl(int canvas_id, double cx, double cy, double radius,
@@ -9446,6 +9488,10 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
 
     HPEN cur_pen = NULL;
     HPEN old_pen = (HPEN)SelectObject(mem, GetStockObject(BLACK_PEN));
+    /* Clip regions saved at each CV_GROUP_BEGIN (see that case). */
+    HRGN lg_rgn[16] = {0};
+    int  lg_has[16] = {0};
+    int  lg_depth = 0;
 
     for (int i = 0; i < cv->cmd_count; i++) {
         CanvasCmd* cmd = &cv->cmds[i];
@@ -9467,6 +9513,7 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
                 SelectClipRgn(mem, NULL);
                 break;
             case CV_LINE: {
+                if (w32_path_feeds_clip(cv, i)) break;  // an outline, not ink
                 MoveToEx(mem, (int)cmd->p0, (int)cmd->p1, NULL);
                 LineTo(mem, (int)cmd->p2, (int)cmd->p3);
                 break;
@@ -9529,6 +9576,7 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
                 // used to punch a white disc into the scene. Select the
                 // NULL brush so this draws an outline only; a genuine fill
                 // is CV_FILL's job (which handles arcs, just below).
+                if (w32_path_feeds_clip(cv, i)) break;  // an outline, not ink
                 int cx = (int)cmd->p0, cy = (int)cmd->p1, rad = (int)cmd->p2;
                 HGDIOBJ prev_br = SelectObject(mem, GetStockObject(NULL_BRUSH));
                 Ellipse(mem, cx - rad, cy - rad, cx + rad, cy + rad);
@@ -9705,8 +9753,77 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
                 }
                 break;
             }
+            case CV_GROUP_BEGIN:
+                /* No layer here (see the NOTE above: GDI keeps no alpha), but
+                   a group still SCOPES a clip: remember the clip region so
+                   END can put it back, dropping any clip-path set inside. */
+                if (lg_depth < 16) {
+                    HRGN sr = CreateRectRgn(0, 0, 0, 0);
+                    lg_has[lg_depth] = (sr && GetClipRgn(mem, sr) == 1) ? 1 : 0;
+                    lg_rgn[lg_depth] = sr;
+                }
+                lg_depth++;
+                break;
+            case CV_GROUP_END:
+                if (lg_depth <= 0) break;
+                lg_depth--;
+                if (lg_depth < 16) {
+                    SelectClipRgn(mem, lg_has[lg_depth] ? lg_rgn[lg_depth] : NULL);
+                    if (lg_rgn[lg_depth]) DeleteObject(lg_rgn[lg_depth]);
+                    lg_rgn[lg_depth] = NULL;
+                }
+                break;
+            case CV_CLIP_PATH: {
+                /* The figures since CV_BEGIN (a MOVE starts one) and any ARCs
+                   (whole circles) as one region, intersected into the clip. */
+                int start = 0;
+                for (int j = i - 1; j >= 0; j--) {
+                    if (cv->cmds[j].k == CV_BEGIN) { start = j + 1; break; }
+                }
+                HRGN acc = CreateRectRgn(0, 0, 0, 0);
+                POINT fig[1024];
+                int fn = 0;
+                for (int j = start; j <= i; j++) {
+                    CanvasCmdKind k = j < i ? cv->cmds[j].k : CV_MOVE;
+                    if (k == CV_MOVE) {
+                        if (fn >= 3) {
+                            HRGN fr = CreatePolygonRgn(fig, fn,
+                                cmd->even_odd ? ALTERNATE : WINDING);
+                            if (fr) { CombineRgn(acc, acc, fr, cmd->even_odd ? RGN_XOR : RGN_OR); DeleteObject(fr); }
+                        }
+                        fn = 0;
+                        if (j < i) {
+                            fig[fn].x = (int)cv->cmds[j].p0;
+                            fig[fn].y = (int)cv->cmds[j].p1;
+                            fn++;
+                        }
+                    } else if (k == CV_LINE && fn < 1024) {
+                        if (fn == 0) {
+                            fig[fn].x = (int)cv->cmds[j].p0;
+                            fig[fn].y = (int)cv->cmds[j].p1;
+                            fn++;
+                        }
+                        fig[fn].x = (int)cv->cmds[j].p2;
+                        fig[fn].y = (int)cv->cmds[j].p3;
+                        fn++;
+                    } else if (k == CV_ARC) {
+                        int acx = (int)cv->cmds[j].p0, acy = (int)cv->cmds[j].p1;
+                        int ar = (int)cv->cmds[j].p2;
+                        HRGN er = CreateEllipticRgn(acx - ar, acy - ar, acx + ar + 1, acy + ar + 1);
+                        if (er) { CombineRgn(acc, acc, er, RGN_OR); DeleteObject(er); }
+                    }
+                }
+                if (acc) {
+                    ExtSelectClipRgn(mem, acc, RGN_AND);
+                    DeleteObject(acc);
+                }
+                break;
+            }
             default: break;
         }
+    }
+    for (int k = 0; k < lg_depth && k < 16; k++) {
+        if (lg_rgn[k]) DeleteObject(lg_rgn[k]);
     }
 
     SelectObject(mem, old_pen);
@@ -9950,6 +10067,28 @@ __declspec(dllimport) int __stdcall GdipClosePathFigure(GpPath* path);
 __declspec(dllimport) int __stdcall GdipSetClipPath(GpGraphics* g, GpPath* path,
     int combineMode);
 __declspec(dllimport) int __stdcall GdipResetClip(GpGraphics* g);
+/* The clip as a region, so a temporary narrowing can put the previous clip
+   back exactly (GdipResetClip would widen it to everything). */
+typedef void GpRegion;
+__declspec(dllimport) int __stdcall GdipCreateRegion(GpRegion** region);
+__declspec(dllimport) int __stdcall GdipDeleteRegion(GpRegion* region);
+__declspec(dllimport) int __stdcall GdipGetClip(GpGraphics* g, GpRegion* region);
+__declspec(dllimport) int __stdcall GdipSetClipRegion(GpGraphics* g, GpRegion* region,
+    int combineMode);
+static GpRegion* w32_clip_save(GpGraphics* g) {
+    GpRegion* r = NULL;
+    if (GdipCreateRegion(&r) != 0 || !r) return NULL;
+    if (GdipGetClip(g, r) != 0) { GdipDeleteRegion(r); return NULL; }
+    return r;
+}
+static void w32_clip_drop(GpRegion** r) {
+    if (*r) { GdipDeleteRegion(*r); *r = NULL; }
+}
+static void w32_clip_restore(GpGraphics* g, GpRegion** r) {
+    if (*r) GdipSetClipRegion(g, *r, 0 /* Replace */);
+    else GdipResetClip(g);
+    w32_clip_drop(r);
+}
 /* CombineMode 1 = Intersect, which is the documented semantic of
    canvas_clip_rect: narrow the CURRENT clip, never widen it. */
 #define GDIP_COMBINE_INTERSECT 1
@@ -10303,7 +10442,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        maroon (px y=10..11 where librsvg is white). Any of
                        these four means "someone else will paint this path". */
                     if (k2 == CV_STROKE || k2 == CV_FILL ||
-                        k2 == CV_FILL_LINEAR || k2 == CV_FILL_RADIAL) {
+                        k2 == CV_FILL_LINEAR || k2 == CV_FILL_RADIAL ||
+                        k2 == CV_CLIP_PATH) {
                         consumer_pending = 1; break;
                     }
                 }
@@ -10545,7 +10685,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     CanvasCmdKind k2 = cv->cmds[j].k;
                     if (k2 == CV_BEGIN) break;
                     if (k2 == CV_STROKE || k2 == CV_FILL ||
-                        k2 == CV_FILL_LINEAR || k2 == CV_FILL_RADIAL) {
+                        k2 == CV_FILL_LINEAR || k2 == CV_FILL_RADIAL ||
+                        k2 == CV_CLIP_PATH) {
                         arc_consumer = 1; break;
                     }
                 }
@@ -10977,11 +11118,17 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                otherwise the circle paints outside the shape. */
                             GpPath* clip2 = NULL;
                             int clipped2 = 0;
+                            /* INTERSECT and put the old clip back after, not
+                               REPLACE then reset: the fill sits inside the
+                               scene's viewport clip and maybe a clip-path,
+                               and a reset painted the gradient straight
+                               through both. */
+                            GpRegion* saved_clip2 = w32_clip_save(g);
                             if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_WINDING, &clip2) == 0
                                 && clip2) {
                                 if (GdipAddPathLine2I(clip2, pts, np) == 0) {
                                     GdipClosePathFigure(clip2);
-                                    if (GdipSetClipPath(g, clip2, GDIP_COMBINE_REPLACE) == 0)
+                                    if (GdipSetClipPath(g, clip2, GDIP_COMBINE_INTERSECT) == 0)
                                         clipped2 = 1;
                                 }
                             }
@@ -11043,7 +11190,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                             if (rotated) GdipSetWorldTransform(g, saved);
                             if (rotm) GdipDeleteMatrix(rotm);
                             if (saved) GdipDeleteMatrix(saved);
-                            if (clipped2) GdipResetClip(g);
+                            if (clipped2) w32_clip_restore(g, &saved_clip2);
+                            else w32_clip_drop(&saved_clip2);
                             if (clip2) GdipDeletePath(clip2);
                             GdipDeleteBrush((GpBrush*)pg);
                         }
@@ -11088,6 +11236,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        exactly as the gradient STROKE case does. */
                     GpPath* clip = NULL;
                     int clipped = 0;
+                    GpRegion* saved_clip = w32_clip_save(g);  /* see saved_clip2 */
                     if (np >= 3 && GdipCreatePath(GDIP_FILLMODE_WINDING, &clip) == 0
                         && clip) {
                         int cstart = 0;
@@ -11118,7 +11267,7 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                             }
                         }
                         if (figs > 0 &&
-                            GdipSetClipPath(g, clip, GDIP_COMBINE_REPLACE) == 0)
+                            GdipSetClipPath(g, clip, GDIP_COMBINE_INTERSECT) == 0)
                             clipped = 1;
                     }
                     /* SVG spreadMethod, which this backend hardcoded to
@@ -11202,7 +11351,8 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                            mxx-mnx, mxy-mny);
                         GdipDeleteBrush((GpBrush*)lg);
                     }
-                    if (clipped) GdipResetClip(g);
+                    if (clipped) w32_clip_restore(g, &saved_clip);
+                    else w32_clip_drop(&saved_clip);
                     if (clip) GdipDeletePath(clip);
                 }
                 break;
@@ -11418,6 +11568,46 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                    copy, it borrows scan0, so releasing it earlier would blit
                    freed memory. */
                 free(bgra);
+                break;
+            }
+            case CV_CLIP_PATH: {
+                /* vg clip-path: the path since CV_BEGIN (a figure per
+                   CV_MOVE, a whole ellipse per CV_ARC) intersected into the
+                   clip of `g` -- which, inside the group vg brackets this
+                   with, is that group's own layer, so the clip ends with it. */
+                int start = 0;
+                for (int j = i - 1; j >= 0; j--) {
+                    if (cv->cmds[j].k == CV_BEGIN) { start = j + 1; break; }
+                }
+                GpPath* cp = NULL;
+                if (GdipCreatePath(cmd->even_odd ? GDIP_FILLMODE_ALTERNATE
+                                                 : GDIP_FILLMODE_WINDING, &cp) == 0 && cp) {
+                    int fig_open = 0;
+                    for (int j = start; j < i; j++) {
+                        CanvasCmdKind k = cv->cmds[j].k;
+                        if (k == CV_MOVE) {
+                            if (fig_open) GdipClosePathFigure(cp);
+                            GdipStartPathFigure(cp);
+                            fig_open = 1;
+                        } else if (k == CV_LINE) {
+                            GpPointI seg[2];
+                            seg[0].X = (INT)cv->cmds[j].p0; seg[0].Y = (INT)cv->cmds[j].p1;
+                            seg[1].X = (INT)cv->cmds[j].p2; seg[1].Y = (INT)cv->cmds[j].p3;
+                            if (!fig_open) { GdipStartPathFigure(cp); fig_open = 1; }
+                            GdipAddPathLine2I(cp, seg, 2);
+                        } else if (k == CV_ARC) {
+                            if (fig_open) { GdipClosePathFigure(cp); fig_open = 0; }
+                            INT acx = (INT)cv->cmds[j].p0, acy = (INT)cv->cmds[j].p1;
+                            INT ar = (INT)cv->cmds[j].p2;
+                            GdipAddPathEllipseI(cp, acx - ar, acy - ar, ar * 2, ar * 2);
+                        }
+                    }
+                    if (fig_open) GdipClosePathFigure(cp);
+                    /* An empty path intersects to an empty clip, as an empty
+                       <clipPath> must. */
+                    GdipSetClipPath(g, cp, GDIP_COMBINE_INTERSECT);
+                    GdipDeletePath(cp);
+                }
                 break;
             }
             case CV_CLOSE:
@@ -11711,14 +11901,37 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             int cid = canvas_id_for_hwnd(hwnd);
             if (cid >= 1) {
                 Canvas* cv = &canvases[cid - 1];
+                int x = (int)(short)LOWORD(lp);
+                int y = (int)(short)HIWORD(lp);
                 if (cv->on_click && cv->on_click->fn) {
-                    int x = (int)(short)LOWORD(lp);
-                    int y = (int)(short)HIWORD(lp);
                     ((void(*)(void*, double, double))cv->on_click->fn)(
                         cv->on_click->env, (double)x, (double)y);
                 }
+                // ...and it IS the double click (CS_DBLCLKS: the system's
+                // double-click time and rectangle decided it).
+                if (cv->on_double_click && cv->on_double_click->fn) {
+                    ((void(*)(void*, double, double))cv->on_double_click->fn)(
+                        cv->on_double_click->env, (double)x, (double)y);
+                }
             }
             return 0;
+        }
+        case WM_RBUTTONUP: {
+            // The right click, on the button's release (the context-menu
+            // convention: DefWindowProc turns this same message into
+            // WM_CONTEXTMENU, which still follows when no handler is wired).
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1) {
+                Canvas* cv = &canvases[cid - 1];
+                if (cv->on_right_click && cv->on_right_click->fn) {
+                    int x = (int)(short)LOWORD(lp);
+                    int y = (int)(short)HIWORD(lp);
+                    ((void(*)(void*, double, double))cv->on_right_click->fn)(
+                        cv->on_right_click->env, (double)x, (double)y);
+                    return 0;
+                }
+            }
+            break;
         }
         case WM_GETDLGCODE:
             // Claim arrow keys and character keys so they arrive as WM_KEYDOWN
@@ -12392,6 +12605,8 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             return 0;
         }
         if (ctx->action == AETHER_DRV_CANVAS_CLICK
+            || ctx->action == AETHER_DRV_CANVAS_RIGHT_CLICK
+            || ctx->action == AETHER_DRV_CANVAS_DOUBLE_CLICK
             || ctx->action == AETHER_DRV_CANVAS_MOVE
             || ctx->action == AETHER_DRV_CANVAS_RELEASE
             || ctx->action == AETHER_DRV_CANVAS_KEY
@@ -12414,6 +12629,14 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     if (cv->on_click && cv->on_click->fn) {
                         ((void(*)(void*, double, double))cv->on_click->fn)(
                             cv->on_click->env, ctx->dval, ctx->dval2);
+                        ctx->result = 0;
+                    }
+                } else if (ctx->action == AETHER_DRV_CANVAS_RIGHT_CLICK
+                           || ctx->action == AETHER_DRV_CANVAS_DOUBLE_CLICK) {
+                    AeClosure* rc = ctx->action == AETHER_DRV_CANVAS_RIGHT_CLICK
+                                    ? cv->on_right_click : cv->on_double_click;
+                    if (rc && rc->fn) {
+                        ((void(*)(void*, double, double))rc->fn)(rc->env, ctx->dval, ctx->dval2);
                         ctx->result = 0;
                     }
                 } else if (ctx->action == AETHER_DRV_CANVAS_RELEASE) {
