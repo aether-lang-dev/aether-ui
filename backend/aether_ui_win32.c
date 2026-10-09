@@ -11389,7 +11389,15 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                     INT old_interp = 0, old_pom = 0;
                     GdipGetInterpolationMode(g, &old_interp);
                     GdipGetPixelOffsetMode(g, &old_pom);
-                    GdipSetInterpolationMode(g, 6 /* HighQualityBilinear */);
+                    /* Enlarging: NearestNeighbor, so a raster's cells are
+                       exactly their colours (GDI+'s bilinear still blends
+                       a little at a cell's centre at large scales, unlike
+                       cairo / CoreGraphics / Skia); shrinking: bilinear
+                       with prefiltering. Win32 therefore enlarges rasters
+                       unsmoothed -- stated in README's vg.image section. */
+                    int enlarging = (ddw > cmd->iw || ddh > cmd->ih);
+                    GdipSetInterpolationMode(g, enlarging ? 5 /* NearestNeighbor */
+                                                          : 6 /* HighQualityBilinear */);
                     GdipSetPixelOffsetMode(g, 4 /* PixelOffsetModeHalf */);
                     void* ia = NULL;
                     if (GdipCreateImageAttributes(&ia) == 0 && ia) {

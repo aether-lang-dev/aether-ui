@@ -451,8 +451,11 @@ re-reads it; the canvas copies it into the frame, so it may be freed or
 resized the moment a flush returns. `image_bytes` / `image_bytes_str`
 (PNG, JPEG, GIF, BMP: GdkTexture, ImageIO, GDI+, UIImage, BitmapFactory,
 through `aether_ui_image_decode_rgba_impl`) decode into pixels the element
-owns. The blit is each backend's scaled image draw with its default
-filtering, so a small buffer scaled up is smoothed, not blocky. A transform
+owns. The blit is each backend's scaled image draw: GTK4, AppKit, UIKit and
+Android smooth a small buffer scaled up (bilinear), Win32 enlarges it
+unsmoothed (nearest neighbour, on both its renderers: GDI+'s bilinear
+blends a cell's centre at large scales, so the honest choice there is the
+exact colour). A transform
 maps the box's corners and draws into their axis-aligned bounds: translate
 and scale are exact, a rotation draws the unrotated image into the rotated
 box's bounds. `examples/vg_image_demo` and `tests/vg_image_demo` are the
