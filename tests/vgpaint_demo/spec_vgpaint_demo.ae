@@ -1,0 +1,186 @@
+// spec_vgpaint_demo.ae — paint a LIVE vg(...) scene used to lose between the
+// recorded shape and the canvas call, read back as pixels.
+//
+//   1 gradients    fill("url(#id)") from defs(): the deferred scene swapped in
+//                  a fresh context on its first canvas_on_resize, whose empty
+//                  registry turned every gradient into the black fallback.
+//   2 clip paths   clip_path() on a shape and on a g(), the group holding a
+//                  gradient fill the clip must also hold in.
+//   3 CSS          css() type < class < id < the shape's own fill.
+//   4 clicks       a right click and a double click reach the shape's
+//                  on_right_click / on_double_click (driver: /rightclick and
+//                  /dblclick, the same canvas hooks a real mouse fires).
+//   5 group alpha  g() { opacity(0.5) } composites its children once: the
+//                  overlap of two red squares is the same pink as either.
+//
+// Pixels come from /canvas/{id}/pixel (the offscreen replay of the canvas's
+// commands). Probes are in viewBox units (every scene is 0 0 200 100), mapped
+// the way the scene maps them: scaled uniformly to fit the canvas's actual
+// allocation and centred, since the layout may hand a canvas more than it
+// asked for.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vgpaint_demo/bin/vgpaint_demo &
+//   UI_SPEC=vgpaint_demo/spec_vgpaint_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+
+// The c-th canvas's field from /widgets (canvases are listed in creation
+// order, so the c-th one is canvas id c). The widget's allocation, not
+// /canvas/{id}/debug's last-paint size: a headless Windows session never
+// paints, so that one stays 0 there.
+canvas_field(c: int, f: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = 0
+    seen = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "canvas") == 1 {
+            seen = seen + 1
+            if seen == c { r = uidriver.field_int(w, f) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+cw(c: int) -> int { return canvas_field(c, "w") }
+ch(c: int) -> int { return canvas_field(c, "h") }
+scale(c: int) -> float {
+    sx = cw(c) / 200.0
+    sy = ch(c) / 100.0
+    if sx < sy { return sx }
+    return sy
+}
+px_x(c: int, vx: float) -> int { return ((cw(c) - 200.0 * scale(c)) / 2.0 + vx * scale(c)) as int }
+px_y(c: int, vy: float) -> int { return ((ch(c) - 100.0 * scale(c)) / 2.0 + vy * scale(c)) as int }
+
+// The pixel of canvas c at viewBox (vx, vy), 0xAARRGGBB.
+pixel_at(c: int, vx: float, vy: float) -> int {
+    body = uidriver.get_body("/canvas/${c}/pixel?x=${px_x(c, vx)}&y=${px_y(c, vy)}&w=${cw(c)}&h=${ch(c)}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+red(p: int) -> int { return (p >> 16) & 255 }
+green(p: int) -> int { return (p >> 8) & 255 }
+blue(p: int) -> int { return p & 255 }
+
+chan_near(a: int, b: int, tol: int) -> int {
+    d = (a & 255) - (b & 255)
+    if d < 0 { d = 0 - d }
+    if d <= tol { return 1 }
+    return 0
+}
+near_rgb(p: int, rgb: int, tol: int) -> int {
+    if chan_near(p >> 16, rgb >> 16, tol) == 0 { return 0 }
+    if chan_near(p >> 8, rgb >> 8, tol) == 0 { return 0 }
+    return chan_near(p, rgb, tol)
+}
+hex(p: int) -> string { return "rgb(${red(p)},${green(p)},${blue(p)})" }
+
+assert_px(c: int, vx: float, vy: float, rgb: int, msg: string) {
+    p = pixel_at(c, vx, vy)
+    spec.assert_true(near_rgb(p, rgb, 24) == 1, "${msg}: canvas ${c} viewBox (${vx},${vy}) is ${hex(p)}")
+}
+
+// Poll until canvas c at (vx, vy) is near rgb (a handler repaints on the
+// main loop, after the driver's POST has answered).
+wait_px(c: int, vx: float, vy: float, rgb: int) -> int {
+    i = 0
+    while i < 30 {
+        if near_rgb(pixel_at(c, vx, vy), rgb, 24) == 1 { return 1 }
+        sleep(100)
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "gradients on the live vg path") {
+        spec.it("a linear gradient from defs runs red to blue across its rect") callback {
+            spec.assert_gt(cw(1), 0, "scene 1 has an allocation")
+            l = pixel_at(1, 5.0, 20.0)
+            m = pixel_at(1, 100.0, 20.0)
+            r = pixel_at(1, 195.0, 20.0)
+            spec.assert_true(red(l) > 200 && blue(l) < 60, "the left end is red: ${hex(l)}")
+            spec.assert_true(red(m) > 90 && red(m) < 170 && blue(m) > 90 && blue(m) < 170 && green(m) < 40,
+                             "the middle is the half-way purple: ${hex(m)}")
+            spec.assert_true(blue(r) > 200 && red(r) < 60, "the right end is blue: ${hex(r)}")
+        }
+        spec.it("a radial gradient from defs runs white at the centre to green at the rim") callback {
+            c = pixel_at(1, 100.0, 70.0)
+            rim = pixel_at(1, 124.0, 70.0)
+            spec.assert_true(red(c) > 220 && green(c) > 220 && blue(c) > 220, "the centre is white: ${hex(c)}")
+            spec.assert_true(green(rim) > red(rim) + 60 && green(rim) > blue(rim) + 60,
+                             "near the rim it is green: ${hex(rim)}")
+        }
+    }
+
+    spec.describe(fw, "clip-path on the live vg path") {
+        spec.it("a shape's clip_path keeps it inside the clip's circle") callback {
+            assert_px(2, 50.0, 50.0, 0xff0000, "inside the circle the rect paints")
+            assert_px(2, 15.0, 15.0, 0xffffff, "the rect's corner, outside the circle, is clipped away")
+            assert_px(2, 85.0, 50.0, 0xffffff, "and its right edge, outside the circle")
+        }
+        spec.it("a group's clip_path clips all of it to a polygon, gradient fill included") callback {
+            in_tri = pixel_at(2, 150.0, 80.0)
+            spec.assert_true(red(in_tri) > 60 && blue(in_tri) > 60 && green(in_tri) < 60,
+                             "inside the triangle the gradient paints: ${hex(in_tri)}")
+            assert_px(2, 110.0, 15.0, 0xffffff, "the group's rect is clipped away top-left of the triangle")
+            assert_px(2, 195.0, 85.0, 0xffffff, "and bottom-right of it")
+        }
+    }
+
+    spec.describe(fw, "CSS rules on the live vg path") {
+        spec.it("type, class and id rules apply by specificity, below the shape's own fill") callback {
+            assert_px(3, 20.0, 50.0, 0x00aa00, "a type rule (rect)")
+            assert_px(3, 60.0, 50.0, 0xff0000, "a class rule beats the type rule")
+            assert_px(3, 100.0, 50.0, 0x0000ff, "an id rule beats the class rule")
+            assert_px(3, 140.0, 50.0, 0x888888, "the shape's own fill beats every rule")
+            assert_px(3, 180.0, 50.0, 0xff0000, "a class rule on a circle the type rule does not name")
+        }
+    }
+
+    spec.describe(fw, "right and double click reach a shape") {
+        spec.it("a right click runs on_right_click, a left click does not") callback {
+            assert_px(4, 50.0, 50.0, 0xff0000, "the right-click target starts red")
+            uidriver.post_ok("/canvas/4/click?x=${px_x(4, 50.0)}&y=${px_y(4, 50.0)}", "POST canvas click")
+            sleep(300)
+            assert_px(4, 50.0, 50.0, 0xff0000, "a left click is not a right click")
+            uidriver.post_ok("/canvas/4/rightclick?x=${px_x(4, 50.0)}&y=${px_y(4, 50.0)}", "POST canvas rightclick")
+            spec.assert_true(wait_px(4, 50.0, 50.0, 0x00ff00) == 1, "the right click turned it green")
+        }
+        spec.it("a double click runs on_double_click") callback {
+            assert_px(4, 150.0, 50.0, 0xff0000, "the double-click target starts red")
+            uidriver.post_ok("/canvas/4/rightclick?x=${px_x(4, 150.0)}&y=${px_y(4, 50.0)}", "POST canvas rightclick")
+            sleep(300)
+            assert_px(4, 150.0, 50.0, 0xff0000, "a right click is not a double click")
+            uidriver.post_ok("/canvas/4/dblclick?x=${px_x(4, 150.0)}&y=${px_y(4, 50.0)}", "POST canvas dblclick")
+            spec.assert_true(wait_px(4, 150.0, 50.0, 0x0000ff) == 1, "the double click turned it blue")
+        }
+    }
+
+    spec.describe(fw, "group opacity on the live vg path") {
+        spec.it("a g() at opacity 0.5 composites once: the overlap is no darker") callback {
+            l = pixel_at(5, 50.0, 50.0)
+            o = pixel_at(5, 100.0, 50.0)
+            r = pixel_at(5, 150.0, 50.0)
+            spec.assert_true(near_rgb(l, 0xff8080, 24) == 1, "one square at half opacity over white is pink: ${hex(l)}")
+            spec.assert_true(near_rgb(o, l, 6) == 1, "the overlap is the same pink, not darker: ${hex(o)} vs ${hex(l)}")
+            spec.assert_true(near_rgb(r, l, 6) == 1, "and so is the other square: ${hex(r)}")
+        }
+    }
+    return spec.run_summary(fw)
+}

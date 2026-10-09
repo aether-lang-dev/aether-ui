@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`examples/vgpaint_demo` + `tests/vgpaint_demo`, and
+  `vg/test/test_vg_live_paint.ae`.** Five live scenes (gradients, clip paths,
+  CSS, right/double click, group opacity) read back as pixels through the
+  driver: ci.sh Phase 5e9c, the spec matrix (`vgpaint`) and the iOS
+  simulator phase; the unit test (Phase 0) pins the dispatch order headless.
+
 - **vg: `defs(markup)`, `css(text)`, `clip_path(ref)`, `css_class(names)`,
   `css_id(name)`, and `opacity()` on a `g()`, on the live path.** `defs`
   registers gradients, clip paths and filters on the scene (`fill("url(#id)")`

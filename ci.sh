@@ -271,7 +271,7 @@ run_smoke_test() {
 # AeVG port unit tests — pure Aether (no GTK/display), so they run even
 # under SKIP_RUNTIME. Each is a self-contained `main()` that exits non-zero
 # on the first failed assertion. Append new modules' tests here as they land.
-AEVG_TESTS=(test_font test_text_path test_transform test_normalizer test_easing test_parser test_bbox test_region test_blur test_rasterize test_grammar_utils test_chrome test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_polypath test_vg3d test_render_as_raster test_grammar_bind test_grammar_reactive test_gradient_transform test_font_family test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing test_gradient_fill test_vg test_transpiler test_grammar_interaction test_vg_interactive test_vg_when test_vg_bindto test_vg_bindpos test_vg_clock test_vg_hidpi test_vg_anim test_live_region test_effects test_behavior test_base64 test_vg_image)
+AEVG_TESTS=(test_font test_text_path test_transform test_normalizer test_easing test_parser test_bbox test_region test_blur test_rasterize test_grammar_utils test_chrome test_grammar_context test_grammar_element test_grammar_rendering test_grammar_style test_grammar_shapes test_grammar_factories test_grammar_animations test_loader test_grammar_defs test_grammar_text test_grammar_css test_grammar_events test_path_builder test_polypath test_vg3d test_render_as_raster test_grammar_bind test_grammar_reactive test_gradient_transform test_font_family test_refresh test_reactive_bindpos test_backend_dispatch test_raster_roundtrip test_filter_routing test_gradient_fill test_vg test_transpiler test_grammar_interaction test_vg_interactive test_vg_when test_vg_bindto test_vg_bindpos test_vg_clock test_vg_hidpi test_vg_anim test_live_region test_effects test_behavior test_base64 test_vg_image test_vg_live_paint)
 # Tests that exercise the REAL cairo text metrics — linked against the GTK4
 # backend (the pure-Aether AEVG_TESTS link with $(ae cflags) only).
 AEVG_GTK_TESTS=(test_text_metrics test_group_pixels)
@@ -853,8 +853,9 @@ else
     # 2-5 for each example: listbox_demo (#22's acceptance: rows rendered by
     # UIKit, a tap selecting one, selection surviving an update), then
     # frametick_demo (the frame clock on CADisplayLink, pinned so a silent
-    # fallback to the timer fails, and timer_once).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo; do
+    # fallback to the timer fails, and timer_once), vg_image_demo and
+    # vgpaint_demo (vg's live paint and the right/double-click hooks on UIKit).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1343,6 +1344,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=vg_image_demo/spec_vg_image_demo \
     run_server_test "$(EX_BIN vg_image_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" vg_image_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9c: AetherUIDriver vg live-path paint spec ==="
+# What a live vg(...) scene's deferred flush used to drop: gradients from
+# defs (lost with the context a resize swapped in), clip_path on shapes and
+# groups, css() type/class/id rules, right and double click on shapes, and
+# g() opacity composited as one layer. Pixels via /canvas/{id}/pixel.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=vgpaint_demo/spec_vgpaint_demo \
+    run_server_test "$(EX_BIN vgpaint_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" vgpaint_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

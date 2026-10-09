@@ -1,0 +1,118 @@
+// vgpaint_demo — paint that only a live vg(...) scene's deferred flush can
+// lose: gradients from defs, clip paths, CSS rules, group opacity composited
+// as one layer, and the right / double click a shape can listen for.
+//
+// Five scenes, one canvas each (canvas ids 1..5, top to bottom), every one a
+// 200x100 viewBox on a 200x100 canvas over a white ground:
+//
+//   1 gradients   defs(): a linear gradient (red -> blue, left to right) on a
+//                 rect across the top; a radial one (white centre, green rim)
+//                 on a circle below it.
+//   2 clip paths  a red rect clipped by a circle (shape clip_path); a group
+//                 clipped by a triangle (a polygon <clipPath>), holding a
+//                 gradient-filled rect, so the clip also has to hold a
+//                 gradient fill in.
+//   3 CSS         css(): type, class and id rules on five rects -- the type
+//                 rule alone, a class over it, an id over that, the shape's
+//                 own fill over every rule, and a circle the type rule does
+//                 not name.
+//   4 clicks      a rect that turns green on a RIGHT click and one that turns
+//                 blue on a DOUBLE click (each red until then).
+//   5 group alpha two red rects overlapping by 40 units in a g() at
+//                 opacity 0.5: composited once, the overlap is the same pink
+//                 as either square alone.
+//
+// The spec (tests/vgpaint_demo) reads the pixels back through the driver.
+// Run by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vgpaint_demo/bin/vgpaint_demo &
+//   UI_SPEC=vgpaint_demo/spec_vgpaint_demo tests/run_spec.sh
+
+import ui                                   // full — transitive canvas_* resolve
+import ui (window, vstack, text, enable_test_server)
+import vg.live (vg)
+import vg                                    // full — vg.live uses vg.scene_new
+import vg (view_box, rect, circle, g, fill, opacity, defs, css, clip_path,
+           css_class, css_id, node_element, element_set_fill,
+           on_right_click, on_double_click)
+import std.os (os_getenv)
+
+extern string_retain(s: string)
+
+// Recolour this shape when it is right-clicked / double-clicked. The handler
+// captures the shape's element (what on_click_recolor does for a left click).
+recolor_on_right(_ctx: ptr, color: string) {
+    el = node_element(_ctx)
+    if el == null { return }
+    string_retain(color)
+    on_right_click(_ctx) callback |x: float, y: float| {
+        println("right click")
+        _xy = x + y
+        element_set_fill(el, color)
+    }
+}
+
+recolor_on_double(_ctx: ptr, color: string) {
+    el = node_element(_ctx)
+    if el == null { return }
+    string_retain(color)
+    on_double_click(_ctx) callback |x: float, y: float| {
+        println("double click")
+        _xy = x + y
+        element_set_fill(el, color)
+    }
+}
+
+main() {
+    window("vg paint", 240, 600) {
+        vstack(4) {
+            text("vg paint")
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                defs("<linearGradient id='sky' x1='0' y1='0' x2='1' y2='0'><stop offset='0' stop-color='#ff0000'/><stop offset='1' stop-color='#0000ff'/></linearGradient><radialGradient id='glow' cx='0.5' cy='0.5' r='0.5'><stop offset='0' stop-color='#ffffff'/><stop offset='1' stop-color='#008800'/></radialGradient>")
+                rect(0, 0, 200, 100) { fill("#ffffff") }
+                rect(0, 0, 200, 40) { fill("url(#sky)") }
+                circle(100, 70, 28) { fill("url(#glow)") }
+            }
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                defs("<clipPath id='disc'><circle cx='50' cy='50' r='30'/></clipPath><clipPath id='tri'><polygon points='110,90 150,10 190,90'/></clipPath><linearGradient id='sky2' x1='0' y1='0' x2='1' y2='0'><stop offset='0' stop-color='#ff0000'/><stop offset='1' stop-color='#0000ff'/></linearGradient>")
+                rect(0, 0, 200, 100) { fill("#ffffff") }
+                rect(10, 10, 80, 80) {
+                    fill("#ff0000")
+                    clip_path("url(#disc)")
+                }
+                g() {
+                    clip_path("tri")
+                    rect(100, 0, 100, 100) { fill("url(#sky2)") }
+                }
+            }
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                css("rect { fill: #00aa00 } .hot { fill: #ff0000 } #special { fill: #0000ff }")
+                rect(0, 0, 200, 100) { fill("#ffffff") }
+                rect(5, 30, 30, 40) { }
+                rect(45, 30, 30, 40) { css_class("hot") }
+                rect(85, 30, 30, 40) { css_class("hot"); css_id("special") }
+                rect(125, 30, 30, 40) { css_class("hot"); fill("#888888") }
+                circle(180, 50, 15) { css_class("hot") }
+            }
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                rect(0, 0, 200, 100) { fill("#ffffff") }
+                rect(10, 20, 80, 60) {
+                    fill("#ff0000")
+                    recolor_on_right("#00ff00")
+                }
+                rect(110, 20, 80, 60) {
+                    fill("#ff0000")
+                    recolor_on_double("#0000ff")
+                }
+            }
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                rect(0, 0, 200, 100) { fill("#ffffff") }
+                g() {
+                    opacity(0.5)
+                    rect(20, 20, 100, 60) { fill("#ff0000") }
+                    rect(80, 20, 100, 60) { fill("#ff0000") }
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
