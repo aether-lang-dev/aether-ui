@@ -9690,7 +9690,13 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
                            scales source to dest natively. */
                         int ddw = cmd->p2 > 0 ? (int)cmd->p2 : cmd->iw;
                         int ddh = cmd->p3 > 0 ? (int)cmd->p3 : cmd->ih;
-                        SetStretchBltMode(mem, HALFTONE);
+                        /* HALFTONE is for shrinking: enlarging a tiny
+                           source with it averages the WHOLE source into
+                           every pixel (a 2x2 raster in a 150 px box reads
+                           as one grey). COLORONCOLOR (nearest) when the
+                           dest is larger than the source. */
+                        SetStretchBltMode(mem, (ddw > cmd->iw || ddh > cmd->ih)
+                                               ? COLORONCOLOR : HALFTONE);
                         StretchDIBits(mem, (int)cmd->p0, (int)cmd->p1,
                             ddw, ddh, 0, 0, cmd->iw, cmd->ih,
                             conv, &bi, DIB_RGB_COLORS, SRCCOPY);
@@ -9841,6 +9847,12 @@ __declspec(dllimport) int __stdcall GdipDrawImageRectRectI(GpGraphics* g,
     const void* imageAttributes, void* callback, void* callbackData);
 __declspec(dllimport) int __stdcall GdipGetImageWidth(void* image, UINT* w);
 __declspec(dllimport) int __stdcall GdipGetImageHeight(void* image, UINT* h);
+__declspec(dllimport) int __stdcall GdipGetInterpolationMode(GpGraphics* g, INT* mode);
+__declspec(dllimport) int __stdcall GdipSetInterpolationMode(GpGraphics* g, INT mode);
+__declspec(dllimport) int __stdcall GdipGetPixelOffsetMode(GpGraphics* g, INT* mode);
+__declspec(dllimport) int __stdcall GdipSetPixelOffsetMode(GpGraphics* g, INT mode);
+__declspec(dllimport) int __stdcall GdipSetImageAttributesWrapMode(void* imageattr, INT wrap,
+    DWORD argb, BOOL clamp);
 
 /* contain/cover for image widgets: keep the ORIGINAL bitmap per handle and
    show a derived DIB scaled into the widget's box — contain letterboxes
@@ -11368,8 +11380,30 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        three executors had the 1:1 stub independently. */
                     INT ddw = cmd->p2 > 0 ? (INT)cmd->p2 : cmd->iw;
                     INT ddh = cmd->p3 > 0 ? (INT)cmd->p3 : cmd->ih;
-                    GdipDrawImageRectI(g, bmp, (INT)cmd->p0, (INT)cmd->p1,
-                                       ddw, ddh);
+                    /* Sample like the other backends do: bilinear with the
+                       half-pixel offset (so a source texel's centre lands
+                       at the centre of its dest cell, not its corner) and
+                       the edges clamped by flip-tiling (no half-texel halo
+                       of transparent outside the box). Without these a 2x2
+                       raster in a 150 px box read as a 4-way blend. */
+                    INT old_interp = 0, old_pom = 0;
+                    GdipGetInterpolationMode(g, &old_interp);
+                    GdipGetPixelOffsetMode(g, &old_pom);
+                    GdipSetInterpolationMode(g, 6 /* HighQualityBilinear */);
+                    GdipSetPixelOffsetMode(g, 4 /* PixelOffsetModeHalf */);
+                    void* ia = NULL;
+                    if (GdipCreateImageAttributes(&ia) == 0 && ia) {
+                        GdipSetImageAttributesWrapMode(ia, 3 /* TileFlipXY */, 0, 0);
+                        GdipDrawImageRectRectI(g, bmp, (INT)cmd->p0, (INT)cmd->p1,
+                                               ddw, ddh, 0, 0, cmd->iw, cmd->ih,
+                                               GDIP_UNIT_PIXEL, ia, NULL, NULL);
+                        GdipDisposeImageAttributes(ia);
+                    } else {
+                        GdipDrawImageRectI(g, bmp, (INT)cmd->p0, (INT)cmd->p1,
+                                           ddw, ddh);
+                    }
+                    GdipSetInterpolationMode(g, old_interp);
+                    GdipSetPixelOffsetMode(g, old_pom);
                     GdipDisposeImage(bmp);
                 }
                 /* Freed AFTER the draw: GdipCreateBitmapFromScan0 does not
