@@ -1,8 +1,21 @@
 # A capturing closure stored through a `fn` parameter is freed after the call
 
 **From:** aether-ui (wave1/raster, 2026-10-08). **Aether:** 0.790.0 (dev
-tree) and 0.791.0 (release) both do it. **Status:** worked around in
-aether-ui; needs a compiler fix.
+tree) and 0.791.0 (release) both do it. **Status:** needs a compiler fix;
+the workaround below no longer holds on 0.796.0.
+
+**Update, 2026-10-09: 0.796.0 makes it worse.** Aether #2670/#2671 ("a callee
+that aliases a closure keeps nothing of its caller's") defeat the alias
+workaround (`kept = h; e.cb = kept`) in `vg/grammar/element.ae`
+`element_on_click` and its siblings, so on 0.796 a capturing closure stored on
+an element is freed as the setter returns and clicking it crashes (sae-driver
+SIGSEGV, on macOS too). aether-ui's CI floor is 0.791.0, so CI does not see
+it; anyone building aether-ui on 0.796 does. sae no longer stores page
+handlers on elements (it keeps them in its own scene record and hit-tests
+itself), but every other caller of `on_click`/`on_hover`/`on_drag` with a
+capturing closure is exposed. A compiler fix (a store of a closure, or of an
+alias of one, into a struct field, global, list or map is an escape) is in
+progress as an aether PR, with this file's repro as its regression test.
 
 ## What happens
 
