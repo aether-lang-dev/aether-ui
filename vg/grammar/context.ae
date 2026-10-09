@@ -28,7 +28,7 @@
 
 exports (
     // Construction
-    new_context, mapping_new,
+    new_context, mapping_new, ctx_adopt_defs,
 
     // Mapping accessors
     mapping_canvas_width, mapping_canvas_height,
@@ -172,6 +172,28 @@ new_context(mapping_handle: ptr) -> ptr {
 }
 
 ctx_mapping(c: ptr) -> ptr { x = c as *AevgContext; return x.mapping }
+
+// ctx_adopt_defs(dst, src) — make `dst` share `src`'s definition registries
+// (gradients, filters, clip paths, the id index, CSS rules). A live scene
+// swaps in a fresh context whenever its canvas is resized or re-viewBoxed:
+// the mapping is new, the definitions are not. Shared, not copied, so a
+// definition registered on either afterwards is seen by both.
+ctx_adopt_defs(dst: ptr, src: ptr) {
+    d = dst as *AevgContext
+    s = src as *AevgContext
+    // dst is normally fresh: its own (empty) registries go, rather than leak
+    // on every resize.
+    if map.size(d.gradients) == 0 { map.free(d.gradients) }
+    if map.size(d.filters) == 0 { map.free(d.filters) }
+    if map.size(d.clip_paths) == 0 { map.free(d.clip_paths) }
+    if map.size(d.nodes_by_id) == 0 { map.free(d.nodes_by_id) }
+    if map.size(d.css_rules) == 0 { map.free(d.css_rules) }
+    d.gradients = s.gradients
+    d.filters = s.filters
+    d.clip_paths = s.clip_paths
+    d.nodes_by_id = s.nodes_by_id
+    d.css_rules = s.css_rules
+}
 ctx_tracked_elements(c: ptr) -> ptr { x = c as *AevgContext; return x.tracked_elements }
 
 // ctx_track_element — append an element to the tracked list. Called

@@ -234,14 +234,16 @@ main() {
     assert_near("cp1[0].width",              defs.clip_shape_width(cp1_shape0),  30.0)
     assert_near("cp1[0].height",             defs.clip_shape_height(cp1_shape0), 40.0)
 
-    // ClipPath with a circle + a rect + a polygon (ignored)
+    // ClipPath with a circle + a polygon + a rect: the polygon is kept as an
+    // outline (CLIP_SHAPE_PATH, path data), which the live vector clip draws;
+    // rect and circle keep their fields for the raster clip route.
     ctx_cp2 = mk_test_ctx()
-    svg_cp2 = "<svg><defs><clipPath id='cp2'><circle cx='5' cy='6' r='7'/><polygon points='0,0 1,1'/><rect x='0' y='0' width='10' height='10'/></clipPath></defs></svg>"
+    svg_cp2 = "<svg><defs><clipPath id='cp2'><circle cx='5' cy='6' r='7'/><polygon points='0,0 1,1 0,1'/><rect x='0' y='0' width='10' height='10'/></clipPath></defs></svg>"
     root_cp2 = parser.parse_svg(svg_cp2)
     cp2 = defs.parse_clip_path(ctx_cp2,
         parser.node_child_at(parser.node_child_at(root_cp2, 0), 0))
-    assert_eq_int("cp2 shape count = 2 (polygon skipped)",
-                   defs.clip_path_shape_count(cp2), 2)
+    assert_eq_int("cp2 shape count = 3 (the polygon is an outline)",
+                   defs.clip_path_shape_count(cp2), 3)
     cp2_s0 = defs.clip_path_shape_at(cp2, 0)
     assert_eq_int("cp2[0] is circle", defs.clip_shape_kind(cp2_s0),
                                        defs.CLIP_SHAPE_CIRCLE)
@@ -249,8 +251,14 @@ main() {
     assert_near("cp2[0].cy", defs.clip_shape_cy(cp2_s0), 6.0)
     assert_near("cp2[0].r",  defs.clip_shape_r(cp2_s0),  7.0)
     cp2_s1 = defs.clip_path_shape_at(cp2, 1)
-    assert_eq_int("cp2[1] is rect", defs.clip_shape_kind(cp2_s1),
+    assert_eq_int("cp2[1] is a path outline", defs.clip_shape_kind(cp2_s1),
+                                               defs.CLIP_SHAPE_PATH)
+    assert_eq_int("cp2[1] has path data", string.length(defs.clip_shape_d(cp2_s1)) > 0, 1)
+    cp2_s2 = defs.clip_path_shape_at(cp2, 2)
+    assert_eq_int("cp2[2] is rect", defs.clip_shape_kind(cp2_s2),
                                      defs.CLIP_SHAPE_RECT)
+    assert_eq_int("cp2[2] rect outline is a closed path",
+                  string.length(defs.clip_shape_outline(cp2_s2)) > 0, 1)
 
     // Missing id → null returned
     ctx_cp3 = mk_test_ctx()

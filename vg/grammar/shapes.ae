@@ -36,7 +36,7 @@
 
 exports (
     shape_circle, shape_rectangle, shape_line, shape_path,
-    shape_group, shape_text,
+    shape_group, shape_text, mapped_points,
     // Exported for vg/test/test_font_family.ae, which pins what a single
     // mono/not-mono bit cannot carry about a CSS font stack.
     is_monospace
@@ -855,6 +855,58 @@ shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
     map.free(opts)
     map.free(style)
     return el
+}
+
+// mapped_points(ctx, d) — SVG path data flattened and mapped to canvas
+// space through the context's current transform, in the "points" encoding
+// shape_path dispatches ("M x,y x,y ... Z ..."). For outlines that are not
+// shapes of their own: the live clip-path's clip region.
+mapped_points(ctx: ptr, d: string) -> string {
+    cmds = normalizer.normalize_commands(normalizer.parse_path(d))
+    points = strbuilder.new(128)
+    has_pt = 0
+    mnx = 0.0; mny = 0.0; mxx = 0.0; mxy = 0.0
+    cur_x = 0.0; cur_y = 0.0
+    n_cmds = list_size(cmds)
+    steps_f = PATH_CUBIC_STEPS * 1.0
+    i = 0
+    while i < n_cmds {
+        item, _ = list.get(cmds, i)
+        cty = normalizer.cmd_type(item)
+        args = normalizer.cmd_args(item)
+        if cty == 90 {
+            sb_token(points, "Z")
+        } else {
+            if cty == 67 {
+                cp1x = floatarr_get_unchecked(args, 0)
+                cp1y = floatarr_get_unchecked(args, 1)
+                cp2x = floatarr_get_unchecked(args, 2)
+                cp2y = floatarr_get_unchecked(args, 3)
+                ex   = floatarr_get_unchecked(args, 4)
+                ey   = floatarr_get_unchecked(args, 5)
+                s = 1
+                while s <= PATH_CUBIC_STEPS {
+                    t = s / steps_f
+                    mp = rendering.map_point(ctx, cubic_at(cur_x, cp1x, cp2x, ex, t),
+                                             cubic_at(cur_y, cp1y, cp2y, ey, t))
+                    has_pt, mnx, mny, mxx, mxy =
+                        emit_pt(points, transform.pt_x(mp), transform.pt_y(mp), has_pt, mnx, mny, mxx, mxy)
+                    s = s + 1
+                }
+                cur_x = ex; cur_y = ey
+            } else {
+                ax = floatarr_get_unchecked(args, 0)
+                ay = floatarr_get_unchecked(args, 1)
+                mp = rendering.map_point(ctx, ax, ay)
+                if cty == 77 { sb_token(points, "M") }
+                has_pt, mnx, mny, mxx, mxy =
+                    emit_pt(points, transform.pt_x(mp), transform.pt_y(mp), has_pt, mnx, mny, mxx, mxy)
+                cur_x = ax; cur_y = ay
+            }
+        }
+        i = i + 1
+    }
+    return strbuilder.finish(points)
 }
 
 // ─── path flattening helpers ─────────────────────────────────────

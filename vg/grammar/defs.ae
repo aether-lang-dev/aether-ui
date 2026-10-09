@@ -47,7 +47,9 @@ exports (
     clip_path_shape_count, clip_path_shape_at,
     clip_shape_kind,
     clip_shape_x, clip_shape_y, clip_shape_width, clip_shape_height,
-    clip_shape_cx, clip_shape_cy, clip_shape_r
+    clip_shape_cx, clip_shape_cy, clip_shape_r,
+    CLIP_SHAPE_PATH, clip_shape_d, clip_shape_outline, clip_shape_transform,
+    clip_path_transform, clip_path_obb, clip_path_evenodd
 )
 
 import std.string
@@ -61,6 +63,7 @@ import vg.geom.transform
 import std.math
 
 extern malloc(size: int) -> ptr
+extern string_retain(s: string)
 
 const GRADIENT_LINEAR: int = 0
 const GRADIENT_RADIAL: int = 1
@@ -479,13 +482,15 @@ parse_filter(ctx: ptr, node: ptr) -> ptr {
 
 // ─── ClipPathDef ─────────────────────────────────────────────────
 //
-// <clipPath> with <rect> or <circle> child shapes. Each shape is
-// stored as a ClipPathShape with a kind discriminator. Other clip
-// shapes (path, polygon, ellipse) are silently skipped — same
-// behaviour as the TS source.
+// <clipPath> with <rect>, <circle>, <ellipse>, <polygon>, <polyline> or
+// <path> child shapes. Each shape is stored as a ClipPathShape with a kind
+// discriminator; every kind also carries its outline as SVG path data
+// (clip_shape_outline), which is what the live vector clip draws. The raster
+// clip route (render_as_raster) still reads rect and circle only.
 
 const CLIP_SHAPE_RECT: int = 0
 const CLIP_SHAPE_CIRCLE: int = 1
+const CLIP_SHAPE_PATH: int = 2
 
 struct ClipPathShape {
     kind: int       // CLIP_SHAPE_RECT or CLIP_SHAPE_CIRCLE
@@ -498,6 +503,8 @@ struct ClipPathShape {
     cx: float
     cy: float
     r: float
+    d: string       // CLIP_SHAPE_PATH: the outline as SVG path data
+    tf: string      // the child's own transform attribute, "" if none
 }
 
 mk_clip_shape() -> *ClipPathShape {
@@ -506,6 +513,8 @@ mk_clip_shape() -> *ClipPathShape {
     s.kind = 0
     s.x = 0.0; s.y = 0.0; s.w = 0.0; s.h = 0.0
     s.cx = 0.0; s.cy = 0.0; s.r = 0.0
+    s.d = ""
+    s.tf = ""
     return s
 }
 
@@ -517,15 +526,53 @@ clip_shape_height(p: ptr) -> float  { s = p as *ClipPathShape; return s.h }
 clip_shape_cx(p: ptr) -> float      { s = p as *ClipPathShape; return s.cx }
 clip_shape_cy(p: ptr) -> float      { s = p as *ClipPathShape; return s.cy }
 clip_shape_r(p: ptr) -> float       { s = p as *ClipPathShape; return s.r }
+clip_shape_d(p: ptr) -> string      { s = p as *ClipPathShape; return s.d }
+clip_shape_transform(p: ptr) -> string { s = p as *ClipPathShape; return s.tf }
+
+// The shape's outline as SVG path data, whatever its kind.
+clip_shape_outline(p: ptr) -> string {
+    s = p as *ClipPathShape
+    if s.kind == CLIP_SHAPE_RECT {
+        x2 = s.x + s.w
+        y2 = s.y + s.h
+        fx = string.from_float(s.x)
+        fy = string.from_float(s.y)
+        fx2 = string.from_float(x2)
+        fy2 = string.from_float(y2)
+        return "M ${fx} ${fy} L ${fx2} ${fy} L ${fx2} ${fy2} L ${fx} ${fy2} Z"
+    }
+    if s.kind == CLIP_SHAPE_CIRCLE {
+        return utils.ellipse_to_path(s.cx, s.cy, s.r, s.r)
+    }
+    return s.d
+}
 
 struct ClipPathDef {
     shapes: ptr     // std.list of *ClipPathShape
+    tf: string      // the <clipPath>'s transform attribute, "" if none
+    obb: int        // 1 = clipPathUnits="objectBoundingBox"
+    evenodd: int    // 1 = a child asked for clip-rule="evenodd"
 }
 
 mk_clip_path_def() -> *ClipPathDef {
     cp = malloc(sizeof(ClipPathDef)) as *ClipPathDef
     cp.shapes = list.new()
+    cp.tf = ""
+    cp.obb = 0
+    cp.evenodd = 0
     return cp
+}
+
+clip_path_transform(p: ptr) -> string { cp = p as *ClipPathDef; return cp.tf }
+clip_path_obb(p: ptr) -> int          { cp = p as *ClipPathDef; return cp.obb }
+clip_path_evenodd(p: ptr) -> int      { cp = p as *ClipPathDef; return cp.evenodd }
+
+// A string attribute kept past the parse (the parser's strings are not ours).
+attr_keep(node: ptr, name: string) -> string {
+    if parser.node_has_attr(node, name) == 0 { return "" }
+    v = string.copy(parser.node_attr(node, name))
+    string_retain(v)
+    return v
 }
 
 clip_path_shape_count(p: ptr) -> int {
@@ -550,6 +597,9 @@ parse_clip_path(ctx: ptr, node: ptr) -> ptr {
     id = parser.node_attr(node, "id")
 
     cp = mk_clip_path_def()
+    cp.tf = attr_keep(node, "transform")
+    if string.equals(attr_keep(node, "clipPathUnits"), "objectBoundingBox") == 1 { cp.obb = 1 }
+    if string.equals(attr_keep(node, "clip-rule"), "evenodd") == 1 { cp.evenodd = 1 }
 
     n = parser.node_child_count(node)
     i = 0
@@ -563,6 +613,7 @@ parse_clip_path(ctx: ptr, node: ptr) -> ptr {
             s.y = attr_num(child, "y", 0.0)
             s.w = attr_num(child, "width", 0.0)
             s.h = attr_num(child, "height", 0.0)
+            s.tf = attr_keep(child, "transform")
             _ = list.add(cp.shapes, s)
         }
         if string.equals(tag, "circle") == 1 {
@@ -571,10 +622,35 @@ parse_clip_path(ctx: ptr, node: ptr) -> ptr {
             s.cx = attr_num(child, "cx", 0.0)
             s.cy = attr_num(child, "cy", 0.0)
             s.r  = attr_num(child, "r",  0.0)
+            s.tf = attr_keep(child, "transform")
             _ = list.add(cp.shapes, s)
         }
-        // Other clip children (path, polygon, ellipse) ignored —
-        // matches TS source's silent skip.
+        // The rest become path data. The raster clip route still skips
+        // them (as the TS source did); the live vector clip draws them.
+        pd = ""
+        if string.equals(tag, "ellipse") == 1 {
+            pd = utils.ellipse_to_path(attr_num(child, "cx", 0.0), attr_num(child, "cy", 0.0),
+                                       attr_num(child, "rx", 0.0), attr_num(child, "ry", 0.0))
+        }
+        if string.equals(tag, "polygon") == 1 {
+            pd = utils.points_to_path(attr_keep(child, "points"), 1)
+        }
+        if string.equals(tag, "polyline") == 1 {
+            pd = utils.points_to_path(attr_keep(child, "points"), 1)
+        }
+        if string.equals(tag, "path") == 1 {
+            pd = attr_keep(child, "d")
+        }
+        if string.length(pd) > 0 {
+            s = mk_clip_shape()
+            s.kind = CLIP_SHAPE_PATH
+            dk = string.copy(pd)
+            string_retain(dk)
+            s.d = dk
+            s.tf = attr_keep(child, "transform")
+            _ = list.add(cp.shapes, s)
+        }
+        if string.equals(attr_keep(child, "clip-rule"), "evenodd") == 1 { cp.evenodd = 1 }
         i = i + 1
     }
 

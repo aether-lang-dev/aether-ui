@@ -24,7 +24,7 @@ exports (
     OP_CIRCLE, OP_RECT, OP_LINE, OP_PATH, OP_TEXT, OP_RASTER, OP_TAPPABLE,
     dispatch_circle, dispatch_rectangle, dispatch_line,
     dispatch_path, dispatch_text, dispatch_raster, dispatch_tappable_raster,
-    dispatch_group_begin, dispatch_group_end, dispatch_image
+    dispatch_group_begin, dispatch_group_end, dispatch_image, dispatch_clip
 )
 
 import std.string
@@ -89,6 +89,12 @@ dispatch_raster(p: ptr, opts: ptr) -> ptr          { return run(p, 5, opts) }
 dispatch_tappable_raster(p: ptr, opts: ptr) -> ptr { return run(p, 6, opts) }
 dispatch_group_begin(p: ptr, opts: ptr) -> ptr     { return run(p, 7, opts) }
 dispatch_group_end(p: ptr, opts: ptr) -> ptr       { return run(p, 8, opts) }
+// dispatch_clip — intersect the clip with an outline: opts "points" (the
+// canvas-space polyline encoding dispatch_path uses; "" = an empty outline,
+// which clips everything away) and "clipRule" ("evenodd" | nonzero). The
+// clip holds until the enclosing group layer ends: callers bracket it with
+// dispatch_group_begin / dispatch_group_end.
+dispatch_clip(p: ptr, opts: ptr) -> ptr            { return run(p, 9, opts) }
 
 // dispatch_image(d, opts, rgba, byte_len) — blit an image element's pixels
 // (see backend_set_image). Returns 0 when the backend has no image blit.

@@ -15,17 +15,19 @@
 // keyed by selector string ("text", ".my-class"). Each value is a
 // std.map string→string of property declarations.
 //
-// Lookup precedence (matching TS):
+// Lookup precedence (CSS specificity, merged least-specific first):
 //   1. Element tag selector ("text", "rect", etc.)
-//   2. Each class in attrs.class (space-separated), most-specific
-//      last. Later classes overwrite earlier ones.
+//   2. Each class in attrs.class (space-separated). Between two
+//      classes of one element, the one named later in the class
+//      list wins (not the later declaration: not tracked).
+//   3. The `#id` selector for attrs.id (get_css_props_id).
 //
 // Style attrs on the element + inline style="..." beat all CSS class
 // rules — that priority is handled by style.cascade_one,
 // where css is layer 3 of 4 (attrs > style > css > parent).
 
 exports (
-    register_css_style, get_css_props
+    register_css_style, get_css_props, get_css_props_id
 )
 
 import std.regex
@@ -202,5 +204,18 @@ get_css_props(ctx: ptr, tag: string, class_attr: string) -> ptr {
         string_array_free(cls_arr)
     }
 
+    return out
+}
+
+// get_css_props_id — as get_css_props, then the `#id` rule on top: type <
+// class < id is CSS specificity order, and merging in that order makes the
+// more specific selector win a conflict.
+get_css_props_id(ctx: ptr, tag: string, class_attr: string, id_attr: string) -> ptr {
+    out = get_css_props(ctx, tag, class_attr)
+    idt = string.trim(id_attr)
+    if string.length(idt) > 0 {
+        id_rules = context.get_css_rule(ctx, string.concat("#", idt))
+        if id_rules != null { merge_into(out, id_rules) }
+    }
     return out
 }

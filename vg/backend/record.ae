@@ -93,6 +93,7 @@ backend_new() -> ptr {
         if op == 5 { return canvas_raster(be, opts) }
         if op == 7 { return canvas_group_begin(be, opts) }
         if op == 8 { return canvas_group_end(be, opts) }
+        if op == 9 { return record_one(be, "clip", opts) }
         return canvas_tappable_raster(be, opts)
     }
     // The image element's blit records as "image" with its dest rect and

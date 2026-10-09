@@ -47,6 +47,8 @@ exports (
     use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
     text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
+    // Definitions and CSS for the scene; a shape's clip path, class and id.
+    defs, css, clip_path, css_class, css_id,
     // Interaction modifiers (attach a handler to the shape's element).
     on_click, on_hover, on_double_click, on_right_click, cursor, tooltip, hit_outline,
     shadow, group_begin, group_end, behavior,
@@ -99,6 +101,11 @@ import vg.grammar.animations
 import vg.region
 import vg.svg.parser
 import vg.font
+import vg.svg.loader
+import vg.grammar.defs as vgdefs
+import vg.grammar.utils
+import std.strbuilder
+import vg.grammar.css as vgcss
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
@@ -181,18 +188,35 @@ struct VgPending {
     font_size: float // text only: font-size in viewBox units (0 = engine default)
     anchor: string  // text only: "" (start) | "middle" | "end" (text-anchor)
     tracked: int    // 1 once track_element'd (re-flush must not double-track)
+    group: ptr      // *VgGroup the shape was made inside (null = scene root)
+}
+
+// A g() scope on the deferred path. Its modifiers that act on the group AS
+// ONE (opacity, clip_path) cannot be folded into each child: opacity must
+// composite the children once, clip must cut them all along one outline. So
+// each recorded shape remembers its innermost group, and vg_flush brackets
+// every run of a group's shapes with that group's layer (see _flush_groups).
+// A group with neither stays transparent to the flush: no layer, no cost.
+struct VgGroup {
+    parent: ptr     // *VgGroup enclosing this one, null at the scene root
+    alpha: float    // group opacity, painted once over the composited layer
+    alpha_set: int  // 1 once opacity() was called on the group
+    clip: string    // clip-path reference ("url(#c)"), "" if none
 }
 
 // PAYLOAD_NONE / ELEMENT / GROUP — what the VgNode's payload is.
 struct VgNode {
     scene: ptr      // *VgScene (the shared drawing target)
-    payload: ptr    // *AevgElement (shape) / group handle / null (vg root)
+    payload: ptr    // *AevgElement (shape) / null (vg root, g())
+    group: ptr      // *VgGroup the node sits in: for a g() node its own
+                    //   group, for a shape the group it was made inside
 }
 
 mk_node(scene: ptr, payload: ptr) -> ptr {
     n = malloc(sizeof(VgNode)) as *VgNode
     n.scene = scene
     n.payload = payload
+    n.group = null
     s = scene as *VgScene
     if s.nodes != null { _ = list.add(s.nodes, n) }
     return n
@@ -200,6 +224,7 @@ mk_node(scene: ptr, payload: ptr) -> ptr {
 
 node_scene(p: ptr) -> ptr   { n = p as *VgNode; return n.scene }
 node_payload(p: ptr) -> ptr { n = p as *VgNode; return n.payload }
+node_group(p: ptr) -> ptr   { n = p as *VgNode; return n.group }
 
 scene_ctx(p: ptr) -> ptr     { s = p as *VgScene; return s.ctx }
 scene_backend(p: ptr) -> ptr { s = p as *VgScene; return s.backend }
@@ -234,6 +259,15 @@ scene_px_to_vb_y(p: ptr, py: float) -> float {
 // which the re-flush does via the dispatched element's bounds copy.)
 scene_set_ctx(p: ptr, ctx: ptr) {
     s = p as *VgScene
+    // A resize changes the viewBox-to-canvas MAPPING, not what the scene
+    // defined: carry the old context's gradients, clip paths, filters, id
+    // index and CSS rules into the new one. Without this every live scene
+    // lost its defs on the first canvas_on_resize -- which AppKit fires as
+    // the canvas is first laid out -- so a fill("url(#id)") painted the
+    // black fallback and a clip path or class rule silently stopped applying.
+    if s.ctx != null {
+        if s.ctx != ctx { context.ctx_adopt_defs(ctx, s.ctx) }
+    }
     s.ctx = ctx
     if s.pending != null {
         n = list.size(s.pending)
@@ -394,7 +428,7 @@ circle(_ctx: ptr, cx: float, cy: float, r: float) -> ptr {
     put_f(a, "cy", cy)
     put_f(a, "r",  r)
     if scene_is_deferred(scene) == 1 {
-        return record_shape(scene, 0, a)
+        return record_shape(_ctx, scene, 0, a)
     }
     el = shapes.shape_circle(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
@@ -408,7 +442,7 @@ rect(_ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
     put_f(a, "width",  w)
     put_f(a, "height", h)
     if scene_is_deferred(scene) == 1 {
-        return record_shape(scene, 1, a)
+        return record_shape(_ctx, scene, 1, a)
     }
     el = shapes.shape_rectangle(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
@@ -427,7 +461,7 @@ rrect(_ctx: ptr, x: float, y: float, w: float, h: float, r: float) -> ptr {
     put_f(a, "height", h)
     put_f(a, "rx", r)
     if scene_is_deferred(scene) == 1 {
-        return record_shape(scene, 1, a)
+        return record_shape(_ctx, scene, 1, a)
     }
     el = shapes.shape_rectangle(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
@@ -441,7 +475,7 @@ line(_ctx: ptr, x1: float, y1: float, x2: float, y2: float) -> ptr {
     put_f(a, "x2", x2)
     put_f(a, "y2", y2)
     if scene_is_deferred(scene) == 1 {
-        return record_shape(scene, 2, a)
+        return record_shape(_ctx, scene, 2, a)
     }
     el = shapes.shape_line(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
@@ -452,7 +486,7 @@ path(_ctx: ptr, d: string) -> ptr {
     a = map.new()
     _ = map.put(a, "d", d)
     if scene_is_deferred(scene) == 1 {
-        return record_shape(scene, 3, a)
+        return record_shape(_ctx, scene, 3, a)
     }
     el = shapes.shape_path(scene_ctx(scene), scene_backend(scene), a)
     return mk_node(scene, el)
@@ -496,7 +530,7 @@ image(_ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
     put_f(a, "width",  w)
     put_f(a, "height", h)
     if scene_is_deferred(scene) == 1 {
-        return record_shape(scene, 7, a)
+        return record_shape(_ctx, scene, 7, a)
     }
     // Eager: draw now with whatever pixels the element has (none, before the
     // block runs), and keep the attrs on the element's node for the test
@@ -890,7 +924,7 @@ text_sized(_ctx: ptr, x: float, y: float, size: float, content: string) -> ptr {
 text_anchored(_ctx: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     scene = node_scene(_ctx)
     if scene_is_deferred(scene) == 1 {
-        return record_text(scene, x, y, size, anchor, content)
+        return record_text(_ctx, scene, x, y, size, anchor, content)
     }
     s = "<svg><text x='"
     s = string.concat(s, string.from_float(x))
@@ -930,7 +964,7 @@ text_anchored(_ctx: ptr, x: float, y: float, size: float, anchor: string, conten
 group_begin(_ctx: ptr, alpha: float) {
     scene = node_scene(_ctx)
     if scene_is_deferred(scene) == 1 {
-        record_group_marker(scene, 5, alpha)
+        record_group_marker(scene, 5, alpha, node_group(_ctx))
         return
     }
     opts = map.new()
@@ -942,7 +976,7 @@ group_begin(_ctx: ptr, alpha: float) {
 group_end(_ctx: ptr, alpha: float) {
     scene = node_scene(_ctx)
     if scene_is_deferred(scene) == 1 {
-        record_group_marker(scene, 6, alpha)
+        record_group_marker(scene, 6, alpha, node_group(_ctx))
         return
     }
     opts = map.new()
@@ -952,7 +986,7 @@ group_end(_ctx: ptr, alpha: float) {
 }
 
 // A group marker pending: kind 5 (begin) / 6 (end); alpha rides in tx.
-record_group_marker(scene: ptr, kind: int, alpha: float) {
+record_group_marker(scene: ptr, kind: int, alpha: float, grp: ptr) {
     s = scene as *VgScene
     if s.pending == null { s.pending = list.new() }
     pend = malloc(sizeof(VgPending)) as *VgPending
@@ -965,6 +999,7 @@ record_group_marker(scene: ptr, kind: int, alpha: float) {
     pend.font_size = 0.0
     pend.anchor = ""
     pend.tracked = 0
+    pend.group = grp
     _gm = list.add(s.pending, pend as ptr)
 }
 
@@ -975,7 +1010,51 @@ g(_ctx: ptr) -> ptr {
     // scene. Group-level style/transform CASCADE (fill set on the g applying
     // to children) is deferred — it needs an after-block pop hook, which a
     // regular trailing block lacks; it lands when g moves to a builder form.
-    return mk_node(scene, null)
+    //
+    // What a g() DOES carry is what acts on the group as one: opacity(a)
+    // composites the group's shapes into one layer painted once at a (so
+    // overlapping children do not show through each other), and
+    // clip_path(ref) cuts them all along one outline. Both are applied at
+    // flush, around the run of shapes recorded inside the block.
+    n = mk_node(scene, null) as *VgNode
+    grp = malloc(sizeof(VgGroup)) as *VgGroup
+    grp.parent = node_group(_ctx)
+    grp.alpha = 1.0
+    grp.alpha_set = 0
+    grp.clip = ""
+    n.group = grp
+    return n
+}
+
+_group_set_clip(gp: ptr, ref: string) {
+    grp = gp as *VgGroup
+    cp = string.copy(ref)
+    string_retain(cp)
+    grp.clip = cp
+}
+
+// defs(markup) — register SVG definitions on the scene: <linearGradient>,
+// <radialGradient>, <clipPath> and <filter> elements, as the inner markup of
+// a <defs> (no <svg>/<defs> wrapper needed, though one is accepted). A shape
+// then refers to them by id: fill("url(#sky)"), clip_path("url(#c)").
+// Several calls accumulate; a gradient may href one registered before it.
+// They live on the scene's context and survive a resize (scene_set_ctx).
+defs(_ctx: ptr, markup: string) {
+    scene = node_scene(_ctx)
+    loader.register_defs_into(scene_ctx(scene), string.concat(string.concat("<svg><defs>", markup), "</defs></svg>"))
+}
+
+// css(text) — register CSS rules on the scene, as an SVG <style> would:
+// type (`rect { ... }`), class (`.hot { ... }`) and id (`#logo { ... }`)
+// selectors, comma lists, no combinators. A shape opts in with css_class /
+// css_id. Precedence follows specificity: type < class < id, then the
+// shape's own modifiers (fill, stroke, ...) beat every rule. Among a
+// shape's several classes the one named LAST in its class list wins a tie
+// (not declaration order); the same selector declared twice merges, the
+// later declaration winning.
+css(_ctx: ptr, text: string) {
+    scene = node_scene(_ctx)
+    vgcss.register_css_style(scene_ctx(scene), text)
 }
 
 // Read a float attr recorded by a shape verb (put_f wrote the string).
@@ -1052,6 +1131,14 @@ opacity(_ctx: ptr, value: float) {
     el = node_payload(_ctx)
     if el != null {
         element.element_set_opacity(el, value)
+        return
+    }
+    // On a g(): the group's opacity, composited once (see VgGroup).
+    gp = node_group(_ctx)
+    if gp != null {
+        grp = gp as *VgGroup
+        grp.alpha = value
+        grp.alpha_set = 1
     }
 }
 
@@ -1079,6 +1166,36 @@ linejoin(_ctx: ptr, v: string) {
     if el != null {
         element.element_set_linejoin(el, v)
     }
+}
+
+// clip_path("url(#c)") — clip this shape to a <clipPath> registered with
+// defs(): only the part of the shape inside the clip path paints. On a g()
+// node it clips every shape the group's block makes. A bare id ("c") is
+// accepted for "url(#c)".
+clip_path(_ctx: ptr, ref: string) {
+    r = ref
+    if string.starts_with(r, "url(") == 0 {
+        r = string.concat(string.concat("url(#", r), ")")
+    }
+    el = node_payload(_ctx)
+    if el != null {
+        element.element_set_clip(el, r)
+        return
+    }
+    grp = node_group(_ctx)
+    if grp != null { _group_set_clip(grp, r) }
+}
+
+// css_class("a b") / css_id("x") — the shape's class list and id, matched by
+// the `.a` / `#x` rules registered with css().
+css_class(_ctx: ptr, names: string) {
+    el = node_payload(_ctx)
+    if el != null { element.element_set_class(el, names) }
+}
+
+css_id(_ctx: ptr, name: string) {
+    el = node_payload(_ctx)
+    if el != null { element.element_set_id(el, name) }
 }
 
 // ─── interaction modifiers ───────────────────────────────────────
@@ -1266,7 +1383,7 @@ tween_opacity(scene: ptr, el: ptr, from: float, to: float, ms: long, ease: int) 
 // vg_flush walks the pending list in draw order, folds each element's final
 // cached style into its attrs, and dispatches for real.
 
-record_shape(scene: ptr, kind: int, attrs: ptr) -> ptr {
+record_shape(_ctx: ptr, scene: ptr, kind: int, attrs: ptr) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
     p = malloc(sizeof(VgPending)) as *VgPending
@@ -1275,11 +1392,14 @@ record_shape(scene: ptr, kind: int, attrs: ptr) -> ptr {
     p.element = el
     p.content = ""
     p.tracked = 0
+    p.group = node_group(_ctx)
     _ = list.add(s.pending, p)
-    return mk_node(scene, el)
+    n = mk_node(scene, el) as *VgNode
+    n.group = p.group
+    return n
 }
 
-record_text(scene: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
+record_text(_ctx: ptr, scene: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
     p = malloc(sizeof(VgPending)) as *VgPending
@@ -1298,8 +1418,11 @@ record_text(scene: ptr, x: float, y: float, size: float, anchor: string, content
     string_retain(ac)
     p.anchor = ac
     p.tracked = 0
+    p.group = node_group(_ctx)
     _ = list.add(s.pending, p)
-    return mk_node(scene, el)
+    n = mk_node(scene, el) as *VgNode
+    n.group = p.group
+    return n
 }
 
 // vg_flush(scene) — dispatch every recorded shape with its final style.
@@ -1314,13 +1437,159 @@ vg_flush(scene: ptr) {
     be = s.backend
     es = s.event_state
     n = list.size(s.pending)
+    open = list.new()
     i = 0
     while i < n {
         item, _ = list.get(s.pending, i)
         p = item as *VgPending
+        // Enter / leave group layers (g() opacity / clip_path) so this shape
+        // draws inside exactly the layers of the groups it was made in.
+        want = _group_chain(p.group)
+        _sync_layers(ctx, be, open, want)
+        list.free(want)
         flush_one_tracked(ctx, be, p, es)
         i = i + 1
     }
+    empty_chain = list.new()
+    _sync_layers(ctx, be, open, empty_chain)
+    list.free(empty_chain)
+    list.free(open)
+}
+
+// ─── group layers (g() opacity / clip_path) ─────────────────────────────────
+//
+// A group with an opacity below 1 or a clip path is drawn as ONE layer:
+// canvas_group_begin, its clip (if any), every shape made inside it, then
+// canvas_group_end at the group's alpha. That is SVG's <g opacity> (children
+// composite first, so overlapping ones do not show through each other) and
+// <g clip-path> (one clip for the whole group). The layer also scopes the
+// clip: it ends with the group on every backend. The shapes of a group are
+// recorded contiguously by its block, so a group is normally one layer; a
+// shape added to it LATER (from a handler, after other shapes) opens a
+// second layer of the same group, which differs only where the two overlap.
+
+_group_needs_layer(gp: ptr) -> int {
+    grp = gp as *VgGroup
+    if string.length(grp.clip) > 0 { return 1 }
+    if grp.alpha_set == 1 {
+        if grp.alpha < 1.0 { return 1 }
+    }
+    return 0
+}
+
+// The groups enclosing `gp` (itself included) that need a layer, outermost
+// first. A fresh list the caller frees.
+_group_chain(gp: ptr) -> ptr {
+    rev = list.new()
+    gq = gp
+    while gq != null {
+        if _group_needs_layer(gq) == 1 { _ = list.add(rev, gq) }
+        grp = gq as *VgGroup
+        gq = grp.parent
+    }
+    out = list.new()
+    k = list.size(rev) - 1
+    while k >= 0 {
+        it, _ = list.get(rev, k)
+        _ = list.add(out, it)
+        k = k - 1
+    }
+    list.free(rev)
+    return out
+}
+
+// Close the open layers `want` does not share, then open the rest of `want`.
+_sync_layers(ctx: ptr, be: ptr, open: ptr, want: ptr) {
+    no = list.size(open)
+    nw = list.size(want)
+    common = 0
+    while common < no && common < nw {
+        a, _ = list.get(open, common)
+        b, _ = list.get(want, common)
+        if a != b { break }
+        common = common + 1
+    }
+    while list.size(open) > common {
+        last = list.size(open) - 1
+        it, _ = list.get(open, last)
+        grp = it as *VgGroup
+        ga = 1.0
+        if grp.alpha_set == 1 { ga = grp.alpha }
+        _end_layer(be, ga)
+        list.remove(open, last)
+    }
+    j = common
+    while j < nw {
+        it2, _ = list.get(want, j)
+        grp2 = it2 as *VgGroup
+        _begin_layer(be)
+        if string.length(grp2.clip) > 0 {
+            _emit_clip(ctx, be, grp2.clip, 0, 0.0, 0.0, 0.0, 0.0)
+        }
+        _ = list.add(open, it2)
+        j = j + 1
+    }
+}
+
+_begin_layer(be: ptr) {
+    o = map.new()
+    put_f(o, "alpha", 1.0)
+    _b = dispatch.dispatch_group_begin(be, o)
+    map.free(o)
+}
+
+_end_layer(be: ptr, alpha: float) {
+    o = map.new()
+    put_f(o, "alpha", alpha)
+    _e = dispatch.dispatch_group_end(be, o)
+    map.free(o)
+}
+
+// Intersect the canvas clip with the <clipPath> `ref` names, mapped through
+// the context's CURRENT transform (a shape's own transform is pushed by the
+// caller: SVG puts clip-path in the user space of the element it clips).
+// has_bb + (bx, by, bw, bh): the element's bounding box in that user space,
+// for clipPathUnits="objectBoundingBox". An unknown id clips nothing (the
+// browsers' answer to a dangling reference); an empty <clipPath> clips
+// everything away, as SVG says.
+_emit_clip(ctx: ptr, be: ptr, ref: string, has_bb: int, bx: float, by: float, bw: float, bh: float) {
+    cid = utils.extract_url_id(ref)
+    if string.length(cid) == 0 { return }
+    if context.has_clip_path(ctx, cid) == 0 { return }
+    cp = context.get_clip_path(ctx, cid)
+    pushed = 0
+    if vgdefs.clip_path_obb(cp) == 1 {
+        if has_bb == 0 { return }
+        rendering.push_transform_str(ctx, "matrix(${string.from_float(bw)} 0 0 ${string.from_float(bh)} ${string.from_float(bx)} ${string.from_float(by)})")
+        pushed = pushed + 1
+    }
+    cptf = vgdefs.clip_path_transform(cp)
+    if string.length(cptf) > 0 {
+        rendering.push_transform_str(ctx, cptf)
+        pushed = pushed + 1
+    }
+    sb = strbuilder.new(256)
+    n = vgdefs.clip_path_shape_count(cp)
+    i = 0
+    while i < n {
+        sh = vgdefs.clip_path_shape_at(cp, i)
+        stf = vgdefs.clip_shape_transform(sh)
+        if string.length(stf) > 0 { rendering.push_transform_str(ctx, stf) }
+        pts = shapes.mapped_points(ctx, vgdefs.clip_shape_outline(sh))
+        if string.length(stf) > 0 { rendering.pop_transform(ctx) }
+        _ = strbuilder.append(sb, " ")
+        _ = strbuilder.append(sb, pts)
+        i = i + 1
+    }
+    while pushed > 0 {
+        rendering.pop_transform(ctx)
+        pushed = pushed - 1
+    }
+    o = map.new()
+    _ = map.put(o, "points", string.trim(strbuilder.finish(sb)))
+    if vgdefs.clip_path_evenodd(cp) == 1 { _ = map.put(o, "clipRule", "evenodd") }
+    _c = dispatch.dispatch_clip(be, o)
+    map.free(o)
 }
 
 // ─── data-driven shapes (bindTo) ─────────────────────────────────
@@ -1604,6 +1873,72 @@ flush_one(ctx: ptr, be: ptr, p: ptr) {
 // event entity (it holds the user's handlers); the dispatched element only
 // draws — so the bounds must be copied across.
 flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
+    pend = p as *VgPending
+    el = pend.element
+    // clip_path on the shape: draw it inside a layer clipped to the outline.
+    // The clip is in the shape's own user space, so its transform applies
+    // to the clip too (SVG); the layer ends the clip with the shape.
+    clp = element.element_last_clip(el)
+    if string.length(clp) > 0 && pend.kind != 5 && pend.kind != 6 {
+        if element.element_is_visible(el) == 1 {
+            _begin_layer(be)
+            tf = element.element_last_transform(el)
+            if string.length(tf) > 0 { rendering.push_transform_str(ctx, tf) }
+            has_bb, bx, by, bw, bh = _pending_bbox(pend)
+            _emit_clip(ctx, be, clp, has_bb, bx, by, bw, bh)
+            if string.length(tf) > 0 { rendering.pop_transform(ctx) }
+            _flush_one_body(ctx, be, p, es)
+            _end_layer(be, 1.0)
+            return
+        }
+    }
+    _flush_one_body(ctx, be, p, es)
+}
+
+// A recorded shape's bounding box in its own user space (from the geometry
+// its verb recorded), for clipPathUnits="objectBoundingBox". Text has none.
+_pending_bbox(pend: *VgPending) -> (int, float, float, float, float) {
+    a = pend.attrs
+    if a == null { return 0, 0.0, 0.0, 0.0, 0.0 }
+    if pend.kind == 0 {
+        r = attr_f(a, "r")
+        return 1, attr_f(a, "cx") - r, attr_f(a, "cy") - r, r * 2.0, r * 2.0
+    }
+    if pend.kind == 1 || pend.kind == 7 {
+        return 1, attr_f(a, "x"), attr_f(a, "y"), attr_f(a, "width"), attr_f(a, "height")
+    }
+    if pend.kind == 2 {
+        x1 = attr_f(a, "x1")
+        y1 = attr_f(a, "y1")
+        x2 = attr_f(a, "x2")
+        y2 = attr_f(a, "y2")
+        lx = x1
+        if x2 < lx { lx = x2 }
+        ly = y1
+        if y2 < ly { ly = y2 }
+        wx = x2 - x1
+        if wx < 0.0 { wx = 0.0 - wx }
+        wy = y2 - y1
+        if wy < 0.0 { wy = 0.0 - wy }
+        return 1, lx, ly, wx, wy
+    }
+    if pend.kind == 3 {
+        dstr, _sd = map.get(a, "d")
+        if dstr != null {
+            bb, _bbe = floatarr.new(4)
+            ok = rasterize.path_bounds(dstr, bb as ptr)
+            rx = floatarr.get_unchecked(bb, 0)
+            ry = floatarr.get_unchecked(bb, 1)
+            rw = floatarr.get_unchecked(bb, 2)
+            rh = floatarr.get_unchecked(bb, 3)
+            floatarr.free(bb)
+            if ok == 1 { return 1, rx, ry, rw, rh }
+        }
+    }
+    return 0, 0.0, 0.0, 0.0, 0.0
+}
+
+_flush_one_body(ctx: ptr, be: ptr, p: ptr, es: ptr) {
     pend = p as *VgPending
     el = pend.element
     if pend.kind == 4 {
@@ -1922,6 +2257,17 @@ apply_cached_style(a: ptr, el: ptr) {
     lj = element.element_last_linejoin(el)
     if string.length(lj) > 0 {
         _ = map.put(a, "stroke-linejoin", lj)
+    }
+    // (clip-path is NOT folded in: the shape factories would take their
+    // raster route for it. The live flush clips with a vector layer instead,
+    // see flush_one_tracked.)
+    cls = element.element_last_class(el)
+    if string.length(cls) > 0 {
+        _ = map.put(a, "class", cls)
+    }
+    eid = element.element_last_id(el)
+    if string.length(eid) > 0 {
+        _ = map.put(a, "id", eid)
     }
 }
 

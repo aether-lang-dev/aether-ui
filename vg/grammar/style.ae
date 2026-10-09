@@ -112,6 +112,14 @@ get_css_props(ctx: ptr, tag: string, class_name: string) -> ptr {
     return css.get_css_props(ctx, tag, class_name)
 }
 
+// As get_css_props, plus the element's `id` attribute's `#id` rule (the most
+// specific selector, so it merges last).
+css_props_for(ctx: ptr, attrs: ptr, tag: string, class_name: string) -> ptr {
+    idv, _ = map.get(attrs, "id")
+    if idv == null { return css.get_css_props(ctx, tag, class_name) }
+    return css.get_css_props_id(ctx, tag, class_name, idv)
+}
+
 // ─── push_style + pop_style + current_style ──────────────────────
 
 // Inputs:
@@ -132,7 +140,7 @@ push_style(ctx: ptr, attrs: ptr, tag: string, class_name: string) {
         inline_style = utils.parse_style_attr(inline_style_str)
     }
 
-    css = get_css_props(ctx, tag, class_name)
+    css = css_props_for(ctx, attrs, tag, class_name)
 
     // The TS source enumerates ~15 properties. Same list here.
     cascade_one(merged, "fill",           attrs, inline_style, css, parent)
@@ -182,7 +190,7 @@ resolve_style(ctx: ptr, attrs: ptr, tag: string, class_name: string) -> ptr {
         inline_style = utils.parse_style_attr(inline_style_str)
     }
 
-    css = get_css_props(ctx, tag, class_name)
+    css = css_props_for(ctx, attrs, tag, class_name)
 
     cascade_one(merged, "fill",           attrs, inline_style, css, parent)
     cascade_one(merged, "stroke",         attrs, inline_style, css, parent)

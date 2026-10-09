@@ -90,6 +90,7 @@ extern aether_ui_canvas_fill_radial_gradient_impl(canvas_id: int,
         cap: int, join: int, rx: float, ry: float, rot_deg: float)
 extern aether_ui_canvas_group_begin_impl(canvas_id: int)
 extern aether_ui_canvas_group_end_impl(canvas_id: int, alpha: float)
+extern aether_ui_canvas_clip_path_impl(canvas_id: int, even_odd: int)
 extern aether_ui_canvas_redraw_impl(canvas_id: int)
 
 // ─── Backend handle ──────────────────────────────────────────────
@@ -117,6 +118,7 @@ gtk_backend_new(canvas_id: int) -> ptr {
         if op == 5 { return canvas_raster(be, opts) }
         if op == 7 { return canvas_group_begin_op(be) }
         if op == 8 { return canvas_group_end_op(be, opts) }
+        if op == 9 { return canvas_clip_op(be, opts) }
         return canvas_tappable_raster(be, opts)
     }
     dispatch.backend_set_image(d) callback |be: ptr, opts: ptr, rgba: ptr, byte_len: int| {
@@ -162,6 +164,22 @@ canvas_group_begin_op(p: ptr) -> ptr {
 canvas_group_end_op(p: ptr, opts: ptr) -> ptr {
     b = p as *GtkBackend
     aether_ui_canvas_group_end_impl(b.canvas_id, opt_f(opts, "alpha", 1.0))
+    return fresh_handle()
+}
+
+// Clip to an outline (vg clip-path): the path, then canvas_clip_path. An empty
+// outline still clips -- to nothing, as an empty <clipPath> does in SVG.
+canvas_clip_op(p: ptr, opts: ptr) -> ptr {
+    b = p as *GtkBackend
+    pts = opt_s(opts, "points")
+    if string.length(pts) > 0 {
+        replay_path(b.canvas_id, pts)
+    } else {
+        aether_ui_canvas_begin_path_impl(b.canvas_id)
+    }
+    eo = 0
+    if string.equals(opt_s(opts, "clipRule"), "evenodd") == 1 { eo = 1 }
+    aether_ui_canvas_clip_path_impl(b.canvas_id, eo)
     return fresh_handle()
 }
 

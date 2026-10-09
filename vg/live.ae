@@ -111,6 +111,21 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
         _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
         ui.canvas_redraw(canvas_id)
     }
+    // Right click and double click: the same hit-test, dispatched to the
+    // topmost shape with an on_right_click / on_double_click, then the same
+    // full re-render (a handler may recolour its shape).
+    ui.canvas_on_right_click(canvas_id) callback |rx: float, ry: float| {
+        events.dispatch_right_click(es, vg.scene_ctx(scene), rx, ry)
+        ui.canvas_clear(canvas_id)
+        _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
+        ui.canvas_redraw(canvas_id)
+    }
+    ui.canvas_on_double_click(canvas_id) callback |dx: float, dy: float| {
+        events.dispatch_double_click(es, vg.scene_ctx(scene), dx, dy)
+        ui.canvas_clear(canvas_id)
+        _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))
+        ui.canvas_redraw(canvas_id)
+    }
     // Hover: on the drawn-tooltip path (sommelier, or $AETHER_UI_TOOLTIP=drawn),
     // resolve the tooltip under the pointer and show/hide a drawn overlay near
     // it. Off the drawn path this no-ops (native GtkTooltip handles display).

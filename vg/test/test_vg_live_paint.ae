@@ -1,0 +1,155 @@
+// test_vg_live_paint.ae — what a LIVE (deferred) vg scene must carry from the
+// shape to the backend call, headless against the recording backend:
+//
+//   1. defs survive a context swap. The live scene swaps in a fresh context on
+//      every canvas_on_resize (AppKit fires one as the canvas is first laid
+//      out), and a fresh context used to have empty registries, so a
+//      fill("url(#id)") lost its gradient and painted the black fallback.
+//   2. clip_path on a shape / a g() reaches the backend as a clip op inside a
+//      group layer that ends with the shape / group.
+//   3. css() type, class and id rules reach live shapes, by specificity.
+//   4. opacity() on a g() is one layer (group_begin ... group_end at the
+//      alpha), not a no-op and not multiplied into each child.
+//
+// The pixel truth of all four is tests/vgpaint_demo (the driver spec); this
+// pins the vg bookkeeping that spec depends on, on a runner with no display.
+
+import std.string
+import vg
+import vg.grammar.context
+import vg.backend.record
+import vg.geom.transform
+
+extern exit(code: int)
+
+assert_eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { println("  PASS: ${label} ('${got}')") }
+    else { println("  FAIL: ${label}: got '${got}' want '${want}'"); exit(1) }
+}
+
+assert_eq_int(label: string, got: int, want: int) {
+    if got == want { println("  PASS: ${label} (${got})") }
+    else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
+}
+
+mk_ctx() -> ptr {
+    id = transform.affine_identity()
+    m = context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)
+    return context.new_context(m)
+}
+
+// The recorded call kinds, space-separated: "group_begin clip path ...".
+kinds(bk: ptr) -> string {
+    out = ""
+    n = record.backend_call_count(bk)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, " ") }
+        out = string.concat(out, record.backend_kind(bk, i))
+        i = i + 1
+    }
+    return out
+}
+
+// A fresh deferred scene on the recording backend.
+mk_scene(bk: ptr) -> ptr {
+    scene = vg.scene_new(mk_ctx(), bk)
+    vg.scene_set_deferred(scene, 1)
+    return scene
+}
+
+main() {
+    println("=== test_vg_live_paint ===")
+
+    // ── 1. defs survive a context swap ───────────────────────────────
+    bk1 = record.backend_new()
+    s1 = mk_scene(bk1)
+    r1 = vg.vg_root(s1)
+    vg.defs(r1, "<linearGradient id='sky' x1='0' y1='0' x2='1' y2='0'><stop offset='0' stop-color='#ff0000'/><stop offset='1' stop-color='#0000ff'/></linearGradient>")
+    vg.css(r1, ".hot { fill: #ff0000 }")
+    n1 = vg.rect(r1, 0.0, 0.0, 100.0, 20.0)
+    vg.fill(n1, "url(#sky)")
+    n1b = vg.rect(r1, 0.0, 50.0, 10.0, 10.0)
+    vg.css_class(n1b, "hot")
+    // What the live resize hook does: a NEW context for the new size.
+    vg.scene_set_ctx(s1, mk_ctx())
+    vg.vg_flush(s1)
+    assert_eq_str("gradient: rect flushed as a path", record.backend_kind(bk1, 0), "path")
+    assert_eq_str("gradient: still linear after the context swap",
+                  record.backend_opt_get(bk1, 0, "gradType"), "linear")
+    assert_eq_str("css: a class rule still applies after the swap",
+                  record.backend_opt_get(bk1, 1, "fillColor"), "#ff0000")
+
+    // ── 2. clip_path on a shape and on a group ───────────────────────
+    bk2 = record.backend_new()
+    s2 = mk_scene(bk2)
+    r2 = vg.vg_root(s2)
+    vg.defs(r2, "<clipPath id='disc'><circle cx='50' cy='50' r='30'/></clipPath><clipPath id='tri'><polygon points='10,90 50,10 90,90'/></clipPath>")
+    n2 = vg.rect(r2, 10.0, 10.0, 80.0, 80.0)
+    vg.fill(n2, "#ff0000")
+    vg.clip_path(n2, "url(#disc)")
+    g2 = vg.g(r2)
+    vg.clip_path(g2, "tri")
+    n2b = vg.rect(g2, 0.0, 0.0, 100.0, 100.0)
+    vg.fill(n2b, "#0000ff")
+    n2c = vg.rect(g2, 0.0, 0.0, 10.0, 10.0)
+    vg.fill(n2c, "#00ff00")
+    n2d = vg.rect(r2, 0.0, 0.0, 5.0, 5.0)
+    vg.fill(n2d, "#000000")
+    vg.vg_flush(s2)
+    // shape clip: one layer around the one shape; group clip: one layer
+    // around both of the group's shapes; the shape after the group is outside.
+    assert_eq_str("clip: layers, clips and shapes in order", kinds(bk2),
+        "group_begin clip rectangle group_end group_begin clip rectangle rectangle group_end rectangle")
+    pts = record.backend_opt_get(bk2, 1, "points")
+    assert_eq_int("clip: the circle outline has points", string.length(pts) > 20, 1)
+    assert_eq_str("clip: a polygon <clipPath> is an outline too",
+                  string.substring(record.backend_opt_get(bk2, 5, "points"), 0, 1), "M")
+
+    // ── 3. CSS: type < class < id < the shape's own fill ─────────────
+    bk3 = record.backend_new()
+    s3 = mk_scene(bk3)
+    r3 = vg.vg_root(s3)
+    vg.css(r3, "rect { fill: #00aa00 } .hot { fill: #ff0000 } #special { fill: #0000ff }")
+    _a = vg.rect(r3, 0.0, 0.0, 10.0, 10.0)
+    b3 = vg.rect(r3, 0.0, 0.0, 10.0, 10.0)
+    vg.css_class(b3, "hot")
+    c3 = vg.rect(r3, 0.0, 0.0, 10.0, 10.0)
+    vg.css_class(c3, "hot")
+    vg.css_id(c3, "special")
+    d3 = vg.rect(r3, 0.0, 0.0, 10.0, 10.0)
+    vg.css_class(d3, "hot")
+    vg.fill(d3, "#888888")
+    e3 = vg.circle(r3, 5.0, 5.0, 5.0)
+    vg.css_id(e3, "special")
+    vg.vg_flush(s3)
+    assert_eq_str("css: a type rule", record.backend_opt_get(bk3, 0, "fillColor"), "#00aa00")
+    assert_eq_str("css: a class beats the type", record.backend_opt_get(bk3, 1, "fillColor"), "#ff0000")
+    assert_eq_str("css: an id beats the class", record.backend_opt_get(bk3, 2, "fillColor"), "#0000ff")
+    assert_eq_str("css: the shape's own fill beats every rule", record.backend_opt_get(bk3, 3, "fillColor"), "#888888")
+    assert_eq_str("css: an id on a circle", record.backend_opt_get(bk3, 4, "fillColor"), "#0000ff")
+
+    // ── 4. group opacity is one layer ────────────────────────────────
+    bk4 = record.backend_new()
+    s4 = mk_scene(bk4)
+    r4 = vg.vg_root(s4)
+    g4 = vg.g(r4)
+    vg.opacity(g4, 0.5)
+    a4 = vg.rect(g4, 0.0, 0.0, 50.0, 50.0)
+    vg.fill(a4, "#ff0000")
+    b4 = vg.rect(g4, 25.0, 0.0, 50.0, 50.0)
+    vg.fill(b4, "#ff0000")
+    // an opaque group is no layer at all
+    g4b = vg.g(r4)
+    c4 = vg.rect(g4b, 0.0, 0.0, 5.0, 5.0)
+    vg.fill(c4, "#000000")
+    vg.vg_flush(s4)
+    assert_eq_str("group opacity: one layer around both children", kinds(bk4),
+        "group_begin rectangle rectangle group_end rectangle")
+    assert_eq_str("group opacity: the layer ends at the group's alpha",
+                  string.substring(record.backend_opt_get(bk4, 3, "alpha"), 0, 3), "0.5")
+    assert_eq_str("group opacity: the children are not faded themselves",
+                  record.backend_opt_get(bk4, 1, "fillColor"), "#ff0000")
+
+    println("=== test_vg_live_paint: all passed ===")
+}

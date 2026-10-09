@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vg: `defs(markup)`, `css(text)`, `clip_path(ref)`, `css_class(names)`,
+  `css_id(name)`, and `opacity()` on a `g()`, on the live path.** `defs`
+  registers gradients, clip paths and filters on the scene (`fill("url(#id)")`
+  then paints them); `css` registers type, class and id rules, applied by
+  specificity (type < class < id, the shape's own modifiers above every rule;
+  among one shape's classes the one named last wins a tie, the same selector
+  declared twice merges with the later declaration winning). `clip_path` on a
+  shape or a `g()` draws it inside a group layer clipped to the `<clipPath>`
+  outline (rect, circle, ellipse, polygon, polyline and path children, its
+  `transform`, `clipPathUnits="objectBoundingBox"` on shapes, `clip-rule`),
+  in the shape's own user space. `opacity(a)` on a `g()` composites the
+  group's shapes into one layer painted once at `a`, so overlapping children
+  no longer show through each other. A shape's `on_right_click` and
+  `on_double_click` now fire (live.ae wires the canvas hooks). CSS `#id`
+  rules now match on the loader path too.
+
 - **`canvas_clip_path`, `canvas_on_right_click` and
   `canvas_on_double_click`, on all five backends.** `canvas_clip_path(cid,
   even_odd)` intersects the clip with the current path (scoped, like
@@ -85,6 +101,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Android (video_frame).
 
 ### Fixed
+
+- **vg: a live scene lost its gradients, clip paths and CSS on its first
+  resize.** `vg.scene_set_ctx` swapped in a fresh `AevgContext` (the resize
+  hook in `vg/live.ae` builds one for every new canvas size, and AppKit fires
+  one as the canvas is first laid out), and a fresh context has empty
+  registries, so `fill("url(#id)")` painted the black fallback and class
+  rules stopped applying. The new context now shares the old one's
+  definitions (`context.ctx_adopt_defs`). This is what sae's ask
+  (`asks/aether-ui-vg-gradients-live-path.md` in sae) reported.
 
 - **Win32 (GDI+): a gradient fill no longer escapes the clip it is drawn
   in.** Both gradient fills clipped to their path with `REPLACE` and then

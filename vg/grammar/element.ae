@@ -100,6 +100,9 @@ exports (
     element_set_transform, element_last_transform,
     element_set_linecap, element_last_linecap,
     element_set_linejoin, element_last_linejoin,
+    element_set_clip, element_last_clip,
+    element_set_class, element_last_class,
+    element_set_id, element_last_id,
     element_set_text, element_last_text,
     element_set_pos_props, element_last_pos_props,
 
@@ -210,6 +213,9 @@ struct AevgElement {
     last_transform: string    // SVG transform string (e.g. "scale(0.1)"), "" if none
     last_linecap: string      // stroke-linecap ("round"/"square"/"butt"), "" if none
     last_linejoin: string     // stroke-linejoin ("round"/"bevel"/"miter"), "" if none
+    last_clip: string         // clip-path reference ("url(#c)"), "" if none
+    last_class: string        // CSS class list ("a b"), "" if none
+    last_id: string           // CSS id (matched by `#id` rules), "" if none
 
     // ─── Shape geometry state (for bindPos → bounds recompute) ──
     // shape_type: 0=none/unknown, 1=circle, 2=rect, 3=line.
@@ -307,6 +313,9 @@ element_new(underlying: ptr) -> ptr {
     e.last_transform = ""
     e.last_linecap = ""
     e.last_linejoin = ""
+    e.last_clip = ""
+    e.last_class = ""
+    e.last_id = ""
     e.shape_type = 0
     e.geo0 = 0.0
     e.geo1 = 0.0
@@ -725,6 +734,9 @@ element_release(p: ptr) {
     string_release(e.last_transform)
     string_release(e.last_linecap)
     string_release(e.last_linejoin)
+    string_release(e.last_clip)
+    string_release(e.last_class)
+    string_release(e.last_id)
     free(p)
 }
 
@@ -843,6 +855,30 @@ element_last_linejoin(p: ptr) -> string {
     e = p as *AevgElement
     return e.last_linejoin
 }
+
+// clip-path / class / id: presentation attributes the deferred flush folds
+// into the shape's attrs, so the shape factories' style cascade sees them.
+element_set_clip(p: ptr, v: string) {
+    e = p as *AevgElement
+    cp = string.copy(v)
+    string_retain(cp)
+    e.last_clip = cp
+}
+element_last_clip(p: ptr) -> string { e = p as *AevgElement; return e.last_clip }
+element_set_class(p: ptr, v: string) {
+    e = p as *AevgElement
+    cp = string.copy(v)
+    string_retain(cp)
+    e.last_class = cp
+}
+element_last_class(p: ptr) -> string { e = p as *AevgElement; return e.last_class }
+element_set_id(p: ptr, v: string) {
+    e = p as *AevgElement
+    cp = string.copy(v)
+    string_retain(cp)
+    e.last_id = cp
+}
+element_last_id(p: ptr) -> string { e = p as *AevgElement; return e.last_id }
 
 element_set_text(p: ptr, content: string) {
     e = p as *AevgElement
