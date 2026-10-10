@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`datagrid` selection and keys** (docs/design/data-grid.md, phase 2):
+  one rectangle from an anchor to a cursor cell. A click selects (and focuses
+  the grid, one tab stop), Shift+click extends; arrows, Shift+arrows,
+  Home/End (Ctrl: the grid's corners), Page_Up/Page_Down, Ctrl/Cmd+A and
+  Return; the cursor scrolls into view and the cells are painted for the
+  selection. `datagrid_select`, `datagrid_select_range`, `datagrid_on_select`,
+  `datagrid_on_activate`, `datagrid_cursor_row/col`,
+  `datagrid_anchor_row/col`, `datagrid_is_selected`. `spec_datagrid_demo`:
+  16/16 on macOS, the iOS simulator, GTK 4.6 and 4.22, win11, FreeBSD and
+  Android.
 - **`datagrid_on_click(g) callback |r, c|`**: a click on a cell, with the
   row and column it shows at the moment of the click (scrolling moves what
   a cell widget shows). `spec_datagrid_demo` clicks before and after
