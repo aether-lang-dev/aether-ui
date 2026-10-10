@@ -751,3 +751,17 @@ pixels now (a spec reading `/canvas/{id}/pixel` straight after, or
 `canvas_write_png`) would get an explicit synchronous form, or the pixel and
 PNG routes would flush a pending refresh first. Prove it with a counter of
 flushes: N refreshes in one frame, one flush.
+
+## Seen on the first full lane runs (2026-10-10), not yet chased
+
+- **FreeBSD: a bus error as `multiwindow_demo` exits.** Once, on ghostbsd
+  (FreeBSD 15, GTK 4.20), after its spec had passed 8/8 ("Bus error (core
+  dumped)" from the app as ci.sh stopped it); the next full run was clean.
+  Intermittent, at teardown with two windows; a core from a repeat run is the
+  place to start.
+- **win11: `gpuview_demo` reads no pixels in the lane.** The GPU demos now
+  link on Windows (opengl32), and gpuanim's spec passes, but gpuview's
+  `/gpuview/{id}/pixel` answers -1: the lane runs over ssh in session 0, with
+  no desktop to give it a GL context. Run it on the interactive desktop
+  (the schtasks /IT recipe) before calling the Win32 GPU view proven or
+  broken.
