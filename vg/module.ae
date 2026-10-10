@@ -42,7 +42,7 @@ exports (
     circle, rect, rrect, line, path, text, text_sized, text_anchored, g,
     // Raster element: image(x, y, w, h) { image_pixels(...) / image_bytes(...) / image_fit(...) }
     // and the same three from anywhere later, by the node image() returned.
-    image, image_pixels, image_bytes, image_bytes_str, image_fit,
+    image, image_pixels, image_bytes, image_bytes_str, image_fit, image_rendering,
     image_set_pixels, image_set_bytes, image_set_fit, image_pixel_w, image_pixel_h, image_box,
     use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
     text_polypath,
@@ -490,6 +490,7 @@ path(_ctx: ptr, d: string) -> ptr {
 //   img = image(10, 10, 80, 60) {
 //       image_pixels(buf, 64, 48)       // a 64x48 RGBA8 buffer the CALLER owns
 //       image_fit("contain")            // stretch (default) / contain / cover / original
+//       image_rendering("pixelated")    // auto (smoothed, the default) / pixelated
 //       on_click() callback |x, y| { ... }
 //   }
 //   ... later: write into buf, then scene_present(scene) (or vg_flush):
@@ -583,6 +584,22 @@ image_fit(_ctx: ptr, mode: string) {
     element.element_set_raster_fit(el, m)
 }
 image_set_fit(node: ptr, mode: string) { image_fit(node, mode) }
+
+// image_rendering(mode) -- how scaled pixels are sampled, SVG's and CSS's
+// image-rendering: "auto" (the default: smoothed) or "pixelated" (each
+// source pixel a crisp square: pixel art, a Life board, a heat map's
+// cells). "crisp-edges" and "optimizeSpeed" read as pixelated too, as
+// browsers treat them for upscaling. The backends switch smoothing off for
+// this one blit (canvas_image_smoothing).
+image_rendering(_ctx: ptr, mode: string) {
+    el = node_payload(_ctx)
+    if el == null { return }
+    on = 0
+    if string.equals(mode, "pixelated") == 1     { on = 1 }
+    if string.equals(mode, "crisp-edges") == 1   { on = 1 }
+    if string.equals(mode, "optimizeSpeed") == 1 { on = 1 }
+    element.element_set_raster_pixelated(el, on)
+}
 
 // The pixel dims of what an image node holds (0 before any pixels).
 image_pixel_w(node: ptr) -> int {
@@ -729,6 +746,7 @@ draw_image_el(ctx: ptr, be: ptr, a: ptr, el: ptr) {
     _o2 = map.put(opts, "ph", string.from_int(sh))
     ov = element.element_last_opacity(el)
     if element.element_has_opacity(el) == 1 { if ov < 1.0 { put_f(opts, "opacity", ov) } }
+    if element.element_raster_pixelated(el) == 1 { _o3 = map.put(opts, "pixelated", "1") }
     if sw == pw && sh == ph {
         _d1 = dispatch.dispatch_image(be, opts, pix, pw * ph * 4)
     } else {

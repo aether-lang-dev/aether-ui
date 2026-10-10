@@ -5197,7 +5197,11 @@ typedef enum {
     /* Intersect the clip with the current path (vg clip-path), consuming
        it; iw = 1 for even-odd. Scoped like CLIP_RECT: the enclosing group's
        END restores the gstate it saved, which drops it. */
-    CANVAS_CLIP_PATH
+    CANVAS_CLIP_PATH,
+    /* Image smoothing for the DRAW_IMAGEs after it: x = 1 smoothed (the
+       default), 0 nearest (vg image_rendering "pixelated"). State, like the
+       web canvas's imageSmoothingEnabled; appended, the values are positional. */
+    CANVAS_IMAGE_SMOOTHING
 } CanvasCmdType;
 
 typedef struct {
@@ -5402,10 +5406,19 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
     /* INVARIANT: every CGContextSaveGState here has exactly one matching
        restore, and CANVAS_RESET_CLIP restores/re-saves in place. CoreGraphics
        has no reset-clip call, so the pairing IS the mechanism. */
+    /* Smoothing in force where this range begins: a partial replay starts
+       after the command that set it. */
+    int smooth = 1;
+    for (int j = start - 1; j >= 0; j--) {
+        if (cs->cmds[j].type == CANVAS_IMAGE_SMOOTHING) { smooth = cs->cmds[j].x != 0.0; break; }
+    }
     CGContextSaveGState(cg);
     for (int i = start; i < end; i++) {
         CanvasCmd* c = &cs->cmds[i];
         switch (c->type) {
+            case CANVAS_IMAGE_SMOOTHING:
+                smooth = c->x != 0.0;
+                break;
             case CANVAS_BEGIN_PATH:
                 CGContextBeginPath(cg);
                 break;
@@ -5579,6 +5592,9 @@ static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
                         CGContextSaveGState(cg);
                         CGContextTranslateCTM(cg, c->x, c->y + ddh);
                         CGContextScaleCTM(cg, 1.0, -1.0);
+                        // image_rendering "pixelated": nearest, inside
+                        // this draw's own save/restore.
+                        if (!smooth) CGContextSetInterpolationQuality(cg, kCGInterpolationNone);
                         CGContextDrawImage(cg,
                             CGRectMake(0, 0, ddw, ddh), img);
                         CGContextRestoreGState(cg);
@@ -6517,6 +6533,10 @@ void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y,
 
 // Viewport clip — no-op on AppKit for now (GTK-verified feature; AppKit can
 // add a CGContextClip path later).
+void aether_ui_canvas_image_smoothing_impl(int canvas_id, int on) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_IMAGE_SMOOTHING, .x = on ? 1.0 : 0.0 });
+}
+
 void aether_ui_canvas_group_begin_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_BEGIN });
 }

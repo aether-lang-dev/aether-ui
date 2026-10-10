@@ -1,0 +1,134 @@
+// spec_pixelated_demo.ae — image_rendering("pixelated") on the live vg path,
+// read back as pixels. Both scenes draw a 2x1 buffer (red | blue) across a
+// 200x100 viewBox, so the cells meet at x = 100.
+//
+//   2 pixelated  at x = 90, 10 units from the boundary, pure red; at 110
+//                pure blue
+//   1 auto       at x = 90 the colours blend (both channels well above 0),
+//                except on Win32, which enlarges unsmoothed anyway (README)
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/pixelated_demo/bin/pixelated_demo &
+//   UI_SPEC=pixelated_demo/spec_pixelated_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+
+// The c-th canvas's field from /widgets (canvases are listed in creation
+// order, so the c-th one is canvas id c). The widget's allocation, not
+// /canvas/{id}/debug's last-paint size: a headless Windows session never
+// paints, so that one stays 0 there.
+canvas_field(c: int, f: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = 0
+    seen = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "canvas") == 1 {
+            seen = seen + 1
+            if seen == c { r = uidriver.field_int(w, f) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+cw(c: int) -> int { return canvas_field(c, "w") }
+ch(c: int) -> int { return canvas_field(c, "h") }
+scale(c: int) -> float {
+    sx = cw(c) / 200.0
+    sy = ch(c) / 100.0
+    if sx < sy { return sx }
+    return sy
+}
+px_x(c: int, vx: float) -> int { return ((cw(c) - 200.0 * scale(c)) / 2.0 + vx * scale(c)) as int }
+px_y(c: int, vy: float) -> int { return ((ch(c) - 100.0 * scale(c)) / 2.0 + vy * scale(c)) as int }
+
+// The pixel of canvas c at viewBox (vx, vy), 0xAARRGGBB.
+pixel_at(c: int, vx: float, vy: float) -> int {
+    body = uidriver.get_body("/canvas/${c}/pixel?x=${px_x(c, vx)}&y=${px_y(c, vy)}&w=${cw(c)}&h=${ch(c)}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+red(p: int) -> int { return (p >> 16) & 255 }
+green(p: int) -> int { return (p >> 8) & 255 }
+blue(p: int) -> int { return p & 255 }
+
+chan_near(a: int, b: int, tol: int) -> int {
+    d = (a & 255) - (b & 255)
+    if d < 0 { d = 0 - d }
+    if d <= tol { return 1 }
+    return 0
+}
+near_rgb(p: int, rgb: int, tol: int) -> int {
+    if chan_near(p >> 16, rgb >> 16, tol) == 0 { return 0 }
+    if chan_near(p >> 8, rgb >> 8, tol) == 0 { return 0 }
+    return chan_near(p, rgb, tol)
+}
+hex(p: int) -> string { return "rgb(${red(p)},${green(p)},${blue(p)})" }
+
+assert_px(c: int, vx: float, vy: float, rgb: int, msg: string) {
+    p = pixel_at(c, vx, vy)
+    spec.assert_true(near_rgb(p, rgb, 24) == 1, "${msg}: canvas ${c} viewBox (${vx},${vy}) is ${hex(p)}")
+}
+
+// Poll until canvas c at (vx, vy) is near rgb (a handler repaints on the
+// main loop, after the driver's POST has answered).
+wait_px(c: int, vx: float, vy: float, rgb: int) -> int {
+    i = 0
+    while i < 30 {
+        if near_rgb(pixel_at(c, vx, vy), rgb, 24) == 1 { return 1 }
+        sleep(100)
+        i = i + 1
+    }
+    return 0
+}
+
+// How many viewBox points from x0 to x1 (every 2 units) along y on canvas c
+// are dark: glyph ink, on a white ground.
+dark_count(c: int, x0: float, x1: float, y: float) -> int {
+    n = 0
+    x = x0
+    while x <= x1 {
+        p = pixel_at(c, x, y)
+        if red(p) < 100 && green(p) < 100 && blue(p) < 100 { n = n + 1 }
+        x = x + 2.0
+    }
+    return n
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    backend = ""
+    if uidriver.widget_id_by_text("backend: win32") > 0 { backend = "win32" }
+
+    spec.describe(fw, "image_rendering on the live vg path") {
+        spec.it("pixelated: each source pixel is a crisp square up to the boundary") callback {
+            spec.assert_gt(cw(2), 0, "scene 2 has an allocation")
+            l = pixel_at(2, 90.0, 50.0)
+            r = pixel_at(2, 110.0, 50.0)
+            spec.assert_true(near_rgb(l, 0xff0000, 8) == 1, "10 units left of the boundary is pure red: ${hex(l)}")
+            spec.assert_true(near_rgb(r, 0x0000ff, 8) == 1, "10 units right of it is pure blue: ${hex(r)}")
+        }
+        spec.it("auto: the same pixels smoothed, blending near the boundary") callback {
+            l = pixel_at(1, 90.0, 50.0)
+            far = pixel_at(1, 10.0, 50.0)
+            spec.assert_true(near_rgb(far, 0xff0000, 24) == 1, "far from the boundary it is red: ${hex(far)}")
+            if string.equals(backend, "win32") == 1 {
+                spec.assert_true(near_rgb(l, 0xff0000, 8) == 1, "Win32 enlarges unsmoothed by default: ${hex(l)}")
+            } else {
+                spec.assert_true(blue(l) > 40 && red(l) > 40, "near the boundary red and blue blend: ${hex(l)}")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}

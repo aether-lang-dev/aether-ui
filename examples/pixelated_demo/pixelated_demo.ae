@@ -1,0 +1,55 @@
+// pixelated_demo — image_rendering("pixelated"): scaled pixels, unsmoothed.
+//
+// Two scenes, one canvas each (canvas ids 1 and 2), each a 200x100 viewBox on
+// a 200x100 canvas, each drawing the same 2x1 buffer (red | blue) into the
+// whole 200x100 box, so every source pixel covers a 100x100 cell:
+//
+//   1 auto       the default: smoothed, so near the cells' boundary the red
+//                and the blue blend
+//   2 pixelated  image_rendering("pixelated"): each source pixel a crisp
+//                square, pure red right up to the boundary
+//
+// Win32 already enlarges unsmoothed by default (GDI+'s bilinear blurs a
+// cell's centre at large scales; README's vg.image section), so scene 1 is
+// crisp there too. The window says which backend it is, for the spec.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/pixelated_demo/bin/pixelated_demo &
+//   UI_SPEC=pixelated_demo/spec_pixelated_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, text, backend_name, enable_test_server)
+import vg.live (vg)
+import vg
+import vg (view_box, image, image_pixels, image_rendering)
+import std.mem
+import std.os (os_getenv)
+
+extern malloc(size: int) -> ptr
+
+main() {
+    // red | blue, RGBA8; never freed (the scenes borrow it for their life).
+    buf = malloc(8)
+    _r0 = mem.set_byte(buf, 0, 255)
+    _r1 = mem.set_byte(buf, 1, 0)
+    _r2 = mem.set_byte(buf, 2, 0)
+    _r3 = mem.set_byte(buf, 3, 255)
+    _b0 = mem.set_byte(buf, 4, 0)
+    _b1 = mem.set_byte(buf, 5, 0)
+    _b2 = mem.set_byte(buf, 6, 255)
+    _b3 = mem.set_byte(buf, 7, 255)
+    window("pixelated", 240, 300) {
+        vstack(4) {
+            text("backend: ${backend_name()}")
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                image(0, 0, 200, 100) { image_pixels(buf, 2, 1) }
+            }
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                image(0, 0, 200, 100) {
+                    image_pixels(buf, 2, 1)
+                    image_rendering("pixelated")
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

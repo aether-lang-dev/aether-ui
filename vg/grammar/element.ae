@@ -119,6 +119,7 @@ exports (
     // they fit its box.
     element_set_raster, element_raster_pixels, element_raster_w, element_raster_h,
     element_set_raster_fit, element_raster_fit,
+    element_set_raster_pixelated, element_raster_pixelated,
     RASTER_STRETCH, RASTER_CONTAIN, RASTER_COVER, RASTER_ORIGINAL
 )
 
@@ -243,6 +244,7 @@ struct AevgElement {
     rst_h: int
     rst_owned: int
     rst_fit: int            // RASTER_STRETCH (default) / CONTAIN / COVER / ORIGINAL
+    rst_pixelated: int      // 1: scaled without smoothing (image_rendering "pixelated")
 }
 
 // How an image's pixels fill its (x, y, w, h) box, after ui.image_fill.
@@ -326,6 +328,7 @@ element_new(underlying: ptr) -> ptr {
     e.rst_h = 0
     e.rst_owned = 0
     e.rst_fit = 0
+    e.rst_pixelated = 0
     return e
 }
 
@@ -678,6 +681,8 @@ element_raster_w(p: ptr) -> int      { e = p as *AevgElement; return e.rst_w }
 element_raster_h(p: ptr) -> int      { e = p as *AevgElement; return e.rst_h }
 element_set_raster_fit(p: ptr, fit: int) { e = p as *AevgElement; e.rst_fit = fit }
 element_raster_fit(p: ptr) -> int    { e = p as *AevgElement; return e.rst_fit }
+element_set_raster_pixelated(p: ptr, on: int) { e = p as *AevgElement; e.rst_pixelated = on }
+element_raster_pixelated(p: ptr) -> int       { e = p as *AevgElement; return e.rst_pixelated }
 
 element_set_fill(p: ptr, color: string) {
     e = p as *AevgElement

@@ -1,0 +1,19 @@
+// pixelated_demo — image_rendering("pixelated"), built as its own cached aeb node.
+import bldr
+import aether
+import aether (source, output, no_closure_regen, lib)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("pixelated_demo.ae")
+            output("pixelated_demo")
+            lib("${root}")               // so `import vg.*` resolves at the repo root
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

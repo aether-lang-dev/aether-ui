@@ -115,6 +115,28 @@ fi
 # every relayout, and a pointer sitting over the canvas fires the app's hover
 # handler between test steps — rewriting the status line the assertions read.
 launch_xvfb() { xvfb-run -a -s "-screen 0 3200x2000x24" "$@"; }
+# Kill a launched app and everything under it. Through launch_xvfb, $! is the
+# subshell running the function, so a plain kill left xvfb-run, its Xvfb and
+# the app itself running: every smoke and driver phase leaked one app, and a
+# full run's leftovers ran a 2 GB container out of memory (cc1 killed in the
+# next build). pgrep -P is on Linux, macOS and MSYS2 alike.
+tree_pids() {
+    local p="$1" c
+    for c in $(pgrep -P "$p" 2>/dev/null); do tree_pids "$c"; done
+    echo "$p"
+}
+# TERM first, then KILL what is left: an app that outlives TERM keeps
+# xvfb-run (a /bin/sh script, which cannot act on TERM while it waits on
+# that app) and its Xvfb alive too -- ae-x64 kept one of each per smoke app
+# per run until this. Once the app is gone, xvfb-run reaps its own Xvfb.
+kill_tree() {
+    local pids
+    pids="$(tree_pids "$1")"
+    kill $pids 2>/dev/null
+    sleep 0.3
+    kill -9 $pids 2>/dev/null
+    return 0
+}
 LAUNCH_PREFIX=""
 if [ "$PLATFORM" = "linux" ]; then
     if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
@@ -153,7 +175,7 @@ run_self_quitting() {
     local ticks=0
     while kill -0 "$pid" 2>/dev/null; do
         if [ "$ticks" -ge "$((limit * 10))" ]; then
-            kill "$pid" 2>/dev/null
+            kill_tree "$pid"
             wait "$pid" 2>/dev/null
             return 124
         fi
@@ -187,7 +209,7 @@ run_server_test() {
     done
     if [ "$up" -ne 1 ]; then
         echo "  FAIL: $name test server never responded"
-        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        kill_tree "$pid"; wait "$pid" 2>/dev/null
         tail -20 "/tmp/ci_${name}.app.log" | sed 's/^/       /'
         return 1
     fi
@@ -205,7 +227,7 @@ run_server_test() {
         if ! curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then freed=1; break; fi
         sleep 0.2
     done
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    kill_tree "$pid"; wait "$pid" 2>/dev/null
     if [ "$freed" -ne 1 ]; then
         pkill -f "$bin" 2>/dev/null
         for _ in $(seq 1 25); do
@@ -259,7 +281,7 @@ run_smoke_test() {
     sleep 1.5
     if kill -0 "$pid" 2>/dev/null; then
         echo "  OK   $name (alive 1.5s)"
-        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        kill_tree "$pid"; wait "$pid" 2>/dev/null
         return 0
     fi
     wait "$pid" 2>/dev/null; local rc=$?
@@ -855,8 +877,9 @@ else
     # frametick_demo (the frame clock on CADisplayLink, pinned so a silent
     # fallback to the timer fails, and timer_once), vg_image_demo and
     # vgpaint_demo (vg's live paint and the right/double-click hooks on UIKit),
-    # spacercanvas_demo (spacers take a stack's slack before a canvas does).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo; do
+    # spacercanvas_demo (spacers take a stack's slack before a canvas does),
+    # pixelated_demo (image_rendering "pixelated": CoreGraphics nearest).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1062,7 +1085,7 @@ retention_run() {
     if ! grep -q "RETENTION_PROBE:" "$log" 2>/dev/null; then
         echo "  FAIL retention probe ($tag) never finished its rebuilds" >&2
         tail -10 "$log" | sed 's/^/       /' >&2
-        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        kill_tree "$pid"; wait "$pid" 2>/dev/null
         return 1
     fi
     n="$(retention_count "$pid")"
@@ -1089,7 +1112,7 @@ retention_run() {
             fi
         } >&2
     fi
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    kill_tree "$pid"; wait "$pid" 2>/dev/null
     if [ -z "$n" ]; then
         echo "  FAIL heap gave no NSTextField count for the $tag run" >&2
         return 1
@@ -1372,6 +1395,17 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=spacercanvas_demo/spec_spacercanvas_demo \
     run_server_test "$(EX_BIN spacercanvas_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" spacercanvas_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9e: AetherUIDriver image_rendering spec ==="
+# vg image_rendering("pixelated"): a 2x1 buffer scaled across 200 units is
+# pure red right up to the cells' boundary; the default blends there (Win32
+# enlarges unsmoothed anyway). canvas_image_smoothing on every backend.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=pixelated_demo/spec_pixelated_demo \
+    run_server_test "$(EX_BIN pixelated_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" pixelated_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

@@ -4830,7 +4830,11 @@ typedef enum {
     /* Intersect the clip with the CURRENT PATH (vg clip-path), consuming
        it; iw = 1 for the even-odd rule. Holds until the enclosing group
        ends or RESET_CLIP, exactly like CLIP_RECT. */
-    CANVAS_CLIP_PATH
+    CANVAS_CLIP_PATH,
+    /* Image smoothing for the DRAW_IMAGEs after it: x = 1 smoothed (the
+       default), 0 nearest (vg image_rendering "pixelated"). State, like the
+       web canvas's imageSmoothingEnabled; appended, the values are positional. */
+    CANVAS_IMAGE_SMOOTHING
 } CanvasCmdType;
 
 typedef struct {
@@ -5046,6 +5050,12 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
     /* INVARIANT: every cairo_save here has exactly one matching restore, and
        CANVAS_RESET_CLIP restores/re-saves in place. Breaking the pairing
        leaks clip state into the next frame. */
+    /* Smoothing in force where this range begins: a partial replay starts
+       after the command that set it. */
+    int smooth = 1;
+    for (int j = start - 1; j >= 0; j--) {
+        if (cs->cmds[j].type == CANVAS_IMAGE_SMOOTHING) { smooth = cs->cmds[j].x != 0.0; break; }
+    }
     cairo_save(cr);
     for (int i = start; i < end; i++) {
         CanvasCmd* c = &cs->cmds[i];
@@ -5151,6 +5161,9 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                 cairo_set_line_cap(cr, pc);
                 break;
             }
+            case CANVAS_IMAGE_SMOOTHING:
+                smooth = c->x != 0.0;
+                break;
             case CANVAS_DRAW_IMAGE:
                 if (c->pixels && c->iw > 0 && c->ih > 0) {
                     // Incoming buffer is RGBA8888 (R,G,B,A bytes).
@@ -5191,9 +5204,10 @@ static void canvas_replay_range(cairo_t* cr, CanvasState* cs,
                             } else {
                                 cairo_set_source_surface(cr, surf, c->x, c->y);
                             }
-                            // Nearest/good filtering for scaled video frames.
+                            // Good filtering for scaled video frames; nearest
+                            // under image_rendering "pixelated".
                             cairo_pattern_set_filter(cairo_get_source(cr),
-                                                     CAIRO_FILTER_GOOD);
+                                smooth ? CAIRO_FILTER_GOOD : CAIRO_FILTER_NEAREST);
                             // Fill the image's OWN rect, padded at the edges,
                             // rather than cairo_paint over the whole clip: with
                             // EXTEND_NONE a scaled-up source fades out over
@@ -5518,6 +5532,11 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
 }
 
 // Group-opacity command pair (see CANVAS_GROUP_BEGIN/END replay cases).
+void aether_ui_canvas_image_smoothing_impl(int canvas_id, int on) {
+    CanvasCmd cmd = { .type = CANVAS_IMAGE_SMOOTHING, .x = on ? 1.0 : 0.0 };
+    canvas_add_cmd(canvas_id, cmd);
+}
+
 void aether_ui_canvas_group_begin_impl(int canvas_id) {
     CanvasCmd cmd = { .type = CANVAS_GROUP_BEGIN };
     canvas_add_cmd(canvas_id, cmd);

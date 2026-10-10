@@ -439,6 +439,7 @@ buf = malloc(64 * 64 * 4)                 // RGBA8, straight alpha, row-major
 img = image(10, 10, 80, 80) {
     image_pixels(buf, 64, 64)             // BORROWED: you own it, update it in place
     image_fit("contain")                  // stretch (default) / contain / cover / original
+    image_rendering("pixelated")          // auto (smoothed, default) / pixelated
     on_click() callback |x, y| { ... }
 }
 image(0, 0, 100, 100) { image_bytes_str(png, png_len) }   // decoded by the toolkit, OWNED
@@ -455,7 +456,11 @@ owns. The blit is each backend's scaled image draw: GTK4, AppKit, UIKit and
 Android smooth a small buffer scaled up (bilinear), Win32 enlarges it
 unsmoothed (nearest neighbour, on both its renderers: GDI+'s bilinear
 blends a cell's centre at large scales, so the honest choice there is the
-exact colour). A transform
+exact colour). `image_rendering("pixelated")` (CSS's `image-rendering`)
+asks every backend for nearest-neighbour sampling, each source pixel a
+crisp square, for that image; it is `canvas_image_smoothing(cid, 0)`, the
+web canvas's `imageSmoothingEnabled`, around the one blit
+(`examples/pixelated_demo`). A transform
 maps the box's corners and draws into their axis-aligned bounds: translate
 and scale are exact, a rotation draws the unrotated image into the rotated
 box's bounds. `examples/vg_image_demo` and `tests/vg_image_demo` are the

@@ -25,8 +25,8 @@
 // aeui_android_run_sync); timers are timerfds on the same looper. Every JNI
 // call that touches a View therefore happens on the UI thread.
 //
-// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 327 ABI functions
-// the UIKit backend exports are here: 321 implemented for real and 6
+// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 328 ABI functions
+// the UIKit backend exports are here: 322 implemented for real and 6
 // documented no-ops (the tray: there is no status-area tray on Android, as
 // on iOS). There are NO STUBS. Stage 1 proved the chain (`--emit=lib`, JNI,
 // the looper bridge, packaging, the driver over `adb forward`) with
@@ -165,13 +165,13 @@
 // modifiers_impl is 0 (no pollable modifier state, as on UIKit), the
 // disclosure triangle is drawn as a path (no system chevron).
 //
-// Real, pass C (49):
+// Real, pass C (50):
 //   canvas     canvas_create_impl canvas_get_widget canvas_begin_path_impl
 //              canvas_move_to_impl canvas_line_to_impl canvas_arc_impl
 //              canvas_close_path_impl canvas_stroke_impl canvas_fill_impl
 //              canvas_fill_rect_impl canvas_clip_rect_impl canvas_clip_path_impl
 //              canvas_set_clip_rects_impl canvas_reset_clip_impl
-//              canvas_group_begin_impl canvas_group_end_impl
+//              canvas_group_begin_impl canvas_group_end_impl canvas_image_smoothing_impl
 //              canvas_fill_text_impl canvas_stroke_text_impl
 //              canvas_draw_image_impl canvas_draw_image_impl_ptr
 //              canvas_draw_image_scaled_impl canvas_draw_image_scaled_impl_ptr
@@ -185,7 +185,7 @@
 //              canvas_on_right_click_impl canvas_on_double_click_impl
 //              canvas_on_key_impl canvas_on_key_release_impl
 //              canvas_on_scroll_impl canvas_on_resize_impl
-//              canvas_gesture_probe_impl                         (40)
+//              canvas_gesture_probe_impl                         (41)
 //   gpuview    gpuview_available_impl gpuview_create_impl gpuview_get_widget
 //              gpuview_on_realize_impl gpuview_on_render_impl
 //              gpuview_on_resize_impl gpuview_request_render_impl
@@ -6519,7 +6519,11 @@ typedef enum {
     CANVAS_CLEAR, CANVAS_ARC, CANVAS_CLOSE_PATH, CANVAS_FILL, CANVAS_FILL_TEXT,
     CANVAS_STROKE_TEXT, CANVAS_DRAW_IMAGE, CANVAS_FILL_LINEAR, CANVAS_FILL_RADIAL,
     CANVAS_CLIP_RECT, CANVAS_GROUP_BEGIN, CANVAS_GROUP_END, CANVAS_RESET_CLIP,
-    CANVAS_CLIP_PATH   // clip to the current path (iw = even-odd), consuming it
+    CANVAS_CLIP_PATH,  // clip to the current path (iw = even-odd), consuming it
+    /* Image smoothing for the DRAW_IMAGEs after it: x = 1 smoothed (the
+       default), 0 nearest (vg image_rendering "pixelated"). State, like the
+       web canvas's imageSmoothingEnabled; appended, the values are positional. */
+    CANVAS_IMAGE_SMOOTHING
 } CanvasCmdType;
 
 typedef struct {
@@ -6668,6 +6672,7 @@ JMETHOD(M_GPt_setStrokeWidth, C_GPaint, "setStrokeWidth", "(F)V");
 JMETHOD(M_GPt_setStrokeCap, C_GPaint, "setStrokeCap", "(Landroid/graphics/Paint$Cap;)V");
 JMETHOD(M_GPt_setStrokeJoin, C_GPaint, "setStrokeJoin", "(Landroid/graphics/Paint$Join;)V");
 JMETHOD(M_GPt_setStrokeMiter, C_GPaint, "setStrokeMiter", "(F)V");
+JMETHOD(M_GPt_setFilterBitmap, C_GPaint, "setFilterBitmap", "(Z)V");
 JMETHOD(M_GPt_setShader, C_GPaint, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;");
 JMETHOD(M_GPt_setTypeface, C_GPaint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
 JMETHOD(M_GPt_setTextSize, C_GPaint, "setTextSize", "(F)V");
@@ -6838,6 +6843,7 @@ typedef struct {
     int cur;
     int bases[64]; int nbases;   // save counts RESET_CLIP restores to
     int layers[64]; int nlayers; // saveLayerAlpha counts GROUP_END restores to
+    int smooth;                  // CANVAS_IMAGE_SMOOTHING in force (1 = filtered)
 } CvReplay;
 
 static void cv_path_reset(CvReplay* r) {
@@ -7021,6 +7027,11 @@ static void cv_draw_image(CvReplay* r, CanvasCmd* c) {
     double dh = c->h > 0.0 ? c->h : (double)c->ih;
     jobject dst = JNEW(M_RF_init, (jfloat)c->x, (jfloat)c->y, (jfloat)(c->x + dw), (jfloat)(c->y + dh));
     jobject p = JNEW(M_GPt_init, (jint)(1 | 2) /* ANTI_ALIAS | FILTER_BITMAP */);
+    // FILTER_BITMAP is the smoothing; without it Skia samples nearest
+    // (image_rendering "pixelated"). Cleared explicitly: since Android 9 a
+    // Paint's constructor ORs FILTER_BITMAP into whatever flags it is given,
+    // so leaving the bit out of them still filtered.
+    if (p && !r->smooth) JV(p, M_GPt_setFilterBitmap, (jboolean)JNI_FALSE);
     if (dst) JV(r->canvas, M_GC_drawBitmapRect, bmp, (jobject)NULL, dst, p);
     if (dst) (*env)->DeleteLocalRef(env, dst);
     if (p) (*env)->DeleteLocalRef(env, p);
@@ -7039,6 +7050,12 @@ static void canvas_replay_range(JNIEnv* env, jobject canvas, CanvasState* cs, in
     memset(&r, 0, sizeof(r));
     r.env = env;
     r.canvas = canvas;
+    // Smoothing in force where this range begins: a partial replay starts
+    // after the command that set it.
+    r.smooth = 1;
+    for (int j = start - 1; j >= 0; j--) {
+        if (cs->cmds[j].type == CANVAS_IMAGE_SMOOTHING) { r.smooth = cs->cmds[j].x != 0.0; break; }
+    }
     r.path = JNEW(M_GP_init);
     r.paint = JNEW(M_GPt_init, (jint)1 /* ANTI_ALIAS_FLAG */);
     r.s_fill = JSFO(F_PS_FILL);
@@ -7142,6 +7159,9 @@ static void canvas_replay_range(JNIEnv* env, jobject canvas, CanvasState* cs, in
             case CANVAS_STROKE_TEXT:
                 cv_draw_text(&r, c, 1);
                 cv_path_reset(&r);
+                break;
+            case CANVAS_IMAGE_SMOOTHING:
+                r.smooth = c->x != 0.0;
                 break;
             case CANVAS_DRAW_IMAGE:
                 cv_draw_image(&r, c);
@@ -7695,6 +7715,10 @@ void aether_ui_canvas_fill_rect_impl(int canvas_id, double x, double y, double w
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_FILL_RECT, .x = x, .y = y, .w = w, .h = h,
                                            .r = r, .g = g, .b = b, .a = a });
 }
+void aether_ui_canvas_image_smoothing_impl(int canvas_id, int on) {
+    canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_IMAGE_SMOOTHING, .x = on ? 1.0 : 0.0 });
+}
+
 void aether_ui_canvas_group_begin_impl(int canvas_id) {
     canvas_add_cmd(canvas_id, (CanvasCmd){ .type = CANVAS_GROUP_BEGIN });
 }

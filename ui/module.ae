@@ -124,7 +124,7 @@ exports (
     canvas_clear, canvas_redraw, canvas_write_png,
     canvas_cmd_count, canvas_render_range_rgba, canvas_draw_image_ptr,
     canvas_draw_image_borrowed_ptr, canvas_draw_image_scaled_borrowed_ptr,
-    canvas_draw_image_scaled_ptr,
+    canvas_draw_image_scaled_ptr, canvas_image_smoothing,
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
@@ -820,6 +820,7 @@ extern aether_ui_canvas_stroke_text_impl(canvas_id: int, text: string,
 extern aether_ui_canvas_draw_image_impl(canvas_id: int, x: float, y: float,
                                         iw: int, ih: int,
                                         rgba: string, byte_len: int)
+extern aether_ui_canvas_image_smoothing_impl(canvas_id: int, on: int)
 extern aether_ui_canvas_draw_image_scaled_impl(canvas_id: int, x: float, y: float,
                                         dw: float, dh: float, iw: int, ih: int,
                                         rgba: string, byte_len: int)
@@ -6465,6 +6466,16 @@ canvas_stroke_text(cid: int, text: string, x: float, y: float, font_size: float,
 canvas_draw_image(cid: int, x: float, y: float, iw: int, ih: int,
                   rgba: string, byte_len: int) {
     aether_ui_canvas_draw_image_impl(cid, x, y, iw, ih, rgba, byte_len)
+}
+
+// canvas_image_smoothing — whether the image blits after it are smoothed
+// when scaled (1, the default) or sampled nearest, each source pixel a crisp
+// square (0): the web canvas's imageSmoothingEnabled, recorded into the
+// command buffer like every other canvas call, so it holds until changed or
+// the canvas is cleared. vg's image_rendering("pixelated") turns it off for
+// one blit.
+canvas_image_smoothing(cid: int, on: int) {
+    aether_ui_canvas_image_smoothing_impl(cid, on)
 }
 
 // canvas_draw_image_scaled — blit an iw×ih RGBA frame scaled to a dw×dh dest

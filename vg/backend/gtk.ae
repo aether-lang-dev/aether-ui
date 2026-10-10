@@ -77,6 +77,7 @@ extern aether_ui_canvas_stroke_text_impl(canvas_id: int, text: string,
 extern aether_ui_canvas_draw_image_impl(canvas_id: int, x: float, y: float,
                                         iw: int, ih: int,
                                         rgba: string, byte_len: int)
+extern aether_ui_canvas_image_smoothing_impl(canvas_id: int, on: int)
 extern aether_ui_canvas_draw_image_scaled_impl_ptr(canvas_id: int, x: float, y: float,
                                                    dw: float, dh: float, iw: int, ih: int,
                                                    rgba: ptr, byte_len: int)
@@ -148,9 +149,13 @@ canvas_image(p: ptr, opts: ptr, rgba: ptr, byte_len: int) {
     // itself takes no alpha.
     alpha = opt_f(opts, "opacity", 1.0)
     if alpha < 1.0 { aether_ui_canvas_group_begin_impl(b.canvas_id) }
+    // image_rendering("pixelated"): this blit only, unsmoothed.
+    pixelated = opt_i(opts, "pixelated", 0)
+    if pixelated == 1 { aether_ui_canvas_image_smoothing_impl(b.canvas_id, 0) }
     aether_ui_canvas_draw_image_scaled_impl_ptr(b.canvas_id,
         opt_f(opts, "x", 0.0), opt_f(opts, "y", 0.0),
         opt_f(opts, "w", 0.0), opt_f(opts, "h", 0.0), pw, ph, rgba, byte_len)
+    if pixelated == 1 { aether_ui_canvas_image_smoothing_impl(b.canvas_id, 1) }
     if alpha < 1.0 { aether_ui_canvas_group_end_impl(b.canvas_id, alpha) }
 }
 

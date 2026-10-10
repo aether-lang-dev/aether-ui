@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Added
+
+- **`image_rendering("pixelated")` in vg, and `canvas_image_smoothing` in
+  ui, on every backend.** An image or raster scaled up draws each source
+  pixel as a crisp square instead of smoothing between them: a Life board,
+  pixel art, a heat map's cells (CSS's and SVG's `image-rendering`;
+  `crisp-edges` and `optimizeSpeed` read as pixelated). The canvas call is
+  the web canvas's `imageSmoothingEnabled`: recorded into the command buffer
+  as state, it holds for the image blits after it, and vg switches it off
+  for one blit. GTK4 samples with `CAIRO_FILTER_NEAREST`, AppKit and UIKit
+  with `kCGInterpolationNone`, Android clears the Paint's FILTER_BITMAP
+  (explicitly: since Android 9 a Paint constructor ORs it back in), and
+  Win32 uses nearest when shrinking too (it already enlarges unsmoothed;
+  README). A partial replay looks back for the state in force where it
+  starts. `examples/pixelated_demo` and its spec (ci.sh Phase 5e9e, the
+  iOS simulator phase, the spec matrix) read a 2x1 buffer scaled across
+  200 units back as pixels: pure red ten units from the cells' boundary.
+
 ### Changed
 
 - **Aether floor 0.801.0, aeb v0.326** (CI `AETHER_REF`/`AEB_REF`,
@@ -19,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ci.sh stops every app it launches, and everything under it.** Through
+  `launch_xvfb` (a shell function), `$!` was the subshell, so killing it
+  left xvfb-run, its Xvfb and the app running: one of each per smoke and
+  driver phase per run. A 2 GB container ran out of memory in the next
+  build (cc1 killed) and ae-x64 had 75 left over. `kill_tree` sends TERM to
+  the whole tree, then KILL to what outlived it (an app that survives TERM
+  keeps xvfb-run, a /bin/sh waiting on it, alive too).
 - **A picker's on-change runs once per pick, and never for adding items.**
   GTK4: appending the first item moves a GtkDropDown's selection from none
   to 0, which it reports as `notify::selected`, so the app's handler ran

@@ -8471,7 +8471,11 @@ typedef enum {
        GROUP_BEGIN/END, and both replays end the clip with the group: GDI+
        because the group's layer has its own Graphics, legacy GDI by saving
        the clip region at BEGIN and selecting it back at END. */
-    CV_CLIP_PATH
+    CV_CLIP_PATH,
+    /* Image smoothing for the CV_DRAW_IMAGEs after it: p0 = 1 smoothed (the
+       default), 0 nearest (vg image_rendering "pixelated"). State, like the
+       web canvas's imageSmoothingEnabled; appended, the values are positional. */
+    CV_IMAGE_SMOOTHING
 } CanvasCmdKind;
 
 typedef struct {
@@ -8997,6 +9001,12 @@ void aether_ui_canvas_line_to_impl(int canvas_id, double x, double y) {
 /* True group opacity. These were empty stubs, so <g opacity="0.5"> painted
    fully opaque on win32 (mememe.svg); GTK4 has had the real thing via
    cairo_push_group all along. See CV_GROUP_BEGIN/END in the GDI+ replay. */
+void aether_ui_canvas_image_smoothing_impl(int canvas_id, int on) {
+    CanvasCmd c = {0};
+    c.k = CV_IMAGE_SMOOTHING; c.p0 = on ? 1.0 : 0.0;
+    canvas_add_cmd(canvas_id, c);
+}
+
 void aether_ui_canvas_group_begin_impl(int canvas_id) {
     CanvasCmd c = {0};
     c.k = CV_GROUP_BEGIN;
@@ -9503,9 +9513,13 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
     int  lg_has[16] = {0};
     int  lg_depth = 0;
 
+    int smooth = 1;   /* CV_IMAGE_SMOOTHING: image_rendering "pixelated" */
     for (int i = 0; i < cv->cmd_count; i++) {
         CanvasCmd* cmd = &cv->cmds[i];
         switch (cmd->k) {
+            case CV_IMAGE_SMOOTHING:
+                smooth = cmd->p0 != 0.0;
+                break;
             case CV_CLEAR:
                 FillRect(mem, &full, white);
                 break;
@@ -9753,7 +9767,7 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
                            every pixel (a 2x2 raster in a 150 px box reads
                            as one grey). COLORONCOLOR (nearest) when the
                            dest is larger than the source. */
-                        SetStretchBltMode(mem, (ddw > cmd->iw || ddh > cmd->ih)
+                        SetStretchBltMode(mem, (!smooth || ddw > cmd->iw || ddh > cmd->ih)
                                                ? COLORONCOLOR : HALFTONE);
                         StretchDIBits(mem, (int)cmd->p0, (int)cmd->p1,
                             ddw, ddh, 0, 0, cmd->iw, cmd->ih,
@@ -10334,9 +10348,13 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
     GpGraphics* grp_saved[GRP_MAX];
     void*       grp_bmp[GRP_MAX];
     int grp_depth = 0;
+    int smooth = 1;   /* CV_IMAGE_SMOOTHING: image_rendering "pixelated" */
     for (int i = 0; i < cv->cmd_count; i++) {
         CanvasCmd* cmd = &cv->cmds[i];
         switch (cmd->k) {
+            case CV_IMAGE_SMOOTHING:
+                smooth = cmd->p0 != 0.0;
+                break;
             case CV_GROUP_BEGIN: {
                 if (grp_depth >= GRP_MAX) break;
                 void* bmp = NULL;
@@ -11556,8 +11574,9 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                        with prefiltering. Win32 therefore enlarges rasters
                        unsmoothed -- stated in README's vg.image section. */
                     int enlarging = (ddw > cmd->iw || ddh > cmd->ih);
-                    GdipSetInterpolationMode(g, enlarging ? 5 /* NearestNeighbor */
-                                                          : 6 /* HighQualityBilinear */);
+                    /* image_rendering "pixelated": nearest when shrinking too. */
+                    GdipSetInterpolationMode(g, (enlarging || !smooth) ? 5 /* NearestNeighbor */
+                                                                       : 6 /* HighQualityBilinear */);
                     GdipSetPixelOffsetMode(g, 4 /* PixelOffsetModeHalf */);
                     void* ia = NULL;
                     if (GdipCreateImageAttributes(&ia) == 0 && ia) {
