@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A picker's on-change runs once per pick, and never for adding items.**
+  GTK4: appending the first item moves a GtkDropDown's selection from none
+  to 0, which it reports as `notify::selected`, so the app's handler ran
+  for an item it was only adding (sae's life page loaded its first pattern
+  twice); `picker_add` now blocks it, as AppKit, Win32 and the drawn picker
+  add silently. Win32: the driver's `set_value` fired on-change after
+  `picker_set_selected` already had, so one pick ran the handler twice.
+  `examples/picker` counts its changes and `spec_picker` wants 0 after
+  startup and 1 after a pick.
+- **GTK4 pictures keep their own size** (`image`, `image_from_bytes`). A
+  GtkBox fills each child across and a GtkPicture then scales up to the
+  row, so a 2x2 image in a vstack came out 800 wide (sae's spec_raster).
+  Pictures are start-aligned, as AppKit's leading-aligned stacks leave an
+  image view at its picture's size.
 - **Spacers take a stack's slack before a canvas does, and share it
   equally, on every backend.** `hstack { spacer; canvas; spacer }` keeps the
   canvas at its requested size, centred; a canvas with no spacer beside it

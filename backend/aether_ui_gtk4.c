@@ -2012,7 +2012,16 @@ void aether_ui_picker_add_item(int handle, const char* item) {
     if (w && GTK_IS_DROP_DOWN(w)) {
         GListModel* model = gtk_drop_down_get_model(GTK_DROP_DOWN(w));
         if (GTK_IS_STRING_LIST(model)) {
+            // Adding the first item moves the selection from none to 0, and
+            // GtkDropDown reports that as notify::selected, so the app's
+            // on-change ran for an item it was only adding (sae's life page
+            // loaded its first pattern twice). AppKit, Win32 and the drawn
+            // picker add items silently; so does this.
+            g_signal_handlers_block_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                            (gpointer)on_picker_changed, NULL);
             gtk_string_list_append(GTK_STRING_LIST(model), item ? item : "");
+            g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                              (gpointer)on_picker_changed, NULL);
         }
     }
 }
@@ -4604,6 +4613,12 @@ int aether_ui_image_create(const char* filepath) {
     gtk_picture_set_can_shrink(GTK_PICTURE(img), TRUE);
     // Explicit, so both backends agree on what an untouched image does.
     aeui_picture_set_fill(GTK_PICTURE(img), 1);
+    // Its own width, not the row's: a GtkBox fills each child across, and a
+    // picture then scales up to the row, so a 2x2 image in a vstack came out
+    // 800 wide (sae's spec_raster). AppKit's stacks align children to the
+    // leading edge, where an image view keeps its picture's size.
+    gtk_widget_set_halign(img, GTK_ALIGN_START);
+    gtk_widget_set_valign(img, GTK_ALIGN_START);
     return aether_ui_register_widget(img);
 }
 
@@ -4656,6 +4671,8 @@ int aether_ui_image_from_bytes(const char* data, int length) {
     GtkWidget* img = gtk_picture_new();
     gtk_picture_set_can_shrink(GTK_PICTURE(img), TRUE);
     aeui_picture_set_fill(GTK_PICTURE(img), 1);
+    gtk_widget_set_halign(img, GTK_ALIGN_START);   // its own size (image_create)
+    gtk_widget_set_valign(img, GTK_ALIGN_START);
     if (data && length > 0) {
         GBytes* bytes = g_bytes_new(data, (gsize)length);
         GError* err = NULL;

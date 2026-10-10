@@ -12880,14 +12880,11 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     aether_ui_progressbar_set_fraction(ctx->handle, ctx->dval);
                 else if (w->kind == WK_PICKER) {
                     // Driver selects a picker index via set_value (the
-                    // surface-agnostic path the drawn/native picker share);
-                    // route it and fire on_change so the round-trip matches
-                    // GtkDropDown's notify::selected.
+                    // surface-agnostic path the drawn/native picker share).
+                    // picker_set_selected fires on_change itself when the
+                    // index changes; this used to fire it again, so one pick
+                    // ran the app's handler twice (spec_picker's "Changes").
                     aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
-                    if (w->on_change && w->on_change->fn) {
-                        ((void(*)(void*, intptr_t))w->on_change->fn)(
-                            w->on_change->env, (intptr_t)(int)ctx->dval);
-                    }
                 }
                 break;
             default: break;

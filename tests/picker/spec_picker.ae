@@ -28,6 +28,9 @@ main() {
             spec.assert_eq(sel, 0, "selection starts at 0")
             txt = uidriver.widget_text_by_id(p)
             spec.assert_str_eq(txt, "Red", "label shows the first item")
+            // Adding items is not a pick: the on-change has not run.
+            spec.assert_contains(uidriver.get_body("/widgets"), "Changes: 0",
+                "adding the items did not run the change handler")
         }
 
         spec.it("selecting index 2 round-trips (selected + label)") callback {
@@ -43,6 +46,8 @@ main() {
             // the selection without calling it.)
             spec.assert_true(uidriver.wait_body_contains("/widgets", "Selected index: 2", 20),
                 "the change handler ran")
+            spec.assert_contains(uidriver.get_body("/widgets"), "Changes: 1",
+                "once")
         }
 
         spec.it("selecting index 3 round-trips") callback {

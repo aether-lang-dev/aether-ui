@@ -11,6 +11,9 @@ extern println(s: string)
 
 main() {
     selected = ui.ui_state(0)
+    // How many times the on-change ran: the spec wants 0 at startup, when
+    // the items were only being added (GTK4 used to run it for the first).
+    changes = ui.ui_state(0)
 
     ui.window("Color Picker", 300, 200) {
     root = ui.vstack(10) {
@@ -18,6 +21,7 @@ main() {
 
         colors = ui.picker() callback |idx: int| {
             ui.ui_set(selected, idx)
+            ui.ui_set(changes, ui.ui_get(changes) + 1)
             println("Selected index: ${idx}")
         }
         ui.picker_add(colors, "Red")
@@ -27,6 +31,7 @@ main() {
 
         ui.divider()
         ui.text_bound(selected, "Selected index: ", "")
+        ui.text_bound(changes, "Changes: ", "")
     }
     // The standard window gutter: content not flush against the frame.
     _ci = ui.content_inset(root)
