@@ -91,6 +91,10 @@ int aether_ui_spacer_create(void);
 int aether_ui_divider_create(void);
 
 // Input widgets (Group 2)
+// A vertical slider: minimum at the TOP, values increasing downward, as a
+// scrollbar's are, on every backend. The slider_* setters and getters work
+// on it as on any slider.
+int aether_ui_vslider_create(double min_val, double max_val, double initial, void* boxed_closure);
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure);
 // cb(text) on Return in a textfield or securefield (ui.on_submit).
 void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure);

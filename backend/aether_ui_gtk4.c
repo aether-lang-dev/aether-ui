@@ -1919,6 +1919,24 @@ void aether_ui_slider_set_value(int handle, double value) {
     }
 }
 
+// A vertical GtkScale already has its minimum at the top.
+static void aeui_slider_set_vertical(int handle, int on) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_SCALE(w)) return;
+    gtk_orientable_set_orientation(GTK_ORIENTABLE(w),
+        on ? GTK_ORIENTATION_VERTICAL : GTK_ORIENTATION_HORIZONTAL);
+    gtk_scale_set_draw_value(GTK_SCALE(w), on ? FALSE : TRUE);
+    gtk_widget_set_hexpand(w, on ? FALSE : TRUE);
+    gtk_widget_set_vexpand(w, on ? TRUE : FALSE);
+}
+
+int aether_ui_vslider_create(double min_val, double max_val, double initial,
+                             void* boxed_closure) {
+    int h = aether_ui_slider_create(min_val, max_val, initial, boxed_closure);
+    if (h) aeui_slider_set_vertical(h, 1);
+    return h;
+}
+
 double aether_ui_slider_get_value(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_SCALE(w)) {

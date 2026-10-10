@@ -25,8 +25,8 @@
 // aeui_android_run_sync); timers are timerfds on the same looper. Every JNI
 // call that touches a View therefore happens on the UI thread.
 //
-// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 329 ABI functions
-// the UIKit backend exports are here: 323 implemented for real and 6
+// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 330 ABI functions
+// the UIKit backend exports are here: 324 implemented for real and 6
 // documented no-ops (the tray: there is no status-area tray on Android, as
 // on iOS). There are NO STUBS. Stage 1 proved the chain (`--emit=lib`, JNI,
 // the looper bridge, packaging, the driver over `adb forward`) with
@@ -165,7 +165,7 @@
 // modifiers_impl is 0 (no pollable modifier state, as on UIKit), the
 // disclosure triangle is drawn as a path (no system chevron).
 //
-// Real, pass C (51):
+// Real, pass C (52):
 //   canvas     canvas_create_impl canvas_get_widget canvas_begin_path_impl
 //              canvas_move_to_impl canvas_line_to_impl canvas_arc_impl
 //              canvas_close_path_impl canvas_stroke_impl canvas_fill_impl
@@ -187,6 +187,7 @@
 //              canvas_on_scroll_impl canvas_on_resize_impl
 //              canvas_gesture_probe_impl                         (41)
 //   fields     textfield_on_submit_impl                          (1)
+//   sliders    vslider_create                                    (1)
 //   gpuview    gpuview_available_impl gpuview_create_impl gpuview_get_widget
 //              gpuview_on_realize_impl gpuview_on_render_impl
 //              gpuview_on_resize_impl gpuview_request_render_impl
@@ -678,6 +679,7 @@ typedef struct {
     AeClosure* layout_cb; int layout_w, layout_h;
     int bound_state;           // bind_value: the string state this field writes back
     double smin, smax;         // slider range
+    double sval; int sval_steps; // the last value set from code, and the step it sits at
     char** items; int nitems; int selected;   // picker
     int radio_leader;          // toggle group
     int fill, tint;            // image: fill mode, tint (-1 none)
@@ -1616,6 +1618,8 @@ int aether_ui_form_section_create(const char* title) {
 // window frame that grows to its body's natural height rather than letting
 // LinearLayout squash what overflows (see AetherHost.java).
 static jclass g_scroll_class = NULL, g_host_class = NULL;
+static jclass g_vseek_class = NULL;   // AetherVSeekBar (ui.vslider)
+static jmethodID g_vseek_init = NULL;
 static jmethodID g_scroll_init = NULL, g_host_init = NULL;
 
 int aether_ui_scrollview_create(void) {
@@ -2092,21 +2096,34 @@ static double slider_value_at(AeuiWidget* w, int steps) {
     return w->smin + (w->smax - w->smin) * (double)steps / SLIDER_STEPS;
 }
 
-int aether_ui_slider_create(double min_val, double max_val, double initial,
-                            void* boxed_closure) {
+static int make_slider(double min_val, double max_val, double initial,
+                       void* boxed_closure, int vertical) {
     JNIEnv* env = aeui_frame(8);
     if (!env) return 0;
     int h = 0;
-    jobject sb = g_activity ? JNEW(M_SB_init, g_activity) : NULL;
+    jobject sb = NULL;
+    if (vertical) {
+        // ui.vslider: AetherVSeekBar, a SeekBar a quarter turn round.
+        if (g_activity && g_vseek_init) {
+            sb = (*env)->NewObject(env, g_vseek_class, g_vseek_init, g_activity);
+            if (aeui_check(env, "new AetherVSeekBar")) sb = NULL;
+        }
+    } else if (g_activity) {
+        sb = JNEW(M_SB_init, g_activity);
+    }
     if (sb) {
         h = register_widget_typed(env, sb, AUI_SLIDER);
         AeuiWidget* w = widget_at(h);
         if (w) {
             w->smin = min_val;
             w->smax = max_val;
+            w->sval = initial;
+            w->sval_steps = slider_steps_for(w, initial);
             w->change = (AeClosure*)boxed_closure;
-            // A slider takes the row's width, as GTK's scale does (hexpand).
-            w->own_hexp = w->hexp = 1;
+            // A slider takes the row's width, as GTK's scale does (hexpand);
+            // a vertical one the column's height.
+            if (vertical) w->own_vexp = w->vexp = 1;
+            else w->own_hexp = w->hexp = 1;
             JV(sb, M_PB_setMax, (jint)SLIDER_STEPS);
             JV(sb, M_PB_setProgress, (jint)slider_steps_for(w, initial));
         }
@@ -2117,6 +2134,15 @@ int aether_ui_slider_create(double min_val, double max_val, double initial,
     return h;
 }
 
+int aether_ui_slider_create(double min_val, double max_val, double initial,
+                            void* boxed_closure) {
+    return make_slider(min_val, max_val, initial, boxed_closure, 0);
+}
+int aether_ui_vslider_create(double min_val, double max_val, double initial,
+                             void* boxed_closure) {
+    return make_slider(min_val, max_val, initial, boxed_closure, 1);
+}
+
 // Programmatic: no on_change (the SeekBar reports it as not from the user,
 // and the listener only forwards a person's drag).
 void aether_ui_slider_set_value(int handle, double value) {
@@ -2124,7 +2150,14 @@ void aether_ui_slider_set_value(int handle, double value) {
     if (!w || w->type != AUI_SLIDER) return;
     JNIEnv* env = aeui_frame(4);
     if (!env) return;
-    JV(w->view, M_PB_setProgress, (jint)slider_steps_for(w, value));
+    int steps = slider_steps_for(w, value);
+    JV(w->view, M_PB_setProgress, (jint)steps);
+    // The exact value, for the getter while the thumb stays on its step: a
+    // SeekBar holds SLIDER_STEPS positions, so over a 100,000-row range a
+    // set of 90,000 read back as 90,002 (the datagrid's scrollbar). Win32
+    // keeps the set value the same way.
+    w->sval = value;
+    w->sval_steps = steps;
     aeui_unframe(env);
 }
 
@@ -2135,6 +2168,7 @@ double aether_ui_slider_get_value(int handle) {
     if (!env) return 0.0;
     int steps = JI(w->view, M_PB_getProgress);
     aeui_unframe(env);
+    if (steps == w->sval_steps && w->sval_steps >= 0) return w->sval;
     return slider_value_at(w, steps);
 }
 
@@ -9271,6 +9305,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_listener_init3           = M(J.Listener, "<init>", "(III)V");
     g_activity_pick            = M(shim, "pick", "(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
     // The shim's other classes, while the app's class loader is in effect.
+    g_vseek_class = aeui_find_class(env, "dev/aether/ui/AetherVSeekBar");
+    if (g_vseek_class) g_vseek_init = M(g_vseek_class, "<init>", "(Landroid/content/Context;)V");
     g_scroll_class = aeui_find_class(env, "dev/aether/ui/AetherScroll");
     if (g_scroll_class) g_scroll_init = M(g_scroll_class, "<init>", "(Landroid/content/Context;)V");
     g_host_class = aeui_find_class(env, "dev/aether/ui/AetherHost");

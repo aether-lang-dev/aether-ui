@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # test_easing_curve.sh — proves the easing CURVE is honoured, not just that
 # *a* tween happens.
 #

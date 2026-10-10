@@ -22,7 +22,9 @@ exports (
     tabs, tab, on_tab_change, tab_select, tab_selected,
     nav_push, nav_pop, nav_depth, nav_page,
     text, text_wrapped, text_anchor, text_truncate, button, btn, spacer, divider,
-    textfield, textfield_bound, securefield, on_submit, toggle, toggle_group, slider, picker, picker_add,
+    textfield, textfield_bound, securefield, on_submit, vslider,
+    datagrid, datagrid_header, datagrid_scroll_to, datagrid_refresh,
+    datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -288,6 +290,7 @@ extern aether_ui_toggle_set_active(handle: int, active: int)
 extern aether_ui_toggle_get_active(handle: int) -> int
 extern aether_ui_toggle_set_group(handle: int, group_with: int)
 
+extern aether_ui_vslider_create(min_val: float, max_val: float, initial: float, boxed_closure: ptr) -> int
 extern aether_ui_slider_create(min_val: float, max_val: float,
                                initial: float, boxed_closure: ptr) -> int
 extern aether_ui_slider_set_value(handle: int, value: float)
@@ -1532,6 +1535,21 @@ toggle_group(handle: int, group_with: int) {
 slider(_ctx: ptr, min_val: float, max_val: float, initial: float, on_change: fn) {
     boxed = box_closure(on_change)
     handle = aether_ui_slider_create(min_val, max_val, initial, boxed)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    _style_on_create(handle)   // use_styles: arrive themed
+    return handle
+}
+
+// vslider(min, max, initial, on_change): a slider standing up, minimum at the
+// TOP and values increasing downward, as a scrollbar's are (the datagrid's
+// scrollbars). The same direction on every backend, whatever the platform's
+// own vertical slider does; slider_set/get and the driver's set_value work on
+// it as on any slider.
+vslider(_ctx: ptr, min_val: float, max_val: float, initial: float, on_change: fn) {
+    boxed = box_closure(on_change)
+    handle = aether_ui_vslider_create(min_val, max_val, initial, boxed)
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
     }
@@ -6209,6 +6227,198 @@ vlist_native(vp: ptr) -> int {
     v = vp as *VList
     return v.native
 }
+
+// ── datagrid: a virtualised grid (docs/design/data-grid.md, phase 1) ─────
+//
+//   g = datagrid(rows, cols, vis_rows, vis_cols, frozen) callback |r: int, c: int| -> string { ... }
+//   datagrid_header(g) callback |c: int| -> string { ... }
+//
+// A grid of `rows` x `cols` cells whose text comes from `cell(r, c)` when a
+// cell is shown, so a model of 100,000 rows costs nothing until scrolled to.
+// Only vis_rows x (frozen + vis_cols) cell widgets exist, made once: scrolling
+// rewrites their text, never adds or removes widgets. The header row and the
+// `frozen` leading columns stay put (they are not in what scrolls), so the
+// header is sticky and a row-number column stays at the left. Two native
+// sliders are its scrollbars (a vslider beside the body, a slider under it),
+// the way a spreadsheet's are; datagrid_scroll_to moves it from code.
+struct DataGrid {
+    rows: int
+    cols: int
+    vis_rows: int
+    vis_cols: int     // scrolling columns shown (the frozen ones are extra)
+    frozen: int
+    col_w: int
+    row_h: int
+    first_row: int
+    first_col: int    // the first SCROLLING column shown (>= frozen)
+    cell: ptr         // boxed |r, c| -> string
+    header: ptr       // boxed |c| -> string, or null
+    root: int
+    hdr_cells: ptr    // intarr of text handles: frozen, then vis_cols
+    cells: ptr        // intarr of text handles, row-major
+    vsl: int
+    hsl: int
+}
+
+_datagrid_invoke_cell(cb: fn, r: int, c: int) -> string {
+    return cb(r, c)
+}
+_datagrid_invoke_header(cb: fn, c: int) -> string {
+    return cb(c)
+}
+
+datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: int, cell: fn) -> ptr {
+    g = malloc(sizeof(DataGrid)) as *DataGrid
+    g.rows = rows
+    g.cols = cols
+    fz = frozen
+    if fz < 0 { fz = 0 }
+    if fz > cols { fz = cols }
+    g.frozen = fz
+    vc = vis_cols
+    if vc > cols - fz { vc = cols - fz }
+    if vc < 0 { vc = 0 }
+    vr = vis_rows
+    if vr > rows { vr = rows }
+    if vr < 0 { vr = 0 }
+    g.vis_rows = vr
+    g.vis_cols = vc
+    g.col_w = 96
+    g.row_h = 24
+    g.first_row = 0
+    g.first_col = fz
+    g.cell = box_closure(cell)
+    g.header = null
+    gp = g as ptr
+    root = vstack(_ctx, 0)
+    g.root = root
+    _art = a11y_role(root, "table")
+    // The header row: not in what scrolls, so it stays at the top.
+    hdr = hstack(root, 0)
+    g.hdr_cells = intarr_new_raw(fz + vc + 1)
+    hi = 0
+    while hi < fz + vc {
+        hh = text(hdr, "")
+        _hw = width(hh, g.col_w)
+        _hhh = height(hh, g.row_h)
+        text_truncate(hh, "tail")
+        add_css_class(hh, "aui-grid-header")
+        aether_ui_set_bg_color(hh, 0.90, 0.91, 0.93, 1.0)
+        _arh = a11y_role(hh, "columnheader")
+        intarr_set_raw(g.hdr_cells, hi, hh)
+        hi = hi + 1
+    }
+    mid = hstack(root, 0)
+    body = vstack(mid, 0)
+    g.cells = intarr_new_raw(vr * (fz + vc) + 1)
+    ri = 0
+    while ri < vr {
+        row = hstack(body, 0)
+        ci = 0
+        while ci < fz + vc {
+            ch = text(row, "")
+            _cw = width(ch, g.col_w)
+            _chh = height(ch, g.row_h)
+            text_truncate(ch, "tail")
+            if ci < fz {
+                add_css_class(ch, "aui-grid-frozen")
+                aether_ui_set_bg_color(ch, 0.95, 0.95, 0.96, 1.0)
+            } else {
+                add_css_class(ch, "aui-grid-cell")
+            }
+            intarr_set_raw(g.cells, ri * (fz + vc) + ci, ch)
+            ci = ci + 1
+        }
+        ri = ri + 1
+    }
+    maxr = rows - vr
+    if maxr < 0 { maxr = 0 }
+    maxc = cols - fz - vc
+    if maxc < 0 { maxc = 0 }
+    g.vsl = vslider(mid, 0.0, maxr * 1.0, 0.0) callback |v: float| {
+        datagrid_scroll_to(gp, (v + 0.5) as int, g.first_col)
+    }
+    _vh = height(g.vsl, vr * g.row_h)
+    g.hsl = slider(root, 0.0, maxc * 1.0, 0.0) callback |v: float| {
+        datagrid_scroll_to(gp, g.first_row, g.frozen + ((v + 0.5) as int))
+    }
+    _hw2 = width(g.hsl, (fz + vc) * g.col_w)
+    _datagrid_bind(g)
+    return gp
+}
+
+// The column a shown position holds: frozen ones are themselves, the rest
+// follow the scroll.
+_datagrid_col_at(g: *DataGrid, j: int) -> int {
+    if j < g.frozen { return j }
+    return g.first_col + (j - g.frozen)
+}
+
+// Rewrite every shown cell (and header) from the model, for the current
+// first row and column. The widgets stay; only their text changes.
+_datagrid_bind(g: *DataGrid) {
+    w = g.frozen + g.vis_cols
+    if g.header != null {
+        hf = unbox_closure(g.header)
+        j = 0
+        while j < w {
+            aether_ui_text_set_string(intarr_get_raw(g.hdr_cells, j), _datagrid_invoke_header(hf, _datagrid_col_at(g, j)))
+            j = j + 1
+        }
+    }
+    cf = unbox_closure(g.cell)
+    r = 0
+    while r < g.vis_rows {
+        c = 0
+        while c < w {
+            aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + c), _datagrid_invoke_cell(cf, g.first_row + r, _datagrid_col_at(g, c)))
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+// datagrid_header(g) callback |c| -> string: the header's text per column.
+datagrid_header(gp: ptr, header: fn) {
+    g = gp as *DataGrid
+    g.header = box_closure(header)
+    _datagrid_bind(g)
+}
+
+// datagrid_scroll_to(g, row, col): show `row` at the top and `col` as the
+// first scrolling column (clamped so the window never runs past the end; a
+// frozen column is always shown, so col below `frozen` reads as `frozen`).
+// The scrollbars follow.
+datagrid_scroll_to(gp: ptr, row: int, col: int) {
+    g = gp as *DataGrid
+    maxr = g.rows - g.vis_rows
+    if maxr < 0 { maxr = 0 }
+    r = row
+    if r < 0 { r = 0 }
+    if r > maxr { r = maxr }
+    maxc = g.cols - g.vis_cols
+    if maxc < g.frozen { maxc = g.frozen }
+    c = col
+    if c < g.frozen { c = g.frozen }
+    if c > maxc { c = maxc }
+    g.first_row = r
+    g.first_col = c
+    aether_ui_slider_set_value(g.vsl, r * 1.0)
+    aether_ui_slider_set_value(g.hsl, (c - g.frozen) * 1.0)
+    _datagrid_bind(g)
+}
+
+// datagrid_refresh(g): the model changed; show it again.
+datagrid_refresh(gp: ptr) {
+    _datagrid_bind(gp as *DataGrid)
+}
+
+datagrid_first_row(gp: ptr) -> int { g = gp as *DataGrid; return g.first_row }
+datagrid_first_col(gp: ptr) -> int { g = gp as *DataGrid; return g.first_col }
+// The grid's outer widget, and its two scrollbars (for a driver or a test).
+datagrid_widget(gp: ptr) -> int { g = gp as *DataGrid; return g.root }
+datagrid_vscroll(gp: ptr) -> int { g = gp as *DataGrid; return g.vsl }
+datagrid_hscroll(gp: ptr) -> int { g = gp as *DataGrid; return g.hsl }
 
 // table_on_select(t) callback |i: int| — row selection (delegates to listbox).
 table_on_select(tp: ptr, cb: fn) {

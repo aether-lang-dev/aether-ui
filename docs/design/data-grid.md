@@ -1,6 +1,9 @@
 # A data grid: design note
 
-Status: proposal, 2026-10-10. Asked for by sae's spreadsheet (demo 18), which
+Status: phase 1 built (2026-10-10): `datagrid` in `ui/module.ae`, with
+`vslider` added for its scrollbars; the scrolling was decided as its own
+viewport with native sliders (option B below, Paul's call), not a native
+scroll view. Phases 2-6 open. Asked for by sae's spreadsheet (demo 18), which
 built about 120 lines of grid by hand in `vg`; the same widget would make data
 grids, log viewers and property sheets cheap. The ask, from a cloud session
 building that demo: Swing's `JTable`, QML's `TableView` or Flutter's
@@ -71,7 +74,8 @@ The contract:
 
 ## Phases, each with its proof
 
-1. **Static grid with a sticky header.** A function-backed model, fixed
+1. **Static grid with a sticky header.** DONE: `datagrid` (148 widgets for
+   a 100,000 x 50 model; `spec_datagrid_demo`). A function-backed model, fixed
    columns, a 2D window of live cells, both-ways scrolling, the header and
    frozen columns pinned. Spec: 100,000 x 50 model, at most a few hundred
    live widgets (counted over the driver), and the header still at the top

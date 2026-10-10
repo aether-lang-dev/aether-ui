@@ -19,8 +19,14 @@ main() {
             //
             // macOS resolves these through -framework OpenGL, already linked
             // by ui_backend for the backend's own use. Elsewhere the app asks.
-            if string.equals(platform(), "darwin") == 0 {
-                link_flag("-lGL")
+            // Windows has no libGL: its GL is opengl32 (the demo's calls are
+            // GL 1.1, all of which opengl32 exports).
+            if string.equals(platform(), "windows") == 1 {
+                link_flag("-lopengl32")
+            } else {
+                if string.equals(platform(), "darwin") == 0 {
+                    link_flag("-lGL")
+                }
             }
         }
         return 0

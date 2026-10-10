@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # capture-pixelgrid.sh — sample one app's RENDERED pixels under both win32
 # renderers, for the GDI-vs-GDI+ comparison in
 # docs/design/win32-gdiplus-renderer.md.

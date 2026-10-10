@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ci.sh — full aether_ui test pipeline as a CI job would run it.
 #
 # The AetherUIDriver control server is OUT of app builds by default (a listening
@@ -86,9 +86,16 @@ OS="$(uname -s)"
 case "$OS" in
     Darwin)  PLATFORM=macos ;;
     Linux)   PLATFORM=linux ;;
+    # The GTK4 backend on FreeBSD (ghostbsd): the Linux path, run under an
+    # Xvfb the caller starts (FreeBSD's Xvfb ships without xvfb-run).
+    FreeBSD) PLATFORM=linux ;;
     MINGW*|MSYS*|CYGWIN*) PLATFORM=windows ;;
     *)       PLATFORM=unknown ;;
 esac
+# The host C compiler for the unit tests' links: $CC when set, else gcc
+# (Linux CI, macOS's clang shim), else cc (FreeBSD has cc, not gcc).
+HOST_CC="${CC:-gcc}"
+command -v "$HOST_CC" >/dev/null 2>&1 || HOST_CC=cc
 echo "=== aether_ui CI on $OS ($PLATFORM) ==="
 
 # A crashing driver app leaves no explanation in its own output. Allow cores so
@@ -166,8 +173,13 @@ run_self_quitting() {
     # ($LAUNCH_PREFIX set) the window maps and the allocation is real. On
     # macOS there is no xvfb, and headless is what keeps a local run from
     # popping windows; allocation works there either way.
+    # A GTK box with a display of its own (DISPLAY already set, as on the
+    # FreeBSD lane, which starts its own Xvfb) maps the window too; headless
+    # there read every width as 0 (panelsize_demo, insets_demo).
     if [ -n "${LAUNCH_PREFIX:-}" ]; then
         $LAUNCH_PREFIX "$bin" > "$log" 2>&1 &
+    elif [ "$PLATFORM" = linux ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        "$bin" > "$log" 2>&1 &
     else
         AETHER_UI_HEADLESS=1 "$bin" > "$log" 2>&1 &
     fi
@@ -355,7 +367,7 @@ for t in "${AEVG_TESTS[@]}"; do
     # link no GTK backend, so a zero-returning stub resolves those symbols
     # (tests importing vg never call them — test_text_metrics uses the real
     # backend via AEVG_GTK_TESTS below).
-    if ! gcc "$cfile" vg/test/text_metrics_stub.c $(ae cflags) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
+    if ! "$HOST_CC" "$cfile" vg/test/text_metrics_stub.c $(ae cflags) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
         echo "  FAIL $t (link)"
         tail -15 "/tmp/ci_aevg_${t}.log" | sed 's/^/       /'
         FAIL=$((FAIL + 1))
@@ -383,7 +395,7 @@ if pkg-config --exists gtk4 2>/dev/null; then
         fi
         # epoxy explicitly: gpuview (#92) calls GL from the GTK4 backend, and
         # gtk4.pc exposes neither epoxy's headers nor its library.
-        if ! gcc $(pkg-config --cflags gtk4) $(pkg-config --cflags epoxy) "$cfile" \
+        if ! "$HOST_CC" $(pkg-config --cflags gtk4) $(pkg-config --cflags epoxy) "$cfile" \
                 backend/aether_ui_gtk4.c backend/aether_ui_system_extras.c backend/aether_ui_sni.c \
                 backend/aether_ui_test_server.c \
                 $(ae cflags) -pthread -lm $(pkg-config --libs gtk4) $(pkg-config --libs epoxy) -o "$bin" >> "/tmp/ci_aevg_${t}.log" 2>&1; then
@@ -425,7 +437,7 @@ for spec in "${ENGINE_TESTS[@]}"; do
     if ! aetherc --lib "apps/${app}" "$src" "$cfile" > "/tmp/ci_eng_${t}.log" 2>&1; then
         echo "  FAIL $t (compile)"; tail -15 "/tmp/ci_eng_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
     fi
-    if ! gcc "$cfile" $(ae cflags) -o "$bin" >> "/tmp/ci_eng_${t}.log" 2>&1; then
+    if ! "$HOST_CC" "$cfile" $(ae cflags) -o "$bin" >> "/tmp/ci_eng_${t}.log" 2>&1; then
         echo "  FAIL $t (link)"; tail -15 "/tmp/ci_eng_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
     fi
     if "$bin" > "/tmp/ci_eng_${t}_run.log" 2>&1; then
@@ -879,8 +891,9 @@ else
     # vgpaint_demo (vg's live paint and the right/double-click hooks on UIKit),
     # spacercanvas_demo (spacers take a stack's slack before a canvas does),
     # pixelated_demo (image_rendering "pixelated": CoreGraphics nearest),
-    # submit_demo (on_submit: Return in a field).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo; do
+    # submit_demo (on_submit: Return in a field), datagrid_demo (the
+    # virtualised grid, with a vslider: a rotated UISlider in a box).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1417,6 +1430,16 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=submit_demo/spec_submit_demo \
     run_server_test "$(EX_BIN submit_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" submit_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9g: AetherUIDriver datagrid spec ==="
+# A virtualised grid: 100,000 x 50 from a function, only the shown cells as
+# widgets, sliders (a vslider) to scroll, a sticky header and frozen column.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=datagrid_demo/spec_datagrid_demo \
+    run_server_test "$(EX_BIN datagrid_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" datagrid_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

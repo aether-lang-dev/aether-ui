@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test for AetherUIDriver HTTP server.
 #
 # Spawns the test driver app with AETHER_UI_TEST_PORT set, waits for the

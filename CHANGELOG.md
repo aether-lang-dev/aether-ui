@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`datagrid`: a virtualised grid** (docs/design/data-grid.md, phase 1).
+  `datagrid(rows, cols, vis_rows, vis_cols, frozen) callback |r, c| { ... }`
+  takes its cells from a function, so a 100,000 x 50 model costs nothing
+  until shown; only vis_rows x (frozen + vis_cols) cell widgets exist, made
+  once, and scrolling rewrites their text. The header row
+  (`datagrid_header`) and the frozen leading columns are not in what
+  scrolls, so they stay put. Its scrollbars are native sliders (a `vslider`
+  beside the body, a `slider` under it); `datagrid_scroll_to` moves it from
+  code. Composed in Aether, so the same on every backend.
+  `examples/datagrid_demo` + spec (ci.sh Phase 5e9g, the iOS simulator
+  phase, the spec matrix): 148 widgets for 5,000,000 cells, before and
+  after scrolling to row 90,000 and column 40; the header stays on top and
+  the row numbers stay at the left. 6/6 on macOS, win11, the Android
+  emulator, GTK 4.6 and GTK 4.22.
+- **`vslider(min, max, initial, cb)`: a vertical slider**, minimum at the
+  top and values increasing downward (a scrollbar's direction) on every
+  backend: GtkScale turned vertical, NSSlider vertical with its value
+  mirrored (its minimum is at the bottom), a TBS_VERT trackbar, a UISlider
+  turned a quarter turn in a box that takes the layout's size (Auto Layout
+  sizes the unrotated bounds), and Android's AetherVSeekBar (a SeekBar
+  measured, drawn and touched a quarter turn round).
 - **Driver `GET /canvas/{id}/nodes`: a vg scene's content as data.** After
   each flush, while the driver runs, vg publishes the scene's nodes in draw
   order: kind (circle, rect, line, path, text, image), visibility, canvas-px
@@ -65,6 +86,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **aether-ui's CI runs on FreeBSD.** ci.sh knew Darwin, Linux and
+  Windows only ("unrecognized platform 'FreeBSD'"); FreeBSD's GTK4 now takes
+  the Linux path. With it: every bash script's shebang is `#!/usr/bin/env
+  bash` (FreeBSD's bash is /usr/local/bin/bash, so ci.sh and the transition
+  tests could not start); the unit-test links use `$HOST_CC` ($CC, else gcc,
+  else cc: FreeBSD has no gcc); and a self-quitting app runs with the display
+  it is given rather than headless whenever one is set (a box that starts
+  its own Xvfb, as ghostbsd does, read every width as 0 in panelsize_demo
+  and insets_demo). Full ./ci.sh on ghostbsd (FreeBSD 15, GTK 4.20): all
+  phases green, 444 checks (with aeb linking through $CC, aeb c878649).
+- **The GPU demos link on Windows**: they linked `-lGL`, which Windows does
+  not have; there it is `-lopengl32`.
+- **An Android slider reads back the value it was set to.** A SeekBar has
+  SLIDER_STEPS positions, so over a large range a programmatic set came
+  back rounded (90,000 of 100,000 read 90,002); while the thumb stays on
+  that step the getter returns the value set, as Win32's does.
 - **A hidden vg text no longer draws, and a text is tracked like any
   shape.** The flush handed text to `flush_text` before tracking and the
   visibility check, so `visible_when` could not hide a text and its when(),

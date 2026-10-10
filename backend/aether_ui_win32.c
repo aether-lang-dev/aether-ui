@@ -275,7 +275,7 @@ typedef struct {
         struct { int timer_id; } button;
         struct { int canvas_id; } canvas;
         struct { int view_id; } native_view;
-        struct { double min_v, max_v, cur_v; } slider;
+        struct { double min_v, max_v, cur_v; int vertical; } slider;
         struct { double fraction; } progressbar;
     } u;
 
@@ -488,6 +488,7 @@ static void w32_settle_owed_opacity(HWND top);
 static void w32_forget_system_dark(void);
 static int  w32_own_visible(HWND hwnd);
 static void w32_request_layout(HWND stack_hwnd);
+static void w32_relayout_parent(Widget* w);
 static void w32_flush_layout(void);
 static void w32_drv_settle_layout(void);
 
@@ -1066,6 +1067,11 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
         return;
     }
     if (w->kind == WK_SLIDER) {
+        if (w->u.slider.vertical) {
+            *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 28);
+            *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 140);
+            return;
+        }
         *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 140);
         *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 26);
         return;
@@ -4692,6 +4698,31 @@ void aether_ui_slider_set_value(int handle, double value) {
 double aether_ui_slider_get_value(int handle) {
     Widget* w = widget_at(handle);
     return w ? w->u.slider.cur_v : 0.0;
+}
+
+// TBS_VERT: a trackbar reads its orientation from its style as it paints and
+// tracks, so switching the style is enough; its minimum is already at the
+// top. Its natural size turns on its side too.
+static void aeui_slider_set_vertical(int handle, int on) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_SLIDER || !w->hwnd) return;
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    st &= ~(LONG_PTR)(TBS_HORZ | TBS_VERT);
+    st |= on ? TBS_VERT : TBS_HORZ;
+    SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+    SetWindowPos(w->hwnd, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    w->u.slider.vertical = on ? 1 : 0;
+    aether_ui_slider_set_value(handle, w->u.slider.cur_v);
+    InvalidateRect(w->hwnd, NULL, TRUE);
+    w32_relayout_parent(w);
+}
+
+int aether_ui_vslider_create(double min_val, double max_val, double initial,
+                             void* boxed_closure) {
+    int h = aether_ui_slider_create(min_val, max_val, initial, boxed_closure);
+    if (h) aeui_slider_set_vertical(h, 1);
+    return h;
 }
 
 int aether_ui_picker_create(void* boxed_closure) {

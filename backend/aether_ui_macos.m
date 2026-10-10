@@ -2706,6 +2706,18 @@ void aether_ui_toggle_set_group(int handle, int group_with) {
     }
 }
 
+// A vertical NSSlider has its minimum at the BOTTOM; aether-ui's vertical
+// slider has it at the top (as GTK's, Win32's and a scrollbar do), so the
+// value is mirrored on the way in and out.
+static int aeui_slider_flipped(NSSlider* s) {
+    return objc_getAssociatedObject(s, "aeui-vflip") != nil;
+}
+static double aeui_slider_value_of(NSSlider* s) {
+    double v = [s doubleValue];
+    if (aeui_slider_flipped(s)) v = [s minValue] + [s maxValue] - v;
+    return v;
+}
+
 // Slider — continuous; target invokes closure with double value.
 @interface AetherSliderTarget : NSObject
 @property (assign) AeClosure* closure;
@@ -2721,7 +2733,7 @@ void aether_ui_toggle_set_group(int handle, int group_with) {
 }
 - (void)sliderChanged:(id)sender {
     NSSlider* s = (NSSlider*)sender;
-    double val = [s doubleValue];
+    double val = aeui_slider_value_of(s);
     if (self.closure && self.closure->fn) {
         ((void(*)(void*, double))self.closure->fn)(self.closure->env, val);
     }
@@ -2749,16 +2761,35 @@ int aether_ui_slider_create(double min_val, double max_val,
 void aether_ui_slider_set_value(int handle, double value) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSSlider class]]) {
-        [(NSSlider*)v setDoubleValue:value];
+        NSSlider* sl = (NSSlider*)v;
+        if (aeui_slider_flipped(sl)) value = [sl minValue] + [sl maxValue] - value;
+        [sl setDoubleValue:value];
     }
 }
 
 double aether_ui_slider_get_value(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSSlider class]]) {
-        return [(NSSlider*)v doubleValue];
+        return aeui_slider_value_of((NSSlider*)v);
     }
     return 0.0;
+}
+
+static void aeui_slider_set_vertical(int handle, int on) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSSlider class]]) return;
+    NSSlider* sl = (NSSlider*)v;
+    double cur = aeui_slider_value_of(sl);
+    objc_setAssociatedObject(sl, "aeui-vflip", on ? @YES : nil, OBJC_ASSOCIATION_RETAIN);
+    [sl setVertical:on ? YES : NO];
+    aether_ui_slider_set_value(handle, cur);
+}
+
+int aether_ui_vslider_create(double min_val, double max_val, double initial,
+                             void* boxed_closure) {
+    int h = aether_ui_slider_create(min_val, max_val, initial, boxed_closure);
+    if (h) aeui_slider_set_vertical(h, 1);
+    return h;
 }
 
 // Picker — NSPopUpButton; target invokes closure with selected index.

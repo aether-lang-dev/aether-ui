@@ -1,0 +1,92 @@
+// spec_datagrid_demo.ae — the virtualised grid: only the shown cells exist,
+// the sliders scroll it, the header and the frozen column stay put.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
+//   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+// How many widgets of `type` /widgets lists.
+count_of(type: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 - 1 }
+    n = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        // Not the driver's "Under Remote Control" banner, which some
+        // backends list as a text.
+        if string.equals(uidriver.field_str(w, "type"), type) == 1 {
+            if string.equals(uidriver.field_str(w, "text"), "Under Remote Control") == 0 { n = n + 1 }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return n
+}
+
+// The id of the first or last widget of a type (the grid's two scrollbars:
+// the vertical slider is made first).
+nth_of(type: string, last: int) -> int {
+    if last == 1 { return uidriver.widget_id_last_of(type, "") }
+    return uidriver.widget_id_of(type, "")
+}
+
+field_of_text(t: string, f: string) -> int {
+    return uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(t), f)
+}
+
+shows(t: string) -> int {
+    return uidriver.wait_body_contains("/widgets", "\"text\":\"${t}\"", 20)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a virtualised grid") {
+        spec.it("shows the first window: header letters, row numbers, cells") callback {
+            spec.assert_true(shows("A") == 1, "header A")
+            spec.assert_true(shows("F") == 1, "header F (six scrolling columns)")
+            spec.assert_true(shows("R0C1") == 1, "the top-left cell")
+            spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
+            spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
+        }
+        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000") callback {
+            // 1 caption + 7 header + 140 cells.
+            spec.assert_eq(count_of("text"), 148, "texts")
+        }
+        spec.it("the vertical scrollbar stands up") callback {
+            v = nth_of("slider", 0)
+            spec.assert_true(uidriver.widget_int_field_by_id(v, "h") > uidriver.widget_int_field_by_id(v, "w"),
+                "taller than wide")
+        }
+        spec.it("scrolling to row 90,000 rewrites the cells; the header stays on top") callback {
+            hdr_y = field_of_text("A", "y")
+            v = nth_of("slider", 0)
+            uidriver.post_ok("/widget/${v}/set_value?v=90000", "scroll down")
+            spec.assert_true(shows("R90000C1") == 1, "row 90,000 at the top")
+            spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
+            spec.assert_true(shows("A") == 1, "the header still reads A")
+            spec.assert_eq(field_of_text("A", "y"), hdr_y, "and has not moved")
+            spec.assert_eq(count_of("text"), 148, "no widgets added")
+        }
+        spec.it("scrolling across keeps the frozen column and moves the rest") callback {
+            hs = nth_of("slider", 1)
+            uidriver.post_ok("/widget/${hs}/set_value?v=39", "scroll right")
+            spec.assert_true(shows("R90000C40") == 1, "column 40 first")
+            spec.assert_true(shows("AN") == 1, "its header letter, AN")
+            spec.assert_true(shows("90001") == 1, "the row number stayed")
+            spec.assert_eq(count_of("text"), 148, "still no widgets added")
+        }
+        spec.it("scrolling past the end stops at the last window") callback {
+            v = nth_of("slider", 0)
+            uidriver.post_ok("/widget/${v}/set_value?v=200000", "scroll far down")
+            spec.assert_true(shows("R99999C40") == 1, "the last row shows, at the bottom")
+        }
+    }
+    return spec.run_summary(fw)
+}

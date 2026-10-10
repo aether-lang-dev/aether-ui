@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # bootstrap_aether.sh — Local Aether toolchain installer
 #
 # Downloads, builds, and sets up Aether locally in .aether/.

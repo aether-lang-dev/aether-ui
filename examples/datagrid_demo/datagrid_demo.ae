@@ -1,0 +1,40 @@
+// datagrid_demo — a virtualised grid (docs/design/data-grid.md, phase 1):
+// 100,000 rows x 50 columns from a function, 20 rows x 6 scrolling columns
+// shown, one frozen column of row numbers, a header of column letters. Only
+// the shown cells exist as widgets; the sliders scroll it.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
+//   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, text, datagrid, datagrid_header, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+// Column letters: A..Z, AA..AZ, ... (a spreadsheet's).
+letters(c: int) -> string {
+    s = ""
+    n = c
+    while n >= 0 {
+        s = string.concat(string.substring("ABCDEFGHIJKLMNOPQRSTUVWXYZ", n % 26, n % 26 + 1), s)
+        n = n / 26 - 1
+    }
+    return s
+}
+
+main() {
+    window("datagrid", 760, 620) {
+        vstack(4) {
+            text("100,000 rows x 50 columns")
+            g = datagrid(100000, 50, 20, 6, 1) callback |r: int, c: int| {
+                if c == 0 { return string.from_int(r + 1) }
+                return "R${r}C${c}"
+            }
+            datagrid_header(g) callback |c: int| {
+                if c == 0 { return "#" }
+                return letters(c - 1)
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

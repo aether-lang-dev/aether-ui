@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # test_tween.sh — drives transitions_demo (launched by ci with animations ON).
 # Proves ui.transition tweens: a screenshot taken right after the toggle
 # differs from the settled one (mid-flight frame), and end states land.

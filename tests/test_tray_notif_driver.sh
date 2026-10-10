@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # tests/test_tray_notif_driver.sh — headless integration test for the
 # system-tray + desktop-notification surface.
 #

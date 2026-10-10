@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # tests/test_sni_dbus.sh — verify the SNI + DBusMenu surface on the
 # session bus. Linux-only. Requires:
 #   - a session D-Bus

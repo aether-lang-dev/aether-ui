@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # test_spring_curve.sh — proves the SPRING curve overshoots.
 #
 # tests/transitions_demo/test_easing_curve.sh separates ease-out from linear by

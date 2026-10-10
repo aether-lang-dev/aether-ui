@@ -1170,10 +1170,37 @@ int aether_ui_toggle_get_active(int handle) {
 }
 
 // ---------------------------------------------------------------------------
+// A vertical slider: UIKit has none, so a UISlider turned a quarter turn
+// clockwise (its minimum end at the top, as a scrollbar's) inside a box that
+// takes the size the layout gives. Auto Layout sizes a view by its unrotated
+// bounds, so the slider's bounds are the box's turned on their side and set
+// by hand in layoutSubviews; the box is what is registered.
+@interface AeuiVSliderBox : UIView
+@property (nonatomic, strong) UISlider* slider;
+@end
+@implementation AeuiVSliderBox
+- (CGSize)intrinsicContentSize { return CGSizeMake(34, UIViewNoIntrinsicMetric); }
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGSize b = self.bounds.size;
+    self.slider.transform = CGAffineTransformIdentity;
+    self.slider.bounds = CGRectMake(0, 0, b.height, b.width);
+    self.slider.center = CGPointMake(b.width / 2.0, b.height / 2.0);
+    self.slider.transform = CGAffineTransformMakeRotation(M_PI_2);
+}
+@end
+
+// The UISlider of a slider widget: the view itself, or a vertical box's.
+static UISlider* aeui_slider_in(UIView* v) {
+    if ([v isKindOfClass:[UISlider class]]) return (UISlider*)v;
+    if ([v isKindOfClass:[AeuiVSliderBox class]]) return ((AeuiVSliderBox*)v).slider;
+    return nil;
+}
+
 // Slider — UISlider. Closure fires the value as a double on change.
 // ---------------------------------------------------------------------------
-int aether_ui_slider_create(double min_val, double max_val, double initial,
-                            void* boxed_closure) {
+static UISlider* make_uislider(double min_val, double max_val, double initial,
+                               void* boxed_closure) {
     UISlider* s = [[UISlider alloc] init];
     s.translatesAutoresizingMaskIntoConstraints = NO;
     s.minimumValue = (float)min_val;
@@ -1186,17 +1213,37 @@ int aether_ui_slider_create(double min_val, double max_val, double initial,
             forControlEvents:UIControlEventValueChanged];
         aeui_own_helper(s, t);
     }
-    return register_widget_typed((__bridge void*)s, AUI_SLIDER);
+    return s;
+}
+
+int aether_ui_slider_create(double min_val, double max_val, double initial,
+                            void* boxed_closure) {
+    return register_widget_typed(
+        (__bridge void*)make_uislider(min_val, max_val, initial, boxed_closure), AUI_SLIDER);
+}
+
+int aether_ui_vslider_create(double min_val, double max_val, double initial,
+                             void* boxed_closure) {
+    UISlider* s = make_uislider(min_val, max_val, initial, boxed_closure);
+    AeuiVSliderBox* box = [[AeuiVSliderBox alloc] init];
+    box.translatesAutoresizingMaskIntoConstraints = NO;
+    s.translatesAutoresizingMaskIntoConstraints = YES;
+    box.slider = s;
+    [box addSubview:s];
+    [box setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    return register_widget_typed((__bridge void*)box, AUI_SLIDER);
 }
 
 void aether_ui_slider_set_value(int handle, double value) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v && [v isKindOfClass:[UISlider class]]) ((UISlider*)v).value = (float)value;
+    UISlider* sl = v ? aeui_slider_in(v) : nil;
+    if (sl) sl.value = (float)value;
 }
 
 double aether_ui_slider_get_value(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v && [v isKindOfClass:[UISlider class]]) return (double)((UISlider*)v).value;
+    UISlider* sl = v ? aeui_slider_in(v) : nil;
+    if (sl) return (double)sl.value;
     return 0.0;
 }
 
@@ -5804,9 +5851,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             }
             break;
         case AETHER_DRV_SET_VALUE:
-            if ([v isKindOfClass:[UISlider class]]) {
+            if (aeui_slider_in(v)) {
                 aether_ui_slider_set_value(ctx->handle, ctx->dval);
-                [(UISlider*)v sendActionsForControlEvents:UIControlEventValueChanged];
+                [aeui_slider_in(v) sendActionsForControlEvents:UIControlEventValueChanged];
             } else if ([v isKindOfClass:[UIProgressView class]]) {
                 aether_ui_progressbar_set_fraction(ctx->handle, ctx->dval);
             } else if (get_widget_type(ctx->handle) == AUI_PICKER) {
