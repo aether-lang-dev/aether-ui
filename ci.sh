@@ -854,8 +854,9 @@ else
     # UIKit, a tap selecting one, selection surviving an update), then
     # frametick_demo (the frame clock on CADisplayLink, pinned so a silent
     # fallback to the timer fails, and timer_once), vg_image_demo and
-    # vgpaint_demo (vg's live paint and the right/double-click hooks on UIKit).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo; do
+    # vgpaint_demo (vg's live paint and the right/double-click hooks on UIKit),
+    # spacercanvas_demo (spacers take a stack's slack before a canvas does).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1359,6 +1360,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=vgpaint_demo/spec_vgpaint_demo \
     run_server_test "$(EX_BIN vgpaint_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" vgpaint_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9d: AetherUIDriver spacers-before-canvas spec ==="
+# spacer() takes a stack's slack before a canvas does, so spacer/canvas/spacer
+# keeps the canvas at its size, centred; a canvas alone still fills. GTK4
+# split the slack three ways, Win32 and UIKit gave it all to the canvas, and
+# AppKit gave it all to the first spacer (sae's corpus pages).
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=spacercanvas_demo/spec_spacercanvas_demo \
+    run_server_test "$(EX_BIN spacercanvas_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" spacercanvas_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

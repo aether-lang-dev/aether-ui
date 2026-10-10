@@ -736,6 +736,32 @@ static void aeui_stack_enable_packing(AeuiStackView* sv) {
     [sv aeuiRepack];
 }
 
+// Spacers share a stack's slack equally. Two spacers are two views free to
+// grow with nothing relating their sizes, and Auto Layout settles that
+// arbitrarily: spacer/canvas/spacer put 82 points left of the canvas and
+// none right (spacercanvas_demo on the simulator; AppKit gave the first
+// spacer everything). Each spacer after the first is held equal to the first
+// along the stack's axis, below required so a squeezed stack still lays out.
+static void aeui_equalize_spacers(UIStackView* sv) {
+    NSMutableArray* stale = [NSMutableArray array];
+    for (NSLayoutConstraint* c in sv.constraints) {
+        if ([c.identifier isEqualToString:@"aeui-spacer-eq"]) [stale addObject:c];
+    }
+    [NSLayoutConstraint deactivateConstraints:stale];
+    BOOL horiz = sv.axis == UILayoutConstraintAxisHorizontal;
+    UIView* first = nil;
+    for (UIView* c in sv.arrangedSubviews) {
+        if (!objc_getAssociatedObject(c, "aeui_spacer")) continue;
+        if (!first) { first = c; continue; }
+        NSLayoutConstraint* eq = horiz
+            ? [c.widthAnchor constraintEqualToAnchor:first.widthAnchor]
+            : [c.heightAnchor constraintEqualToAnchor:first.heightAnchor];
+        eq.identifier = @"aeui-spacer-eq";
+        eq.priority = 700;
+        eq.active = YES;
+    }
+}
+
 @implementation AeuiStackView
 - (BOOL)canBecomeFirstResponder { return self.aeuiFocusable; }
 // Real children go before the slack, at their index among real children.
@@ -746,11 +772,13 @@ static void aeui_stack_enable_packing(AeuiStackView* sv) {
         if (at != NSNotFound) {
             [super insertArrangedSubview:view atIndex:at];
             [self aeuiRepack];
+            if (objc_getAssociatedObject(view, "aeui_spacer")) aeui_equalize_spacers(self);
             return;
         }
     }
     [super addArrangedSubview:view];
     [self aeuiRepack];
+    if (objc_getAssociatedObject(view, "aeui_spacer")) aeui_equalize_spacers(self);
 }
 - (void)insertArrangedSubview:(UIView*)view atIndex:(NSUInteger)index {
     UIView* slack = self.aeuiSlack;
@@ -760,6 +788,7 @@ static void aeui_stack_enable_packing(AeuiStackView* sv) {
     }
     [super insertArrangedSubview:view atIndex:index];
     [self aeuiRepack];
+    if (objc_getAssociatedObject(view, "aeui_spacer")) aeui_equalize_spacers(self);
 }
 - (void)setDistribution:(UIStackViewDistribution)distribution {
     [super setDistribution:distribution];
@@ -883,6 +912,9 @@ int aether_ui_spacer_create(void) {
                                        forAxis:UILayoutConstraintAxisHorizontal];
     [v setContentCompressionResistancePriority:UILayoutPriorityDefaultLow - 1
                                        forAxis:UILayoutConstraintAxisVertical];
+    // Marked so a stack can find its spacers and keep them equal
+    // (aeui_equalize_spacers).
+    objc_setAssociatedObject(v, "aeui_spacer", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return register_widget_typed((__bridge void*)v, AUI_SPACER);
 }
 

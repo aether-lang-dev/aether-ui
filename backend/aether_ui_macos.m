@@ -7529,6 +7529,16 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
         NSStackView* sv = (NSStackView*)parent;
         [sv addArrangedSubview:child];
 
+        // Spacers share a stack's slack equally. Each is an implicit weight 1
+        // (aeui_effective_weight), but the flex pass that ties weighted
+        // siblings' sizes together only ran on weight(), so two bare spacers
+        // were two equal-hugging views with nothing relating them, and Auto
+        // Layout handed ALL the slack to the first: spacer/canvas/spacer
+        // right-aligned the canvas instead of centring it (spacercanvas_demo).
+        if (get_widget_type(child_handle) == AUI_SPACER) {
+            aeui_apply_flex(sv);
+        }
+
         // Propagate "wants slack" from the child up the ancestor chain.
         //
         // GTK computes expand transitively: a box holding an expanding child

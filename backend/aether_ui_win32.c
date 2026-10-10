@@ -1647,6 +1647,16 @@ static void stack_do_layout(HWND stack_hwnd) {
     int total_primary = 0;
     int spacer_count = 0;
     int total_weight = 0;
+    // A spacer is the app saying where the slack goes, so it outranks the
+    // greed a canvas (or a container holding one) gets by default: with a
+    // spacer in the stack, only an explicit weight() competes with it.
+    // Without this, spacer/canvas/spacer gave the canvas everything and the
+    // spacers nothing, where AppKit and GTK4 centre it (spacercanvas_demo).
+    int has_spacer = 0;
+    for (int i = 0; i < nchildren; i++) {
+        Widget* sw2 = widget_at(handle_for_hwnd(children[i]));
+        if (sw2 && sw2->kind == WK_SPACER) { has_spacer = 1; break; }
+    }
     for (int i = 0; i < nchildren; i++) {
         int ch = handle_for_hwnd(children[i]);
         Widget* cw = widget_at(ch);
@@ -1700,7 +1710,7 @@ static void stack_do_layout(HWND stack_hwnd) {
                              || cw->kind == WK_SCROLLVIEW
                              || (cw->kind == WK_CANVAS
                                  && (!pinned_primary || weighted)));
-            if (mc[i].weight == 0 && (intrinsic || !pinned_primary)
+            if (mc[i].weight == 0 && !has_spacer && (intrinsic || !pinned_primary)
                 && w32_subtree_greedy(cw, orientation))
                 mc[i].weight = 1;
         } else {

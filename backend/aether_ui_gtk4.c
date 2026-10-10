@@ -1193,6 +1193,9 @@ int aether_ui_spacer_create(void) {
     GtkWidget* spacer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_vexpand(spacer, TRUE);
     gtk_widget_set_hexpand(spacer, TRUE);
+    // Marked so a stack's flex layout can rank it above a child that merely
+    // expands (aeui_child_weight); adding one installs that layout.
+    g_object_set_data(G_OBJECT(spacer), "aeui-spacer", GINT_TO_POINTER(1));
     return aether_ui_register_widget(spacer);
 }
 
@@ -1234,12 +1237,31 @@ typedef struct { GtkLayoutManagerClass parent_class; } AeuiFlexLayoutClass;
 
 G_DEFINE_TYPE(AeuiFlexLayout, aeui_flex_layout, GTK_TYPE_LAYOUT_MANAGER)
 
+static int aeui_is_spacer(GtkWidget* c) {
+    return c && g_object_get_data(G_OBJECT(c), "aeui-spacer") != NULL;
+}
+
+// Who shares a stack's leftover space, in order of who asked for it:
+// an explicit weight() first, then spacer() (the app saying "the slack
+// goes here"), then anything that merely expands (a canvas, a row holding
+// one). So in a stack with a spacer, a child that only expands keeps its
+// natural size and the spacers centre it, as AppKit and Win32 do: GtkBox
+// split the slack three ways and spacer/canvas(400)/spacer came out 533
+// wide (sae's corpus pages; spacercanvas_demo). A stack without spacers
+// is unchanged.
 static int aeui_child_weight(GtkWidget* c, GtkOrientation orient) {
     int w = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(c), "aeui-weight"));
     if (w > 0) return w;
+    if (aeui_is_spacer(c)) return 1;
     gboolean expands = (orient == GTK_ORIENTATION_HORIZONTAL)
         ? gtk_widget_get_hexpand(c) : gtk_widget_get_vexpand(c);
-    return expands ? 1 : 0;
+    if (!expands) return 0;
+    GtkWidget* parent = gtk_widget_get_parent(c);
+    for (GtkWidget* s = parent ? gtk_widget_get_first_child(parent) : NULL; s;
+         s = gtk_widget_get_next_sibling(s)) {
+        if (aeui_is_spacer(s) && gtk_widget_should_layout(s)) return 0;
+    }
+    return 1;
 }
 
 // The request-mode + for_size plumbing below is NOT optional polish:
@@ -1341,6 +1363,17 @@ static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
     }
     int leftover = axis_total - fixed - (n > 1 ? (n - 1) * self->spacing : 0);
     if (leftover < 0) leftover = 0;
+    if (getenv("AEUI_LAYOUT_DEBUG")) {
+        // The same trace win32's stack layout prints, for comparing the two.
+        fprintf(stderr, "[flex] %s orient=%d axis=%d fixed=%d leftover=%d tw=%d\n",
+                G_OBJECT_TYPE_NAME(widget), (int)self->orient, axis_total,
+                fixed, leftover, total_weight);
+        for (GtkWidget* c = gtk_widget_get_first_child(widget); c;
+             c = gtk_widget_get_next_sibling(c)) {
+            fprintf(stderr, "  child %s spacer=%d weight=%d\n", G_OBJECT_TYPE_NAME(c),
+                    aeui_is_spacer(c), aeui_child_weight(c, self->orient));
+        }
+    }
 
     // Pass 1b: min-clamp. A weighted child's proportional share can fall below
     // its own minimum when leftover is tight; pinning it there and removing it
@@ -8945,6 +8978,9 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
             }
         }
         gtk_box_append(GTK_BOX(parent), child);
+        // Spacers outrank a merely-expanding sibling, which stock GtkBoxLayout
+        // cannot express; the flex layout can (aeui_child_weight).
+        if (aeui_is_spacer(child)) aeui_ensure_flex_layout(parent);
     } else if (GTK_IS_SCROLLED_WINDOW(parent)) {
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), child);
     } else if (GTK_IS_OVERLAY(parent)) {

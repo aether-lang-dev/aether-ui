@@ -1,0 +1,56 @@
+// spacercanvas_demo — who takes a stack's slack: a spacer or a canvas.
+//
+// A canvas grows to fill when nothing else claims the room (its vg scene
+// rescales), so a canvas alone in a row fills it. But spacer() is the app
+// saying where slack goes, and between two spacers a canvas keeps the size it
+// asked for and sits centred: sae centres every corpus page's 400x400 scene
+// that way. AppKit did this; GTK4 shared the slack three ways (a 400 canvas
+// came out 533), Win32 and UIKit's spacers were unequal or empty, and AppKit
+// gave all the slack to the first spacer. 200 wide so a phone has room.
+//
+//   canvas 1  hstack { spacer; vg 200x100; spacer }   200 wide, centred
+//   canvas 2  hstack { vg 200x100 }                   fills the row
+//   canvas 3  vstack { spacer; vg 200x60; spacer }    60 tall, centred, in a
+//             fixed-height row so the vertical slack is there to take
+//
+// The spec (tests/spacercanvas_demo) reads the canvases' geometry back.
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/spacercanvas_demo/bin/spacercanvas_demo &
+//   UI_SPEC=spacercanvas_demo/spec_spacercanvas_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, hstack, text, spacer, height, enable_test_server)
+import vg.live (vg)
+import vg
+import vg (view_box, rect, fill)
+import std.os (os_getenv)
+
+main() {
+    window("spacer canvas", 700, 460) {
+        vstack(0) {
+            text("spacers centre a canvas; a canvas alone fills")
+            hstack(0) {
+                spacer()
+                vg(view_box(0, 0, 200, 100), 200, 100) {
+                    rect(0, 0, 200, 100) { fill("#3366cc") }
+                }
+                spacer()
+            }
+            hstack(0) {
+                vg(view_box(0, 0, 200, 100), 200, 100) {
+                    rect(0, 0, 200, 100) { fill("#cc6633") }
+                }
+            }
+            col = hstack(0) {
+                vstack(0) {
+                    spacer()
+                    vg(view_box(0, 0, 200, 60), 200, 60) {
+                        rect(0, 0, 200, 60) { fill("#33aa55") }
+                    }
+                    spacer()
+                }
+            }
+            height(col, 200)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

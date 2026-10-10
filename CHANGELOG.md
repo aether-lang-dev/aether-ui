@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Spacers take a stack's slack before a canvas does, and share it
+  equally, on every backend.** `hstack { spacer; canvas; spacer }` keeps the
+  canvas at its requested size, centred; a canvas with no spacer beside it
+  still fills. Each backend was wrong its own way: GTK4 split the slack
+  three ways (a 400 canvas came out 533, sae's corpus pages), Win32 gave it
+  all to the canvas and none to the spacers, UIKit split it unevenly, and
+  AppKit gave it all to the first spacer (so nothing centred). GTK4's flex
+  layout now ranks an explicit weight, then a spacer, then a child that
+  merely expands, and a stack gets that layout when a spacer joins it;
+  Win32 drops the canvas's automatic greed in a stack with a spacer; AppKit
+  and UIKit hold sibling spacers equal. `examples/spacercanvas_demo` and its
+  spec (ci.sh Phase 5e9d, the iOS simulator phase, the spec matrix) read
+  the geometry back. GTK4's flex layout prints its decisions under
+  `AEUI_LAYOUT_DEBUG`, like Win32's.
 - **A text's transform survives vg's live (deferred) path** (`vg/module.ae`).
   The flush rebuilds a text as its own `<text>` (`flush_text`, and
   `_emit_text` for its shadow) instead of going through `apply_cached_style`,

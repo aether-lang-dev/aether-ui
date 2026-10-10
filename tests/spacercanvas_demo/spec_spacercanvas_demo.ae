@@ -1,0 +1,63 @@
+// spec_spacercanvas_demo.ae — spacers take a stack's slack before a canvas
+// does; a canvas with no spacer beside it still fills. Geometry from /widgets.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/spacercanvas_demo/bin/spacercanvas_demo &
+//   UI_SPEC=spacercanvas_demo/spec_spacercanvas_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+// The c-th canvas's field from /widgets (canvases in creation order).
+canvas_field(c: int, f: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return -1 }
+    r = -1
+    seen = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "canvas") == 1 {
+            seen = seen + 1
+            if seen == c { r = uidriver.field_int(w, f) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a canvas between spacers") {
+        spec.it("keeps the width it asked for, and the spacers centre it") callback {
+            // Centred in its row (its parent), not the window: a phone
+            // insets a stack's rows from the screen's edges.
+            row = canvas_field(1, "parent")
+            row_x = uidriver.widget_int_field_by_id(row, "x")
+            row_w = uidriver.widget_int_field_by_id(row, "w")
+            spec.assert_gt(row_w, 240, "the row is wider than the canvas")
+            spec.assert_eq(canvas_field(1, "w"), 200, "canvas 1 is 200 wide, not stretched")
+            left = canvas_field(1, "x") - row_x
+            right = row_w - (left + canvas_field(1, "w"))
+            d = left - right
+            if d < 0 { d = 0 - d }
+            spec.assert_true(d <= 2, "centred: ${left} px left of it, ${right} right")
+        }
+        spec.it("keeps the height it asked for, between spacers in a vstack") callback {
+            spec.assert_eq(canvas_field(3, "h"), 60, "canvas 3 is 60 tall, not stretched")
+        }
+    }
+    spec.describe(fw, "a canvas with no spacer") {
+        spec.it("fills its row") callback {
+            row2 = uidriver.widget_int_field_by_id(canvas_field(2, "parent"), "w")
+            spec.assert_eq(canvas_field(2, "w"), row2,
+                           "canvas 2 is as wide as its row")
+        }
+    }
+    return spec.run_summary(fw)
+}
