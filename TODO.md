@@ -684,3 +684,53 @@ geometry and paint state, the backend only draws it. Concretely:
 Worth doing before any fourth backend, and before the remaining
 gradientTransform work — that fix belongs in the vg layer and would improve
 GTK4, win32 and macOS at once.
+
+## GTK4: adapt to the GTK it runs on, not the one it was built against
+
+Paul, 2026-10-10: keep Ubuntu 22.04 (GTK 4.6) as the floor, and make the
+GTK4 backend adaptive later. Today every newer API is a BUILD-time guard
+(`AEUI_HAVE_CONTENT_FIT`, `AEUI_HAVE_CHECK_BUTTON_CHILD` at the top of
+`backend/aether_ui_gtk4.c`, a `GTK_CHECK_VERSION(4, 4, 0)` further down), so a
+binary built on 22.04 runs on GTK 4.22 with 4.6's limits, and one built on
+4.22 will not load on 4.6 at all. The two lanes show the gap:
+`aether-linux` (22.04, GTK 4.6) fails `imagefill_demo` and `vlist_demo`;
+`aether-linux-2604` (26.04, GTK 4.22) passes every ci.sh phase.
+
+What to do:
+
+1. **Build against the floor, choose at run time.** `gtk_get_minor_version()`
+   says what is loaded. A newer API is then used only when present:
+   - content-fit is a GObject property, so it needs no new symbol:
+     `g_object_class_find_property(G_OBJECT_GET_CLASS(pic), "content-fit")`,
+     then `g_object_set(pic, "content-fit", mode, NULL)` with GtkContentFit's
+     integer values (fill 0, contain 1, cover 2, scale-down 3).
+   - a function that is not a property (`gtk_check_button_set_child` 4.8,
+     `gtk_list_view_scroll_to` 4.12): `dlsym(RTLD_DEFAULT, ...)` once,
+     cached, falling back when NULL.
+   The guards then become run-time checks, and one 22.04-built binary does
+   the best each machine allows.
+
+2. **Close the gaps on 4.6 itself, where it can be done for real** (the
+   no-stubs rule):
+   - `image_fill` "original" and "cover": a small GdkPaintable wrapping the
+     texture whose `snapshot` does the fit itself (crop for cover, a centred
+     1:1 rect for original, clipped to the box), shown in a GtkPicture set
+     to fill. The effective mode is then what was asked for on every GTK, and
+     `image_get_fill` stops reporting "contain" for both.
+   - `vlist_scroll_to`: on 4.6 setting the scrolled window's vadjustment
+     moves the value (14000 for row 500 at 28 px; `AETHER_UI_LIST_DEBUG`)
+     but the list view never re-anchors, so rows 0..11 stay realized
+     (`gtk_widget_queue_allocate` on it did not help). GtkListView has had
+     the `list.scroll-to-item` action since 4.0:
+     `gtk_widget_activate_action(lv, "list.scroll-to-item", "u", index)` is
+     the first thing to try, and `gtk_list_view_scroll_to` (4.12) when it
+     resolves.
+
+3. **Let the specs know which GTK they face.** The driver could report the
+   loaded GTK version (in `/widgets`' root, or a `/backend` route) so a spec
+   asserts the right thing for 4.6 instead of failing, the way
+   `pixelated_demo` reads `ui.backend_name()` for Win32's documented
+   difference. With 1 and 2 done there should be little left to tell apart.
+
+Run both lanes for any of it: `aelane aether-linux` and
+`aelane aether-linux-2604`.
