@@ -12,6 +12,8 @@
 //                  /dblclick, the same canvas hooks a real mouse fires).
 //   5 group alpha  g() { opacity(0.5) } composites its children once: the
 //                  overlap of two red squares is the same pink as either.
+//   6 text moved   a text's transform: the flush rebuilt text without it,
+//                  so a translated text stayed where it was made.
 //
 // Pixels come from /canvas/{id}/pixel (the offscreen replay of the canvas's
 // commands). Probes are in viewBox units (every scene is 0 0 200 100), mapped
@@ -104,6 +106,19 @@ wait_px(c: int, vx: float, vy: float, rgb: int) -> int {
     return 0
 }
 
+// How many viewBox points from x0 to x1 (every 2 units) along y on canvas c
+// are dark: glyph ink, on a white ground.
+dark_count(c: int, x0: float, x1: float, y: float) -> int {
+    n = 0
+    x = x0
+    while x <= x1 {
+        p = pixel_at(c, x, y)
+        if red(p) < 100 && green(p) < 100 && blue(p) < 100 { n = n + 1 }
+        x = x + 2.0
+    }
+    return n
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -180,6 +195,15 @@ main() {
             spec.assert_true(near_rgb(l, 0xff8080, 24) == 1, "one square at half opacity over white is pink: ${hex(l)}")
             spec.assert_true(near_rgb(o, l, 6) == 1, "the overlap is the same pink, not darker: ${hex(o)} vs ${hex(l)}")
             spec.assert_true(near_rgb(r, l, 6) == 1, "and so is the other square: ${hex(r)}")
+        }
+    }
+    spec.describe(fw, "a text's transform on the live vg path") {
+        spec.it("text made at x 10 and translated by 100 inks the right half, not the left") callback {
+            spec.assert_gt(cw(6), 0, "scene 6 has an allocation")
+            left = dark_count(6, 2.0, 98.0, 50.0)
+            right = dark_count(6, 102.0, 198.0, 50.0)
+            spec.assert_eq(left, 0, "no ink left of x 100 (where the text was made)")
+            spec.assert_gt(right, 3, "ink right of x 100 (where its transform puts it)")
         }
     }
     return spec.run_summary(fw)

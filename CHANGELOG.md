@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A text's transform survives vg's live (deferred) path** (`vg/module.ae`).
+  The flush rebuilds a text as its own `<text>` (`flush_text`, and
+  `_emit_text` for its shadow) instead of going through `apply_cached_style`,
+  and dropped the element's cached transform on the way, so a text given
+  `transform(...)` (as sae composes its groups' transforms onto each element)
+  was drawn where it was made while rects and circles moved. Both rebuilds
+  now carry it. From sae's `asks/aether-ui-vg-text-transform.md` (its
+  spreadsheet's columns), whose patch this is. `vg/test/test_vg.ae` checks
+  the text and its shadow dispatch 100 to the right; `vgpaint_demo` scene 6
+  reads the moved text's ink back as pixels.
+- **macOS `/canvas/{id}/pixel` sees text** (`backend/aether_ui_macos.m`).
+  `canvas_read_pixel` replayed into a bitmap without pushing an
+  `NSGraphicsContext`, and AppKit draws strings into the current one, so
+  every glyph went nowhere and a pixel probe of text read the ground under
+  it. `canvas_write_png` already pushed one; both now share
+  `canvas_replay_offscreen`. Found because scene 6's spec saw no ink at all
+  on macOS, before or after the transform fix.
 - **`ae cflags` include filters keep `-idirafter DIR` pairs** (`build.sh`,
   `ci.sh` Phase 1e2, `tests/test_driver.sh`, `tools/ios-app.sh`). Aether
   0.801.0 moved the runtime and std header directories from `-I` to

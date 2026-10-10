@@ -2,7 +2,7 @@
 // lose: gradients from defs, clip paths, CSS rules, group opacity composited
 // as one layer, and the right / double click a shape can listen for.
 //
-// Five scenes, one canvas each (canvas ids 1..5, top to bottom), every one a
+// Six scenes, one canvas each (canvas ids 1..6, top to bottom), every one a
 // 200x100 viewBox on a 200x100 canvas over a white ground:
 //
 //   1 gradients   defs(): a linear gradient (red -> blue, left to right) on a
@@ -21,6 +21,9 @@
 //   5 group alpha two red rects overlapping by 40 units in a g() at
 //                 opacity 0.5: composited once, the overlap is the same pink
 //                 as either square alone.
+//   6 text moved  black "MM" made at x 10 and transformed translate(100 0):
+//                 its ink is in the right half, none in the left. (The flush
+//                 rebuilt text without its transform, so it stayed put.)
 //
 // The spec (tests/vgpaint_demo) reads the pixels back through the driver.
 // Run by hand:
@@ -33,7 +36,7 @@ import vg.live (vg)
 import vg                                    // full — vg.live uses vg.scene_new
 import vg (view_box, rect, circle, g, fill, opacity, defs, css, clip_path,
            css_class, css_id, node_element, element_set_fill,
-           on_right_click, on_double_click)
+           on_right_click, on_double_click, text_sized, transform)
 import std.os (os_getenv)
 
 extern string_retain(s: string)
@@ -63,7 +66,7 @@ recolor_on_double(_ctx: ptr, color: string) {
 }
 
 main() {
-    window("vg paint", 240, 600) {
+    window("vg paint", 240, 710) {
         vstack(4) {
             text("vg paint")
             vg(view_box(0, 0, 200, 100), 200, 100) {
@@ -110,6 +113,13 @@ main() {
                     opacity(0.5)
                     rect(20, 20, 100, 60) { fill("#ff0000") }
                     rect(80, 20, 100, 60) { fill("#ff0000") }
+                }
+            }
+            vg(view_box(0, 0, 200, 100), 200, 100) {
+                rect(0, 0, 200, 100) { fill("#ffffff") }
+                text_sized(10, 60, 40, "MM") {
+                    fill("#000000")
+                    transform("translate(100 0)")
                 }
             }
         }

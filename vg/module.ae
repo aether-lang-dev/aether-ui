@@ -2138,6 +2138,17 @@ _text_of(pend: *VgPending) -> string {
     return pend.content
 }
 
+// The element's transform (its own composed with its groups') as an attr
+// for a rebuilt <text>, or "". Text is flushed by rebuilding it rather than
+// through apply_cached_style, which is where every other shape's transform
+// is folded in, so without this a text in a translated group stayed where
+// it was made while the rest of its group moved.
+_transform_attr(pend: *VgPending) -> string {
+    tf = element.element_last_transform(pend.element)
+    if string.length(tf) == 0 { return "" }
+    return string.concat("' transform='", tf)
+}
+
 // Emit one <text> at (x,y) in `fill`, reusing pend's font/anchor/content.
 _emit_text(ctx: ptr, be: ptr, pend: *VgPending, x: float, y: float, fill: string) {
     s = "<svg><text x='"
@@ -2154,6 +2165,7 @@ _emit_text(ctx: ptr, be: ptr, pend: *VgPending, x: float, y: float, fill: string
         s = string.concat(s, "' text-anchor='")
         s = string.concat(s, pend.anchor)
     }
+    s = string.concat(s, _transform_attr(pend))
     s = string.concat(s, "'>")
     s = string.concat(s, _text_of(pend))
     s = string.concat(s, "</text></svg>")
@@ -2206,6 +2218,7 @@ flush_text(ctx: ptr, be: ptr, p: ptr) {
         s = string.concat(s, "' text-anchor='")
         s = string.concat(s, pend.anchor)
     }
+    s = string.concat(s, _transform_attr(pend))
     s = string.concat(s, "'>")
     s = string.concat(s, _text_of(pend))
     s = string.concat(s, "</text></svg>")

@@ -159,5 +159,42 @@ main() {
     vg.vg_flush(tscene)
     assert_near("transform: circle shifted +10 in x", parse_opt(tbk, 0, "x"), 40.0)
 
+    // ── a text's transform (deferred) ───────────────────────────────
+    // The flush rebuilds a text as its own <text> rather than through
+    // apply_cached_style, and once dropped the transform there: a text
+    // transformed translate(100 0) was drawn at its own x while a circle
+    // given the same transform moved. sae composes a group's transforms
+    // onto each element this way (its spreadsheet's columns; sae's
+    // asks/aether-ui-vg-text-transform.md). The text, its shadow copy and
+    // the circle must all land 100 to the right.
+    xctx = mk_ctx()
+    xbk = record.backend_new()
+    xscene = vg.scene_new(xctx, xbk)
+    vg.scene_set_deferred(xscene, 1)
+    xroot = vg.vg_root(xscene)
+    xt = vg.text(xroot, 10.0, 20.0, "Qty")
+    vg.transform(xt, "translate(100 0)")
+    vg.shadow(xt, 2.0, 2.0, 0.0, "#888888")
+    xc = vg.circle(xroot, 50.0, 50.0, 20.0)
+    vg.transform(xc, "translate(100 0)")
+    vg.vg_flush(xscene)
+    xi = 0
+    texts = 0
+    while xi < record.backend_call_count(xbk) {
+        kind = record.backend_kind(xbk, xi)
+        if string.equals(kind, "text") == 1 {
+            texts = texts + 1
+            if parse_opt(xbk, xi, "x") < 100.0 {
+                println("  FAIL: text transformed translate(100 0) drawn at x ${parse_opt(xbk, xi, \"x\")}, not past 100")
+                exit(1)
+            }
+        }
+        if string.equals(kind, "circle") == 1 {
+            assert_near("circle with the same transform: bbox x 130", parse_opt(xbk, xi, "x"), 130.0)
+        }
+        xi = xi + 1
+    }
+    assert_eq_int("the text and its shadow were both drawn", texts, 2)
+
     println("=== test_vg passed ===")
 }
