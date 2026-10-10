@@ -84,6 +84,47 @@ static int  sealed_count = 0;
 static int  sealed_capacity = 0;
 static int  banner_handle = 0;
 
+/* ── A canvas's vg nodes, for GET /canvas/{id}/nodes ─────────────────────
+ * vg publishes a JSON array of a live scene's nodes after each flush, on the
+ * UI thread, while this server runs; the route hands the latest one to the
+ * HTTP thread. Kind, text, canvas-px bounds and paint per node: a spec reads
+ * a canvas's content back instead of sampling pixels or clicking cells. */
+#define NODES_MAX 256
+static char* g_nodes_json[NODES_MAX + 1];
+static int   g_server_running = 0;
+#ifdef _WIN32
+static SRWLOCK g_nodes_lock = SRWLOCK_INIT;
+#define NODES_LOCK()   AcquireSRWLockExclusive(&g_nodes_lock)
+#define NODES_UNLOCK() ReleaseSRWLockExclusive(&g_nodes_lock)
+#else
+static pthread_mutex_t g_nodes_lock = PTHREAD_MUTEX_INITIALIZER;
+#define NODES_LOCK()   pthread_mutex_lock(&g_nodes_lock)
+#define NODES_UNLOCK() pthread_mutex_unlock(&g_nodes_lock)
+#endif
+
+/* 1 while a driver could ask: vg builds the JSON only then. */
+int aether_ui_canvas_nodes_wanted(void) { return g_server_running; }
+
+void aether_ui_canvas_nodes_publish(int canvas_id, const char* json) {
+    if (canvas_id < 1 || canvas_id > NODES_MAX || !json) return;
+    char* copy = strdup(json);
+    if (!copy) return;
+    NODES_LOCK();
+    char* old = g_nodes_json[canvas_id];
+    g_nodes_json[canvas_id] = copy;
+    NODES_UNLOCK();
+    free(old);
+}
+
+/* A copy of canvas_id's latest nodes (the caller frees), or NULL. */
+static char* nodes_copy(int canvas_id) {
+    if (canvas_id < 1 || canvas_id > NODES_MAX) return NULL;
+    NODES_LOCK();
+    char* r = g_nodes_json[canvas_id] ? strdup(g_nodes_json[canvas_id]) : NULL;
+    NODES_UNLOCK();
+    return r;
+}
+
 void aether_ui_test_server_set_banner(int handle) {
     banner_handle = handle;
 }
@@ -708,6 +749,19 @@ static void handle_request_inner(aether_sock_t client_fd,
                 send_http(client_fd, 500, "Error", "text/plain",
                           "screenshot capture failed");
             }
+        }
+    } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
+               && strstr(path, "/nodes")) {
+        /* GET /canvas/{id}/nodes -- the vg scene's nodes, as vg last flushed
+           them: [{"i","kind","visible","x","y","w","h","fill","stroke",
+           "text"}...]. 404 when nothing was published (not a vg canvas). */
+        char* j = nodes_copy(extract_id_from_path(path, "/canvas/"));
+        if (j) {
+            send_http(client_fd, 200, "OK", "application/json", j);
+            free(j);
+        } else {
+            send_http(client_fd, 404, "Not Found", "application/json",
+                      "{\"error\":\"no vg nodes for this canvas\"}");
         }
     } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
                && strstr(path, "/debug")) {
@@ -1697,6 +1751,7 @@ void aether_ui_test_server_start(int port, const AetherDriverHooks* hooks) {
         int p = atoi(env_port);
         if (p > 0 && p < 65536) port = p;
     }
+    g_server_running = 1;
     ServerArgs* args = (ServerArgs*)malloc(sizeof(ServerArgs));
     args->port = port;
     args->hooks = hooks;

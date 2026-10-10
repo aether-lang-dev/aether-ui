@@ -206,5 +206,29 @@ main() {
             spec.assert_gt(right, 3, "ink right of x 100 (where its transform puts it)")
         }
     }
+    spec.describe(fw, "a canvas's nodes over the driver") {
+        spec.it("GET /canvas/{id}/nodes lists what the scene drew: kind, text, bounds, paint") callback {
+            body = uidriver.get_body("/canvas/6/nodes")
+            v, _jerr = json.parse(body)
+            spec.assert_true(v != null, "JSON: ${body}")
+            n = json.json_array_size(v)
+            spec.assert_eq(n, 2, "two nodes: the white ground and the text")
+            r = json.json_array_get_raw(v, 0)
+            spec.assert_true(string.equals(uidriver.field_str(r, "kind"), "rect") == 1, "the first is a rect")
+            spec.assert_true(string.equals(uidriver.field_str(r, "fill"), "#ffffff") == 1, "filled white")
+            t = json.json_array_get_raw(v, 1)
+            spec.assert_true(string.equals(uidriver.field_str(t, "kind"), "text") == 1, "the second is a text")
+            spec.assert_true(string.equals(uidriver.field_str(t, "text"), "MM") == 1, "reading MM")
+            // Made at x 10, transformed by 100: its bounds start right of the
+            // canvas's x for viewBox 100.
+            tx = uidriver.field_int(t, "x")
+            spec.assert_true(tx >= px_x(6, 100.0), "its bounds start right of viewBox x 100 (x ${tx}, 100 is at ${px_x(6, 100.0)})")
+            spec.assert_true(uidriver.field_int(t, "w") > 10, "and have a width (${uidriver.field_int(t, "w")})")
+            json.json_free(v)
+        }
+        spec.it("a canvas that is not a vg scene has no nodes") callback {
+            spec.assert_eq(uidriver.get_status("/canvas/999/nodes"), 404, "404")
+        }
+    }
     return spec.run_summary(fw)
 }

@@ -122,6 +122,8 @@ extern aether_ui_text_measure(size: float, text: string) -> float
 extern aether_ui_font_ascent(size: float) -> float
 extern aether_ui_font_descent(size: float) -> float
 extern aether_ui_font_height(size: float) -> float
+extern aether_ui_canvas_nodes_wanted() -> int
+extern aether_ui_canvas_nodes_publish(canvas_id: int, json: string)
 // Image decoding (vg.image_bytes): the backend's own decoder (GdkTexture,
 // ImageIO, GDI+, UIImage, BitmapFactory) to straight RGBA8, malloc'd; null
 // when the bytes are not an image it can read. aether_ui_string_ptr is the
@@ -1475,6 +1477,70 @@ vg_flush(scene: ptr) {
     _sync_layers(ctx, be, open, empty_chain)
     list.free(empty_chain)
     list.free(open)
+    // While the driver runs, publish what was drawn for GET
+    // /canvas/{id}/nodes (built only then: a release build has no server).
+    if s.canvas_id > 0 {
+        if aether_ui_canvas_nodes_wanted() == 1 {
+            aether_ui_canvas_nodes_publish(s.canvas_id, _nodes_json(s))
+        }
+    }
+}
+
+// The scene's nodes as JSON, in draw order: kind, visibility, canvas-px
+// bounds (as hit-testing has them), paint and, for a text, its text. What a
+// spec reads instead of sampling pixels or clicking cells to learn them.
+_nodes_json(s: *VgScene) -> string {
+    out = "["
+    n = list.size(s.pending)
+    first = 1
+    i = 0
+    while i < n {
+        item, _e = list.get(s.pending, i)
+        p = item as *VgPending
+        kind = _node_kind(p.kind)
+        if string.length(kind) > 0 {
+            el = p.element
+            o = "{\"i\":${i},\"kind\":\"${kind}\",\"visible\":"
+            if element.element_is_visible(el) == 1 { o = string.concat(o, "true") } else { o = string.concat(o, "false") }
+            o = string.concat(o, ",\"x\":${_r1(element.element_bounds_x(el))},\"y\":${_r1(element.element_bounds_y(el))}")
+            o = string.concat(o, ",\"w\":${_r1(element.element_bounds_width(el))},\"h\":${_r1(element.element_bounds_height(el))}")
+            o = string.concat(o, ",\"fill\":\"${_json_esc(element.element_last_fill(el))}\"")
+            sc = ""
+            if element.element_has_stroke(el) == 1 { sc = element.element_last_stroke_color(el) }
+            o = string.concat(o, ",\"stroke\":\"${_json_esc(sc)}\"")
+            if p.kind == 4 {
+                o = string.concat(o, ",\"text\":\"${_json_esc(_text_of(p))}\"")
+            }
+            o = string.concat(o, "}")
+            if first == 0 { out = string.concat(out, ",") }
+            out = string.concat(out, o)
+            first = 0
+        }
+        i = i + 1
+    }
+    return string.concat(out, "]")
+}
+
+_node_kind(k: int) -> string {
+    if k == 0 { return "circle" }
+    if k == 1 { return "rect" }
+    if k == 2 { return "line" }
+    if k == 3 { return "path" }
+    if k == 4 { return "text" }
+    if k == 7 { return "image" }
+    return ""     // 5/6: a group layer's begin/end markers, not nodes
+}
+
+// One decimal place, for compact JSON.
+_r1(v: float) -> float { return lrint(v * 10.0) / 10.0 }
+
+_json_esc(t: string) -> string {
+    if t == null { return "" }
+    r = string.string_replace_all(t, "\\", "\\\\")
+    r = string.string_replace_all(r, "\"", "\\\"")
+    r = string.string_replace_all(r, "\n", "\\n")
+    r = string.string_replace_all(r, "\t", "\\t")
+    return r
 }
 
 // ─── group layers (g() opacity / clip_path) ─────────────────────────────────
@@ -2210,6 +2276,25 @@ _emit_text(ctx: ptr, be: ptr, pend: *VgPending, x: float, y: float, fill: string
     _ = shapes.shape_text(ctx, be, node_h)
 }
 
+// A text's canvas-px bounds, as shape_text will draw it: the anchor point
+// through the scene and its transform, the toolkit's own width for its size,
+// shifted by its anchor, and the font's ascent and line height. Text had
+// none, so a text could not be hit-tested or reported by the driver.
+_text_bounds(ctx: ptr, pend: *VgPending, el: ptr, tx: float, ty: float) {
+    tf = element.element_last_transform(el)
+    if string.length(tf) > 0 { rendering.push_transform_str(ctx, tf) }
+    fs = pend.font_size
+    if fs <= 0.0 { fs = 16.0 }
+    size = rendering.map_length(ctx, fs) * xf.affine_average_scale_p(rendering.current_transform(ctx))
+    pt = rendering.map_point(ctx, tx, ty)
+    if string.length(tf) > 0 { rendering.pop_transform(ctx) }
+    w = aether_ui_text_measure(size, _text_of(pend))
+    x = xf.pt_x(pt)
+    if string.equals(pend.anchor, "middle") == 1 { x = x - w / 2.0 }
+    if string.equals(pend.anchor, "end") == 1 { x = x - w }
+    element.element_set_bounds(el, x, xf.pt_y(pt) - aether_ui_font_ascent(size), w, aether_ui_font_height(size))
+}
+
 flush_text(ctx: ptr, be: ptr, p: ptr) {
     pend = p as *VgPending
     el = pend.element
@@ -2224,6 +2309,7 @@ flush_text(ctx: ptr, be: ptr, p: ptr) {
         tx = element.element_geo0(el)
         ty = element.element_geo1(el)
     }
+    _text_bounds(ctx, pend, el, tx, ty)
     if element.element_shadow_on(el) == 1 {
         _emit_text(ctx, be, pend,
             tx + element.element_shadow_dx(el),

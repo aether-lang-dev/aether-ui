@@ -28,3 +28,7 @@ void aether_ui_test_server_set_banner(int handle) { (void)handle; }
 int  aether_ui_test_server_banner_handle(void) { return 0; }
 void aether_ui_test_server_seal_widget(int handle) { (void)handle; }
 int  aether_ui_test_server_is_sealed(int handle) { (void)handle; return 0; }
+
+/* GET /canvas/{id}/nodes has no server here: vg never builds the JSON. */
+int  aether_ui_canvas_nodes_wanted(void) { return 0; }
+void aether_ui_canvas_nodes_publish(int canvas_id, const char* json) { (void)canvas_id; (void)json; }

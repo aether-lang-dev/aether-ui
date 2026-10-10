@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Driver `GET /canvas/{id}/nodes`: a vg scene's content as data.** After
+  each flush, while the driver runs, vg publishes the scene's nodes in draw
+  order: kind (circle, rect, line, path, text, image), visibility, canvas-px
+  bounds as hit-testing has them, fill, stroke and a text's text; the route
+  returns the latest (404 for a canvas that is not a vg scene). A spec reads
+  a scene back instead of sampling pixels or clicking cells (Flutter's
+  finders, AssertJ for Swing). Shared server, so every backend; the JSON is
+  built only while a server runs, and a release build's no-op control never
+  builds it. `spec_vgpaint_demo` reads scene 6's two nodes on macOS, win11,
+  Android and both GTKs.
+- **A vg text has bounds**: canvas px, from the anchor through the scene and
+  its transform, the toolkit's own width for its size and the font's
+  ascent and line height. Text could not be hit-tested or reported before.
 - **`on_submit(field, cb)`: Return in a text or secure field** (Swing's
   ActionListener, QML's onAccepted), cb(text), on every backend: GtkEntry
   and GtkPasswordEntry's `activate`, NSTextField's action, Win32's message

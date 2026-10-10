@@ -33,3 +33,7 @@ unsigned char* aether_ui_image_decode_rgba_impl(const unsigned char* data, int l
     return 0;
 }
 void* aether_ui_string_ptr(const char* s) { return (void*)s; }
+
+/* GET /canvas/{id}/nodes: no driver in a unit test, so vg never builds it. */
+int  aether_ui_canvas_nodes_wanted(void) { return 0; }
+void aether_ui_canvas_nodes_publish(int canvas_id, const char* json) { (void)canvas_id; (void)json; }

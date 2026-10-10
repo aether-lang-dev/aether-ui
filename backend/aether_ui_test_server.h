@@ -210,6 +210,10 @@ typedef struct {
 // for the life of the process; there is currently no shutdown hook (the
 // inherited test_server_thread in each backend never exposed one either).
 void aether_ui_test_server_start(int port, const AetherDriverHooks* hooks);
+// GET /canvas/{id}/nodes: vg publishes a live scene's nodes as JSON after
+// each flush while the server runs (wanted() says whether it does).
+int  aether_ui_canvas_nodes_wanted(void);
+void aether_ui_canvas_nodes_publish(int canvas_id, const char* json);
 
 // Banner + seal management. Implemented in aether_ui_test_server.c and
 // callable from backends that need to query sealed state (e.g., when
