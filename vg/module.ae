@@ -57,6 +57,7 @@ exports (
     // Re-exported element mutators so a handler can recolor the element it
     // captured: vg.element_set_fill(el, "#0f0") inside an on_click closure.
     element_set_fill, element_set_stroke, element_set_opacity, element_set_text,
+    text_set_pos, element_text_set_pos,
     // Scene construction — backend-agnostic (recording stub, GTK adapter, …).
     scene_new, vg_root, node_element, scene_ctx, scene_backend, node_scene,
     scene_set_canvas, scene_canvas, scene_set_ctx, mk_node,
@@ -1324,6 +1325,16 @@ element_set_fill(el: ptr, color: string) {
 }
 
 // A text shape's new text; the next flush draws it (_text_of).
+// text_set_pos(node, x, y): move a text after it was made, as vg.set moves a
+// rect by its x/y. The next flush draws it there (and its shadow with it).
+text_set_pos(node: ptr, x: float, y: float) {
+    el = node_payload(node)
+    if el != null { element.element_set_text_pos(el, x, y) }
+}
+element_text_set_pos(el: ptr, x: float, y: float) {
+    if el != null { element.element_set_text_pos(el, x, y) }
+}
+
 element_set_text(el: ptr, content: string) {
     element.element_set_text(el, content)
 }
@@ -1408,6 +1419,10 @@ record_shape(_ctx: ptr, scene: ptr, kind: int, attrs: ptr) -> ptr {
 record_text(_ctx: ptr, scene: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
+    // Where it is, for a reader (sae's vg.get, a partial vg.set): the flush
+    // draws from p.tx/ty until text_set_pos moves it.
+    element.element_set_geo(el, 0, x)
+    element.element_set_geo(el, 1, y)
     p = malloc(sizeof(VgPending)) as *VgPending
     p.kind = 4
     p.attrs = null
@@ -1947,10 +1962,6 @@ _pending_bbox(pend: *VgPending) -> (int, float, float, float, float) {
 _flush_one_body(ctx: ptr, be: ptr, p: ptr, es: ptr) {
     pend = p as *VgPending
     el = pend.element
-    if pend.kind == 4 {
-        flush_text(ctx, be, pend)
-        return
-    }
     // Track interactive elements regardless of visibility, so the tracked list
     // is stable across when() toggles. A hidden element's hit-test returns 0
     // (clicks fall through); when shown again it hit-tests live.
@@ -1966,6 +1977,13 @@ _flush_one_body(ctx: ptr, be: ptr, p: ptr, es: ptr) {
     // (and don't refresh its bounds; the stale bounds don't matter while
     // invisible since hit_test short-circuits on visible==0).
     if element.element_is_visible(el) == 0 {
+        return
+    }
+    // Text after both: it used to return before them, so a text was never
+    // tracked (scene_refresh never evaluated its when() or bindings) and a
+    // hidden one drew anyway.
+    if pend.kind == 4 {
+        flush_text(ctx, be, pend)
         return
     }
     a = pend.attrs
@@ -2199,16 +2217,23 @@ flush_text(ctx: ptr, be: ptr, p: ptr) {
     // text so it sits under. Crisp offset (blur>0 would need a glyph
     // rasterizer, which vg doesn't have) — the standard non-blurred
     // text-shadow. Stroke/full styling stay on the real text below.
+    // Where it was made, or where text_set_pos moved it.
+    tx = pend.tx
+    ty = pend.ty
+    if element.element_text_moved(el) == 1 {
+        tx = element.element_geo0(el)
+        ty = element.element_geo1(el)
+    }
     if element.element_shadow_on(el) == 1 {
         _emit_text(ctx, be, pend,
-            pend.tx + element.element_shadow_dx(el),
-            pend.ty + element.element_shadow_dy(el),
+            tx + element.element_shadow_dx(el),
+            ty + element.element_shadow_dy(el),
             element.element_shadow_color(el))
     }
     s = "<svg><text x='"
-    s = string.concat(s, string.from_float(pend.tx))
+    s = string.concat(s, string.from_float(tx))
     s = string.concat(s, "' y='")
-    s = string.concat(s, string.from_float(pend.ty))
+    s = string.concat(s, string.from_float(ty))
     if pend.font_size > 0.0 {
         s = string.concat(s, "' font-size='")
         s = string.concat(s, string.from_float(pend.font_size))
@@ -2300,9 +2325,8 @@ put_f(m: ptr, k: string, v: float) {
 //
 // text_extent(size, s) -> (width, height, ascent). width = pen advance;
 // height = font line height; ascent = top-to-baseline (draw at
-// y=box_top+ascent to seat the baseline). Backed by cairo on GTK4; the
-// win32/macos stubs return 0 for now (callers get a 0-extent, which is a
-// safe no-clip / no-measure fallback).
+// y=box_top+ascent to seat the baseline). Real on every backend: cairo
+// (GTK4), CoreText (AppKit, UIKit), GDI (Win32), Paint (Android).
 text_extent(size: float, s: string) -> (float, float, float) {
     w = aether_ui_text_measure(size, s)
     h = aether_ui_font_height(size)

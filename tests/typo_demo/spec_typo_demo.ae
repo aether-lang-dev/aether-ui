@@ -18,6 +18,17 @@ main() {
             spec.assert_contains(b, "\"wrap\":true", "the paragraph wraps")
         }
 
+        spec.it("and really wraps at its 300 px: no wider, several lines tall") callback {
+            // The flag alone passed while GTK4 laid the paragraph out as one
+            // line across the whole row (sae's spec_keys found it).
+            p = uidriver.widget_id_by_text("This is a long paragraph that should wrap across several lines because it is far wider than the label's wrap width of three hundred pixels.")
+            spec.assert_gt(p, 0, "the paragraph")
+            w = uidriver.widget_int_field_by_id(p, "w")
+            h = uidriver.widget_int_field_by_id(p, "h")
+            spec.assert_true(w <= 330, "no wider than 300 px and its padding (got ${w})")
+            spec.assert_true(h >= 40, "several lines tall (got ${h})")
+        }
+
         spec.it("plain labels do not wrap") callback {
             id = uidriver.widget_id_by_text("left label")
             b = uidriver.get_body("/widget/${id}")

@@ -92,6 +92,8 @@ int aether_ui_divider_create(void);
 
 // Input widgets (Group 2)
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure);
+// cb(text) on Return in a textfield or securefield (ui.on_submit).
+void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure);
 void aether_ui_textfield_set_text(int handle, const char* text);
 const char* aether_ui_textfield_get_text(int handle);
 

@@ -81,6 +81,10 @@ typedef enum {
     // canvas has none (the route answers 404, as CANVAS_CLICK does).
     AETHER_DRV_CANVAS_RIGHT_CLICK  = 26, // handle=canvas, dval=x, dval2=y
     AETHER_DRV_CANVAS_DOUBLE_CLICK = 27, // handle=canvas, dval=x, dval2=y
+    // Enter in a text or secure field, through the platform's own path (the
+    // field's on_submit runs as for a person's Return); result 3 when the
+    // widget is not a field.
+    AETHER_DRV_SUBMIT = 28,        // handle=textfield/securefield
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

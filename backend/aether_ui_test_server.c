@@ -956,6 +956,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.handle = extract_id_from_path(path, "/widget/");
         dispatch_and_reply(client_fd, h, &ctx, "released");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/submit")) {
+        // POST /widget/{id}/submit -- Return in a text field: on_submit.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_SUBMIT;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        dispatch_and_reply(client_fd, h, &ctx, "submitted");
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/set_text")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_SET_TEXT;

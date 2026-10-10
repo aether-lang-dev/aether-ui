@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`on_submit(field, cb)`: Return in a text or secure field** (Swing's
+  ActionListener, QML's onAccepted), cb(text), on every backend: GtkEntry
+  and GtkPasswordEntry's `activate`, NSTextField's action, Win32's message
+  loop catching Return before the dialog manager turns it into the default
+  button, UIKit's EditingDidEndOnExit, Android's editor action (the
+  keyboard's Done, or Enter). The driver's `POST /widget/{id}/submit` takes
+  each platform's own path; `examples/submit_demo` and its spec (ci.sh Phase
+  5e9f, the iOS simulator phase, the spec matrix).
+- **vg `text_set_pos(node, x, y)`**: a text moves after it was made, as a rect
+  does by its x/y (sae's `vg.set` on a text). Its position is in the
+  element's geo0/geo1 from the start, for readers.
+- **`docs/design/data-grid.md`**: a design note for a real data grid
+  (virtualised cells, column resize and reorder, cell selection, editors, a
+  sticky header, grid accessibility), from a survey of what `table`,
+  `listbox` and `vlist` already have.
 - **`image_rendering("pixelated")` in vg, and `canvas_image_smoothing` in
   ui, on every backend.** An image or raster scaled up draws each source
   pixel as a crisp square instead of smoothing between them: a Life board,
@@ -37,6 +52,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A hidden vg text no longer draws, and a text is tracked like any
+  shape.** The flush handed text to `flush_text` before tracking and the
+  visibility check, so `visible_when` could not hide a text and its when(),
+  bindings and click handlers never ran (`test_vg_when`).
+- **`bind_text` sets a button's caption**, not only a label's, on GTK4,
+  AppKit and UIKit (Win32 and Android already did); `bindings_demo` binds
+  one.
+- **GTK4 secure fields take driver text**: `set_text` (the driver's and the
+  ABI's) and `get_text` skipped GtkPasswordEntry, which is a GtkEditable but
+  not a GtkEntry.
+- **GTK4 `text_wrapped` wraps at its width.** The size request was only a
+  minimum, so a stack stretched the label across the row, and stock GtkBox
+  measured its height at the row's width (one line) and then gave it that
+  line's width. The label's natural width now sits below the request, and a
+  stack holding one gets the flex layout, which measures a child that does
+  not fill at its own width (`aeui_child_cross`). `typo_demo`'s spec now
+  checks the geometry, not only the wrap flag: 120 px wide and several lines
+  where it was 503 x 16.
 - **ci.sh stops every app it launches, and everything under it.** Through
   `launch_xvfb` (a shell function), `$!` was the subshell, so killing it
   left xvfb-run, its Xvfb and the app running: one of each per smoke and

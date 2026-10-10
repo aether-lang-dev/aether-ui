@@ -44,6 +44,8 @@ main() {
             spec.assert_contains(b, "\"text\":\"idle\"", "string binding")
             spec.assert_eq(enabled_of("Stop"), 0, "Stop ghosted while not busy")
             spec.assert_eq(enabled_of("Run"), 1, "Run live while not busy")
+            spec.assert_gt(uidriver.widget_id_of("button", "idle"), 0,
+                "a button's caption is bound too")
         }
 
         spec.it("one bool state flips three bound properties") callback {
@@ -53,6 +55,8 @@ main() {
             spec.assert_true(ok, "busy set")
             oks = uidriver.wait_body_contains("/widgets", "\"text\":\"running\"", 20)
             spec.assert_true(oks, "status label tracked the string state")
+            spec.assert_gt(uidriver.widget_id_of("button", "running"), 0,
+                "and so did the bound button's caption")
             spec.assert_eq(enabled_of("Run"), 0, "Run ghosted (inverted bind)")
             spec.assert_eq(enabled_of("Stop"), 1, "Stop live")
             il = uidriver.widget_id_by_text("machine is idle")

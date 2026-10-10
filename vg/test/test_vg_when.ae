@@ -37,6 +37,17 @@ mk_ctx() -> ptr {
 struct Flag { on: int }
 mk_flag(v: int) -> *Flag { f = malloc(sizeof(Flag)) as *Flag; f.on = v; return f }
 
+// How many "text" calls the recorder has seen.
+text_calls(bk: ptr) -> int {
+    n = 0
+    i = 0
+    while i < record.backend_call_count(bk) {
+        if string.equals(record.backend_kind(bk, i), "text") == 1 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
 main() {
     println("=== test_vg_when ===")
 
@@ -115,6 +126,33 @@ main() {
     vg.scene_refresh(scene2)
     events.dispatch_click(es2, ctx2, 50.0, 50.0)
     assert_eq_str("shown top: top got the click", element.element_last_fill(tel), "#ff00ff")
+
+    // ─── A hidden TEXT draws nothing ───
+    // Text is flushed by its own path (flush_text), which ran before the
+    // visibility check every other shape gets, so visible_when() could not
+    // hide a text (found reading the code for sae's spreadsheet).
+    ctx3 = mk_ctx()
+    bk3 = record.backend_new()
+    scene3 = vg.scene_new(ctx3, bk3)
+    vg.scene_set_event_state(scene3, events.event_state_new())
+    vg.scene_set_deferred(scene3, 1)
+    shown = mk_flag(0)
+    tx = vg.text(vg.vg_root(scene3), 10.0, 20.0, "hidden")
+    vg.visible_when(tx) callback {
+        return shown.on
+    }
+    // The first flush draws it (not yet tracked, so when() not yet run) and
+    // tracks it; the refresh then hides it. From here on it must not draw.
+    vg.vg_flush(scene3)
+    vg.scene_refresh(scene3)
+    assert_eq_int("when(0): the text is hidden", element.element_is_visible(vg.node_element(tx)), 0)
+    record.backend_clear(bk3)
+    vg.vg_flush(scene3)
+    assert_eq_int("and a flush draws nothing", text_calls(bk3), 0)
+    shown.on = 1
+    vg.scene_refresh(scene3)
+    vg.vg_flush(scene3)
+    assert_eq_int("when(1): it draws", text_calls(bk3) > 0, 1)
 
     println("=== test_vg_when passed ===")
 }

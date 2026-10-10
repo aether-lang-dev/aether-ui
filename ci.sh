@@ -878,8 +878,9 @@ else
     # fallback to the timer fails, and timer_once), vg_image_demo and
     # vgpaint_demo (vg's live paint and the right/double-click hooks on UIKit),
     # spacercanvas_demo (spacers take a stack's slack before a canvas does),
-    # pixelated_demo (image_rendering "pixelated": CoreGraphics nearest).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo; do
+    # pixelated_demo (image_rendering "pixelated": CoreGraphics nearest),
+    # submit_demo (on_submit: Return in a field).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1406,6 +1407,16 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=pixelated_demo/spec_pixelated_demo \
     run_server_test "$(EX_BIN pixelated_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" pixelated_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9f: AetherUIDriver on_submit spec ==="
+# Return in a text or secure field runs on_submit with the field's text;
+# POST /widget/{id}/submit takes each platform's own Return path.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=submit_demo/spec_submit_demo \
+    run_server_test "$(EX_BIN submit_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" submit_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

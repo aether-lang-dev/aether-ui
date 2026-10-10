@@ -25,8 +25,8 @@
 // aeui_android_run_sync); timers are timerfds on the same looper. Every JNI
 // call that touches a View therefore happens on the UI thread.
 //
-// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 328 ABI functions
-// the UIKit backend exports are here: 322 implemented for real and 6
+// STATUS: STAGE 2 COMPLETE (pass C, 2026-10-07) -- all 329 ABI functions
+// the UIKit backend exports are here: 323 implemented for real and 6
 // documented no-ops (the tray: there is no status-area tray on Android, as
 // on iOS). There are NO STUBS. Stage 1 proved the chain (`--emit=lib`, JNI,
 // the looper bridge, packaging, the driver over `adb forward`) with
@@ -165,7 +165,7 @@
 // modifiers_impl is 0 (no pollable modifier state, as on UIKit), the
 // disclosure triangle is drawn as a path (no system chevron).
 //
-// Real, pass C (50):
+// Real, pass C (51):
 //   canvas     canvas_create_impl canvas_get_widget canvas_begin_path_impl
 //              canvas_move_to_impl canvas_line_to_impl canvas_arc_impl
 //              canvas_close_path_impl canvas_stroke_impl canvas_fill_impl
@@ -186,6 +186,7 @@
 //              canvas_on_key_impl canvas_on_key_release_impl
 //              canvas_on_scroll_impl canvas_on_resize_impl
 //              canvas_gesture_probe_impl                         (41)
+//   fields     textfield_on_submit_impl                          (1)
 //   gpuview    gpuview_available_impl gpuview_create_impl gpuview_get_widget
 //              gpuview_on_realize_impl gpuview_on_render_impl
 //              gpuview_on_resize_impl gpuview_request_render_impl
@@ -670,6 +671,7 @@ typedef struct {
     int disabled;              // set_enabled(0) on THIS widget
     int listeners;
     AeClosure* change;         // textfield/toggle/slider/picker/textarea on_change
+    AeClosure* submit;         // textfield/securefield on_submit(text)
     AeClosure** clicks; int nclicks;
     AeClosure** hovers; int nhovers;
     AeClosure* dbl;
@@ -1647,7 +1649,7 @@ enum { AEUI_EV_CLICK = 1, AEUI_EV_TEXT = 2, AEUI_EV_CHECK = 3, AEUI_EV_SEEK = 4,
        AEUI_EV_TAB = 9, AEUI_EV_MENU = 10, AEUI_EV_CONTEXT = 11, AEUI_EV_SCRIM = 12,
        AEUI_EV_DISMISS = 13, AEUI_EV_DRAG = 14, AEUI_EV_WHEEL = 15, AEUI_EV_MENU_CLOSED = 16,
        AEUI_EV_SURFACE = 17, AEUI_EV_MENU_OPEN = 18, AEUI_EV_ROW_DRAG = 19, AEUI_EV_ROW_DROP = 20,
-       AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22 };
+       AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22, AEUI_EV_SUBMIT = 23 };
 
 static jobject aeui_listener(JNIEnv* env, int handle, int kind) {
     jobject l = (*env)->NewObject(env, J.Listener, J.Listener_init, (jint)handle, (jint)kind);
@@ -1692,6 +1694,9 @@ JMETHOD(M_TV_setSingleLine, C_TextView, "setSingleLine", "(Z)V");
 JMETHOD(M_TV_setGravity, C_TextView, "setGravity", "(I)V");
 JMETHOD(M_TV_setEllipsize, C_TextView, "setEllipsize", "(Landroid/text/TextUtils$TruncateAt;)V");
 JMETHOD(M_TV_setHint, C_TextView, "setHint", "(Ljava/lang/CharSequence;)V");
+JMETHOD(M_TV_setOnEditorActionListener, C_TextView, "setOnEditorActionListener", "(Landroid/widget/TextView$OnEditorActionListener;)V");
+JMETHOD(M_TV_setImeOptions, C_TextView, "setImeOptions", "(I)V");
+JMETHOD(M_TV_onEditorAction, C_TextView, "onEditorAction", "(I)V");
 JMETHOD(M_TV_setInputType, C_TextView, "setInputType", "(I)V");
 JMETHOD(M_TV_setMinLines, C_TextView, "setMinLines", "(I)V");
 JMETHOD(M_TV_setTextColor, C_TextView, "setTextColor", "(I)V");
@@ -1882,6 +1887,25 @@ static void aeui_watch_text(JNIEnv* env, int handle) {
     JV(w->view, M_TV_addTextChangedListener, l);
     (*env)->DeleteLocalRef(env, l);
     w->listeners |= LST_TEXT;
+}
+
+// on_submit: the field's editor action (the keyboard's Done, or Enter),
+// relayed by AetherListener as AEUI_EV_SUBMIT.
+#define AEUI_IME_ACTION_DONE 6
+void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !boxed_closure) return;
+    if (w->type != AUI_TEXTFIELD && w->type != AUI_SECUREFIELD) return;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    w->submit = (AeClosure*)boxed_closure;
+    jobject l = aeui_listener(env, handle, AEUI_EV_SUBMIT);
+    if (l) {
+        JV(w->view, M_TV_setImeOptions, (jint)AEUI_IME_ACTION_DONE);
+        JV(w->view, M_TV_setOnEditorActionListener, l);
+        (*env)->DeleteLocalRef(env, l);
+    }
+    aeui_unframe(env);
 }
 
 static int make_edit(const char* placeholder, void* boxed_closure, int type) {
@@ -8637,6 +8661,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             ctx->result = 3;   // no tray on Android
             return;
         case AETHER_DRV_CLICK:
+        case AETHER_DRV_SUBMIT:
         case AETHER_DRV_SET_TEXT:
         case AETHER_DRV_TOGGLE:
         case AETHER_DRV_SET_VALUE:
@@ -8692,6 +8717,14 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             // own toggle, which fires its change listener.
             if (ctx->action == AETHER_DRV_CLICK || w->type == AUI_TOGGLE)
                 JZ(w->view, M_View_performClick);
+            break;
+        case AETHER_DRV_SUBMIT:
+            // The keyboard's Done key: TextView.onEditorAction runs the
+            // field's editor-action listener (AetherListener -> on_submit).
+            if (w->type != AUI_TEXTFIELD && w->type != AUI_SECUREFIELD) {
+                ctx->result = 3; aeui_unframe(env); return;
+            }
+            JV(w->view, M_TV_onEditorAction, (jint)AEUI_IME_ACTION_DONE);
             break;
         case AETHER_DRV_SET_TEXT:
             if (aeui_is_edit(w->type)) {
@@ -9082,6 +9115,13 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
             w = live_widget(handle);
             if (w && !g_programmatic && w->change && w->change->fn)
                 ((void (*)(void*, const char*))w->change->fn)(w->change->env, text);
+            free(text);
+            break;
+        }
+        case AEUI_EV_SUBMIT: {
+            char* text = aeui_charseq_dup(env, s);
+            if (w->submit && w->submit->fn)
+                ((void (*)(void*, const char*))w->submit->fn)(w->submit->env, text);
             free(text);
             break;
         }

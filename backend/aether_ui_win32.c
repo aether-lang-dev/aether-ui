@@ -260,6 +260,7 @@ typedef struct {
     AeClosure* on_hover;
     AeClosure* on_double_click;
     AeClosure* on_change; // text/value change for input widgets
+    AeClosure* on_submit; // Return in a text/secure field: on_submit(text)
     int bound_state;      // two-way bind_value target (0 = none)
     AeClosure* on_drop;   // row drag-reorder: on_drop(src_index)
     AeClosure* on_scroll; // vlist native scroll: on_scroll(dy rows)
@@ -543,6 +544,8 @@ void* aether_ui_get_widget(int handle) {
 
 // O(1) average reverse lookup via the HWND hash. Falls back to linear scan
 // for HWNDs that were never registered (the hash would miss anyway).
+static int w32_fire_submit(Widget* w);           // on_submit, below
+static void w32_release_box(AeClosure** slot);   // the graveyard, below
 static int handle_for_hwnd(HWND h) {
     if (!h || !widget_hash) return 0;
     uint32_t slot = hash_hwnd(h) & widget_hash_mask;
@@ -3474,6 +3477,18 @@ void aether_ui_app_run_raw(int app_handle) {
                 aether_ui_window_key_deliver(w32_name, w32_mods);
             }
         }
+        // Return in a field with on_submit: its callback, before the dialog
+        // manager turns Return into the default button. The WM_CHAR '\r'
+        // that would follow is dropped too, or the EDIT beeps.
+        if ((msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN)
+            || (msg.message == WM_CHAR && msg.wParam == '\r')) {
+            Widget* fw = widget_at(handle_for_hwnd(msg.hwnd));
+            if (fw && fw->on_submit
+                && (fw->kind == WK_TEXTFIELD || fw->kind == WK_SECUREFIELD)) {
+                if (msg.message == WM_KEYDOWN) w32_fire_submit(fw);
+                continue;
+            }
+        }
         int canvas_has_focus =
             (msg.message == WM_KEYDOWN || msg.message == WM_CHAR) &&
             aeui_hwnd_is_key_canvas(msg.hwnd);
@@ -4534,6 +4549,27 @@ void aether_ui_textfield_set_text(int handle, const char* text) {
 // This handed back wide_to_utf8's rotating static buffer, and the first
 // free of it corrupted the heap -- an app reading a text field on Windows
 // died in whatever free came next, far from here.
+// on_submit: an EDIT reports no Return of its own (IsDialogMessage takes it
+// for the default button), so the message loop hands a Return aimed at a
+// field with on_submit here first, and the driver's submit comes the same way.
+void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
+    Widget* w = widget_at(handle);
+    if (!w || !boxed_closure) return;
+    if (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD) return;
+    w32_release_box(&w->on_submit);
+    w->on_submit = (AeClosure*)boxed_closure;
+}
+
+/* 1 when the field had an on_submit and it ran. */
+static int w32_fire_submit(Widget* w) {
+    if (!w || !w->on_submit || w->sealed) return 0;
+    if (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD) return 0;
+    wchar_t buf[4096];
+    GetWindowTextW(w->hwnd, buf, 4096);
+    invoke_closure_str(w->on_submit, wide_to_utf8(buf));
+    return 1;
+}
+
 const char* aether_ui_textfield_get_text(int handle) {
     Widget* w = widget_at(handle);
     if (!w) return _strdup("");
@@ -12111,6 +12147,7 @@ static void w32_release_handle_state(int h) {
         w32_release_box(&w->on_hover);
         w32_release_box(&w->on_double_click);
         w32_release_box(&w->on_change);
+        w32_release_box(&w->on_submit);
         w32_release_box(&w->on_drop);
         w32_release_box(&w->on_scroll);
         w32_release_box(&w->on_layout);
@@ -12905,6 +12942,14 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     // ran the app's handler twice (spec_picker's "Changes").
                     aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
                 }
+                break;
+            case AETHER_DRV_SUBMIT:
+                // Return in a field, posted so it travels the message loop's
+                // Return-to-on_submit path as a real key does.
+                if (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD) {
+                    ctx->result = 3; ctx->done = 1; return 0;
+                }
+                PostMessageW(w->hwnd, WM_KEYDOWN, VK_RETURN, 0x001C0001);
                 break;
             default: break;
         }

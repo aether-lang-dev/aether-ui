@@ -402,6 +402,9 @@ static void apply_prop_binding(PropBinding* b) {
         char buf[512];
         snprintf(buf, sizeof(buf), "%s%s%s", b->prefix, val, b->suffix);
         aether_ui_text_set_string(b->widget_handle, buf);
+        // A button's caption too (each setter ignores the other kind): this
+        // set only labels, so a bound button kept its first caption.
+        aether_ui_button_set_label(b->widget_handle, buf);
     } else {
         int on = state_truthy(c);
         if (b->invert) on = !on;
@@ -2481,6 +2484,34 @@ int aether_ui_divider_create(void) {
     }
 }
 @end
+
+// on_submit: an NSTextField (NSSecureTextField too) sends its action on
+// Return; this target turns that into the app's cb(text).
+@interface AetherSubmitTarget : NSObject
+@property (assign) AeClosure* closure;
+- (void)submit:(id)sender;
+@end
+@implementation AetherSubmitTarget
+- (void)submit:(id)sender {
+    AeClosure* c = self.closure;
+    if (c && c->fn) {
+        const char* t = [[(NSTextField*)sender stringValue] UTF8String];
+        ((void(*)(void*, const char*))c->fn)(c->env, t ? t : "");
+    }
+}
+@end
+
+void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
+    int t = get_widget_type(handle);
+    if (!boxed_closure || (t != AUI_TEXTFIELD && t != AUI_SECUREFIELD)) return;
+    NSTextField* field = (__bridge NSTextField*)aether_ui_get_widget(handle);
+    if (!field) return;
+    AetherSubmitTarget* st = [[AetherSubmitTarget alloc] init];
+    st.closure = (AeClosure*)boxed_closure;
+    [field setTarget:st];
+    [field setAction:@selector(submit:)];
+    aeui_own_helper(field, "aeui_submit", st);
+}
 
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     NSTextField* field = [[NSTextField alloc] init];
@@ -8341,6 +8372,19 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
             }
             break;
+        case AETHER_DRV_SUBMIT: {
+            // Return in a field: the action message a key press sends.
+            int t = get_widget_type(ctx->handle);
+            if ((t == AUI_TEXTFIELD || t == AUI_SECUREFIELD)
+                && [v isKindOfClass:[NSTextField class]]) {
+                NSTextField* f = (NSTextField*)v;
+                if ([f action]) [f sendAction:[f action] to:[f target]];
+                ctx->result = 0;
+            } else {
+                ctx->result = 3;
+            }
+            return;
+        }
         case AETHER_DRV_SET_TEXT: {
             NSString* s = [NSString stringWithUTF8String:ctx->sval];
             if ([v isKindOfClass:[NSTextField class]]) {

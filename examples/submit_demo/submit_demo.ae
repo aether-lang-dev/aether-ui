@@ -1,0 +1,35 @@
+// submit_demo — on_submit: Return in a text field (Swing's ActionListener,
+// QML's onAccepted). A text field and a secure field each report what was
+// submitted; typing alone reports nothing.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/submit_demo/bin/submit_demo &
+//   UI_SPEC=submit_demo/spec_submit_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, text, textfield, securefield, on_submit,
+    ui_state_s, ui_set_s, text_bound, ui_state_i, ui_set_i, ui_get_i,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+main() {
+    last = ui_state_s("nothing yet")
+    count = ui_state_i(0)
+    window("submit", 320, 220) {
+        vstack(8) {
+            f = textfield("type, then Return") callback |t: string| { }
+            on_submit(f) callback |t: string| {
+                _s = ui_set_s(last, "text: ${t}")
+                _n = ui_set_i(count, ui_get_i(count) + 1)
+            }
+            p = securefield("password") callback |t: string| { }
+            on_submit(p) callback |t: string| {
+                _s = ui_set_s(last, "secret of ${string.length(t)}")
+                _n = ui_set_i(count, ui_get_i(count) + 1)
+            }
+            text_bound(last, "submitted ", "")
+            text_bound(count, "submits: ", "")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

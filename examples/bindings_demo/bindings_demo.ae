@@ -41,6 +41,11 @@ main() {
                 _b2 = ui_set_b(busy, 0)
                 _s2 = ui_set_s(status, "idle")
             }
+            // A button's caption bound too: bind_text is for any widget
+            // with text (GTK4, AppKit and UIKit set only labels until
+            // 2026-10-10; sae's spreadsheet grid hit it).
+            caption_btn = btn("") callback { }
+            bind_text(caption_btn, status)
             idle_lbl = text("machine is idle")
             // Run ghosts while busy; Stop ghosts while NOT busy; the
             // idle label hides while busy. One bool, three properties.

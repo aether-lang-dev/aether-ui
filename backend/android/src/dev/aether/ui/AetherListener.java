@@ -25,8 +25,11 @@ import android.view.InputDevice;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
+import android.widget.TextView;
 import android.widget.CompoundButton;
 import android.widget.PopupMenu;
 import android.widget.SeekBar;
@@ -38,7 +41,8 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
         View.OnLongClickListener, View.OnContextClickListener,
         PopupMenu.OnMenuItemClickListener, PopupMenu.OnDismissListener,
         DialogInterface.OnDismissListener, DialogInterface.OnClickListener,
-        View.OnGenericMotionListener, SurfaceHolder.Callback, View.OnDragListener {
+        View.OnGenericMotionListener, SurfaceHolder.Callback, View.OnDragListener,
+        TextView.OnEditorActionListener {
     // Event kinds; the same numbers are AEUI_EV_* in aether_ui_android.c.
     static final int CLICK = 1, TEXT = 2, CHECK = 3, SEEK = 4, SELECT = 5,
                      HOVER = 6, LAYOUT = 7, DOUBLE = 8,
@@ -55,7 +59,8 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
                      ROW_DRAG = 19,  // a reorderable row long-pressed: start its drag
                      ROW_DROP = 20,  // a row dropped on this one: a = source index
                      FILE_DRAG = 21, // a draggable file's widget long-pressed: start the drag
-                     FILE_DROP = 22; // files dropped on the window: s = paths, newline-separated
+                     FILE_DROP = 22, // files dropped on the window: s = paths, newline-separated
+                     SUBMIT = 23;    // Return / the keyboard's Done in a field: s = its text
 
     private final int handle;
     private final int kind;
@@ -98,6 +103,20 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
     @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
     @Override public void afterTextChanged(Editable s) {
         AetherActivity.nativeEvent(handle, TEXT, 0, 0, s.toString());
+    }
+
+    // on_submit: the keyboard's action key (Done, Go, Send) or a hardware
+    // Enter. The driver calls TextView.onEditorAction(IME_ACTION_DONE),
+    // which is what the keyboard's key does, so both arrive here.
+    @Override public boolean onEditorAction(TextView v, int actionId, KeyEvent ev) {
+        boolean enter = ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+        if (enter && ev.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (enter || actionId == EditorInfo.IME_ACTION_DONE || actionId == EditorInfo.IME_ACTION_GO
+                || actionId == EditorInfo.IME_ACTION_SEND) {
+            AetherActivity.nativeEvent(handle, SUBMIT, 0, 0, v.getText().toString());
+            return true;
+        }
+        return false;
     }
 
     @Override public void onCheckedChanged(CompoundButton b, boolean checked) {

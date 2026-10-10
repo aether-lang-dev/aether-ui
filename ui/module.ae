@@ -22,7 +22,7 @@ exports (
     tabs, tab, on_tab_change, tab_select, tab_selected,
     nav_push, nav_pop, nav_depth, nav_page,
     text, text_wrapped, text_anchor, text_truncate, button, btn, spacer, divider,
-    textfield, textfield_bound, securefield, toggle, toggle_group, slider, picker, picker_add,
+    textfield, textfield_bound, securefield, on_submit, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -277,6 +277,7 @@ extern aether_ui_state_hub_get_impl() -> ptr
 
 // Group 2: Input widgets
 extern aether_ui_textfield_create(placeholder: string, boxed_closure: ptr) -> int
+extern aether_ui_textfield_on_submit_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_textfield_set_text(handle: int, text: string)
 extern aether_ui_textfield_get_text(handle: int) -> string @heap
 
@@ -1473,6 +1474,15 @@ textfield_bound(_ctx: ptr, placeholder: string, state_handle: int) {
     }
     aether_ui_bind_value(state_handle, handle)
     return handle
+}
+
+// on_submit(field, cb): cb(text) when the person presses Return in a
+// textfield or securefield (Swing's ActionListener, QML's onAccepted). The
+// driver's POST /widget/{id}/submit takes the same path.
+//   f = textfield("Formula…") callback |t: string| { }
+//   on_submit(f) callback |t: string| { commit(t) }
+on_submit(widget: int, cb: fn) {
+    aether_ui_textfield_on_submit_impl(widget, box_closure(cb))
 }
 
 securefield(_ctx: ptr, placeholder: string, on_change: fn) {

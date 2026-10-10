@@ -1,0 +1,45 @@
+// spec_submit_demo.ae — on_submit: Return in a text or secure field runs the
+// app's callback with the field's text; typing alone does not; a widget that
+// is not a field answers 404. POST /widget/{id}/submit takes the platform's
+// own Return path (GtkEntry "activate", NSTextField's action, ...).
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/submit_demo/bin/submit_demo &
+//   UI_SPEC=submit_demo/spec_submit_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "on_submit") {
+        spec.it("typing alone submits nothing") callback {
+            f = uidriver.widget_id_of("textfield", "")
+            spec.assert_gt(f, 0, "a text field")
+            uidriver.post_ok("/widget/${f}/set_text?v=hello", "type hello")
+            sleep(300)
+            spec.assert_contains(uidriver.get_body("/widgets"), "submits: 0", "no submit yet")
+        }
+        spec.it("Return in a text field runs on_submit with its text") callback {
+            f = uidriver.widget_id_of("textfield", "")
+            uidriver.post_ok("/widget/${f}/submit", "press Return")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "submitted text: hello", 20),
+                "the callback got the field's text")
+            spec.assert_contains(uidriver.get_body("/widgets"), "submits: 1", "once")
+        }
+        spec.it("and in a secure field") callback {
+            p = uidriver.widget_id_of("securefield", "")
+            spec.assert_gt(p, 0, "a secure field")
+            uidriver.post_ok("/widget/${p}/set_text?v=s3cret", "type a password")
+            uidriver.post_ok("/widget/${p}/submit", "press Return")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "submitted secret of 6", 20),
+                "the callback got the password (its length shown)")
+        }
+        spec.it("a widget that is not a field cannot be submitted") callback {
+            t = uidriver.widget_id_of("text", "")
+            spec.assert_eq(uidriver.post_status("/widget/${t}/submit"), 404, "404 for a label")
+        }
+    }
+    return spec.run_summary(fw)
+}

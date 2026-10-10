@@ -120,6 +120,7 @@ exports (
     element_set_raster, element_raster_pixels, element_raster_w, element_raster_h,
     element_set_raster_fit, element_raster_fit,
     element_set_raster_pixelated, element_raster_pixelated,
+    element_set_text_pos, element_text_moved,
     RASTER_STRETCH, RASTER_CONTAIN, RASTER_COVER, RASTER_ORIGINAL
 )
 
@@ -245,6 +246,7 @@ struct AevgElement {
     rst_owned: int
     rst_fit: int            // RASTER_STRETCH (default) / CONTAIN / COVER / ORIGINAL
     rst_pixelated: int      // 1: scaled without smoothing (image_rendering "pixelated")
+    text_moved: int         // 1: a text drawn at geo0/geo1, not where it was made
 }
 
 // How an image's pixels fill its (x, y, w, h) box, after ui.image_fill.
@@ -329,6 +331,7 @@ element_new(underlying: ptr) -> ptr {
     e.rst_owned = 0
     e.rst_fit = 0
     e.rst_pixelated = 0
+    e.text_moved = 0
     return e
 }
 
@@ -683,6 +686,15 @@ element_set_raster_fit(p: ptr, fit: int) { e = p as *AevgElement; e.rst_fit = fi
 element_raster_fit(p: ptr) -> int    { e = p as *AevgElement; return e.rst_fit }
 element_set_raster_pixelated(p: ptr, on: int) { e = p as *AevgElement; e.rst_pixelated = on }
 element_raster_pixelated(p: ptr) -> int       { e = p as *AevgElement; return e.rst_pixelated }
+// A text's position after it was made (vg.text_set_pos): kept in geo0/geo1,
+// which a text has no other use for.
+element_set_text_pos(p: ptr, x: float, y: float) {
+    e = p as *AevgElement
+    e.geo0 = x
+    e.geo1 = y
+    e.text_moved = 1
+}
+element_text_moved(p: ptr) -> int { e = p as *AevgElement; return e.text_moved }
 
 element_set_fill(p: ptr, color: string) {
     e = p as *AevgElement

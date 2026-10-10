@@ -313,6 +313,8 @@ static void aeui_own_helper(id owner, id helper) {
         ((void(*)(void*, const char*))self.closure->fn)(self.closure->env, cs);
     }
 }
+// on_submit: Return (EditingDidEndOnExit), the same cb(text) shape.
+- (void)submitted:(UITextField*)f { [self changed:f]; }
 @end
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1091,20 @@ static UITextField* make_field(const char* placeholder, void* boxed_closure,
         aeui_own_helper(f, t);
     }
     return f;
+}
+
+void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
+    int t = get_widget_type(handle);
+    if (!boxed_closure || (t != AUI_TEXTFIELD && t != AUI_SECUREFIELD)) return;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[UITextField class]]) return;
+    AeuiFieldTarget* ft = [[AeuiFieldTarget alloc] init];
+    ft.closure = (AeClosure*)boxed_closure;
+    // EditingDidEndOnExit is Return (and dismisses the keyboard, as a
+    // phone's Return should).
+    [(UITextField*)v addTarget:ft action:@selector(submitted:)
+              forControlEvents:UIControlEventEditingDidEndOnExit];
+    aeui_own_helper(v, ft);
 }
 
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
@@ -3669,6 +3685,9 @@ static void apply_prop_binding(PropBinding* b) {
         char val[256]; state_render_value(c, b->decimals, val, sizeof(val));
         char buf[512]; snprintf(buf, sizeof(buf), "%s%s%s", b->prefix, val, b->suffix);
         aether_ui_text_set_string(b->widget_handle, buf);
+        // A button's caption too (each setter ignores the other kind): this
+        // set only labels, so a bound button kept its first caption.
+        aether_ui_button_set_label(b->widget_handle, buf);
     } else {
         int on = state_truthy(c);
         if (b->invert) on = !on;
@@ -5795,6 +5814,16 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
             }
             break;
+        case AETHER_DRV_SUBMIT: {
+            // Return in a field: the control event the keyboard's Return sends.
+            int t = get_widget_type(ctx->handle);
+            if ((t != AUI_TEXTFIELD && t != AUI_SECUREFIELD)
+                || ![v isKindOfClass:[UITextField class]]) {
+                ctx->result = 3; return;
+            }
+            [(UITextField*)v sendActionsForControlEvents:UIControlEventEditingDidEndOnExit];
+            break;
+        }
         default:
             break;
     }

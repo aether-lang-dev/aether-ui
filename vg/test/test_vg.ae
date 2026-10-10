@@ -196,5 +196,20 @@ main() {
     }
     assert_eq_int("the text and its shadow were both drawn", texts, 2)
 
+    // ── text_set_pos moves a text after it was made ─────────────────
+    // vg.set could move a rect or a circle but not a text (sae's spreadsheet
+    // wrapped each header letter in a group to re-centre it).
+    mctx = mk_ctx()
+    mbk = record.backend_new()
+    mscene = vg.scene_new(mctx, mbk)
+    vg.scene_set_deferred(mscene, 1)
+    mt = vg.text(vg.vg_root(mscene), 10.0, 20.0, "A")
+    vg.vg_flush(mscene)
+    assert_near("made at x 10", parse_opt(mbk, 0, "x"), 10.0)
+    vg.text_set_pos(mt, 70.0, 20.0)
+    record.backend_clear(mbk)
+    vg.vg_flush(mscene)
+    assert_near("moved to x 70", parse_opt(mbk, 0, "x"), 70.0)
+
     println("=== test_vg passed ===")
 }

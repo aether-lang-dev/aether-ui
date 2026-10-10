@@ -285,6 +285,9 @@ static void apply_prop_binding(PropBinding* b) {
         char buf[512];
         snprintf(buf, sizeof(buf), "%s%s%s", b->prefix, val, b->suffix);
         aether_ui_text_set_string(b->widget_handle, buf);
+        // A button's caption too (each setter ignores the other kind): this
+        // set only labels, so a bound button kept its first caption.
+        aether_ui_button_set_label(b->widget_handle, buf);
     } else {
         int on = state_truthy(c);
         if (b->invert) on = !on;
@@ -697,9 +700,19 @@ int aether_ui_text_wrapped_create(const char* text, int wrap_width_px) {
     gtk_label_set_wrap(GTK_LABEL(label), TRUE);
     gtk_label_set_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
     if (wrap_width_px > 0) {
-        // Request the wrap width; the label grows in height to fit.
+        // Wrap AT wrap_width_px. The size request is only a minimum: a
+        // GtkBox stretched the label across the row (800 px) and it wrapped
+        // into one line (sae's spec_keys). A one-character max width puts the
+        // label's natural width below the request, so it gets exactly the
+        // request, and start-aligned the row does not widen it. Its height
+        // must then be measured at that width, which stock GtkBox does not
+        // do (it measures at the box's full width: one line, then gives the
+        // label that one line's width), so adding one to a stack gives the
+        // stack the flex layout, which does (aeui_child_cross).
         gtk_widget_set_size_request(label, wrap_width_px, -1);
-        gtk_label_set_max_width_chars(GTK_LABEL(label), -1);
+        gtk_label_set_max_width_chars(GTK_LABEL(label), 1);
+        gtk_widget_set_halign(label, GTK_ALIGN_START);
+        g_object_set_data(G_OBJECT(label), "aeui-wrap-label", GINT_TO_POINTER(1));
     }
     return aether_ui_register_widget(label);
 }
@@ -1278,6 +1291,7 @@ static GtkSizeRequestMode aeui_flex_layout_get_request_mode(GtkLayoutManager* lm
         : GTK_SIZE_REQUEST_WIDTH_FOR_HEIGHT;
 }
 
+static int aeui_child_cross(GtkWidget* c, GtkOrientation orient, int extent);
 static void aeui_flex_layout_measure(GtkLayoutManager* lm, GtkWidget* widget,
                                      GtkOrientation orientation, int for_size,
                                      int* minimum, int* natural,
@@ -1291,7 +1305,9 @@ static void aeui_flex_layout_measure(GtkLayoutManager* lm, GtkWidget* widget,
          c = gtk_widget_get_next_sibling(c)) {
         if (!gtk_widget_should_layout(c)) continue;
         int cmin = 0, cnat = 0;
-        gtk_widget_measure(c, orientation, child_for, &cmin, &cnat, NULL, NULL);
+        int cfor = (orientation == self->orient)
+            ? aeui_child_cross(c, self->orient, child_for) : child_for;
+        gtk_widget_measure(c, orientation, cfor, &cmin, &cnat, NULL, NULL);
         min_sum += cmin;
         nat_sum += cnat;
         if (cmin > min_max) min_max = cmin;
@@ -1338,6 +1354,25 @@ static gboolean aeui_layout_fire_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// The cross-axis size child `c` will actually get from an extent of `extent`:
+// all of it when it fills (the default), else its natural size within it.
+// Its main-axis size has to be measured AT that size: a wrapping label
+// start-aligned at 120 px in an 800 px vstack is several lines tall at 120,
+// one line at 800 -- and measured at 800, GTK then gave it the width of that
+// one line (sae's text_wrapped came out 415 x 16). GtkBox does the same.
+static int aeui_child_cross(GtkWidget* c, GtkOrientation orient, int extent) {
+    if (extent < 0) return extent;
+    GtkAlign a = (orient == GTK_ORIENTATION_VERTICAL)
+        ? gtk_widget_get_halign(c) : gtk_widget_get_valign(c);
+    if (a == GTK_ALIGN_FILL) return extent;
+    GtkOrientation cross = (orient == GTK_ORIENTATION_VERTICAL)
+        ? GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL;
+    int mn = 0, nat = 0;
+    gtk_widget_measure(c, cross, -1, &mn, &nat, NULL, NULL);
+    int want = nat > mn ? nat : mn;
+    return want < extent ? want : extent;
+}
+
 static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
                                       int width, int height, int baseline) {
     AeuiFlexLayout* self = (AeuiFlexLayout*)lm;
@@ -1356,7 +1391,7 @@ static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
             total_weight += wgt;
         } else {
             int cmin = 0, cnat = 0;
-            gtk_widget_measure(c, self->orient, cross_extent, &cmin, &cnat, NULL, NULL);
+            gtk_widget_measure(c, self->orient, aeui_child_cross(c, self->orient, cross_extent), &cmin, &cnat, NULL, NULL);
             fixed += cnat;
         }
         n++;
@@ -1392,7 +1427,7 @@ static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
             if (wgt <= 0) continue;
             if (g_object_get_data(G_OBJECT(c), "aeui-weight-pinned")) continue;
             int cmin = 0, cnat = 0;
-            gtk_widget_measure(c, self->orient, cross_extent, &cmin, &cnat, NULL, NULL);
+            gtk_widget_measure(c, self->orient, aeui_child_cross(c, self->orient, cross_extent), &cmin, &cnat, NULL, NULL);
             int share = clamp_leftover * wgt / clamp_weight;
             if (share < cmin) {
                 g_object_set_data(G_OBJECT(c), "aeui-weight-pinned",
@@ -1427,7 +1462,7 @@ static void aeui_flex_layout_allocate(GtkLayoutManager* lm, GtkWidget* widget,
             weighted_used += size;
         } else {
             int cmin = 0, cnat = 0;
-            gtk_widget_measure(c, self->orient, cross_extent, &cmin, &cnat, NULL, NULL);
+            gtk_widget_measure(c, self->orient, aeui_child_cross(c, self->orient, cross_extent), &cmin, &cnat, NULL, NULL);
             size = cnat;
         }
         int cw = (self->orient == GTK_ORIENTATION_HORIZONTAL) ? size : width;
@@ -1664,6 +1699,23 @@ static void on_entry_changed(GtkEditable* editable, gpointer data) {
     }
 }
 
+// on_submit: GtkEntry and GtkPasswordEntry both emit "activate" on Return.
+static void on_entry_activate(GtkWidget* w, gpointer data) {
+    AeClosure* c = (AeClosure*)data;
+    if (c && c->fn) {
+        const char* text = gtk_editable_get_text(GTK_EDITABLE(w));
+        ((void(*)(void*, const char*))c->fn)(c->env, text ? text : "");
+    }
+}
+
+void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !boxed_closure) return;
+    if (!GTK_IS_ENTRY(w) && !GTK_IS_PASSWORD_ENTRY(w)) return;
+    g_signal_connect_data(w, "activate", G_CALLBACK(on_entry_activate),
+                          boxed_closure, aeui_release_boxed, 0);
+}
+
 // Two-way value binding: the editable widget's text writes back to a string
 // state cell (compare-first, so it doesn't fight the state→widget push).
 static void on_value_binding_changed(GtkEditable* editable, gpointer data) {
@@ -1723,6 +1775,14 @@ void aether_ui_textfield_set_text(int handle, const char* text) {
         gtk_entry_buffer_set_text(buf, text ? text : "", -1);
         g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
                                           (gpointer)on_entry_changed, NULL);
+    } else if (w && GTK_IS_PASSWORD_ENTRY(w)) {
+        // A securefield: not a GtkEntry, but a GtkEditable like one. Writing
+        // only GtkEntry left a driver-typed password empty.
+        g_signal_handlers_block_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                        (gpointer)on_entry_changed, NULL);
+        gtk_editable_set_text(GTK_EDITABLE(w), text ? text : "");
+        g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
+                                          (gpointer)on_entry_changed, NULL);
     }
 }
 
@@ -1737,6 +1797,10 @@ const char* aether_ui_textfield_get_text(int handle) {
     if (w && GTK_IS_ENTRY(w)) {
         GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));
         const char* t = gtk_entry_buffer_get_text(buf);
+        return strdup(t ? t : "");
+    }
+    if (w && GTK_IS_PASSWORD_ENTRY(w)) {
+        const char* t = gtk_editable_get_text(GTK_EDITABLE(w));
         return strdup(t ? t : "");
     }
     return strdup("");
@@ -8018,6 +8082,10 @@ static gboolean test_action_idle(gpointer data) {
             } else if (GTK_IS_ENTRY(w)) {
                 GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));
                 gtk_entry_buffer_set_text(buf, ta->sval, -1);
+            } else if (GTK_IS_PASSWORD_ENTRY(w)) {
+                // A securefield (a GtkEditable, not a GtkEntry): typed into
+                // as a person would, so its on_change runs. It was skipped.
+                gtk_editable_set_text(GTK_EDITABLE(w), ta->sval);
             }
             break;
         case 2: // toggle
@@ -8764,6 +8832,18 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
            yes, and then waited out its teardown budget for an exit that never
            came -- ~96s wall for a suite doing 0.4s of work. Already on the
            GTK thread here, so call the handlers' bodies directly. */
+        case AETHER_DRV_SUBMIT: {
+            /* Return in a field: the same "activate" a key press emits. */
+            GtkWidget* w = aether_ui_get_widget(ctx->handle);
+            if (w && (GTK_IS_ENTRY(w) || GTK_IS_PASSWORD_ENTRY(w))) {
+                g_signal_emit_by_name(w, "activate");
+                ctx->result = 0;
+            } else {
+                ctx->result = 3;
+            }
+            ctx->done = 1;
+            return;
+        }
         case AETHER_DRV_SHUTDOWN:
             shutdown_idle(NULL);
             ctx->result = 0; ctx->done = 1;
@@ -9016,7 +9096,9 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
         gtk_box_append(GTK_BOX(parent), child);
         // Spacers outrank a merely-expanding sibling, which stock GtkBoxLayout
         // cannot express; the flex layout can (aeui_child_weight).
-        if (aeui_is_spacer(child)) aeui_ensure_flex_layout(parent);
+        if (aeui_is_spacer(child)
+            || g_object_get_data(G_OBJECT(child), "aeui-wrap-label"))
+            aeui_ensure_flex_layout(parent);
     } else if (GTK_IS_SCROLLED_WINDOW(parent)) {
         gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), child);
     } else if (GTK_IS_OVERLAY(parent)) {

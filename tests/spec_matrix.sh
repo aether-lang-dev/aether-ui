@@ -104,6 +104,7 @@ SUITES=(
   "vgpaint|examples/vgpaint_demo|vgpaint_demo/spec_vgpaint_demo|"
   "spacercanvas|examples/spacercanvas_demo|spacercanvas_demo/spec_spacercanvas_demo|"
   "pixelated|examples/pixelated_demo|pixelated_demo/spec_pixelated_demo|"
+  "submit|examples/submit_demo|submit_demo/spec_submit_demo|"
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
   "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
   "frametick|examples/frametick_demo|frametick_demo/spec_frametick_demo|"
