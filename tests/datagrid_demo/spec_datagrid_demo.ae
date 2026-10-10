@@ -1,5 +1,7 @@
 // spec_datagrid_demo.ae — the virtualised grid: only the shown cells exist,
-// the sliders scroll it, the header and the frozen column stay put.
+// the sliders scroll it, the header and the frozen column stay put (phase 1);
+// clicks and keys move a cursor and a range, read back as the demo's
+// "selection:" line and as the cells' colours (phase 2).
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
@@ -39,6 +41,20 @@ field_of_text(t: string, f: string) -> int {
     return uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(t), f)
 }
 
+// The colour a cell was painted, "#rrggbb" ("" when never set).
+bg_of(t: string) -> string {
+    body = uidriver.get_body("/widget/${uidriver.widget_id_by_text(t)}")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = uidriver.field_str(v, "bg")
+    json.json_free(v)
+    return r
+}
+
+key(combo: string) {
+    uidriver.post_ok("/window/key?combo=${combo}", "press ${combo}")
+}
+
 shows(t: string) -> int {
     return uidriver.wait_body_contains("/widgets", "\"text\":\"${t}\"", 20)
 }
@@ -55,9 +71,10 @@ main() {
             spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
             spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
         }
-        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and two labels)") callback {
-            // 1 caption + 7 header + 140 cells + the "clicked" line.
-            spec.assert_eq(count_of("text"), 149, "texts")
+        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and four labels)") callback {
+            // 1 caption + 7 header + 140 cells + the clicked, selection and
+            // activated lines.
+            spec.assert_eq(count_of("text"), 151, "texts")
         }
         spec.it("the vertical scrollbar stands up") callback {
             v = nth_of("slider", 0)
@@ -76,7 +93,7 @@ main() {
             spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
             spec.assert_true(shows("A") == 1, "the header still reads A")
             spec.assert_eq(field_of_text("A", "y"), hdr_y, "and has not moved")
-            spec.assert_eq(count_of("text"), 149, "no widgets added")
+            spec.assert_eq(count_of("text"), 151, "no widgets added")
         }
         spec.it("scrolling across keeps the frozen column and moves the rest") callback {
             hs = nth_of("slider", 1)
@@ -84,7 +101,7 @@ main() {
             spec.assert_true(shows("R90000C40") == 1, "column 40 first")
             spec.assert_true(shows("AN") == 1, "its header letter, AN")
             spec.assert_true(shows("90001") == 1, "the row number stayed")
-            spec.assert_eq(count_of("text"), 149, "still no widgets added")
+            spec.assert_eq(count_of("text"), 151, "still no widgets added")
         }
         spec.it("and after scrolling, the cell's new row and column") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R90003C41")}/click", "click R90003C41")
@@ -94,6 +111,73 @@ main() {
             v = nth_of("slider", 0)
             uidriver.post_ok("/widget/${v}/set_value?v=200000", "scroll far down")
             spec.assert_true(shows("R99999C40") == 1, "the last row shows, at the bottom")
+        }
+    }
+
+    spec.describe(fw, "selection and keys") {
+        spec.it("a click puts the cursor on the cell and paints it") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99990C41")}/click", "click R99990C41")
+            spec.assert_true(shows("selection: 99990,41 from 99990,41") == 1, "one cell selected")
+            spec.assert_str_eq(bg_of("R99990C41"), "#99c2ff", "the cursor's colour")
+            spec.assert_str_eq(bg_of("R99990C42"), "#ffffff", "its neighbour plain")
+        }
+        spec.it("arrows move the cursor") callback {
+            key("Down")
+            spec.assert_true(shows("selection: 99991,41 from 99991,41") == 1, "Down")
+            key("Right")
+            key("Left")
+            key("Left")
+            spec.assert_true(shows("selection: 99991,40 from 99991,40") == 1, "Right, Left, Left")
+            spec.assert_str_eq(bg_of("R99990C41"), "#ffffff", "the old cell repainted plain")
+        }
+        spec.it("Shift+arrows extend a range from the anchor") callback {
+            key("Shift%2BRight")
+            key("Shift%2BRight")
+            key("Shift%2BDown")
+            spec.assert_true(shows("selection: 99992,42 from 99991,40") == 1, "a 2 x 3 range")
+            spec.assert_str_eq(bg_of("R99991C40"), "#cce0ff", "the anchor is in the range")
+            spec.assert_str_eq(bg_of("R99992C41"), "#cce0ff", "so is the middle")
+            spec.assert_str_eq(bg_of("R99992C42"), "#99c2ff", "the cursor")
+            spec.assert_str_eq(bg_of("R99993C41"), "#ffffff", "below the range is plain")
+            key("Up")
+            spec.assert_true(shows("selection: 99991,42 from 99991,42") == 1, "a plain arrow collapses it")
+        }
+        spec.it("Home goes to the row's start (the frozen column), End to its end, scrolling") callback {
+            key("Home")
+            spec.assert_true(shows("selection: 99991,0 from 99991,0") == 1, "Home")
+            spec.assert_str_eq(bg_of("99992"), "#99c2ff", "the row-number cell is the cursor")
+            key("End")
+            spec.assert_true(shows("selection: 99991,49 from 99991,49") == 1, "End")
+            spec.assert_true(shows("R99991C49") == 1, "the last column scrolled into view")
+            spec.assert_true(shows("AW") == 1, "with its header")
+        }
+        spec.it("Ctrl+Home and Ctrl+End go to the grid's corners") callback {
+            key("Ctrl%2BHome")
+            spec.assert_true(shows("selection: 0,0 from 0,0") == 1, "Ctrl+Home")
+            spec.assert_true(shows("R0C44") == 1, "scrolled to the top")
+            key("Up")
+            key("Left")
+            spec.assert_true(shows("selection: 0,0 from 0,0") == 1, "the edges clamp")
+            key("Ctrl%2BEnd")
+            spec.assert_true(shows("selection: 99999,49 from 99999,49") == 1, "Ctrl+End")
+            spec.assert_true(shows("R99999C49") == 1, "scrolled to the bottom")
+        }
+        spec.it("Page_Up and Page_Down move a screenful") callback {
+            key("Page_Up")
+            spec.assert_true(shows("selection: 99979,49 from 99979,49") == 1, "twenty rows up")
+            spec.assert_true(shows("R99979C49") == 1, "and shown")
+            key("Page_Down")
+            spec.assert_true(shows("selection: 99999,49 from 99999,49") == 1, "and back")
+        }
+        spec.it("Return activates the cursor cell") callback {
+            key("Return")
+            spec.assert_true(shows("activated: 99999,49") == 1, "activated")
+        }
+        spec.it("Ctrl+A selects everything") callback {
+            key("Ctrl%2Ba")
+            spec.assert_true(shows("selection: 99999,49 from 0,0") == 1, "the whole grid")
+            spec.assert_str_eq(bg_of("R99990C45"), "#cce0ff", "a shown cell is in it")
+            spec.assert_eq(count_of("text"), 151, "no widgets added")
         }
     }
     return spec.run_summary(fw)

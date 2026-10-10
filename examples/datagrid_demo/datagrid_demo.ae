@@ -1,13 +1,15 @@
-// datagrid_demo — a virtualised grid (docs/design/data-grid.md, phase 1):
+// datagrid_demo — a virtualised grid (docs/design/data-grid.md, phases 1-2):
 // 100,000 rows x 50 columns from a function, 20 rows x 6 scrolling columns
 // shown, one frozen column of row numbers, a header of column letters. Only
-// the shown cells exist as widgets; the sliders scroll it.
+// the shown cells exist as widgets; the sliders scroll it. Clicks and keys
+// select; the selection and Return are shown under the grid.
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
 
 import ui
 import ui (window, vstack, text, datagrid, datagrid_header, datagrid_on_click,
+    datagrid_on_select, datagrid_on_activate, datagrid_anchor_row, datagrid_anchor_col,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -25,6 +27,8 @@ letters(c: int) -> string {
 
 main() {
     clicked = ui_state_s("none")
+    selected = ui_state_s("none")
+    activated = ui_state_s("none")
     window("datagrid", 760, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
@@ -39,7 +43,15 @@ main() {
             datagrid_on_click(g) callback |r: int, c: int| {
                 _s = ui_set_s(clicked, "${r},${c}")
             }
+            datagrid_on_select(g) callback |r: int, c: int| {
+                _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}")
+            }
+            datagrid_on_activate(g) callback |r: int, c: int| {
+                _s3 = ui_set_s(activated, "${r},${c}")
+            }
             text_bound(clicked, "clicked: ", "")
+            text_bound(selected, "selection: ", "")
+            text_bound(activated, "activated: ", "")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

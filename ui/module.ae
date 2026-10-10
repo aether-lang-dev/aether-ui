@@ -25,7 +25,9 @@ exports (
     textfield, textfield_bound, securefield, on_submit, vslider,
     datagrid, datagrid_header, datagrid_scroll_to, datagrid_refresh,
     datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll,
-    datagrid_on_click, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_on_click, datagrid_select, datagrid_select_range, datagrid_cursor_row,
+    datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
+    datagrid_on_select, datagrid_on_activate, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -6229,7 +6231,7 @@ vlist_native(vp: ptr) -> int {
     return v.native
 }
 
-// ── datagrid: a virtualised grid (docs/design/data-grid.md, phase 1) ─────
+// ── datagrid: a virtualised grid (docs/design/data-grid.md, phases 1-2) ──
 //
 //   g = datagrid(rows, cols, vis_rows, vis_cols, frozen) callback |r: int, c: int| -> string { ... }
 //   datagrid_header(g) callback |c: int| -> string { ... }
@@ -6242,6 +6244,16 @@ vlist_native(vp: ptr) -> int {
 // header is sticky and a row-number column stays at the left. Two native
 // sliders are its scrollbars (a vslider beside the body, a slider under it),
 // the way a spreadsheet's are; datagrid_scroll_to moves it from code.
+//
+// Selection is one rectangle, from an anchor cell to the cursor cell (the
+// one the keys move). A click selects a cell, Shift+click extends to it; the
+// grid is one tab stop, and while focus is in it the arrows move the cursor,
+// Shift+arrows extend, Home/End go to the row's ends (Ctrl: the grid's),
+// Page_Up/Page_Down move a screenful, Ctrl/Cmd+A selects everything and
+// Return activates the cursor cell. Tab leaves the grid, as the ARIA grid
+// pattern has it; Tab along a row is an editor's key (phase 4). The cursor
+// is always scrolled into view. Colours: the range #cce0ff, the cursor
+// #99c2ff, frozen cells #f2f2f5, the rest white.
 struct DataGrid {
     rows: int
     cols: int
@@ -6260,6 +6272,13 @@ struct DataGrid {
     vsl: int
     hsl: int
     click: ptr        // boxed |r, c|, or null (datagrid_on_click)
+    cur_r: int        // the cursor cell, -1 before anything is selected
+    cur_c: int
+    anc_r: int        // the range's other corner
+    anc_c: int
+    painted: ptr      // intarr: the colour each shown cell was last given
+    on_sel: ptr       // boxed |r, c|, or null (datagrid_on_select)
+    on_act: ptr       // boxed |r, c|, or null (datagrid_on_activate)
 }
 
 _datagrid_invoke_cell(cb: fn, r: int, c: int) -> string {
@@ -6292,10 +6311,17 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.cell = box_closure(cell)
     g.header = null
     g.click = null
+    g.cur_r = -1
+    g.cur_c = -1
+    g.anc_r = -1
+    g.anc_c = -1
+    g.on_sel = null
+    g.on_act = null
     gp = g as ptr
     root = vstack(_ctx, 0)
     g.root = root
     _art = a11y_role(root, "table")
+    set_focusable(root, 1)
     // The header row: not in what scrolls, so it stays at the top.
     hdr = hstack(root, 0)
     g.hdr_cells = intarr_new_raw(fz + vc + 1)
@@ -6314,6 +6340,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     mid = hstack(root, 0)
     body = vstack(mid, 0)
     g.cells = intarr_new_raw(vr * (fz + vc) + 1)
+    g.painted = intarr_new_raw(vr * (fz + vc) + 1)
     ri = 0
     while ri < vr {
         row = hstack(body, 0)
@@ -6325,11 +6352,16 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             text_truncate(ch, "tail")
             if ci < fz {
                 add_css_class(ch, "aui-grid-frozen")
-                aether_ui_set_bg_color(ch, 0.95, 0.95, 0.96, 1.0)
             } else {
                 add_css_class(ch, "aui-grid-cell")
             }
             intarr_set_raw(g.cells, ri * (fz + vc) + ci, ch)
+            intarr_set_raw(g.painted, ri * (fz + vc) + ci, -1)
+            vr2 = ri
+            vc2 = ci
+            _hc = on_click(ch) callback {
+                _datagrid_clicked(gp, vr2, vc2)
+            }
             ci = ci + 1
         }
         ri = ri + 1
@@ -6346,6 +6378,9 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
         datagrid_scroll_to(gp, g.first_row, g.frozen + ((v + 0.5) as int))
     }
     _hw2 = width(g.hsl, (fz + vc) * g.col_w)
+    on_key(root) callback |k: string, m: int| {
+        _datagrid_key(gp, k, m)
+    }
     _datagrid_bind(g)
     return gp
 }
@@ -6379,6 +6414,134 @@ _datagrid_bind(g: *DataGrid) {
         }
         r = r + 1
     }
+    _datagrid_paint(g)
+}
+
+// Colour every shown cell for the selection. A widget is only touched when
+// its colour changes, so scrolling a plain grid sets no colours at all.
+_datagrid_paint(g: *DataGrid) {
+    w = g.frozen + g.vis_cols
+    r = 0
+    while r < g.vis_rows {
+        c = 0
+        while c < w {
+            mr = g.first_row + r
+            mc = _datagrid_col_at(g, c)
+            col = 0xffffff
+            if c < g.frozen { col = 0xf2f2f5 }
+            if _datagrid_in_range(g, mr, mc) == 1 { col = 0xcce0ff }
+            if mr == g.cur_r && mc == g.cur_c { col = 0x99c2ff }
+            i = r * w + c
+            if intarr_get_raw(g.painted, i) != col {
+                intarr_set_raw(g.painted, i, col)
+                aether_ui_set_bg_color(intarr_get_raw(g.cells, i), ((col / 65536) % 256) / 255.0, ((col / 256) % 256) / 255.0, (col % 256) / 255.0, 1.0)
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+_datagrid_in_range(g: *DataGrid, r: int, c: int) -> int {
+    if g.cur_r < 0 { return 0 }
+    r0 = g.anc_r
+    r1 = g.cur_r
+    if r0 > r1 { r0 = g.cur_r; r1 = g.anc_r }
+    c0 = g.anc_c
+    c1 = g.cur_c
+    if c0 > c1 { c0 = g.cur_c; c1 = g.anc_c }
+    if r < r0 || r > r1 || c < c0 || c > c1 { return 0 }
+    return 1
+}
+
+// Move the cursor to (r, c), clamped to the grid; extend = 1 keeps the
+// anchor (a Shift move), else the anchor follows. Scrolls the cursor into
+// view, repaints, and tells on_select when anything changed.
+_datagrid_move(g: *DataGrid, r: int, c: int, extend: int) {
+    if extend == 1 && g.cur_r >= 0 {
+        _datagrid_set(g, g.anc_r, g.anc_c, r, c)
+    } else {
+        _datagrid_set(g, r, c, r, c)
+    }
+}
+
+// Select from the anchor (ar, ac) to the cursor (r, c), both clamped.
+_datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
+    if g.rows <= 0 || g.cols <= 0 { return }
+    nr = _datagrid_clamp(r, g.rows - 1)
+    nc = _datagrid_clamp(c, g.cols - 1)
+    na_r = _datagrid_clamp(ar, g.rows - 1)
+    na_c = _datagrid_clamp(ac, g.cols - 1)
+    changed = 0
+    if nr != g.cur_r || nc != g.cur_c || na_r != g.anc_r || na_c != g.anc_c { changed = 1 }
+    g.cur_r = nr
+    g.cur_c = nc
+    g.anc_r = na_r
+    g.anc_c = na_c
+    fr = g.first_row
+    if nr < fr { fr = nr }
+    if nr > fr + g.vis_rows - 1 { fr = nr - g.vis_rows + 1 }
+    fc = g.first_col
+    if nc >= g.frozen {
+        if nc < fc { fc = nc }
+        if nc > fc + g.vis_cols - 1 { fc = nc - g.vis_cols + 1 }
+    }
+    if fr != g.first_row || fc != g.first_col {
+        datagrid_scroll_to(g as ptr, fr, fc)
+    } else {
+        _datagrid_paint(g)
+    }
+    if changed == 1 && g.on_sel != null {
+        _datagrid_invoke_click(unbox_closure(g.on_sel), nr, nc)
+    }
+}
+
+_datagrid_clamp(v: int, hi: int) -> int {
+    if v < 0 { return 0 }
+    if v > hi { return hi }
+    return v
+}
+
+_datagrid_key(gp: ptr, k: string, m: int) {
+    g = gp as *DataGrid
+    shift = m % 2
+    ctrl = 0
+    if (m / 2) % 2 == 1 || (m / 8) % 2 == 1 { ctrl = 1 }
+    r = g.cur_r
+    c = g.cur_c
+    if r < 0 {
+        // Nothing selected yet: the first key lands on the top-left shown cell.
+        _datagrid_move(g, g.first_row, 0, 0)
+        return
+    }
+    if string.equals(k, "Down") == 1 {
+        r = r + 1
+    } else if string.equals(k, "Up") == 1 {
+        r = r - 1
+    } else if string.equals(k, "Right") == 1 {
+        c = c + 1
+    } else if string.equals(k, "Left") == 1 {
+        c = c - 1
+    } else if string.equals(k, "Home") == 1 {
+        c = 0
+        if ctrl == 1 { r = 0 }
+    } else if string.equals(k, "End") == 1 {
+        c = g.cols - 1
+        if ctrl == 1 { r = g.rows - 1 }
+    } else if string.equals(k, "Page_Down") == 1 {
+        r = r + g.vis_rows
+    } else if string.equals(k, "Page_Up") == 1 {
+        r = r - g.vis_rows
+    } else if ctrl == 1 && (string.equals(k, "a") == 1 || string.equals(k, "A") == 1) {
+        _datagrid_set(g, 0, 0, g.rows - 1, g.cols - 1)
+        return
+    } else if string.equals(k, "Return") == 1 || string.equals(k, "KP_Enter") == 1 {
+        if g.on_act != null { _datagrid_invoke_click(unbox_closure(g.on_act), r, c) }
+        return
+    } else {
+        return
+    }
+    _datagrid_move(g, r, c, shift)
 }
 
 // datagrid_header(g) callback |c| -> string: the header's text per column.
@@ -6419,33 +6582,54 @@ datagrid_refresh(gp: ptr) {
 // datagrid_on_click(g) callback |r, c| { ... }: a click on a cell, with the
 // row and column it shows now (scrolling moves what a cell widget shows, so
 // the position is worked out at the click, not when the handler was set).
+// The click has already selected the cell (or, with Shift, extended to it).
 datagrid_on_click(gp: ptr, cb: fn) {
     g = gp as *DataGrid
-    first = 0
-    if g.click == null { first = 1 }
     g.click = box_closure(cb)
-    if first == 0 { return }
-    w = g.frozen + g.vis_cols
-    r = 0
-    while r < g.vis_rows {
-        c = 0
-        while c < w {
-            vr = r
-            vc = c
-            _h = on_click(intarr_get_raw(g.cells, r * w + c)) callback {
-                _datagrid_clicked(gp, vr, vc)
-            }
-            c = c + 1
-        }
-        r = r + 1
-    }
 }
 
 _datagrid_clicked(gp: ptr, vr: int, vc: int) {
     g = gp as *DataGrid
+    r = g.first_row + vr
+    c = _datagrid_col_at(g, vc)
+    focus(g.root)
+    _datagrid_move(g, r, c, modifiers() % 2)
     if g.click == null { return }
-    f = unbox_closure(g.click)
-    _datagrid_invoke_click(f, g.first_row + vr, _datagrid_col_at(g, vc))
+    _datagrid_invoke_click(unbox_closure(g.click), r, c)
+}
+
+// datagrid_select(g, r, c): put the cursor on one cell (scrolled into view);
+// datagrid_select_range(g, ar, ac, r, c) selects from (ar, ac) to the cursor
+// at (r, c). on_select hears both, as it hears a click or a key.
+datagrid_select(gp: ptr, r: int, c: int) {
+    _datagrid_move(gp as *DataGrid, r, c, 0)
+}
+
+datagrid_select_range(gp: ptr, ar: int, ac: int, r: int, c: int) {
+    _datagrid_set(gp as *DataGrid, ar, ac, r, c)
+}
+
+// The cursor and the anchor (-1 before anything is selected), and whether a
+// cell is inside the selected rectangle.
+datagrid_cursor_row(gp: ptr) -> int { g = gp as *DataGrid; return g.cur_r }
+datagrid_cursor_col(gp: ptr) -> int { g = gp as *DataGrid; return g.cur_c }
+datagrid_anchor_row(gp: ptr) -> int { g = gp as *DataGrid; return g.anc_r }
+datagrid_anchor_col(gp: ptr) -> int { g = gp as *DataGrid; return g.anc_c }
+datagrid_is_selected(gp: ptr, r: int, c: int) -> int {
+    return _datagrid_in_range(gp as *DataGrid, r, c)
+}
+
+// datagrid_on_select(g) callback |r, c| { ... }: the selection changed; the
+// cursor is at (r, c) (read the anchor for the range).
+datagrid_on_select(gp: ptr, cb: fn) {
+    g = gp as *DataGrid
+    g.on_sel = box_closure(cb)
+}
+
+// datagrid_on_activate(g) callback |r, c| { ... }: Return on the cursor cell.
+datagrid_on_activate(gp: ptr, cb: fn) {
+    g = gp as *DataGrid
+    g.on_act = box_closure(cb)
 }
 
 _datagrid_invoke_click(cb: fn, r: int, c: int) {

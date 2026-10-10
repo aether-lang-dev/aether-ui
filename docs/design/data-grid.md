@@ -3,7 +3,9 @@
 Status: phase 1 built (2026-10-10): `datagrid` in `ui/module.ae`, with
 `vslider` added for its scrollbars; the scrolling was decided as its own
 viewport with native sliders (option B below, Paul's call), not a native
-scroll view. Phases 2-6 open. Asked for by sae's spreadsheet (demo 18), which
+scroll view. Phase 2 built the same day (selection and keys), and phase 6
+began: sae pages have `ui.datagrid`; moving sae's spreadsheet onto it is that
+demo's own session's work. Phases 3-5 open. Asked for by sae's spreadsheet (demo 18), which
 built about 120 lines of grid by hand in `vg`; the same widget would make data
 grids, log viewers and property sheets cheap. The ask, from a cloud session
 building that demo: Swing's `JTable`, QML's `TableView` or Flutter's
@@ -80,8 +82,15 @@ The contract:
    frozen columns pinned. Spec: 100,000 x 50 model, at most a few hundred
    live widgets (counted over the driver), and the header still at the top
    after scrolling to row 90,000 and column 40.
-2. **Selection and keys.** Cell focus, ranges, the key table above. Spec:
-   arrows, Shift-ranges and Home/End read back as selection state.
+2. **Selection and keys.** DONE: one rectangle from an anchor to a cursor;
+   a click selects, Shift+click extends; arrows, Shift+arrows, Home/End
+   (Ctrl: the grid's corners), Page_Up/Page_Down, Ctrl/Cmd+A and Return
+   (`datagrid_on_activate`); the cursor scrolls into view; `datagrid_select`,
+   `datagrid_select_range`, `datagrid_on_select` and the cursor/anchor
+   getters. Tab leaves the grid (the ARIA grid pattern: the grid is one tab
+   stop); Tab along a row moves to phase 4, where it is the editor's key.
+   Spec: `spec_datagrid_demo`'s second half reads the selection back as text
+   and as the cells' painted colours.
 3. **Column resize and reorder.** Header drag handles (a driver verb to
    drag one), the view-to-model column map. Spec: widths and order read
    back; cells follow.
