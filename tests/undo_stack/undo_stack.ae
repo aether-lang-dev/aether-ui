@@ -13,7 +13,10 @@ import ui (root_vstack, undoable, undo, redo, undo_depth, redo_depth, undo_label
 
 extern exit(code: int)
 
-var n = 0
+// Not `n`: on Aether 0.801.0 a program's top-level var leaks into the
+// imported std modules' function bodies, so std.fs's own `n = ...` local
+// type-checked as this global (asks/aether-program-global-leaks-into-module-scope.md).
+var undo_total_ = 0
 var bad = 0
 
 check(label: string, got: int, want: int) {
@@ -28,29 +31,29 @@ main() {
     }
 
     // undoable RUNS the action now and records the pair.
-    undoable("add one", || { n = n + 1 }, || { n = n - 1 })
-    check("the action ran", n, 1)
+    undoable("add one", || { undo_total_ = undo_total_ + 1 }, || { undo_total_ = undo_total_ - 1 })
+    check("the action ran", undo_total_, 1)
     check("one edit to undo", undo_depth(), 1)
     check("nothing to redo", redo_depth(), 0)
     check_s("label is the top edit's", undo_label(), "add one")
 
-    undoable("add ten", || { n = n + 10 }, || { n = n - 10 })
-    check("both edits applied", n, 11)
+    undoable("add ten", || { undo_total_ = undo_total_ + 10 }, || { undo_total_ = undo_total_ - 10 })
+    check("both edits applied", undo_total_, 11)
     check("two to undo", undo_depth(), 2)
 
     check("undo reports it stepped", undo(), 1)
-    check("undo ran the inverse", n, 1)
+    check("undo ran the inverse", undo_total_, 1)
     check("one left to undo", undo_depth(), 1)
     check("one to redo", redo_depth(), 1)
 
     check("redo reports it stepped", redo(), 1)
-    check("redo re-applied", n, 11)
+    check("redo re-applied", undo_total_, 11)
     check("nothing to redo again", redo_depth(), 0)
 
     // Undoing past the bottom is a no-op, not an error and not a wrap.
     _a = undo()
     _b = undo()
-    check("both undone", n, 0)
+    check("both undone", undo_total_, 0)
     check("undo at the bottom reports nothing", undo(), 0)
     check("depth stays at zero", undo_depth(), 0)
     check("redo at the top reports nothing after redoing all", redo_depth(), 2)
@@ -58,12 +61,12 @@ main() {
     // Pushing after an undo truncates the redo tail (the classic rule).
     _c = redo()
     _d = redo()
-    check("redone to the top", n, 11)
+    check("redone to the top", undo_total_, 11)
     _e = undo()
-    check("one undo back", n, 1)
+    check("one undo back", undo_total_, 1)
     check("one redo waiting", redo_depth(), 1)
-    undoable("add one hundred", || { n = n + 100 }, || { n = n - 100 })
-    check("the new edit applied", n, 101)
+    undoable("add one hundred", || { undo_total_ = undo_total_ + 100 }, || { undo_total_ = undo_total_ - 100 })
+    check("the new edit applied", undo_total_, 101)
     check("the redo tail is gone", redo_depth(), 0)
     check("two undoable again", undo_depth(), 2)
 
@@ -71,7 +74,7 @@ main() {
     // every cycle drops an edit and must reclaim both of its closures.
     i = 0
     while i < 2000 {
-        undoable("edit", || { n = n + 1 }, || { n = n - 1 })
+        undoable("edit", || { undo_total_ = undo_total_ + 1 }, || { undo_total_ = undo_total_ - 1 })
         _u = undo()
         i = i + 1
     }

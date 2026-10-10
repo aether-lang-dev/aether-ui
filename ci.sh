@@ -872,7 +872,7 @@ else
         #    link check, with the real runtime where tests/ios/link_stub.c stood.
         if [ "$sim_fail" -eq 0 ]; then
             if "$IOS_CLANG" -fobjc-arc -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
-                    $(ae cflags | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ') -Ibackend \
+                    $(ae cflags | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print;p=1;next} /^-I/{print}' | tr '\n' ' ') -Ibackend \
                     "$SIM_DIR/$SIM_EX.c" \
                     "$ROOT/backend/aether_ui_uikit.m" \
                     "$ROOT/backend/aether_ui_test_server.c" \
@@ -1004,12 +1004,15 @@ else
             ANDROID_SO="$ROOT/target/android/counter/stage/lib/arm64-v8a/libapp.so"
             exports="$(nm -D --defined-only "$ANDROID_SO" 2>/dev/null)"
             if echo "$exports" | grep -q ' JNI_OnLoad$' \
-               && echo "$exports" | grep -q ' aether_aeui_app_main$'; then
-                echo "  OK   counter builds as libapp.so (JNI_OnLoad + aether_aeui_app_main exported)"
+               && echo "$exports" | grep -q ' aether_main$'; then
+                # aether_main is the --emit=lib entry the shim starts the app
+                # through since the 0.791 move (aether#2489); the old
+                # aether_aeui_app_main rename is only a weak fallback now.
+                echo "  OK   counter builds as libapp.so (JNI_OnLoad + aether_main exported)"
             elif [ -z "$exports" ]; then
                 echo "  OK   counter builds as libapp.so (no ELF-capable nm here to check its exports)"
             else
-                echo "  FAIL libapp.so is missing JNI_OnLoad or aether_aeui_app_main"
+                echo "  FAIL libapp.so is missing JNI_OnLoad or aether_main"
                 android_fail=1
             fi
         else

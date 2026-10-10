@@ -9,7 +9,10 @@ import ui (root_vstack, undoable, undo, redo, undo_depth, redo_depth,
 
 extern exit(code: int)
 
-var n = 0
+// Not `n`: on Aether 0.801.0 a program's top-level var leaks into the
+// imported std modules' function bodies, so std.fs's own `n = ...` local
+// type-checked as this global (asks/aether-program-global-leaks-into-module-scope.md).
+var undo_total_ = 0
 var bad = 0
 
 check(label: string, got: int, want: int) {
@@ -20,7 +23,7 @@ check_s(label: string, got: string, want: string) {
 }
 
 bump(by: int) {
-    undoable("bump", || { n = n + by }, || { n = n - by })
+    undoable("bump", || { undo_total_ = undo_total_ + by }, || { undo_total_ = undo_total_ - by })
 }
 
 main() {
@@ -36,28 +39,28 @@ main() {
         bump(10)
         bump(100)
     }
-    check("all three applied", n, 111)
+    check("all three applied", undo_total_, 111)
     check("but they are ONE undo step", undo_depth(), 1)
     check_s("wearing the group's label", undo_label(), "Move 3 frames")
     check("group closed again", undo_grouping(), 0)
 
     check("one undo reverts the whole gesture", undo(), 1)
-    check("back to the start", n, 0)
+    check("back to the start", undo_total_, 0)
     check("nothing left to undo", undo_depth(), 0)
     check("one step to redo", redo_depth(), 1)
 
     check("one redo re-applies the whole gesture", redo(), 1)
-    check("all three back", n, 111)
+    check("all three back", undo_total_, 111)
 
     // --- a group of one keeps its edit and takes the label ---------------
     undo_group("Single") callback {
         bump(5)
     }
-    check("applied", n, 116)
+    check("applied", undo_total_, 116)
     check("two steps on the stack", undo_depth(), 2)
     check_s("relabelled", undo_label(), "Single")
     _u1 = undo()
-    check("undone", n, 111)
+    check("undone", undo_total_, 111)
 
     // --- a group of none records nothing ---------------------------------
     before = undo_depth()
@@ -69,7 +72,7 @@ main() {
     _u2 = undo()
     _u3 = undo()
     check("stack drained", undo_depth(), 0)
-    n = 0
+    undo_total_ = 0
     undo_group("Outer") callback {
         bump(1)
         undo_group("Inner") callback {
@@ -78,11 +81,11 @@ main() {
         }
         bump(8)
     }
-    check("all four applied", n, 15)
+    check("all four applied", undo_total_, 15)
     check("nesting still yields ONE step", undo_depth(), 1)
     check_s("the OUTER label wins", undo_label(), "Outer")
     _u4 = undo()
-    check("one undo reverts all four", n, 0)
+    check("one undo reverts all four", undo_total_, 0)
 
     if bad > 0 { println("undo_group: ${bad} mismatch(es)")  exit(1) }
     println("undo_group: a gesture is one undo step")

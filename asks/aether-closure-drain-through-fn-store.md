@@ -1,8 +1,17 @@
 # A capturing closure stored through a `fn` parameter is freed after the call
 
 **From:** aether-ui (wave1/raster, 2026-10-08). **Aether:** 0.790.0 (dev
-tree) and 0.791.0 (release) both do it. **Status:** needs a compiler fix;
-the workaround below no longer holds on 0.796.0.
+tree) and 0.791.0 (release) both do it. **Status:** RESOLVED in Aether
+0.801.0 (#2703; aether `asks/REPLY-aether-closure-drain-through-fn-store.md`).
+
+**RESOLVED, 2026-10-10: 0.801.0 (#2703).** A store of a closure into a `ptr`
+field now boxes a retained reference (`_aether_box_closure(_aether_closure_retain(h))`),
+so the environment lives as long as the box. aether-ui's CI floor moved to
+0.801.0 in the same commit that dropped the `kept = h; e.cb = kept` aliases
+from `vg/grammar/element.ae`, `events.ae`, `bind.ae`, `vg/module.ae` and
+`vg/region.ae` back to direct stores. Verified with `examples/vg_image_demo`'s
+spec and `apps/aevg_interactive` clicks on 0.801.0 (macOS and Linux). The
+history below is kept as it was.
 
 **Update, 2026-10-09: 0.796.0 makes it worse.** Aether #2670/#2671 ("a callee
 that aliases a closure keeps nothing of its caller's") defeat the alias

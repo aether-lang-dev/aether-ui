@@ -166,10 +166,7 @@ live_draw_new(x: float, y: float, w: float, h: float, draw_fn: fn) -> ptr {
     r.frame_len = 0
     r.pw = 0
     r.ph = 0
-    // `kept = draw_fn` before the store: the alias the compiler's escape walk
-    // sees (asks/aether-closure-drain-through-fn-store.md).
-    kept = draw_fn
-    r.draw_fn = kept
+    r.draw_fn = draw_fn
     r.z = 0
     r.src_fn = null
     r.animated = 1
@@ -240,13 +237,7 @@ region_src_fn(p: ptr) -> ptr     { r = p as *LiveRegion; return r.src_fn }
 // static (push a frame once via region_push).
 region_set_source(p: ptr, src: fn) {
     r = p as *LiveRegion
-    // `kept = src` before the store: an alias the compiler's escape walk
-    // sees. The fn->ptr coercion in `field = src` is a call it looks through
-    // as non-retaining, so without the alias it frees a capturing closure's
-    // env right after the setter returns (0.790/0.791) and the stored handler
-    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
-    kept = src
-    r.src_fn = kept
+    r.src_fn = src
 }
 
 // Invoke a RASTER region's per-frame source with (region, t).

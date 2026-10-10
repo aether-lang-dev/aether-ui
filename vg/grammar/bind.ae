@@ -105,46 +105,22 @@ new_region() -> ptr {
 
 region_set_items(rp: ptr, cb: fn) {
     r = rp as *BindingRegion
-    // `kept = cb` before the store: an alias the compiler's escape walk
-    // sees. The fn->ptr coercion in `field = cb` is a call it looks through
-    // as non-retaining, so without the alias it frees a capturing closure's
-    // env right after the setter returns (0.790/0.791) and the stored handler
-    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
-    kept = cb
-    r.items_cb = kept
+    r.items_cb = cb
 }
 
 region_set_render(rp: ptr, cb: fn) {
     r = rp as *BindingRegion
-    // `kept = cb` before the store: an alias the compiler's escape walk
-    // sees. The fn->ptr coercion in `field = cb` is a call it looks through
-    // as non-retaining, so without the alias it frees a capturing closure's
-    // env right after the setter returns (0.790/0.791) and the stored handler
-    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
-    kept = cb
-    r.render_cb = kept
+    r.render_cb = cb
 }
 
 region_set_trackby(rp: ptr, cb: fn) {
     r = rp as *BindingRegion
-    // `kept = cb` before the store: an alias the compiler's escape walk
-    // sees. The fn->ptr coercion in `field = cb` is a call it looks through
-    // as non-retaining, so without the alias it frees a capturing closure's
-    // env right after the setter returns (0.790/0.791) and the stored handler
-    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
-    kept = cb
-    r.trackby_cb = kept
+    r.trackby_cb = cb
 }
 
 region_set_update(rp: ptr, cb: fn) {
     r = rp as *BindingRegion
-    // `kept = cb` before the store: an alias the compiler's escape walk
-    // sees. The fn->ptr coercion in `field = cb` is a call it looks through
-    // as non-retaining, so without the alias it frees a capturing closure's
-    // env right after the setter returns (0.790/0.791) and the stored handler
-    // reads freed memory. See asks/aether-closure-drain-through-fn-store.md.
-    kept = cb
-    r.update_cb = kept
+    r.update_cb = cb
 }
 
 region_init(ctx: ptr, rp: ptr) {

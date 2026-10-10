@@ -22,7 +22,7 @@ case "$OS" in
         # `ae cflags`, exactly like build.sh. Link flags mirror build.sh's
         # Windows branch (-lbcrypt for libaether's BCryptGenRandom, -lmsimg32).
         mkdir -p "$ROOT/build"
-        AE_INC="$(ae cflags 2>/dev/null | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ')"
+        AE_INC="$(ae cflags 2>/dev/null | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print;p=1;next} /^-I/{print}' | tr '\n' ' ')"
         AE_LPATH="$(ae cflags --libs 2>/dev/null | tr ' ' '\n' | grep -E '^-L' | head -1)"
         gcc -O2 \
             -I"$ROOT" -I"$ROOT/backend" $AE_INC \

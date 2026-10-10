@@ -97,7 +97,7 @@ fi
 echo "[2/4] $APP for $TGT (UIKit backend, $CONTROL)"
 ( cd "$ROOT" && "$AETHERC" "$SRC" "$OUT/obj/$APP.c" > "$OUT/aetherc.log" 2>&1 ) \
     || { tail -20 "$OUT/aetherc.log" >&2; exit 1; }
-INCS="$("$AE" cflags | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ')"
+INCS="$("$AE" cflags | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print;p=1;next} /^-I/{print}' | tr '\n' ' ')"
 OBJS=()
 for s in "$OUT/obj/$APP.c" \
          "$ROOT/backend/aether_ui_uikit.m" \

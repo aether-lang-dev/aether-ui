@@ -11,7 +11,10 @@ AETHERC="aetherc"
 # installed prefix AND a dev build tree — e.g. the MSYS2/MinGW winbaz box, where
 # aether lives at C:\Users\paul\aether\build with no /usr/local prefix). Fall
 # back to the canonical Linux install layout when `ae cflags` is unavailable.
-AETHER_CFLAGS_INC="$(ae cflags 2>/dev/null | tr ' ' '\n' | grep -E '^-I' | tr '\n' ' ' || true)"
+# The include flags: -I and, since Aether 0.801.0, `-idirafter DIR` pairs (ae
+# cflags moved the runtime/std header dirs there, so an -I-only filter drops
+# aether_panic.h and friends).
+AETHER_CFLAGS_INC="$(ae cflags 2>/dev/null | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print;p=1;next} /^-I/{print}' | tr '\n' ' ' || true)"
 if [ -n "$AETHER_CFLAGS_INC" ]; then
     AETHER_INCLUDES="$AETHER_CFLAGS_INC"
 else

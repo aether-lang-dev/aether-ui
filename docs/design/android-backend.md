@@ -221,7 +221,9 @@ Found on the way: `--emit=lib` drops a program's `main()`, so the packaging
 script compiles a copy with `main()` renamed to `aeui_app_main()` (exported as
 `aether_aeui_app_main`) — `asks/aether-emit-lib-keeps-main.md`. And an
 app-as-library needs `--with=fs,net,os`, since `--emit=lib` is
-capability-empty by default.
+capability-empty by default, and from Aether 0.801 (#2709) `extern` as well
+(`--with=fs,net,os,extern`): a library build refuses an `extern` declaration
+without that grant, and `ui/module.ae` declares the backend's C entry points.
 
 Run it by hand:
 

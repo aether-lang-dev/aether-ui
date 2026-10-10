@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [current]
 
+### Changed
+
+- **Aether floor 0.801.0, aeb v0.326** (CI `AETHER_REF`/`AEB_REF`,
+  `bootstrap.sh` `MIN_AE`). A real floor: 0.796.0-0.800.x crash vg click
+  handlers that capture (aether #2670/#2671 defeated the `kept = h` alias
+  workaround); 0.801.0's #2703 boxes a retained closure into a `ptr` field.
+  vg's setters (`vg/grammar/element.ae`, `events.ae`, `bind.ae`,
+  `vg/module.ae`, `vg/region.ae`) store directly again; the 23 aliases are
+  gone and `asks/aether-closure-drain-through-fn-store.md` is RESOLVED.
+
+### Fixed
+
+- **`ae cflags` include filters keep `-idirafter DIR` pairs** (`build.sh`,
+  `ci.sh` Phase 1e2, `tests/test_driver.sh`, `tools/ios-app.sh`). Aether
+  0.801.0 moved the runtime and std header directories from `-I` to
+  `-idirafter`, so the `-I`-only filters lost `aether_panic.h` and every
+  `build.sh` compile (the retention probe, the iOS simulator link) failed.
+- **`tools/android-apk.sh` grants `extern`** (`--with=fs,net,os,extern`).
+  Aether 0.801.0's structured grants (#2709) refuse an `extern` in an
+  `--emit=lib` build without it, so every APK build failed at step 1.
+- **ci.sh Phase 1e3 checks the Android library for `aether_main`**, the
+  `--emit=lib` entry the shim starts the app through since the 0.791 move,
+  not the old `aether_aeui_app_main` (now only a weak fallback).
+- **`tests/undo_stack`, `tests/undo_group`: the global is `undo_total_`, not
+  `n`.** On Aether 0.801.0 a program's top-level `var` leaks into imported
+  std modules' function bodies, and std.fs's own `n = ...` local failed to
+  type-check against it, taking the whole `aeb .all.ae` fan-out down
+  (`asks/aether-program-global-leaks-into-module-scope.md`).
+
 ### Added
 
 - **`examples/vgpaint_demo` + `tests/vgpaint_demo`, and

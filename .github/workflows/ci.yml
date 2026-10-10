@@ -230,7 +230,17 @@ jobs:
           # Android; 0.791.0 also carries #2511 (pure-Aether TLS for
           # std.http.client without OpenSSL, and the aether_main rerun
           # actor-leak fix).
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.791.0' }}
+          # v0.801.0 (2026-10-10): a REAL floor move. 0.796.0-0.800.x crash
+          # vg click handlers with captures: aether #2670/#2671 gave the
+          # alias in aether-ui's workaround (`kept = h; e.cb = kept`) a
+          # reference of its own, released as the setter returned, so a
+          # capturing closure stored on an element was freed and the click
+          # read freed memory (macOS too, not only glibc). 0.801.0 carries
+          # #2703 (a closure boxed into a ptr field takes its own reference),
+          # so vg's setters store directly again and the aliases are gone
+          # (asks/aether-closure-drain-through-fn-store.md, RESOLVED). Anything
+          # older than 0.801.0 builds this tree and then crashes on a click.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.801.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
@@ -284,7 +294,9 @@ jobs:
           # so `make install` died on fs.write_atomic's argument count and both
           # legs were red from the 0.766 bump on. v0.325 is the aeb the whole
           # family pins with 0.778.0 (verified there: 152/152 + the CI itests).
-          AEB_REF: ${{ vars.AEB_REF || 'v0.325' }}
+          # v0.326 (2026-10-10): the aeb released alongside Aether 0.801.0 and
+          # the one the family pins with it; moved with the 0.801.0 floor.
+          AEB_REF: ${{ vars.AEB_REF || 'v0.326' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh

@@ -23,9 +23,12 @@
 #          finishes. (It used to rename main() to aeui_app_main(), which
 #          skipped the prologue; the backend still runs that symbol when a
 #          library from an older ae has no aether_main.)
-#        * --with=fs,net,os: an --emit=lib library is capability-empty by
-#          default, and ui/module.ae imports std.fs and std.os. An app IS
-#          the host, so it grants them.
+#        * --with=fs,net,os,extern: an --emit=lib library is capability-empty
+#          by default, and ui/module.ae imports std.fs and std.os. An app IS
+#          the host, so it grants them. `extern` too: from Aether 0.801
+#          (#2709, structured grants) a library build refuses an `extern`
+#          declaration without it, and ui/module.ae names the backend's C
+#          entry points that way (as apps may).
 #   2. The Java shim (backend/android/src): javac --release 17 against the
 #      platform android.jar, then d8 to classes.dex.
 #   3. aapt2 link of the manifest template (backend/android/AndroidManifest.xml)
@@ -124,7 +127,7 @@ for f in ${ANDROID_EXTRA_SOURCES:-}; do
 done
 echo "[1/4] libapp.so  ($AE build --target=aarch64-linux-android --emit=lib)"
 AETHER_SYSROOT="$AETHER_SYSROOT" AETHER_ANDROID_API="$MIN_SDK" \
-"$AE" build "$GEN" --target=aarch64-linux-android --emit=lib --with=fs,net,os \
+"$AE" build "$GEN" --target=aarch64-linux-android --emit=lib --with=fs,net,os,extern \
     --lib "$ROOT" --lib "$APP_DIR" \
     --extra "$ROOT/backend/aether_ui_android.c" \
     --extra "$ROOT/backend/$CONTROL" \
