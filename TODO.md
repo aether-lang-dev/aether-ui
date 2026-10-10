@@ -734,3 +734,20 @@ What to do:
 
 Run both lanes for any of it: `aelane aether-linux` and
 `aelane aether-linux-2604`.
+
+## Nice to have: `scene_refresh` repaints once per frame
+
+From sae's spreadsheet work (2026-10-10), filed as a nice-to-have, not owed
+work. `scene_refresh` (`vg/module.ae`) flushes, re-evaluates bindings,
+flushes again and presents immediately, every time it is called. An app that
+refreshes in a loop (a column resize setting ~50 nodes, each followed by a
+refresh) pays for a full flush and present per call. sae coalesces its own
+`vg.set` repaints already, so nothing is blocked on this.
+
+What it would be: `scene_refresh` marks the scene dirty and schedules one
+flush-and-present on the next frame (`ui.on_frame`, the frame clock), so any
+number of refreshes before that frame cost one. A caller that needs the
+pixels now (a spec reading `/canvas/{id}/pixel` straight after, or
+`canvas_write_png`) would get an explicit synchronous form, or the pixel and
+PNG routes would flush a pending refresh first. Prove it with a counter of
+flushes: N refreshes in one frame, one flush.
