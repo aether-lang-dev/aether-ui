@@ -24,7 +24,8 @@ exports (
     text, text_wrapped, text_anchor, text_truncate, button, btn, spacer, divider,
     textfield, textfield_bound, securefield, on_submit, vslider,
     datagrid, datagrid_header, datagrid_scroll_to, datagrid_refresh,
-    datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll,
+    datagrid_on_click, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -6258,6 +6259,7 @@ struct DataGrid {
     cells: ptr        // intarr of text handles, row-major
     vsl: int
     hsl: int
+    click: ptr        // boxed |r, c|, or null (datagrid_on_click)
 }
 
 _datagrid_invoke_cell(cb: fn, r: int, c: int) -> string {
@@ -6289,6 +6291,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.first_col = fz
     g.cell = box_closure(cell)
     g.header = null
+    g.click = null
     gp = g as ptr
     root = vstack(_ctx, 0)
     g.root = root
@@ -6411,6 +6414,42 @@ datagrid_scroll_to(gp: ptr, row: int, col: int) {
 // datagrid_refresh(g): the model changed; show it again.
 datagrid_refresh(gp: ptr) {
     _datagrid_bind(gp as *DataGrid)
+}
+
+// datagrid_on_click(g) callback |r, c| { ... }: a click on a cell, with the
+// row and column it shows now (scrolling moves what a cell widget shows, so
+// the position is worked out at the click, not when the handler was set).
+datagrid_on_click(gp: ptr, cb: fn) {
+    g = gp as *DataGrid
+    first = 0
+    if g.click == null { first = 1 }
+    g.click = box_closure(cb)
+    if first == 0 { return }
+    w = g.frozen + g.vis_cols
+    r = 0
+    while r < g.vis_rows {
+        c = 0
+        while c < w {
+            vr = r
+            vc = c
+            _h = on_click(intarr_get_raw(g.cells, r * w + c)) callback {
+                _datagrid_clicked(gp, vr, vc)
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+_datagrid_clicked(gp: ptr, vr: int, vc: int) {
+    g = gp as *DataGrid
+    if g.click == null { return }
+    f = unbox_closure(g.click)
+    _datagrid_invoke_click(f, g.first_row + vr, _datagrid_col_at(g, vc))
+}
+
+_datagrid_invoke_click(cb: fn, r: int, c: int) {
+    cb(r, c)
 }
 
 datagrid_first_row(gp: ptr) -> int { g = gp as *DataGrid; return g.first_row }

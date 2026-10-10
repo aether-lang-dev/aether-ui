@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`datagrid_on_click(g) callback |r, c|`**: a click on a cell, with the
+  row and column it shows at the moment of the click (scrolling moves what
+  a cell widget shows). `spec_datagrid_demo` clicks before and after
+  scrolling: 8/8 on macOS, win11, the Android emulator, GTK 4.6, GTK 4.22
+  and FreeBSD.
 - **`datagrid`: a virtualised grid** (docs/design/data-grid.md, phase 1).
   `datagrid(rows, cols, vis_rows, vis_cols, frozen) callback |r, c| { ... }`
   takes its cells from a function, so a 100,000 x 50 model costs nothing

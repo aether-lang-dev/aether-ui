@@ -7,7 +7,8 @@
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
 
 import ui
-import ui (window, vstack, text, datagrid, datagrid_header, enable_test_server)
+import ui (window, vstack, text, datagrid, datagrid_header, datagrid_on_click,
+    ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
 
@@ -23,7 +24,8 @@ letters(c: int) -> string {
 }
 
 main() {
-    window("datagrid", 760, 620) {
+    clicked = ui_state_s("none")
+    window("datagrid", 760, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
             g = datagrid(100000, 50, 20, 6, 1) callback |r: int, c: int| {
@@ -34,6 +36,10 @@ main() {
                 if c == 0 { return "#" }
                 return letters(c - 1)
             }
+            datagrid_on_click(g) callback |r: int, c: int| {
+                _s = ui_set_s(clicked, "${r},${c}")
+            }
+            text_bound(clicked, "clicked: ", "")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

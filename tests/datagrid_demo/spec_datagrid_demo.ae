@@ -55,14 +55,18 @@ main() {
             spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
             spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
         }
-        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000") callback {
-            // 1 caption + 7 header + 140 cells.
-            spec.assert_eq(count_of("text"), 148, "texts")
+        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and two labels)") callback {
+            // 1 caption + 7 header + 140 cells + the "clicked" line.
+            spec.assert_eq(count_of("text"), 149, "texts")
         }
         spec.it("the vertical scrollbar stands up") callback {
             v = nth_of("slider", 0)
             spec.assert_true(uidriver.widget_int_field_by_id(v, "h") > uidriver.widget_int_field_by_id(v, "w"),
                 "taller than wide")
+        }
+        spec.it("a click names the cell it shows") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R3C2")}/click", "click R3C2")
+            spec.assert_true(shows("clicked: 3,2") == 1, "row 3, column 2")
         }
         spec.it("scrolling to row 90,000 rewrites the cells; the header stays on top") callback {
             hdr_y = field_of_text("A", "y")
@@ -72,7 +76,7 @@ main() {
             spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
             spec.assert_true(shows("A") == 1, "the header still reads A")
             spec.assert_eq(field_of_text("A", "y"), hdr_y, "and has not moved")
-            spec.assert_eq(count_of("text"), 148, "no widgets added")
+            spec.assert_eq(count_of("text"), 149, "no widgets added")
         }
         spec.it("scrolling across keeps the frozen column and moves the rest") callback {
             hs = nth_of("slider", 1)
@@ -80,7 +84,11 @@ main() {
             spec.assert_true(shows("R90000C40") == 1, "column 40 first")
             spec.assert_true(shows("AN") == 1, "its header letter, AN")
             spec.assert_true(shows("90001") == 1, "the row number stayed")
-            spec.assert_eq(count_of("text"), 148, "still no widgets added")
+            spec.assert_eq(count_of("text"), 149, "still no widgets added")
+        }
+        spec.it("and after scrolling, the cell's new row and column") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R90003C41")}/click", "click R90003C41")
+            spec.assert_true(shows("clicked: 90003,41") == 1, "row 90,003, column 41")
         }
         spec.it("scrolling past the end stops at the last window") callback {
             v = nth_of("slider", 0)
