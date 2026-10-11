@@ -765,3 +765,16 @@ flushes: N refreshes in one frame, one flush.
   no desktop to give it a GL context. Run it on the interactive desktop
   (the schtasks /IT recipe) before calling the Win32 GPU view proven or
   broken.
+
+## A pointer-cursor API (asked for by the data grid, 2026-10-11)
+
+aether-ui cannot set the mouse pointer's shape over a widget, so a grid
+column's resize grip (`datagrid`, phase 3) looks like the rest of its header
+and a splitter-like `on_drag` handle gives no hint either. Wanted:
+`pointer_cursor(widget, "col-resize" | "row-resize" | "move" | "pointer" |
+"text" | "default")`, real on GTK4 (`gtk_widget_set_cursor_from_name`),
+AppKit (cursor rects / `NSTrackingArea` with `-[NSCursor set]`), Win32
+(`WM_SETCURSOR`) and, where a pointer exists, UIKit (`UIPointerInteraction`)
+and Android (`View.setPointerIcon`); the driver reads it back as a `cursor`
+field in `/widgets`. The grid's header would then show col-resize within
+6px of a column's right edge.

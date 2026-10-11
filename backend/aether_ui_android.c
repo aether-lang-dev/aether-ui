@@ -691,6 +691,7 @@ typedef struct {
     int weight;                // widget_weight: a share of the stack's slack, 0 none
     AeClosure* scroll_cb;      // vlist_attach_scroll: on_scroll(dy)
     AeClosure* row_drop;       // row_drag_reorder: on_drop(src)
+    AeClosure* wdrag;          // on_drag(phase, x, y)
     int row_index;             //   ... and this row's index
     char* drag_path;           // widget_draggable_file
     int face;                  // set_child on a non-container: the face widget laid over it
@@ -1653,7 +1654,8 @@ enum { AEUI_EV_CLICK = 1, AEUI_EV_TEXT = 2, AEUI_EV_CHECK = 3, AEUI_EV_SEEK = 4,
        AEUI_EV_TAB = 9, AEUI_EV_MENU = 10, AEUI_EV_CONTEXT = 11, AEUI_EV_SCRIM = 12,
        AEUI_EV_DISMISS = 13, AEUI_EV_DRAG = 14, AEUI_EV_WHEEL = 15, AEUI_EV_MENU_CLOSED = 16,
        AEUI_EV_SURFACE = 17, AEUI_EV_MENU_OPEN = 18, AEUI_EV_ROW_DRAG = 19, AEUI_EV_ROW_DROP = 20,
-       AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22, AEUI_EV_SUBMIT = 23 };
+       AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22, AEUI_EV_SUBMIT = 23,
+       AEUI_EV_WDRAG = 24 };
 
 static jobject aeui_listener(JNIEnv* env, int handle, int kind) {
     jobject l = (*env)->NewObject(env, J.Listener, J.Listener_init, (jint)handle, (jint)kind);
@@ -3394,6 +3396,28 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
     JNIEnv* env = aeui_frame(4);
     if (!env) return;
     aeui_add_click(env, handle, (AeClosure*)boxed_closure);
+    aeui_unframe(env);
+}
+
+// on_drag: the view's own touch stream. The listener keeps where the touch
+// went down and sends the press point, then offsets from it, packed as two
+// signed 16-bit pixel counts (nativeEvent carries two ints); here they become
+// dp, the unit width() and the driver's geometry use.
+static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
+    if (c && c->fn)
+        ((void(*)(void*, intptr_t, double, double))c->fn)(c->env, (intptr_t)phase, x, y);
+}
+
+void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !boxed_closure) return;
+    int armed = w->wdrag != NULL;
+    w->wdrag = (AeClosure*)boxed_closure;
+    if (armed) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    jobject l = aeui_listener(env, handle, AEUI_EV_WDRAG);
+    if (l) JV(w->view, M_View_setOnTouchListener, l);
     aeui_unframe(env);
 }
 
@@ -8696,6 +8720,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         case AETHER_DRV_CLICK:
         case AETHER_DRV_SUBMIT:
+        case AETHER_DRV_DRAG:
         case AETHER_DRV_SET_TEXT:
         case AETHER_DRV_TOGGLE:
         case AETHER_DRV_SET_VALUE:
@@ -8751,6 +8776,14 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             // own toggle, which fires its change listener.
             if (ctx->action == AETHER_DRV_CLICK || w->type == AUI_TOGGLE)
                 JZ(w->view, M_View_performClick);
+            break;
+        case AETHER_DRV_DRAG:
+            // A press, two moves and a release through on_drag's closure.
+            if (!w->wdrag) { ctx->result = 3; aeui_unframe(env); return; }
+            aeui_drag_call(w->wdrag, 0, ctx->dval, ctx->dval2);
+            aeui_drag_call(w->wdrag, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
+            aeui_drag_call(w->wdrag, 1, (double)ctx->ival, (double)ctx->ival2);
+            aeui_drag_call(w->wdrag, 2, (double)ctx->ival, (double)ctx->ival2);
             break;
         case AETHER_DRV_SUBMIT:
             // The keyboard's Done key: TextView.onEditorAction runs the
@@ -9214,6 +9247,11 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
         case AEUI_EV_WHEEL:
             aether_ui_fire_scroll(handle, a);
             break;
+        case AEUI_EV_WDRAG: {
+            double px = (double)(short)((unsigned)b >> 16), py = (double)(short)(b & 0xFFFF);
+            aeui_drag_call(w->wdrag, a, aeui_px_to_dp(px), aeui_px_to_dp(py));
+            break;
+        }
         case AEUI_EV_SURFACE:
             if ((*env)->PushLocalFrame(env, 16) != 0) break;
             if (w->type == AUI_GPUVIEW) aeui_gpu_surface(env, handle, a, b);

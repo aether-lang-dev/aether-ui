@@ -796,6 +796,10 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
 
 // Events
 void aether_ui_on_hover_impl(int handle, void* boxed_closure);
+// A press-drag-release on any widget. The closure is
+// (void*, intptr_t phase, double x, double y): phase 0 the press at (x, y)
+// widget-local, 1 a move and 2 the release at offset (x, y) from the press.
+void aether_ui_on_drag_impl(int handle, void* boxed_closure);
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure);
 void aether_ui_on_click_impl(int handle, void* boxed_closure);
 

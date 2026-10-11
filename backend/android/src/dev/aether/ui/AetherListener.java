@@ -60,12 +60,14 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
                      ROW_DROP = 20,  // a row dropped on this one: a = source index
                      FILE_DRAG = 21, // a draggable file's widget long-pressed: start the drag
                      FILE_DROP = 22, // files dropped on the window: s = paths, newline-separated
-                     SUBMIT = 23;    // Return / the keyboard's Done in a field: s = its text
+                     SUBMIT = 23,    // Return / the keyboard's Done in a field: s = its text
+                     WDRAG = 24;     // on_drag: a = phase, b = packed x/y px (see onTouch)
 
     private final int handle;
     private final int kind;
     private final int arg;
     private final GestureDetector taps;   // DOUBLE only
+    private float downX, downY;            // WDRAG: where the touch went down (raw px)
 
     AetherListener(int handle, int kind) {
         this(handle, kind, 0);
@@ -155,6 +157,24 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
     // View's own click handling still sees every event. A split divider's
     // listener (DRAG) owns its touches: the drag is the divider's whole job.
     @Override public boolean onTouch(View v, MotionEvent e) {
+        if (kind == WDRAG) {
+            // A press (with where it landed in the view), then moves and the
+            // release as offsets from it in raw pixels, which stay right when
+            // the view moves or resizes under the finger. The parent is told
+            // not to take the stream over (a scroll view would).
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN) {
+                downX = e.getRawX();
+                downY = e.getRawY();
+                if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
+                AetherActivity.nativeEvent(handle, WDRAG, 0, pack(e.getX(), e.getY()), null);
+            } else if (a == MotionEvent.ACTION_MOVE) {
+                AetherActivity.nativeEvent(handle, WDRAG, 1, pack(e.getRawX() - downX, e.getRawY() - downY), null);
+            } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                AetherActivity.nativeEvent(handle, WDRAG, 2, pack(e.getRawX() - downX, e.getRawY() - downY), null);
+            }
+            return true;
+        }
         if (kind == DRAG) {
             int a = e.getActionMasked();
             float raw = arg != 0 ? e.getRawY() : e.getRawX();
@@ -164,6 +184,11 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
         }
         if (taps != null) taps.onTouchEvent(e);
         return false;
+    }
+
+    // Two signed 16-bit pixel counts in one int, x high (native code unpacks).
+    private static int pack(float x, float y) {
+        return ((Math.round(x) & 0xFFFF) << 16) | (Math.round(y) & 0xFFFF);
     }
 
     // The context menu: a long press on a touch screen, a secondary click

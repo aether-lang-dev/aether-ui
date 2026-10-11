@@ -3452,13 +3452,31 @@ void aether_ui_set_distribution(int handle, int distribution) {
 }
 
 // --- Size / margins / match-parent ------------------------------------------
+// A second width()/height() moves the constraint the first one made rather
+// than adding a rival: two required == on one axis conflict and UIKit breaks
+// whichever it likes (a widened grid column kept its old width).
+static void aeui_own_size(UIView* v, int vertical, int px) {
+    NSString* ident = vertical ? @"aeui-height" : @"aeui-width";
+    NSLayoutAttribute attr = vertical ? NSLayoutAttributeHeight : NSLayoutAttributeWidth;
+    for (NSLayoutConstraint* c in v.constraints) {
+        if (c.firstItem == v && c.firstAttribute == attr && c.secondItem == nil
+            && c.isActive && [c.identifier isEqualToString:ident]) {
+            c.constant = px;
+            return;
+        }
+    }
+    NSLayoutConstraint* c = vertical ? [v.heightAnchor constraintEqualToConstant:px]
+                                     : [v.widthAnchor constraintEqualToConstant:px];
+    c.identifier = ident;
+    c.active = YES;
+}
 void aether_ui_set_width(int handle, int width) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v && width > 0) [v.widthAnchor constraintEqualToConstant:width].active = YES;
+    if (v && width > 0) aeui_own_size(v, 0, width);
 }
 void aether_ui_set_height(int handle, int height) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v && height > 0) [v.heightAnchor constraintEqualToConstant:height].active = YES;
+    if (v && height > 0) aeui_own_size(v, 1, height);
 }
 static void aeui_apply_margins(UIView* v, int top, int right, int bottom, int left) {
     if (!v) return;
@@ -3914,6 +3932,60 @@ int aether_ui_fire_double_click(int handle) {
 }
 
 // Pointer hover (iPad, iOS 13.4+ trackpad/Magic-Keyboard). No-op on plain touch.
+// ── on_drag: press, drag and release on any widget ───────────────────
+// A pan recogniser: the press point is where the touch is less the
+// translation so far (UIKit's coordinates are already top-left).
+static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
+    if (c && c->fn)
+        ((void(*)(void*, intptr_t, double, double))c->fn)(c->env, (intptr_t)phase, x, y);
+}
+
+@interface AeuiWidgetDrag : UIPanGestureRecognizer
+@property (nonatomic) AeClosure* closure;
+@end
+@implementation AeuiWidgetDrag
+@end
+
+@interface AeuiWidgetDragTarget : NSObject
++ (void)pan:(AeuiWidgetDrag*)g;
+@end
+@implementation AeuiWidgetDragTarget
++ (void)pan:(AeuiWidgetDrag*)g {
+    UIView* v = g.view;
+    if (!v) return;
+    CGPoint t = [g translationInView:v];
+    switch (g.state) {
+        case UIGestureRecognizerStateBegan: {
+            CGPoint at = [g locationInView:v];
+            aeui_drag_call(g.closure, 0, at.x - t.x, at.y - t.y);
+            aeui_drag_call(g.closure, 1, t.x, t.y);
+            break;
+        }
+        case UIGestureRecognizerStateChanged:
+            aeui_drag_call(g.closure, 1, t.x, t.y);
+            break;
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+            aeui_drag_call(g.closure, 2, t.x, t.y);
+            break;
+        default:
+            break;
+    }
+}
+@end
+
+void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !boxed_closure) return;
+    v.userInteractionEnabled = YES;   // a UILabel takes no touches otherwise
+    AeuiWidgetDrag* rec = [[AeuiWidgetDrag alloc]
+        initWithTarget:[AeuiWidgetDragTarget class] action:@selector(pan:)];
+    rec.closure = (AeClosure*)boxed_closure;
+    [v addGestureRecognizer:rec];
+    objc_setAssociatedObject(v, "aeui_wdrag",
+        [NSValue valueWithPointer:boxed_closure], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v || !boxed_closure) return;
@@ -5861,6 +5933,17 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
             }
             break;
+        case AETHER_DRV_DRAG: {
+            // A press, two moves and a release through on_drag's closure.
+            NSValue* nv = v ? objc_getAssociatedObject(v, "aeui_wdrag") : nil;
+            AeClosure* c = nv ? (AeClosure*)nv.pointerValue : NULL;
+            if (!c) { ctx->result = 3; return; }
+            aeui_drag_call(c, 0, ctx->dval, ctx->dval2);
+            aeui_drag_call(c, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
+            aeui_drag_call(c, 1, (double)ctx->ival, (double)ctx->ival2);
+            aeui_drag_call(c, 2, (double)ctx->ival, (double)ctx->ival2);
+            break;
+        }
         case AETHER_DRV_SUBMIT: {
             // Return in a field: the control event the keyboard's Return sends.
             int t = get_widget_type(ctx->handle);

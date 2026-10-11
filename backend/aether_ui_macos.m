@@ -3425,6 +3425,18 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
     [sv setNeedsLayout:YES];
 }
 
+// The size constraint width()/height() made on v earlier, so a second call
+// moves it rather than adding a rival: two required == constraints on one
+// axis conflict, and AppKit breaks whichever it likes, so a grid column
+// widened from 96 to 156 stayed 96 (shrinking happened to win).
+static NSLayoutConstraint* aeui_own_size(NSView* v, NSLayoutAttribute attr, NSString* ident) {
+    for (NSLayoutConstraint* c in [v constraints]) {
+        if (c.firstItem == v && c.firstAttribute == attr && c.secondItem == nil
+            && [c isActive] && [[c identifier] isEqualToString:ident]) return c;
+    }
+    return nil;
+}
+
 void aether_ui_set_width(int handle, int width) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
@@ -3439,12 +3451,18 @@ void aether_ui_set_width(int handle, int width) {
     int weighted = (handle >= 1 && handle <= widget_count
                     && widget_weights[handle - 1] > 0);
     if (weighted) {
+        NSLayoutConstraint* old = aeui_own_size(v, NSLayoutAttributeWidth, @"aeui-flexmin");
+        if (old) { old.constant = width; return; }
         NSLayoutConstraint* mn =
             [v.widthAnchor constraintGreaterThanOrEqualToConstant:width];
         [mn setIdentifier:@"aeui-flexmin"];
         mn.active = YES;
     } else {
-        [v.widthAnchor constraintEqualToConstant:width].active = YES;
+        NSLayoutConstraint* old = aeui_own_size(v, NSLayoutAttributeWidth, @"aeui-width");
+        if (old) { old.constant = width; return; }
+        NSLayoutConstraint* eq = [v.widthAnchor constraintEqualToConstant:width];
+        [eq setIdentifier:@"aeui-width"];
+        eq.active = YES;
     }
 }
 
@@ -3452,7 +3470,11 @@ void aether_ui_set_height(int handle, int height) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     [v setTranslatesAutoresizingMaskIntoConstraints:NO];
-    [v.heightAnchor constraintEqualToConstant:height].active = YES;
+    NSLayoutConstraint* old = aeui_own_size(v, NSLayoutAttributeHeight, @"aeui-height");
+    if (old) { old.constant = height; return; }
+    NSLayoutConstraint* eq = [v.heightAnchor constraintEqualToConstant:height];
+    [eq setIdentifier:@"aeui-height"];
+    eq.active = YES;
 }
 
 // Implicit-transition lookups — defined with apply_css, which records them.
@@ -7121,6 +7143,63 @@ int aether_ui_canvas_write_png_impl(int canvas_id, const char* path,
 }
 @end
 
+// ── on_drag: press, drag and release on any widget ───────────────────
+// A pan recogniser reports the translation since the press; the press point
+// is where it is now less that. Both are turned to top-left coordinates for
+// a view that is not flipped (a label), as everything else here reports.
+static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
+    if (c && c->fn)
+        ((void(*)(void*, intptr_t, double, double))c->fn)(c->env, (intptr_t)phase, x, y);
+}
+
+@interface AeuiWidgetDrag : NSPanGestureRecognizer
+@property (nonatomic) AeClosure* closure;
+@end
+@implementation AeuiWidgetDrag
+@end
+
+@interface AeuiWidgetDragTarget : NSObject
++ (void)pan:(AeuiWidgetDrag*)g;
+@end
+@implementation AeuiWidgetDragTarget
++ (void)pan:(AeuiWidgetDrag*)g {
+    NSView* v = [g view];
+    if (!v) return;
+    NSPoint t = [g translationInView:v];
+    double ty = [v isFlipped] ? t.y : -t.y;
+    switch ([g state]) {
+        case NSGestureRecognizerStateBegan: {
+            NSPoint at = [g locationInView:v];
+            double sx = at.x - t.x, sy = at.y - t.y;
+            if (![v isFlipped]) sy = [v bounds].size.height - sy;
+            aeui_drag_call(g.closure, 0, sx, sy);
+            aeui_drag_call(g.closure, 1, t.x, ty);
+            break;
+        }
+        case NSGestureRecognizerStateChanged:
+            aeui_drag_call(g.closure, 1, t.x, ty);
+            break;
+        case NSGestureRecognizerStateEnded:
+        case NSGestureRecognizerStateCancelled:
+            aeui_drag_call(g.closure, 2, t.x, ty);
+            break;
+        default:
+            break;
+    }
+}
+@end
+
+void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || !boxed_closure) return;
+    AeuiWidgetDrag* rec = [[AeuiWidgetDrag alloc]
+        initWithTarget:[AeuiWidgetDragTarget class] action:@selector(pan:)];
+    rec.closure = (AeClosure*)boxed_closure;
+    [v addGestureRecognizer:rec];
+    objc_setAssociatedObject(v, "aeui_wdrag",
+        [NSValue valueWithPointer:boxed_closure], OBJC_ASSOCIATION_RETAIN);
+}
+
 void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || !boxed_closure) return;
@@ -8403,6 +8482,18 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
             }
             break;
+        case AETHER_DRV_DRAG: {
+            // A press, two moves and a release through on_drag's closure.
+            NSValue* nv = v ? objc_getAssociatedObject(v, "aeui_wdrag") : nil;
+            AeClosure* c = nv ? (AeClosure*)[nv pointerValue] : NULL;
+            if (!c) { ctx->result = 3; return; }
+            aeui_drag_call(c, 0, ctx->dval, ctx->dval2);
+            aeui_drag_call(c, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
+            aeui_drag_call(c, 1, (double)ctx->ival, (double)ctx->ival2);
+            aeui_drag_call(c, 2, (double)ctx->ival, (double)ctx->ival2);
+            ctx->result = 0;
+            return;
+        }
         case AETHER_DRV_SUBMIT: {
             // Return in a field: the action message a key press sends.
             int t = get_widget_type(ctx->handle);

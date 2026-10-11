@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`on_drag(widget) callback |phase, x, y|`**: a press, drag and release on
+  any widget (a label, a stack, a control). Phase 0 is the press at (x, y)
+  inside the widget; phases 1 and 2 (move, release) give the offset from the
+  press, which stays right when the widget resizes or moves under the
+  pointer. GTK4 `GtkGestureDrag`, AppKit and UIKit pan recognisers, Win32 a
+  captured press (through the parent for a label), Android the view's touch
+  stream; the driver's `POST /widget/{id}/drag?x=&y=&dx=&dy=` replays one.
+- **`datagrid` column resize and reorder** (docs/design/data-grid.md,
+  phase 3). Drag a header cell's right edge (6px) to resize its column
+  live, clamped (24-1000 by default, `datagrid_col_limits`); drag a
+  scrolling column's header elsewhere to move it. A view-to-model column
+  map with per-column widths that travel with a moved column;
+  `datagrid_col_width`, `datagrid_set_col_width`, `datagrid_move_col`,
+  `datagrid_col_model`, `datagrid_on_col_resize`, `datagrid_on_col_move`.
+  `spec_datagrid_demo`: 21/21 on macOS, the iOS simulator, GTK 4.6 and
+  4.22, win11, FreeBSD and Android.
 - **`datagrid` selection and keys** (docs/design/data-grid.md, phase 2):
   one rectangle from an anchor to a cursor cell. A click selects (and focuses
   the grid, one tab stop), Shift+click extends; arrows, Shift+arrows,
@@ -101,6 +117,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`width()` / `height()` called a second time now take effect** on
+  GTK4, AppKit, UIKit and Win32 (a grid column widened by a drag kept its
+  old width). GTK4: a size request is both axes, and each call passed -1
+  for the other, so `height()` after `width()` (or the reverse) cleared the
+  first; and a truncating label given a width is now that wide, not its
+  natural text width. AppKit and UIKit added a second required width
+  constraint beside the first, and the toolkit broke one at random; the
+  call now moves its own constraint. Win32 stored the new width but laid
+  nothing out again; it now queues a layout of the parent.
 - **aether-ui's CI runs on FreeBSD.** ci.sh knew Darwin, Linux and
   Windows only ("unrecognized platform 'FreeBSD'"); FreeBSD's GTK4 now takes
   the Linux path. With it: every bash script's shebang is `#!/usr/bin/env

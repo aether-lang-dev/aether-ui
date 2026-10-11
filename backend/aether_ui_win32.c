@@ -257,6 +257,7 @@ typedef struct {
 
     // Attached event closures
     AeClosure* on_click;
+    AeClosure* on_drag;   // on_drag: press, drag, release
     AeClosure* on_hover;
     AeClosure* on_double_click;
     AeClosure* on_change; // text/value change for input widgets
@@ -844,6 +845,13 @@ static const wchar_t* STACK_CLASS = L"AetherUIStack";
 static int w32_click_target(HWND hwnd);
 static int w32_click_target_at(HWND hwnd, LPARAM lp);
 static int g_press_target = 0;   // what the last press on a container was for
+// on_drag: the widget being dragged, the window holding the capture, and
+// where (in screen pixels) the press was.
+static int g_drag_target = 0;
+static HWND g_drag_hwnd = NULL;
+static POINT g_drag_origin;
+static int w32_drag_begin(HWND hwnd, LPARAM lp);
+static int w32_drag_track(HWND hwnd, POINT screen, int phase);
 
 typedef struct {
     int measured_w;
@@ -2170,6 +2178,9 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     return 0;
                 }
             }
+            // A press on a widget that takes drags (a label passes its mouse
+            // to this window): capture, so the drag goes on outside it.
+            w32_drag_begin(hwnd, lp);
             if (w2 && w2->active_set) {   /* container st_active press */
                 w2->is_pressed = 1;
                 InvalidateRect(hwnd, NULL, TRUE);
@@ -2191,6 +2202,12 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         case WM_MOUSEMOVE: {
+            if (g_drag_target && hwnd == g_drag_hwnd) {
+                POINT s = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                ClientToScreen(hwnd, &s);
+                w32_drag_track(hwnd, s, 1);
+                return 0;
+            }
             int h3 = handle_for_hwnd(hwnd);
             Widget* w3 = widget_at(h3);
             if (w3 && w3->kind == WK_SPLITVIEW && GetCapture() == hwnd) {
@@ -2225,7 +2242,22 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             }
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
+        case WM_CAPTURECHANGED:
+            // Capture taken away mid-drag (a dialog, Alt+Tab): the drag ends
+            // where the pointer is.
+            if (g_drag_target && hwnd == g_drag_hwnd && (HWND)lp != hwnd) {
+                POINT s; GetCursorPos(&s);
+                w32_drag_track(hwnd, s, 2);
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
         case WM_LBUTTONUP:
+            if (g_drag_target && hwnd == g_drag_hwnd) {
+                // The drag ends; the release still clicks a widget pressed
+                // and released in place, as GTK's two gestures both fire.
+                POINT s = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                ClientToScreen(hwnd, &s);
+                w32_drag_track(hwnd, s, 2);
+            }
             if (GetCapture() == hwnd) { ReleaseCapture(); return 0; }
             {
                 int h3 = handle_for_hwnd(hwnd);
@@ -6058,14 +6090,30 @@ void aether_ui_set_edge_insets(int handle, double top, double right,
     }
 }
 
+// A width() or height() after the widget is laid out (a grid column being
+// widened) has to reach the screen: the parent's pass is what hands a child
+// its size, so queue one -- the coalesced kind, since a column's worth of
+// cells change together. Before the widget is in a stack the parent is the
+// holder, which w32_request_layout passes over.
+static void w32_size_changed(Widget* w) {
+    if (w && w->hwnd) {
+        HWND p = GetParent(w->hwnd);
+        if (p) w32_request_layout(p);
+    }
+}
+
 void aether_ui_set_width(int handle, int width) {
     Widget* w = widget_at(handle);
-    if (w) w->pref_width = width;
+    if (!w || w->pref_width == width) return;
+    w->pref_width = width;
+    w32_size_changed(w);
 }
 
 void aether_ui_set_height(int handle, int height) {
     Widget* w = widget_at(handle);
-    if (w) w->pref_height = height;
+    if (!w || w->pref_height == height) return;
+    w->pref_height = height;
+    w32_size_changed(w);
 }
 
 static void w32_apply_opacity(Widget* w, double v);
@@ -6343,6 +6391,109 @@ void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
 // mouse (a static control answers HTTRANSPARENT), so its press is delivered
 // to the stack it sits in; searched from the stack, a label's own on_click
 // -- a panel's fold caret -- was never found and the click did nothing.
+static void w32_drag_call(AeClosure* c, int phase, double x, double y) {
+    if (c && c->fn)
+        ((void(*)(void*, intptr_t, double, double))c->fn)(c->env, (intptr_t)phase, x, y);
+}
+
+// A press at lp in hwnd: if the deepest widget there, or its nearest
+// ancestor, takes drags, capture the mouse to hwnd and report the press
+// in that widget's own coordinates. 1 when a drag began.
+static int w32_drag_begin(HWND hwnd, LPARAM lp) {
+    POINT at = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+    POINT local = at;
+    HWND deepest = hwnd;
+    for (;;) {
+        HWND child = ChildWindowFromPointEx(deepest, local, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+        if (!child || child == deepest) break;
+        MapWindowPoints(deepest, child, &local, 1);
+        deepest = child;
+    }
+    for (HWND h = deepest; h; h = GetAncestor(h, GA_PARENT)) {
+        int handle = handle_for_hwnd(h);
+        Widget* w = widget_at(handle);
+        if (!w) return 0;
+        if (w->on_drag && w->on_drag->fn) {
+            POINT p = at;
+            MapWindowPoints(hwnd, h, &p, 1);
+            POINT s = at;
+            ClientToScreen(hwnd, &s);
+            g_drag_target = handle;
+            g_drag_hwnd = hwnd;
+            g_drag_origin = s;
+            SetCapture(hwnd);
+            w32_drag_call(w->on_drag, 0, p.x, p.y);
+            return 1;
+        }
+        if (w->kind == WK_SCROLLVIEW) return 0;
+    }
+    return 0;
+}
+
+// A move (phase 1) or the end (phase 2) of the drag hwnd holds, at a screen
+// point. The end clears the drag before the closure runs, since the closure
+// may rebuild what holds hwnd.
+static int w32_drag_track(HWND hwnd, POINT screen, int phase) {
+    if (!g_drag_target || hwnd != g_drag_hwnd) return 0;
+    Widget* w = widget_at(g_drag_target);
+    AeClosure* c = w ? w->on_drag : NULL;
+    double dx = screen.x - g_drag_origin.x, dy = screen.y - g_drag_origin.y;
+    if (phase == 2) {
+        g_drag_target = 0;
+        g_drag_hwnd = NULL;
+        if (GetCapture() == hwnd) ReleaseCapture();
+    }
+    w32_drag_call(c, phase, dx, dy);
+    return 1;
+}
+
+// A control that takes its own mouse (a button, a field): the same drag,
+// tracked on the control's window.
+static LRESULT CALLBACK w32_wdrag_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                       UINT_PTR id, DWORD_PTR ref) {
+    (void)id; (void)ref;
+    switch (msg) {
+        case WM_LBUTTONDOWN: {
+            LRESULT r = DefSubclassProc(hwnd, msg, wp, lp);
+            if (!g_drag_target) w32_drag_begin(hwnd, lp);
+            return r;
+        }
+        case WM_MOUSEMOVE:
+            if (g_drag_target && hwnd == g_drag_hwnd) {
+                POINT s = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                ClientToScreen(hwnd, &s);
+                w32_drag_track(hwnd, s, 1);
+            }
+            break;
+        case WM_LBUTTONUP:
+            if (g_drag_target && hwnd == g_drag_hwnd) {
+                POINT s = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                ClientToScreen(hwnd, &s);
+                w32_drag_track(hwnd, s, 2);
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            if (g_drag_target && hwnd == g_drag_hwnd && (HWND)lp != hwnd) {
+                POINT s; GetCursorPos(&s);
+                w32_drag_track(hwnd, s, 2);
+            }
+            break;
+        default: break;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
+    Widget* w = widget_at(handle);
+    if (!w || !boxed_closure) return;
+    int armed = w->on_drag != NULL;
+    w->on_drag = (AeClosure*)boxed_closure;
+    // A label or a stack passes its mouse to the window that holds it,
+    // whose press finds this widget; anything else gets its own.
+    if (!armed && w->hwnd && w->kind != WK_TEXT && !w32_is_stack(w->kind))
+        SetWindowSubclass(w->hwnd, w32_wdrag_proc, 9, (DWORD_PTR)handle);
+}
+
 static int w32_click_target_at(HWND hwnd, LPARAM lp) {
     POINT at = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
     HWND deepest = hwnd;
@@ -12175,6 +12326,7 @@ static void w32_release_handle_state(int h) {
     }
     if (w) {
         w32_release_box(&w->on_click);
+        w32_release_box(&w->on_drag);
         w32_release_box(&w->on_hover);
         w32_release_box(&w->on_double_click);
         w32_release_box(&w->on_change);
@@ -12973,6 +13125,14 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     // ran the app's handler twice (spec_picker's "Changes").
                     aether_ui_picker_set_selected(ctx->handle, (int)ctx->dval);
                 }
+                break;
+            case AETHER_DRV_DRAG:
+                // A press, two moves and a release through on_drag's closure.
+                if (!w->on_drag) { ctx->result = 3; ctx->done = 1; return 0; }
+                w32_drag_call(w->on_drag, 0, ctx->dval, ctx->dval2);
+                w32_drag_call(w->on_drag, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
+                w32_drag_call(w->on_drag, 1, (double)ctx->ival, (double)ctx->ival2);
+                w32_drag_call(w->on_drag, 2, (double)ctx->ival, (double)ctx->ival2);
                 break;
             case AETHER_DRV_SUBMIT:
                 // Return in a field, posted so it travels the message loop's

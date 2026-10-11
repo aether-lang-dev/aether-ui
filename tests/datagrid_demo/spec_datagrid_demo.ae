@@ -1,7 +1,8 @@
 // spec_datagrid_demo.ae — the virtualised grid: only the shown cells exist,
 // the sliders scroll it, the header and the frozen column stay put (phase 1);
 // clicks and keys move a cursor and a range, read back as the demo's
-// "selection:" line and as the cells' colours (phase 2).
+// "selection:" line and as the cells' colours (phase 2); header drags resize
+// and move columns, read back as geometry and the demo's lines (phase 3).
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
@@ -55,6 +56,25 @@ key(combo: string) {
     uidriver.post_ok("/window/key?combo=${combo}", "press ${combo}")
 }
 
+// A field of the widget with text t once it reads `want`, or what it reads
+// after ~3s: GTK lays out on its next frame, so geometry read straight after
+// a change can still be the old one.
+settled(t: string, f: string, want: int) -> int {
+    v = field_of_text(t, f)
+    i = 0
+    while i < 20 && v != want {
+        sleep(150)
+        v = field_of_text(t, f)
+        i = i + 1
+    }
+    return v
+}
+
+// Drag widget-with-text t: pressed at (x, 8) inside it, moved by dx.
+drag(t: string, x: int, dx: int) {
+    uidriver.post_ok("/widget/${uidriver.widget_id_by_text(t)}/drag?x=${x}&y=8&dx=${dx}&dy=0", "drag ${t}")
+}
+
 shows(t: string) -> int {
     return uidriver.wait_body_contains("/widgets", "\"text\":\"${t}\"", 20)
 }
@@ -71,10 +91,10 @@ main() {
             spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
             spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
         }
-        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and four labels)") callback {
-            // 1 caption + 7 header + 140 cells + the clicked, selection and
-            // activated lines.
-            spec.assert_eq(count_of("text"), 151, "texts")
+        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and six labels)") callback {
+            // 1 caption + 7 header + 140 cells + the clicked, selection,
+            // activated, resized and moved lines.
+            spec.assert_eq(count_of("text"), 153, "texts")
         }
         spec.it("the vertical scrollbar stands up") callback {
             v = nth_of("slider", 0)
@@ -93,7 +113,7 @@ main() {
             spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
             spec.assert_true(shows("A") == 1, "the header still reads A")
             spec.assert_eq(field_of_text("A", "y"), hdr_y, "and has not moved")
-            spec.assert_eq(count_of("text"), 151, "no widgets added")
+            spec.assert_eq(count_of("text"), 153, "no widgets added")
         }
         spec.it("scrolling across keeps the frozen column and moves the rest") callback {
             hs = nth_of("slider", 1)
@@ -101,7 +121,7 @@ main() {
             spec.assert_true(shows("R90000C40") == 1, "column 40 first")
             spec.assert_true(shows("AN") == 1, "its header letter, AN")
             spec.assert_true(shows("90001") == 1, "the row number stayed")
-            spec.assert_eq(count_of("text"), 151, "still no widgets added")
+            spec.assert_eq(count_of("text"), 153, "still no widgets added")
         }
         spec.it("and after scrolling, the cell's new row and column") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R90003C41")}/click", "click R90003C41")
@@ -177,7 +197,45 @@ main() {
             key("Ctrl%2Ba")
             spec.assert_true(shows("selection: 99999,49 from 0,0") == 1, "the whole grid")
             spec.assert_str_eq(bg_of("R99990C45"), "#cce0ff", "a shown cell is in it")
-            spec.assert_eq(count_of("text"), 151, "no widgets added")
+            spec.assert_eq(count_of("text"), 153, "no widgets added")
+        }
+    }
+
+    spec.describe(fw, "column resize and reorder") {
+        spec.it("back to the first columns") callback {
+            hs = nth_of("slider", 1)
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll left")
+            spec.assert_true(shows("R99980C1") == 1, "column 1 first again")
+            spec.assert_eq(settled("C", "w", 36), 36, "C starts 36 wide (the demo's width)")
+        }
+        spec.it("dragging a header's right edge resizes the column, cells and all") callback {
+            drag("C", 33, 60)
+            spec.assert_true(shows("resized: 3 to 96") == 1, "on_col_resize heard 3 to 96")
+            spec.assert_eq(settled("C", "w", 96), 96, "the header is 96 wide")
+            spec.assert_eq(settled("R99980C3", "w", 96), 96, "so is its column's cell")
+            spec.assert_eq(settled("D", "x", field_of_text("C", "x") + 96), field_of_text("C", "x") + 96, "D starts where C ends")
+        }
+        spec.it("widths are clamped") callback {
+            drag("C", 93, 0 - 500)
+            spec.assert_true(shows("resized: 3 to 24") == 1, "no narrower than 24")
+            spec.assert_eq(settled("C", "w", 24), 24, "the header is 24 wide")
+        }
+        spec.it("dragging a header elsewhere moves the column") callback {
+            // 36 each but C at 24: B starts at 72, and pressed 18px in and
+            // let go 96px right it is 186px in, over E (168 to 204).
+            drag("B", 18, 96)
+            spec.assert_true(shows("moved: 2 to 5") == 1, "on_col_move heard 2 to 5")
+            _bx = settled("B", "x", field_of_text("F", "x") - 36)
+            spec.assert_true(field_of_text("B", "x") > field_of_text("E", "x"), "B now right of E")
+            spec.assert_true(field_of_text("C", "x") < field_of_text("D", "x"), "C, D and E slid left")
+            spec.assert_eq(settled("R99980C2", "x", field_of_text("B", "x")), field_of_text("B", "x"), "B's cells moved with it")
+            spec.assert_eq(settled("C", "w", 24), 24, "and C kept its width")
+            spec.assert_eq(count_of("text"), 153, "no widgets added")
+        }
+        spec.it("a frozen column does not move") callback {
+            drag("#", 18, 150)
+            spec.assert_true(shows("moved: 2 to 5") == 1, "still the last move")
+            spec.assert_true(field_of_text("#", "x") < field_of_text("A", "x"), "# stays first")
         }
     }
     return spec.run_summary(fw)

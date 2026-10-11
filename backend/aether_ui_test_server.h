@@ -85,6 +85,10 @@ typedef enum {
     // field's on_submit runs as for a person's Return); result 3 when the
     // widget is not a field.
     AETHER_DRV_SUBMIT = 28,        // handle=textfield/securefield
+    // A drag through the widget's on_drag closure: the press at (dval,
+    // dval2) widget-local, moves to half and all of (ival, ival2), then the
+    // release there. result 3 when the widget has no on_drag.
+    AETHER_DRV_DRAG = 29,          // handle, dval=x, dval2=y, ival=dx, ival2=dy
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

@@ -5,7 +5,8 @@ Status: phase 1 built (2026-10-10): `datagrid` in `ui/module.ae`, with
 viewport with native sliders (option B below, Paul's call), not a native
 scroll view. Phase 2 built the same day (selection and keys), and phase 6
 began: sae pages have `ui.datagrid`; moving sae's spreadsheet onto it is that
-demo's own session's work. Phases 3-5 open. Asked for by sae's spreadsheet (demo 18), which
+demo's own session's work. Phase 3 (column resize and reorder) built
+2026-10-11 on a new any-widget `on_drag`. Phases 4-5 open. Asked for by sae's spreadsheet (demo 18), which
 built about 120 lines of grid by hand in `vg`; the same widget would make data
 grids, log viewers and property sheets cheap. The ask, from a cloud session
 building that demo: Swing's `JTable`, QML's `TableView` or Flutter's
@@ -91,9 +92,19 @@ The contract:
    stop); Tab along a row moves to phase 4, where it is the editor's key.
    Spec: `spec_datagrid_demo`'s second half reads the selection back as text
    and as the cells' painted colours.
-3. **Column resize and reorder.** Header drag handles (a driver verb to
-   drag one), the view-to-model column map. Spec: widths and order read
-   back; cells follow.
+3. **Column resize and reorder.** DONE: a drag that starts within 6px of
+   a header cell's right edge resizes the column as it goes (clamped,
+   24-1000 by default, `datagrid_col_limits`); one that starts elsewhere on
+   a scrolling column's header moves it to where it is released; frozen
+   columns stay. A view-to-model column map, widths kept per model column
+   so they travel with a moved column; `datagrid_col_width`,
+   `datagrid_set_col_width`, `datagrid_move_col`, `datagrid_col_model`,
+   `datagrid_on_col_resize`, `datagrid_on_col_move`. Built on a new
+   `on_drag(widget)` (press point, then offsets) that is real on every
+   backend, with the driver verb `POST /widget/{id}/drag`. Spec: widths,
+   positions and order read back as geometry; cells follow. Not yet: a
+   resize pointer over the grip (aether-ui has no pointer-cursor API), and
+   live feedback while a column is being moved (it moves on release).
 4. **Editing.** The overlaid editor with `on_submit`, Tab and Escape. Spec:
    edit, commit, cancel, and the model's `on_edit` call.
 5. **Accessibility.** `grid` / `row` / `gridcell` / `columnheader` roles

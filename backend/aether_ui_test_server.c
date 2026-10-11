@@ -1010,6 +1010,22 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.handle = extract_id_from_path(path, "/widget/");
         dispatch_and_reply(client_fd, h, &ctx, "released");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/drag")) {
+        // POST /widget/{id}/drag?x=&y=&dx=&dy= -- press at (x, y) inside the
+        // widget, drag by (dx, dy), release: the widget's on_drag closure.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_DRAG;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        const char* xs = extract_query_param(path, "x");
+        const char* ys = extract_query_param(path, "y");
+        const char* dxs = extract_query_param(path, "dx");
+        const char* dys = extract_query_param(path, "dy");
+        ctx.dval = xs ? atof(xs) : 0.0;
+        ctx.dval2 = ys ? atof(ys) : 0.0;
+        ctx.ival = dxs ? atoi(dxs) : 0;
+        ctx.ival2 = dys ? atoi(dys) : 0;
+        dispatch_and_reply(client_fd, h, &ctx, "dragged");
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/submit")) {
         // POST /widget/{id}/submit -- Return in a text field: on_submit.
         AetherDriverActionCtx ctx = {0};

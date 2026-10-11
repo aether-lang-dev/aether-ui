@@ -731,6 +731,20 @@ int aether_ui_text_get_wrap(int handle) {
     return (w && GTK_IS_LABEL(w) && gtk_label_get_wrap(GTK_LABEL(w))) ? 1 : 0;
 }
 
+// A truncating label given a width() is that wide, not wider: a size request
+// is only a minimum in GTK, and a box hands a child its NATURAL size when
+// there is room, so a 24px grid column of "R0C3" came out 36px. Capping the
+// natural width (max-width-chars 1, which an ellipsizing label honours) lets
+// the request be both. Called from width() and from text_truncate, whichever
+// comes second.
+static void aeui_label_pin_width(GtkWidget* w) {
+    if (!w || !GTK_IS_LABEL(w)) return;
+    int rw = -1;
+    gtk_widget_get_size_request(w, &rw, NULL);
+    int ellipsizes = gtk_label_get_ellipsize(GTK_LABEL(w)) != PANGO_ELLIPSIZE_NONE;
+    if (rw > 0 && ellipsizes) gtk_label_set_max_width_chars(GTK_LABEL(w), 1);
+}
+
 void aether_ui_text_set_truncate(int handle, int mode) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return;
@@ -739,6 +753,7 @@ void aether_ui_text_set_truncate(int handle, int mode) {
     else if (mode == 2) em = PANGO_ELLIPSIZE_MIDDLE;
     else if (mode == 3) em = PANGO_ELLIPSIZE_END;
     gtk_label_set_ellipsize(GTK_LABEL(w), em);
+    aeui_label_pin_width(w);
 }
 
 int aether_ui_text_get_truncate(int handle) {
@@ -2858,7 +2873,13 @@ const char* aether_ui_backend_name_impl(void) { return "gtk4"; }
 void aether_ui_set_width(int handle, int width) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return;
-    gtk_widget_set_size_request(w, width, -1);
+    // Keep the height a height() call asked for: a size request is both
+    // axes at once, and passing -1 for the other one cleared it, so a widget
+    // given height() then width() (or the reverse) kept only the last.
+    int keep_h = -1;
+    gtk_widget_get_size_request(w, NULL, &keep_h);
+    gtk_widget_set_size_request(w, width, keep_h);
+    aeui_label_pin_width(w);
     // A pinned width normally means "this is exactly my size" — so stop
     // expanding to fill the parent. Canvases are created hexpand=TRUE (a
     // full-window canvas should fill), which otherwise stretches a 16px ICON
@@ -2884,7 +2905,10 @@ void aether_ui_set_height(int handle, int height) {
     // made GTK log a theme-parser error for EVERY height() call, on every
     // widget, forever ("No property named max-height"). The min-height half
     // did apply, so the sizing looked right and the noise went unnoticed.
-    gtk_widget_set_size_request(w, -1, height);
+    // Keep the width a width() call asked for (see aether_ui_set_width).
+    int keep_w = -1;
+    gtk_widget_get_size_request(w, &keep_w, NULL);
+    gtk_widget_set_size_request(w, keep_w, height);
     // A pinned height means "this is exactly my size" — stop expanding.
     // valign FILL (not CENTER): a height()'d CONTAINER — e.g. a scrollview
     // holding a list — must fill the box it was just given, or it centres a
@@ -6850,6 +6874,36 @@ static void on_hover_leave(GtkEventControllerMotion* ctrl, gpointer data) {
     }
 }
 
+// ── on_drag: press, drag and release on any widget ───────────────────
+// GtkGestureDrag reports the press point widget-local and then offsets from
+// it, which is the closure's own shape. The closure is stored on the widget
+// for the driver's /drag route.
+static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
+    if (c && c->fn)
+        ((void(*)(void*, intptr_t, double, double))c->fn)(c->env, (intptr_t)phase, x, y);
+}
+static void on_wdrag_begin(GtkGestureDrag* g, double x, double y, gpointer d) {
+    (void)g; aeui_drag_call((AeClosure*)d, 0, x, y);
+}
+static void on_wdrag_update(GtkGestureDrag* g, double x, double y, gpointer d) {
+    (void)g; aeui_drag_call((AeClosure*)d, 1, x, y);
+}
+static void on_wdrag_end(GtkGestureDrag* g, double x, double y, gpointer d) {
+    (void)g; aeui_drag_call((AeClosure*)d, 2, x, y);
+}
+
+void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !boxed_closure) return;
+    GtkGesture* drag = gtk_gesture_drag_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(drag), GDK_BUTTON_PRIMARY);
+    g_signal_connect(drag, "drag-begin",  G_CALLBACK(on_wdrag_begin), boxed_closure);
+    g_signal_connect(drag, "drag-update", G_CALLBACK(on_wdrag_update), boxed_closure);
+    g_signal_connect(drag, "drag-end",    G_CALLBACK(on_wdrag_end), boxed_closure);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(drag));
+    g_object_set_data(G_OBJECT(w), "aeui-wdrag", boxed_closure);
+}
+
 void aether_ui_on_hover_impl(int handle, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !boxed_closure) return;
@@ -8850,6 +8904,18 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
            yes, and then waited out its teardown budget for an exit that never
            came -- ~96s wall for a suite doing 0.4s of work. Already on the
            GTK thread here, so call the handlers' bodies directly. */
+        case AETHER_DRV_DRAG: {
+            /* A press, two moves and a release through on_drag's closure. */
+            GtkWidget* w = aether_ui_get_widget(ctx->handle);
+            AeClosure* c = w ? (AeClosure*)g_object_get_data(G_OBJECT(w), "aeui-wdrag") : NULL;
+            if (!c) { ctx->result = 3; ctx->done = 1; return; }
+            aeui_drag_call(c, 0, ctx->dval, ctx->dval2);
+            aeui_drag_call(c, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
+            aeui_drag_call(c, 1, (double)ctx->ival, (double)ctx->ival2);
+            aeui_drag_call(c, 2, (double)ctx->ival, (double)ctx->ival2);
+            ctx->result = 0; ctx->done = 1;
+            return;
+        }
         case AETHER_DRV_SUBMIT: {
             /* Return in a field: the same "activate" a key press emits. */
             GtkWidget* w = aether_ui_get_widget(ctx->handle);
