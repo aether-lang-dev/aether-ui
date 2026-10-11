@@ -7,7 +7,8 @@ scroll view. Phase 2 built the same day (selection and keys), and phase 6
 began: sae pages have `ui.datagrid`; moving sae's spreadsheet onto it is that
 demo's own session's work. Phase 3 (column resize and reorder) built
 2026-10-11 on a new any-widget `on_drag`. Phase 4 (editing) built the
-same day. Phase 5 (accessibility) open. Asked for by sae's spreadsheet (demo 18), which
+same day, and phase 5 (accessibility) the day after. All six phases are
+built; sae's spreadsheet moving onto the grid is that demo's own work. Asked for by sae's spreadsheet (demo 18), which
 built about 120 lines of grid by hand in `vg`; the same widget would make data
 grids, log viewers and property sheets cheap. The ask, from a cloud session
 building that demo: Swing's `JTable`, QML's `TableView` or Flutter's
@@ -144,11 +145,25 @@ store); everything else speaks view columns.
    name is a word ("comma", "minus") does not open an editor, and an editor
    that loses focus some other way (a click outside the grid) stays open
    until the grid next commits.
-5. **Accessibility.** `grid` / `row` / `gridcell` / `columnheader` roles
-   with row and column index and count on every backend (GTK4
-   GtkAccessible, AppKit NSAccessibility table/cell protocols, Win32 UIA or
-   MSAA, UIKit, Android `CollectionInfo`). Spec: the driver's a11y read-out
-   of a cell names its row, column and header.
+5. **Accessibility.** DONE: `a11y_grid`, `a11y_grid_row`, `a11y_grid_cell`
+   and `a11y_grid_header` (and `a11y_next_role`, since GTK4 takes a role
+   only at construction). The grid is a grid of rows + 1 (the header row is
+   row 0) by cols; each shown row and cell is rewritten as it scrolls, so it
+   names the row it shows, and each cell names its column's header. GTK4:
+   roles at construction, ROW/COL_INDEX and _COUNT relations. AppKit: Table /
+   Row / Cell roles, index ranges, counts, column header elements. UIKit:
+   UIAccessibilityContainerDataTable on the grid, the DataTableCell ranges on
+   its cells. Android: CollectionInfo / CollectionItemInfo in the widget's
+   AetherA11y delegate. Win32: a UI Automation provider (Grid, Table,
+   GridItem, TableItem) from WM_GETOBJECT on each part's window. Spec: the
+   grid's size; a cell's role, row, column and header; a header's place, also
+   after its column moved; a cell's row after scrolling. The driver reads
+   GTK's test AT context, AppKit's accessors and Android's node info, so a
+   value that never reached the platform fails. Windows proven once with a
+   real UI Automation client (PowerShell's UIAutomationClient, on the
+   interactive desktop): a 100,001 x 50 DataGrid, GetItem(2, 1) is "R1C1" at
+   row 2, column 1, header "A". Not automated: VoiceOver, TalkBack and Orca
+   themselves.
 6. **sae.** `ui.grid` (or `ui.table`) for pages, and sae's spreadsheet moves
    onto it, dropping its hand-built grid.
 

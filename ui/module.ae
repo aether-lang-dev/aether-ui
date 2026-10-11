@@ -79,7 +79,7 @@ exports (
     keymap_count, keymap_key_at, keymap_name_at,
     enable_undo_shortcuts,
     style_font_weight, style_font_family,
-    a11y_role, a11y_label, a11y_description,
+    a11y_role, a11y_next_role, a11y_grid, a11y_grid_row, a11y_grid_cell, a11y_grid_header, a11y_label, a11y_description,
     edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
     alert, clipboard_write, clipboard_read, open_url, open_file, save_file,
@@ -389,6 +389,8 @@ extern aether_ui_watch_appearance_impl()
 extern aether_ui_a11y_set_role_impl(handle: int, role: string)
 extern aether_ui_a11y_set_label_impl(handle: int, name: string)
 extern aether_ui_a11y_set_description_impl(handle: int, desc: string)
+extern aether_ui_a11y_grid_impl(handle: int, kind: int, row: int, col: int, rows: int, cols: int, header: int)
+extern aether_ui_a11y_next_role_impl(role: string)
 extern aether_ui_set_distribution(handle: int, distribution: int)
 extern aether_ui_set_alignment(handle: int, alignment: int)
 extern aether_ui_match_parent_width(handle: int)
@@ -4083,6 +4085,46 @@ a11y_description(handle: int, desc: string) -> int {
     return handle
 }
 
+// a11y_next_role(role): the next widget made has this role from birth. GTK4
+// fixes a widget's accessible role when it is constructed, so a11y_role on
+// an existing GTK widget reaches the driver's record but not a screen
+// reader; a widget that needs a real role there is made right after this.
+// Elsewhere it changes nothing a11y_role would not.
+//   a11y_next_role("gridcell")
+//   c = text(row, "")
+//   a11y_role(c, "gridcell")
+a11y_next_role(role: string) {
+    aether_ui_a11y_next_role_impl(role)
+}
+
+// ── A grid's accessible structure (data-grid.md phase 5) ──────────────
+// What a screen reader needs to read a table: the grid's size, each row's
+// index, each cell's row and column and its column's header. Rows and
+// columns count from 0 (a header row, if any, is row 0). Each sets the
+// role too (grid, row, gridcell, columnheader) when it first applies. GTK4 GtkAccessible relations
+// (row/col index and count), AppKit NSAccessibility index ranges, counts and
+// column header elements, UIKit UIAccessibilityContainerDataTable, Android
+// CollectionInfo / CollectionItemInfo, Win32 UI Automation Grid and
+// GridItem patterns. The driver reports a11y_rows / a11y_cols (a grid),
+// a11y_row (a row), a11y_row / a11y_col / a11y_header (a cell, the header
+// widget's id). Call again as a virtualised cell comes to show another one.
+a11y_grid(handle: int, rows: int, cols: int) -> int {
+    aether_ui_a11y_grid_impl(handle, 0, 0 - 1, 0 - 1, rows, cols, 0)
+    return handle
+}
+a11y_grid_row(handle: int, row: int) -> int {
+    aether_ui_a11y_grid_impl(handle, 1, row, 0 - 1, 0, 0, 0)
+    return handle
+}
+a11y_grid_cell(handle: int, row: int, col: int, header: int) -> int {
+    aether_ui_a11y_grid_impl(handle, 2, row, col, 0, 0, header)
+    return handle
+}
+a11y_grid_header(handle: int, col: int) -> int {
+    aether_ui_a11y_grid_impl(handle, 3, 0, col, 0, 0, 0)
+    return handle
+}
+
 // content_inset(container) — the standard window gutter.
 //
 // A window's content is otherwise flush against the frame: the leftmost
@@ -6358,6 +6400,7 @@ struct DataGrid {
     edit_box: int     // the zstack it sits in
     edit_r: int       // the cell it edits (view column)
     edit_c: int
+    row_boxes: ptr    // intarr of the shown rows' hstacks (their a11y row index)
 }
 
 // A header cell's grip: a press this close to its right edge resizes.
@@ -6434,22 +6477,27 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     }
     g.shown_w = intarr_new_raw(fz + vc + 1)
     gp = g as ptr
+    // Accessible structure (phase 5): a grid of rows + 1 (the header row is
+    // row 0) by cols; the roles are given at construction for GTK's sake.
+    a11y_next_role("grid")
     root = vstack(_ctx, 0)
     g.root = root
-    _art = a11y_role(root, "table")
+    _ag = a11y_grid(root, rows + 1, cols)
     set_focusable(root, 1)
     // The header row: not in what scrolls, so it stays at the top.
+    a11y_next_role("row")
     hdr = hstack(root, 0)
+    _agr = a11y_grid_row(hdr, 0)
     g.hdr_cells = intarr_new_raw(fz + vc + 1)
     hi = 0
     while hi < fz + vc {
+        a11y_next_role("columnheader")
         hh = text(hdr, "")
         _hw = width(hh, g.col_w)
         _hhh = height(hh, g.row_h)
         text_truncate(hh, "tail")
         add_css_class(hh, "aui-grid-header")
         aether_ui_set_bg_color(hh, 0.90, 0.91, 0.93, 1.0)
-        _arh = a11y_role(hh, "columnheader")
         intarr_set_raw(g.hdr_cells, hi, hh)
         intarr_set_raw(g.shown_w, hi, g.col_w)
         hpos = hi
@@ -6464,8 +6512,11 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.painted = intarr_new_raw(vr * (fz + vc) + 1)
     g.boxes = intarr_new_raw(vr * (fz + vc) + 1)
     ri = 0
+    g.row_boxes = intarr_new_raw(vr + 1)
     while ri < vr {
+        a11y_next_role("row")
         row = hstack(body, 0)
+        intarr_set_raw(g.row_boxes, ri, row)
         ci = 0
         while ci < fz + vc {
             // Each cell is a zstack holding its text, so an editor can be
@@ -6474,6 +6525,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             _bw = width(cb, g.col_w)
             _bh = height(cb, g.row_h)
             intarr_set_raw(g.boxes, ri * (fz + vc) + ci, cb)
+            a11y_next_role("gridcell")
             ch = text(cb, "")
             _cw = width(ch, g.col_w)
             _chh = height(ch, g.row_h)
@@ -6550,6 +6602,7 @@ _datagrid_bind(g: *DataGrid) {
     if g.cell == null {
         _datagrid_size(g)
         _datagrid_paint(g)
+        _datagrid_a11y(g)
         return
     }
     cf = unbox_closure(g.cell)
@@ -6564,6 +6617,30 @@ _datagrid_bind(g: *DataGrid) {
     }
     _datagrid_size(g)
     _datagrid_paint(g)
+    _datagrid_a11y(g)
+}
+
+// Each shown header, row and cell names the row and column it shows now
+// (the header row is row 0, model row r is row r + 1; columns are view
+// columns), and each cell its column's header, so a screen reader reads the
+// position of what is on screen, not of the widget.
+_datagrid_a11y(g: *DataGrid) {
+    w = g.frozen + g.vis_cols
+    j = 0
+    while j < w {
+        _h = a11y_grid_header(intarr_get_raw(g.hdr_cells, j), _datagrid_col_at(g, j))
+        j = j + 1
+    }
+    r = 0
+    while r < g.vis_rows {
+        _rr = a11y_grid_row(intarr_get_raw(g.row_boxes, r), g.first_row + r + 1)
+        c = 0
+        while c < w {
+            _c = a11y_grid_cell(intarr_get_raw(g.cells, r * w + c), g.first_row + r + 1, _datagrid_col_at(g, c), intarr_get_raw(g.hdr_cells, c))
+            c = c + 1
+        }
+        r = r + 1
+    }
 }
 
 _datagrid_model(g: *DataGrid, view: int) -> int {

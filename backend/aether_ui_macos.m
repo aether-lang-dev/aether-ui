@@ -23,6 +23,7 @@
 #include <stdatomic.h>
 #include "aether_ui_backend.h"  // cross-platform backend ABI
 #include "aether_ui_system_extras.h"
+#include "aether_ui_a11y_grid.h"      // the grid a11y side-store (data-grid.md phase 5)
 #include <stdint.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -3568,6 +3569,8 @@ static NSAccessibilityRole aeui_ns_role(const char* role) {
     if (!strcmp(role, "group"))       return NSAccessibilityGroupRole;
     if (!strcmp(role, "list"))        return NSAccessibilityListRole;
     if (!strcmp(role, "table"))       return NSAccessibilityTableRole;
+    if (!strcmp(role, "grid"))        return NSAccessibilityTableRole;
+    if (!strcmp(role, "gridcell"))    return NSAccessibilityCellRole;
     if (!strcmp(role, "columnheader")) return NSAccessibilityColumnRole;
     if (!strcmp(role, "row"))         return NSAccessibilityRowRole;
     if (!strcmp(role, "listitem"))    return NSAccessibilityRowRole;
@@ -3604,6 +3607,83 @@ static const char* aeui_role_name_from_ns(NSAccessibilityRole r) {
     if ([r isEqualToString:NSAccessibilitySliderRole])            return "slider";
     if ([r isEqualToString:NSAccessibilityProgressIndicatorRole]) return "progressbar";
     return "";
+}
+
+// Driver readback through the NSAccessibility accessors VoiceOver calls
+// (on the main thread; the driver's request thread hops): counts from the
+// grid, index ranges from a row or cell, and a cell's header element.
+int aether_ui_a11y_grid_get_impl(int handle, int* kind, int* row, int* col,
+                                 int* rows, int* cols, int* header) {
+    if (!aeui_ga_get(handle, kind, row, col, rows, cols, header)) return 0;
+    if (![NSThread isMainThread]) {
+        __block int r = 0, k = 0, ro = 0, co = 0, rs = 0, cs = 0, he = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{ r = aether_ui_a11y_grid_get_impl(handle, &k, &ro, &co, &rs, &cs, &he); });
+        *kind = k; *row = ro; *col = co; *rows = rs; *cols = cs; *header = he;
+        return r;
+    }
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    if (*kind == 0) {
+        *rows = (int)[v accessibilityRowCount];
+        *cols = (int)[v accessibilityColumnCount];
+    } else {
+        NSRange rr = [v accessibilityRowIndexRange];
+        *row = rr.location == NSNotFound ? -1 : (int)rr.location;
+        if (*kind >= 2) {
+            NSRange cr = [v accessibilityColumnIndexRange];
+            *col = cr.location == NSNotFound ? -1 : (int)cr.location;
+        }
+        if (*kind == 2) {
+            NSArray* hs = [v accessibilityColumnHeaderUIElements];
+            id hv = hs.count ? hs[0] : nil;
+            *header = hv ? handle_for_view((NSView*)hv) : 0;
+        }
+    }
+    return 1;
+}
+
+// AppKit takes a role at any time, so the next widget's role needs nothing
+// beyond what a11y_role does.
+void aether_ui_a11y_next_role_impl(const char* role) { (void)role; }
+
+// A grid's structure through the NSAccessibility protocol: the grid a Table
+// with its row and column counts and its column header elements; a row its
+// index; a cell (or a column header) its row and column index ranges and,
+// for a cell, its column's header element.
+void aether_ui_a11y_grid_impl(int handle, int kind, int row, int col,
+                              int rows, int cols, int header) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    if (!aeui_ga_store(handle, kind, row, col, rows, cols, header)) return;
+    if (kind == 0) {
+        [v setAccessibilityRole:NSAccessibilityTableRole];
+        [v setAccessibilityRowCount:rows];
+        [v setAccessibilityColumnCount:cols];
+    } else if (kind == 1) {
+        [v setAccessibilityRole:NSAccessibilityRowRole];
+        [v setAccessibilityIndex:row];
+        [v setAccessibilityRowIndexRange:NSMakeRange((NSUInteger)row, 1)];
+    } else {
+        [v setAccessibilityRole:NSAccessibilityCellRole];
+        [v setAccessibilityRowIndexRange:NSMakeRange((NSUInteger)row, 1)];
+        [v setAccessibilityColumnIndexRange:NSMakeRange((NSUInteger)col, 1)];
+        if (kind == 2) {
+            NSView* hv = header > 0 ? (__bridge NSView*)aether_ui_get_widget(header) : nil;
+            [v setAccessibilityColumnHeaderUIElements:hv ? @[hv] : nil];
+        } else {
+            // A column header joins its grid's column header elements.
+            for (NSView* a = [v superview]; a; a = [a superview]) {
+                int ah = handle_for_view(a);
+                AeuiGridA11y* ge = aeui_ga_at(ah, 0);
+                if (ge && ge->set && ge->kind == 0) {
+                    NSArray* had = [a accessibilityColumnHeaderUIElements] ?: @[];
+                    if (![had containsObject:v])
+                        [a setAccessibilityColumnHeaderUIElements:[had arrayByAddingObject:v]];
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void aether_ui_a11y_set_role_impl(int handle, const char* role) {
@@ -3652,6 +3732,16 @@ void aether_ui_a11y_get_impl(int handle,
     if (desc && descsz) desc[0] = '\0';
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
+    if (role && rolesz) {
+        // A grid part reads back as the part it is (AppKit's Row role also
+        // stands for a list item, its Table for a table).
+        static const char* gnames[] = { "grid", "row", "gridcell", "columnheader" };
+        int gk, gr, gc, grs, gcs, gh;
+        if (aether_ui_a11y_grid_get_impl(handle, &gk, &gr, &gc, &grs, &gcs, &gh) && gk >= 0 && gk <= 3) {
+            strncpy(role, gnames[gk], rolesz - 1); role[rolesz - 1] = '\0';
+            role = NULL;
+        }
+    }
     if (role && rolesz) {
         // An explicit override reads back from the native role; when none was
         // set (native default is empty here) fall back to the type's auto-role.

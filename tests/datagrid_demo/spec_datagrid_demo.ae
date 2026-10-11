@@ -3,7 +3,8 @@
 // clicks and keys move a cursor and a range, read back as the demo's
 // "selection:" line and as the cells' colours (phase 2); header drags resize
 // and move columns, read back as geometry and the demo's lines (phase 3);
-// an editor opens over a cell, commits and cancels (phase 4).
+// an editor opens over a cell, commits and cancels (phase 4); the grid, its
+// rows and cells say where they are to a screen reader (phase 5).
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
@@ -69,6 +70,32 @@ settled(t: string, f: string, want: int) -> int {
         i = i + 1
     }
     return v
+}
+
+// A string field of the widget with text t.
+str_of_text(t: string, f: string) -> string {
+    body = uidriver.get_body("/widget/${uidriver.widget_id_by_text(t)}")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = uidriver.field_str(v, f)
+    json.json_free(v)
+    return r
+}
+
+// The id of the first widget whose role is `role` (0 when none).
+id_of_role(role: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) && id == 0 {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "role"), role) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
 }
 
 // The open editor (the demo's only text field), 0 when none.
@@ -321,5 +348,33 @@ main() {
             spec.assert_eq(count_of("text"), 154, "no widgets left behind")
         }
     }
+    spec.describe(fw, "accessibility") {
+        spec.it("the grid says its size: 100,000 rows and a header row, 50 columns") callback {
+            gid = id_of_role("grid")
+            spec.assert_true(gid > 0, "a widget with the grid role")
+            spec.assert_eq(uidriver.widget_int_field_by_id(gid, "a11y_rows"), 100001, "rows, the header row included")
+            spec.assert_eq(uidriver.widget_int_field_by_id(gid, "a11y_cols"), 50, "columns")
+        }
+        spec.it("a cell names its row, its column and its column's header") callback {
+            spec.assert_str_eq(str_of_text("R99985C1", "role"), "gridcell", "a grid cell")
+            spec.assert_eq(field_of_text("R99985C1", "a11y_row"), 99986, "model row 99,985 is row 99,986 (the header row is 0)")
+            spec.assert_eq(field_of_text("R99985C1", "a11y_col"), 1, "column 1")
+            spec.assert_str_eq(uidriver.widget_text_by_id(field_of_text("R99985C1", "a11y_header")), "A", "its header is A")
+        }
+        spec.it("a header is row 0 of its column, and a moved column's header goes with it") callback {
+            spec.assert_str_eq(str_of_text("A", "role"), "columnheader", "a column header")
+            spec.assert_eq(field_of_text("A", "a11y_row"), 0, "row 0")
+            spec.assert_eq(field_of_text("A", "a11y_col"), 1, "column 1")
+            spec.assert_eq(field_of_text("B", "a11y_col"), 5, "B, moved to column 5, says 5")
+        }
+        spec.it("scrolling: the same cell widget names the row it shows now") callback {
+            v = nth_of("slider", 0)
+            uidriver.post_ok("/widget/${v}/set_value?v=0", "scroll to the top")
+            spec.assert_true(shows("R0C1") == 1, "row 0 shown")
+            spec.assert_eq(field_of_text("R0C1", "a11y_row"), 1, "model row 0 is row 1")
+            spec.assert_eq(field_of_text("R2C1", "a11y_row"), 3, "model row 2 is row 3")
+        }
+    }
+
     return spec.run_summary(fw)
 }

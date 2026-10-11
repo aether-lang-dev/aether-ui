@@ -89,6 +89,7 @@
 #include "aether_ui_backend.h"
 #include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
 #include "aether_ui_system_extras.h" // headless open_url record (GET /opened_urls)
+#include "aether_ui_a11y_grid.h"     // the grid a11y side-store (data-grid.md phase 5)
 
 // ---------------------------------------------------------------------------
 // Closure struct — must match Aether codegen's _AeClosure layout (identical to
@@ -1371,6 +1372,110 @@ static void a11y_copy(char* dst, int sz, NSString* s) {
 void aether_ui_a11y_set_role_impl(int handle, const char* role) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (v) a11y_store(v, &kA11yRole, role);
+}
+
+// UIKit takes a role at any time: nothing beyond what a11y_role does.
+void aether_ui_a11y_next_role_impl(const char* role) { (void)role; }
+
+// ── A grid's structure for VoiceOver ────────────────────────────────────
+// UIKit reads a table through UIAccessibilityContainerDataTable on the
+// container (accessibilityContainerType = DataTable) and
+// UIAccessibilityContainerDataTableCell on its cells. Both are answered from
+// the grid side-store by a category on UIView: UIKit asks a view only when
+// its container type says it is a data table, so every other view is
+// untouched.
+static UIView* aeui_ga_find(UIView* in, int kind, NSInteger row, NSInteger col) {
+    for (UIView* sv in in.subviews) {
+        int h = aether_ui_handle_for_widget((__bridge void*)sv);
+        AeuiGridA11y* e = aeui_ga_at(h, 0);
+        if (e && e->set && e->kind == kind && (row < 0 || e->row == row) && e->col == col)
+            return sv;
+        UIView* deeper = aeui_ga_find(sv, kind, row, col);
+        if (deeper) return deeper;
+    }
+    return nil;
+}
+
+@interface UIView (AeuiGridA11y) <UIAccessibilityContainerDataTable, UIAccessibilityContainerDataTableCell>
+@end
+@implementation UIView (AeuiGridA11y)
+- (AeuiGridA11y*)aeui_ga {
+    AeuiGridA11y* e = aeui_ga_at(aether_ui_handle_for_widget((__bridge void*)self), 0);
+    return (e && e->set) ? e : NULL;
+}
+- (NSUInteger)accessibilityRowCount {
+    AeuiGridA11y* e = [self aeui_ga];
+    return (e && e->kind == 0) ? (NSUInteger)e->rows : 0;
+}
+- (NSUInteger)accessibilityColumnCount {
+    AeuiGridA11y* e = [self aeui_ga];
+    return (e && e->kind == 0) ? (NSUInteger)e->cols : 0;
+}
+- (id<UIAccessibilityContainerDataTableCell>)accessibilityDataTableCellElementForRow:(NSUInteger)row
+                                                                                column:(NSUInteger)column {
+    if (row == 0) return (id<UIAccessibilityContainerDataTableCell>)aeui_ga_find(self, 3, -1, (NSInteger)column);
+    return (id<UIAccessibilityContainerDataTableCell>)aeui_ga_find(self, 2, (NSInteger)row, (NSInteger)column);
+}
+- (NSArray<id<UIAccessibilityContainerDataTableCell>>*)accessibilityHeaderElementsForColumn:(NSUInteger)column {
+    UIView* h = aeui_ga_find(self, 3, -1, (NSInteger)column);
+    return h ? @[(id<UIAccessibilityContainerDataTableCell>)h] : @[];
+}
+- (NSRange)accessibilityRowRange {
+    AeuiGridA11y* e = [self aeui_ga];
+    return (e && e->kind >= 2) ? NSMakeRange((NSUInteger)e->row, 1) : NSMakeRange(NSNotFound, 0);
+}
+- (NSRange)accessibilityColumnRange {
+    AeuiGridA11y* e = [self aeui_ga];
+    return (e && e->kind >= 2) ? NSMakeRange((NSUInteger)e->col, 1) : NSMakeRange(NSNotFound, 0);
+}
+@end
+
+// Driver readback through the data-table protocol VoiceOver uses: the
+// grid's counts only if it really is a DataTable container, a cell's ranges
+// from its UIAccessibilityContainerDataTableCell methods, and its header
+// from the grid's accessibilityHeaderElementsForColumn:.
+int aether_ui_a11y_grid_get_impl(int handle, int* kind, int* row, int* col,
+                                 int* rows, int* cols, int* header) {
+    if (!aeui_ga_get(handle, kind, row, col, rows, cols, header)) return 0;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return 0;
+    if (*kind == 0) {
+        int table = v.accessibilityContainerType == UIAccessibilityContainerTypeDataTable;
+        *rows = table ? (int)[v accessibilityRowCount] : -1;
+        *cols = table ? (int)[v accessibilityColumnCount] : -1;
+    } else if (*kind >= 2) {
+        NSRange rr = [v accessibilityRowRange], cr = [v accessibilityColumnRange];
+        *row = rr.location == NSNotFound ? -1 : (int)rr.location;
+        *col = cr.location == NSNotFound ? -1 : (int)cr.location;
+        if (*kind == 2) {
+            *header = 0;
+            for (UIView* a = v.superview; a; a = a.superview) {
+                if (a.accessibilityContainerType == UIAccessibilityContainerTypeDataTable) {
+                    NSArray* hs = [a accessibilityHeaderElementsForColumn:(NSUInteger)*col];
+                    UIView* hv = hs.count ? (UIView*)hs[0] : nil;
+                    *header = hv ? aether_ui_handle_for_widget((__bridge void*)hv) : 0;
+                    break;
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+void aether_ui_a11y_grid_impl(int handle, int kind, int row, int col,
+                              int rows, int cols, int header) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    if (!aeui_ga_store(handle, kind, row, col, rows, cols, header)) return;
+    static const char* roles[] = { "grid", "row", "gridcell", "columnheader" };
+    if (kind >= 0 && kind <= 3) a11y_store(v, &kA11yRole, roles[kind]);
+    if (kind == 0) {
+        v.isAccessibilityElement = NO;   // a container: its cells are the elements
+        v.accessibilityContainerType = UIAccessibilityContainerTypeDataTable;
+    } else if (kind >= 2) {
+        v.isAccessibilityElement = YES;
+        if (kind == 3) v.accessibilityTraits |= UIAccessibilityTraitHeader;
+    }
 }
 
 void aether_ui_a11y_set_label_impl(int handle, const char* name) {

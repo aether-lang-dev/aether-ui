@@ -225,6 +225,7 @@
 #include <unistd.h>
 
 #include "aether_ui_backend.h"
+#include "aether_ui_a11y_grid.h"   // the grid a11y side-store (data-grid.md phase 5)
 #include "aether_ui_test_server.h"    // AetherDriverHooks + aether_ui_test_server_start
 #include "aether_ui_system_extras.h"  // aether_ui_state_notify (observers live above the ABI)
 
@@ -3311,6 +3312,8 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
 JCLASS(C_A11y, "dev/aether/ui/AetherA11y");
 JMETHOD(M_A11y_setClassName, C_A11y, "setClassName", "(Ljava/lang/String;)V");
 JMETHOD(M_A11y_setHint, C_A11y, "setHint", "(Ljava/lang/String;)V");
+JMETHOD(M_A11y_setCollection, C_A11y, "setCollection", "(II)V");
+JMETHOD(M_A11y_setItem, C_A11y, "setItem", "(IIZ)V");
 
 static const char* aeui_role_class(const char* role) {
     static const struct { const char* role; const char* cls; } map[] = {
@@ -3318,6 +3321,7 @@ static const char* aeui_role_class(const char* role) {
         {"radio", "android.widget.RadioButton"}, {"link", "android.widget.Button"},
         {"heading", "android.widget.TextView"}, {"image", "android.widget.ImageView"},
         {"group", "android.view.ViewGroup"}, {"table", "android.widget.GridView"},
+        {"grid", "android.widget.GridView"},
         {"list", "android.widget.ListView"}, {"tablist", "android.widget.TabWidget"},
         {"textbox", "android.widget.EditText"}, {"slider", "android.widget.SeekBar"},
         {"progressbar", "android.widget.ProgressBar"}, {"menu", "android.widget.ListView"},
@@ -3334,6 +3338,68 @@ static jobject aeui_a11y_delegate(JNIEnv* env, AeuiWidget* w) {
     w->a11y = (*env)->NewGlobalRef(env, d);
     JV(w->view, M_View_setAccessibilityDelegate, w->a11y);
     return w->a11y;
+}
+
+// Android takes a role at any time: nothing beyond what a11y_role does.
+void aether_ui_a11y_next_role_impl(const char* role) { (void)role; }
+
+// Driver readback through the AccessibilityNodeInfo the view hands TalkBack
+// (View.createAccessibilityNodeInfo runs the AetherA11y delegate): the
+// grid's CollectionInfo counts and a cell's CollectionItemInfo indices, -1
+// where the node carries none.
+JCLASS(C_ANI, "android/view/accessibility/AccessibilityNodeInfo");
+JCLASS(C_ANI_CI, "android/view/accessibility/AccessibilityNodeInfo$CollectionInfo");
+JCLASS(C_ANI_CII, "android/view/accessibility/AccessibilityNodeInfo$CollectionItemInfo");
+JMETHOD(M_View_createANI, C_View, "createAccessibilityNodeInfo", "()Landroid/view/accessibility/AccessibilityNodeInfo;");
+JMETHOD(M_ANI_getCI, C_ANI, "getCollectionInfo", "()Landroid/view/accessibility/AccessibilityNodeInfo$CollectionInfo;");
+JMETHOD(M_ANI_getCII, C_ANI, "getCollectionItemInfo", "()Landroid/view/accessibility/AccessibilityNodeInfo$CollectionItemInfo;");
+JMETHOD(M_CI_rows, C_ANI_CI, "getRowCount", "()I");
+JMETHOD(M_CI_cols, C_ANI_CI, "getColumnCount", "()I");
+JMETHOD(M_CII_row, C_ANI_CII, "getRowIndex", "()I");
+JMETHOD(M_CII_col, C_ANI_CII, "getColumnIndex", "()I");
+
+int aether_ui_a11y_grid_get_impl(int handle, int* kind, int* row, int* col,
+                                 int* rows, int* cols, int* header) {
+    if (!aeui_ga_get(handle, kind, row, col, rows, cols, header)) return 0;
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return 0;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return 1;
+    jobject info = JO(w->view, M_View_createANI);
+    if (!info) { aeui_check(env, "createAccessibilityNodeInfo"); aeui_unframe(env); return 1; }
+    if (*kind == 0) {
+        jobject ci = JO(info, M_ANI_getCI);
+        *rows = ci ? JI(ci, M_CI_rows) : -1;
+        *cols = ci ? JI(ci, M_CI_cols) : -1;
+    } else {
+        jobject cii = JO(info, M_ANI_getCII);
+        *row = cii ? JI(cii, M_CII_row) : -1;
+        if (*kind >= 2) *col = cii ? JI(cii, M_CII_col) : -1;
+    }
+    aeui_unframe(env);
+    return 1;
+}
+
+// A grid's structure through the widget's AetherA11y delegate: the grid's
+// CollectionInfo, a row's index, a cell's (or a column header's, as a
+// heading) CollectionItemInfo. TalkBack reads "row 3, column 2" from it.
+void aether_ui_a11y_grid_impl(int handle, int kind, int row, int col,
+                              int rows, int cols, int header) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    if (!aeui_ga_store(handle, kind, row, col, rows, cols, header)) return;
+    static const char* roles[] = { "grid", "row", "gridcell", "columnheader" };
+    if (kind >= 0 && kind <= 3 && (!w->role || strcmp(w->role, roles[kind]) != 0))
+        aether_ui_a11y_set_role_impl(handle, roles[kind]);
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    jobject d = aeui_a11y_delegate(env, w);
+    if (d) {
+        if (kind == 0) JV(d, M_A11y_setCollection, (jint)rows, (jint)cols);
+        else if (kind == 1) JV(d, M_A11y_setItem, (jint)row, (jint)-1, JNI_FALSE);
+        else JV(d, M_A11y_setItem, (jint)row, (jint)col, kind == 3 ? JNI_TRUE : JNI_FALSE);
+    }
+    aeui_unframe(env);
 }
 
 void aether_ui_a11y_set_role_impl(int handle, const char* role) {

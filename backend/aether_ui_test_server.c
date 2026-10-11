@@ -380,6 +380,13 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         const char* wt  = aether_ui_styled_weight_impl(handle);
         if (fam[0]) n += snprintf(buf + n, bufsize - n, ",\"fontFamily\":\"%s\"", fam);
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
+        int gk = 0, gr = 0, gc = 0, grs = 0, gcs = 0, gh = 0;
+        if (aether_ui_a11y_grid_get_impl(handle, &gk, &gr, &gc, &grs, &gcs, &gh)) {
+            if (gk == 0) n += snprintf(buf + n, bufsize - n, ",\"a11y_rows\":%d,\"a11y_cols\":%d", grs, gcs);
+            else if (gk == 1) n += snprintf(buf + n, bufsize - n, ",\"a11y_row\":%d", gr);
+            else n += snprintf(buf + n, bufsize - n, ",\"a11y_row\":%d,\"a11y_col\":%d", gr, gc);
+            if (gk == 2 && gh > 0) n += snprintf(buf + n, bufsize - n, ",\"a11y_header\":%d", gh);
+        }
         int ss = 0, se = 0;
         if (aether_ui_textfield_selection_impl(handle, &ss, &se))
             n += snprintf(buf + n, bufsize - n, ",\"sel_start\":%d,\"sel_end\":%d", ss, se);

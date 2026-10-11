@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Accessible grids** (docs/design/data-grid.md, phase 5):
+  `a11y_grid`, `a11y_grid_row`, `a11y_grid_cell`, `a11y_grid_header` and
+  `a11y_next_role`, real on every backend (GTK4 relations and construction
+  roles, AppKit index ranges and header elements, UIKit data-table
+  protocols, Android CollectionInfo, a Win32 UI Automation provider with the
+  Grid/Table/GridItem/TableItem patterns). `datagrid` uses them: a screen
+  reader hears the row and column a cell shows and its column's header, and
+  they follow the scroll. The driver reports `a11y_rows`/`a11y_cols`/
+  `a11y_row`/`a11y_col`/`a11y_header`, read from the platform on GTK4,
+  macOS and Android. `spec_datagrid_demo`: 32/32 on macOS, GTK 4.6 and
+  4.22, win11, FreeBSD and Android; the Win32 provider checked once with
+  PowerShell's UIAutomationClient on the interactive desktop.
 - **`datagrid` editing** (docs/design/data-grid.md, phase 4).
   `datagrid_on_edit(g) |r, c, text|` makes a grid editable: F2, a double
   click, Return (with no on_activate) or typing opens a text field over the

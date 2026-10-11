@@ -59,6 +59,20 @@ platform actually exposes where the API allows it.
   side-store when set, else fall through to `super`. The driver reports the
   effective values via the same accessors.
 
+## Grids (data-grid.md phase 5)
+
+`a11y_grid(w, rows, cols)`, `a11y_grid_row(w, row)`,
+`a11y_grid_cell(w, row, col, header)` and `a11y_grid_header(w, col)` give a
+grid's parts their roles (grid, row, gridcell, columnheader), places and
+column headers; rows and columns count from 0. `a11y_next_role(role)` gives
+the next widget made its role at construction, the only way GTK4 takes one.
+Per backend: GTK4 accessible relations; AppKit index ranges, counts and
+column header elements; UIKit UIAccessibilityContainerDataTable; Android
+CollectionInfo/CollectionItemInfo; Win32 a UI Automation provider with the
+Grid, Table, GridItem and TableItem patterns. `/widgets` reports `a11y_rows`
+/ `a11y_cols` (a grid), `a11y_row` (a row) and `a11y_row` / `a11y_col` /
+`a11y_header` (a cell). `datagrid` uses them.
+
 ## Driver surface (both servers)
 
 - `GET /widget/{id}/a11y` → `{"role":"button","name":"Delete","description":""}`

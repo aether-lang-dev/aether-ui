@@ -14,6 +14,7 @@
 
 #include "aether_ui_backend.h"
 #include "aether_ui_system_extras.h"
+#include "aether_ui_a11y_grid.h"   // the grid a11y side-store (data-grid.md phase 5)
 
 #ifndef UNICODE
 #define UNICODE
@@ -270,6 +271,7 @@ typedef struct {
     int text_truncate;    // WK_TEXT: EFFECTIVE ellipsis 0=none 2=middle 3=tail
     int image_fill;       // WK_IMAGE: EFFECTIVE fill 0=original 3=stretch
     int drag_armed;       // draggable(): the drag-source subclass is installed
+    int uia_armed;        // a11y_grid*: the UI Automation provider subclass is installed
 
     // Per-widget data (union over kind)
     union {
@@ -6229,6 +6231,8 @@ static long w32_msaa_role(const char* role) {
     if (!strcmp(role, "image"))       return ROLE_SYSTEM_GRAPHIC;
     if (!strcmp(role, "group"))       return ROLE_SYSTEM_GROUPING;
     if (!strcmp(role, "table"))       return ROLE_SYSTEM_TABLE;
+    if (!strcmp(role, "grid"))        return ROLE_SYSTEM_TABLE;
+    if (!strcmp(role, "gridcell"))    return ROLE_SYSTEM_CELL;
     if (!strcmp(role, "columnheader")) return ROLE_SYSTEM_COLUMNHEADER;
     if (!strcmp(role, "row"))         return ROLE_SYSTEM_ROW;
     if (!strcmp(role, "list"))        return ROLE_SYSTEM_LIST;
@@ -6267,6 +6271,366 @@ static void w32_annotate(HWND hwnd, const char* name, const char* role) {
             PROPID_ACC_ROLE, v);
     }
     svc->lpVtbl->Release(svc);
+}
+
+// ── A grid's structure for UI Automation (data-grid.md phase 5) ─────────
+// MSAA has roles but no rows or columns, so a grid's parts answer UIA
+// themselves: each window the grid marks (the grid's stack, its rows, its
+// header and cell labels) is subclassed to return a provider from
+// WM_GETOBJECT(UiaRootObjectId). The grid offers the Grid and Table
+// patterns (its size, the cell at (row, col), its column headers); a cell
+// GridItem and TableItem (its row and column, its grid, its column header).
+// Everything is read from the side-store the driver reads, so the AT and the
+// spec see the same numbers. uiautomationcore.dll is loaded at run time, so
+// the link line is unchanged.
+#include <stddef.h>             // offsetof
+#include <uiautomationcore.h>
+#ifndef UiaRootObjectId
+#define UiaRootObjectId (-25)
+#endif
+#define AEUIA_GridPattern       10006
+#define AEUIA_GridItemPattern   10007
+#define AEUIA_TablePattern      10012
+#define AEUIA_TableItemPattern  10013
+#define AEUIA_ControlTypeProp   30003
+#define AEUIA_NameProp          30005
+#define AEUIA_TextControl       50020
+#define AEUIA_DataGridControl   50028
+#define AEUIA_DataItemControl   50029
+#define AEUIA_HeaderItemControl 50035
+
+static const IID AEUI_IID_Simple   = {0xd6dd68d1,0x86fd,0x4332,{0x86,0x66,0x9a,0xbe,0xde,0xa2,0xd2,0x4c}};
+static const IID AEUI_IID_Grid     = {0xb17d6187,0x0907,0x464b,{0xa1,0x68,0x0e,0xf1,0x7a,0x15,0x72,0xb1}};
+static const IID AEUI_IID_GridItem = {0xd02541f1,0xfb81,0x4d64,{0xae,0x32,0xf5,0x20,0xf8,0xa6,0xdb,0xd1}};
+static const IID AEUI_IID_Table    = {0x9c860395,0x97b3,0x490a,{0xb5,0x2a,0x85,0x8c,0xc2,0x2a,0xf1,0x66}};
+static const IID AEUI_IID_TableItem= {0xb9734fa6,0x771f,0x4d78,{0x9c,0x90,0x25,0x17,0x99,0x93,0x49,0xcd}};
+static const IID AEUI_IID_Unknown  = {0x00000000,0x0000,0x0000,{0xc0,0x00,0x00,0x00,0x00,0x00,0x00,0x46}};
+
+static LRESULT (WINAPI *aeui_UiaReturn)(HWND, WPARAM, LPARAM, IRawElementProviderSimple*) = NULL;
+static HRESULT (WINAPI *aeui_UiaHost)(HWND, IRawElementProviderSimple**) = NULL;
+
+static int aeui_uia_load(void) {
+    static int tried = 0;
+    if (!tried) {
+        tried = 1;
+        HMODULE m = LoadLibraryW(L"uiautomationcore.dll");
+        if (m) {
+            aeui_UiaReturn = (LRESULT (WINAPI *)(HWND, WPARAM, LPARAM, IRawElementProviderSimple*))
+                (void*)GetProcAddress(m, "UiaReturnRawElementProvider");
+            aeui_UiaHost = (HRESULT (WINAPI *)(HWND, IRawElementProviderSimple**))
+                (void*)GetProcAddress(m, "UiaHostProviderFromHwnd");
+        }
+    }
+    return aeui_UiaReturn != NULL;
+}
+
+typedef struct AeuiUia {
+    IRawElementProviderSimple simple;
+    IGridItemProvider item;
+    IGridProvider grid;
+    ITableProvider table;
+    ITableItemProvider titem;
+    LONG ref;
+    int handle;
+} AeuiUia;
+
+static AeuiUia** aeui_uias = NULL;
+static int aeui_uias_len = 0;
+static AeuiUia* aeui_uia_for(int handle);
+
+#define AEUIA_SELF(p, member) ((AeuiUia*)((char*)(p) - offsetof(AeuiUia, member)))
+
+static AeuiGridA11y* aeui_uia_entry(AeuiUia* u) {
+    AeuiGridA11y* e = aeui_ga_at(u->handle, 0);
+    return (e && e->set) ? e : NULL;
+}
+static HWND aeui_uia_hwnd(int handle) {
+    Widget* w = widget_at(handle);
+    return w ? w->hwnd : NULL;
+}
+
+static HRESULT aeui_uia_qi(AeuiUia* u, REFIID riid, void** out) {
+    *out = NULL;
+    AeuiGridA11y* e = aeui_uia_entry(u);
+    int kind = e ? e->kind : -1;
+    if (IsEqualIID(riid, &AEUI_IID_Unknown) || IsEqualIID(riid, &AEUI_IID_Simple)) *out = &u->simple;
+    else if (kind >= 2 && IsEqualIID(riid, &AEUI_IID_GridItem)) *out = &u->item;
+    else if (kind >= 2 && IsEqualIID(riid, &AEUI_IID_TableItem)) *out = &u->titem;
+    else if (kind == 0 && IsEqualIID(riid, &AEUI_IID_Grid)) *out = &u->grid;
+    else if (kind == 0 && IsEqualIID(riid, &AEUI_IID_Table)) *out = &u->table;
+    if (!*out) return E_NOINTERFACE;
+    InterlockedIncrement(&u->ref);
+    return S_OK;
+}
+/* A provider lives as long as its widget's slot: AddRef/Release count, and
+   nothing is freed (a grid has a few hundred of these, made once). */
+static ULONG aeui_uia_addref(AeuiUia* u) { return (ULONG)InterlockedIncrement(&u->ref); }
+static ULONG aeui_uia_release(AeuiUia* u) { return (ULONG)InterlockedDecrement(&u->ref); }
+
+/* The grid a widget is inside: the nearest ancestor window marked kind 0. */
+static AeuiUia* aeui_uia_grid_of(int handle) {
+    HWND h = aeui_uia_hwnd(handle);
+    for (h = h ? GetParent(h) : NULL; h; h = GetParent(h)) {
+        int ah = handle_for_hwnd(h);
+        AeuiGridA11y* e = aeui_ga_at(ah, 0);
+        if (e && e->set && e->kind == 0) return aeui_uia_for(ah);
+    }
+    return NULL;
+}
+
+/* A grid's descendant cell (kind 2 at row, col) or column header (row 0). */
+typedef struct { int row, col, want_headers, found; SAFEARRAY* arr; LONG n; } AeuiUiaFind;
+static BOOL CALLBACK aeui_uia_find_cb(HWND h, LPARAM lp) {
+    AeuiUiaFind* f = (AeuiUiaFind*)lp;
+    int hh = handle_for_hwnd(h);
+    AeuiGridA11y* e = aeui_ga_at(hh, 0);
+    if (!e || !e->set) return TRUE;
+    if (f->want_headers) {
+        if (e->kind == 3 && f->arr) {
+            AeuiUia* u = aeui_uia_for(hh);
+            if (u) { IUnknown* unk = (IUnknown*)&u->simple; SafeArrayPutElement(f->arr, &f->n, unk); f->n++; }
+        } else if (e->kind == 3) {
+            f->n++;
+        }
+        return TRUE;
+    }
+    if ((f->row == 0 && e->kind == 3 && e->col == f->col)
+        || (e->kind == 2 && e->row == f->row && e->col == f->col)) {
+        f->found = hh;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static SAFEARRAY* aeui_uia_array1(IUnknown* one) {
+    SAFEARRAY* a = SafeArrayCreateVector(VT_UNKNOWN, 0, one ? 1 : 0);
+    if (a && one) { LONG i = 0; SafeArrayPutElement(a, &i, one); }
+    return a;
+}
+
+/* ---- IRawElementProviderSimple ---- */
+static HRESULT STDMETHODCALLTYPE ae_s_qi(IRawElementProviderSimple* p, REFIID r, void** o) { return aeui_uia_qi(AEUIA_SELF(p, simple), r, o); }
+static ULONG STDMETHODCALLTYPE ae_s_add(IRawElementProviderSimple* p) { return aeui_uia_addref(AEUIA_SELF(p, simple)); }
+static ULONG STDMETHODCALLTYPE ae_s_rel(IRawElementProviderSimple* p) { return aeui_uia_release(AEUIA_SELF(p, simple)); }
+static HRESULT STDMETHODCALLTYPE ae_s_opts(IRawElementProviderSimple* p, enum ProviderOptions* o) {
+    (void)p;
+    *o = (enum ProviderOptions)(ProviderOptions_ServerSideProvider | ProviderOptions_UseComThreading);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_s_pattern(IRawElementProviderSimple* p, PATTERNID id, IUnknown** o) {
+    AeuiUia* u = AEUIA_SELF(p, simple);
+    AeuiGridA11y* e = aeui_uia_entry(u);
+    *o = NULL;
+    if (!e) return S_OK;
+    if (e->kind == 0 && id == AEUIA_GridPattern) *o = (IUnknown*)&u->grid;
+    else if (e->kind == 0 && id == AEUIA_TablePattern) *o = (IUnknown*)&u->table;
+    else if (e->kind >= 2 && id == AEUIA_GridItemPattern) *o = (IUnknown*)&u->item;
+    else if (e->kind >= 2 && id == AEUIA_TableItemPattern) *o = (IUnknown*)&u->titem;
+    if (*o) aeui_uia_addref(u);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_s_prop(IRawElementProviderSimple* p, PROPERTYID id, VARIANT* v) {
+    AeuiUia* u = AEUIA_SELF(p, simple);
+    AeuiGridA11y* e = aeui_uia_entry(u);
+    VariantInit(v);
+    if (!e) return S_OK;
+    if (id == AEUIA_ControlTypeProp) {
+        v->vt = VT_I4;
+        v->lVal = e->kind == 0 ? AEUIA_DataGridControl
+                : e->kind == 1 ? AEUIA_DataItemControl
+                : e->kind == 3 ? AEUIA_HeaderItemControl : AEUIA_TextControl;
+    } else if (id == AEUIA_NameProp && e->kind >= 2) {
+        HWND h = aeui_uia_hwnd(u->handle);
+        wchar_t buf[512];
+        buf[0] = 0;
+        if (h) GetWindowTextW(h, buf, 512);
+        v->vt = VT_BSTR;
+        v->bstrVal = SysAllocString(buf);
+    }
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_s_host(IRawElementProviderSimple* p, IRawElementProviderSimple** o) {
+    AeuiUia* u = AEUIA_SELF(p, simple);
+    *o = NULL;
+    HWND h = aeui_uia_hwnd(u->handle);
+    if (h && aeui_UiaHost) return aeui_UiaHost(h, o);
+    return S_OK;
+}
+static IRawElementProviderSimpleVtbl aeui_vt_simple = {
+    ae_s_qi, ae_s_add, ae_s_rel, ae_s_opts, ae_s_pattern, ae_s_prop, ae_s_host
+};
+
+/* ---- IGridItemProvider ---- */
+static HRESULT STDMETHODCALLTYPE ae_i_qi(IGridItemProvider* p, REFIID r, void** o) { return aeui_uia_qi(AEUIA_SELF(p, item), r, o); }
+static ULONG STDMETHODCALLTYPE ae_i_add(IGridItemProvider* p) { return aeui_uia_addref(AEUIA_SELF(p, item)); }
+static ULONG STDMETHODCALLTYPE ae_i_rel(IGridItemProvider* p) { return aeui_uia_release(AEUIA_SELF(p, item)); }
+static HRESULT STDMETHODCALLTYPE ae_i_row(IGridItemProvider* p, int* o) {
+    AeuiGridA11y* e = aeui_uia_entry(AEUIA_SELF(p, item)); *o = e ? e->row : 0; return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_i_col(IGridItemProvider* p, int* o) {
+    AeuiGridA11y* e = aeui_uia_entry(AEUIA_SELF(p, item)); *o = e ? e->col : 0; return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_i_span(IGridItemProvider* p, int* o) { (void)p; *o = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE ae_i_grid(IGridItemProvider* p, IRawElementProviderSimple** o) {
+    AeuiUia* g = aeui_uia_grid_of(AEUIA_SELF(p, item)->handle);
+    *o = g ? &g->simple : NULL;
+    if (g) aeui_uia_addref(g);
+    return S_OK;
+}
+static IGridItemProviderVtbl aeui_vt_item = {
+    ae_i_qi, ae_i_add, ae_i_rel, ae_i_row, ae_i_col, ae_i_span, ae_i_span, ae_i_grid
+};
+
+/* ---- IGridProvider ---- */
+static HRESULT STDMETHODCALLTYPE ae_g_qi(IGridProvider* p, REFIID r, void** o) { return aeui_uia_qi(AEUIA_SELF(p, grid), r, o); }
+static ULONG STDMETHODCALLTYPE ae_g_add(IGridProvider* p) { return aeui_uia_addref(AEUIA_SELF(p, grid)); }
+static ULONG STDMETHODCALLTYPE ae_g_rel(IGridProvider* p) { return aeui_uia_release(AEUIA_SELF(p, grid)); }
+static HRESULT STDMETHODCALLTYPE ae_g_item(IGridProvider* p, int row, int col, IRawElementProviderSimple** o) {
+    AeuiUia* u = AEUIA_SELF(p, grid);
+    *o = NULL;
+    HWND h = aeui_uia_hwnd(u->handle);
+    if (!h) return S_OK;
+    AeuiUiaFind f = { row, col, 0, 0, NULL, 0 };
+    EnumChildWindows(h, aeui_uia_find_cb, (LPARAM)&f);
+    AeuiUia* c = f.found ? aeui_uia_for(f.found) : NULL;
+    if (c) { *o = &c->simple; aeui_uia_addref(c); }
+    return S_OK;   /* a row scrolled out of the window has no element */
+}
+static HRESULT STDMETHODCALLTYPE ae_g_rows(IGridProvider* p, int* o) {
+    AeuiGridA11y* e = aeui_uia_entry(AEUIA_SELF(p, grid)); *o = e ? e->rows : 0; return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_g_cols(IGridProvider* p, int* o) {
+    AeuiGridA11y* e = aeui_uia_entry(AEUIA_SELF(p, grid)); *o = e ? e->cols : 0; return S_OK;
+}
+static IGridProviderVtbl aeui_vt_grid = {
+    ae_g_qi, ae_g_add, ae_g_rel, ae_g_item, ae_g_rows, ae_g_cols
+};
+
+/* ---- ITableProvider ---- */
+static HRESULT STDMETHODCALLTYPE ae_t_qi(ITableProvider* p, REFIID r, void** o) { return aeui_uia_qi(AEUIA_SELF(p, table), r, o); }
+static ULONG STDMETHODCALLTYPE ae_t_add(ITableProvider* p) { return aeui_uia_addref(AEUIA_SELF(p, table)); }
+static ULONG STDMETHODCALLTYPE ae_t_rel(ITableProvider* p) { return aeui_uia_release(AEUIA_SELF(p, table)); }
+static HRESULT STDMETHODCALLTYPE ae_t_rowh(ITableProvider* p, SAFEARRAY** o) { (void)p; *o = aeui_uia_array1(NULL); return S_OK; }
+static HRESULT STDMETHODCALLTYPE ae_t_colh(ITableProvider* p, SAFEARRAY** o) {
+    AeuiUia* u = AEUIA_SELF(p, table);
+    HWND h = aeui_uia_hwnd(u->handle);
+    AeuiUiaFind f = { 0, 0, 1, 0, NULL, 0 };
+    if (h) EnumChildWindows(h, aeui_uia_find_cb, (LPARAM)&f);   /* count */
+    f.arr = SafeArrayCreateVector(VT_UNKNOWN, 0, (ULONG)f.n);
+    f.n = 0;
+    if (h && f.arr) EnumChildWindows(h, aeui_uia_find_cb, (LPARAM)&f);
+    *o = f.arr;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE ae_t_major(ITableProvider* p, enum RowOrColumnMajor* o) { (void)p; *o = RowOrColumnMajor_RowMajor; return S_OK; }
+static ITableProviderVtbl aeui_vt_table = {
+    ae_t_qi, ae_t_add, ae_t_rel, ae_t_rowh, ae_t_colh, ae_t_major
+};
+
+/* ---- ITableItemProvider ---- */
+static HRESULT STDMETHODCALLTYPE ae_ti_qi(ITableItemProvider* p, REFIID r, void** o) { return aeui_uia_qi(AEUIA_SELF(p, titem), r, o); }
+static ULONG STDMETHODCALLTYPE ae_ti_add(ITableItemProvider* p) { return aeui_uia_addref(AEUIA_SELF(p, titem)); }
+static ULONG STDMETHODCALLTYPE ae_ti_rel(ITableItemProvider* p) { return aeui_uia_release(AEUIA_SELF(p, titem)); }
+static HRESULT STDMETHODCALLTYPE ae_ti_rowh(ITableItemProvider* p, SAFEARRAY** o) { (void)p; *o = aeui_uia_array1(NULL); return S_OK; }
+static HRESULT STDMETHODCALLTYPE ae_ti_colh(ITableItemProvider* p, SAFEARRAY** o) {
+    AeuiGridA11y* e = aeui_uia_entry(AEUIA_SELF(p, titem));
+    AeuiUia* h = (e && e->kind == 2 && e->header > 0) ? aeui_uia_for(e->header) : NULL;
+    *o = aeui_uia_array1(h ? (IUnknown*)&h->simple : NULL);
+    return S_OK;
+}
+static ITableItemProviderVtbl aeui_vt_titem = {
+    ae_ti_qi, ae_ti_add, ae_ti_rel, ae_ti_rowh, ae_ti_colh
+};
+
+static AeuiUia* aeui_uia_for(int handle) {
+    if (handle < 1) return NULL;
+    if (handle > aeui_uias_len) {
+        int want = handle + 64;
+        AeuiUia** g = (AeuiUia**)realloc(aeui_uias, sizeof(AeuiUia*) * (size_t)want);
+        if (!g) return NULL;
+        for (int i = aeui_uias_len; i < want; i++) g[i] = NULL;
+        aeui_uias = g;
+        aeui_uias_len = want;
+    }
+    AeuiUia* u = aeui_uias[handle - 1];
+    if (!u) {
+        u = (AeuiUia*)calloc(1, sizeof(AeuiUia));
+        if (!u) return NULL;
+        u->simple.lpVtbl = &aeui_vt_simple;
+        u->item.lpVtbl = &aeui_vt_item;
+        u->grid.lpVtbl = &aeui_vt_grid;
+        u->table.lpVtbl = &aeui_vt_table;
+        u->titem.lpVtbl = &aeui_vt_titem;
+        u->ref = 1;
+        u->handle = handle;
+        aeui_uias[handle - 1] = u;
+    }
+    return u;
+}
+
+static LRESULT CALLBACK w32_uia_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                     UINT_PTR id, DWORD_PTR ref) {
+    (void)id;
+    if (msg == WM_GETOBJECT && (LONG)lp == UiaRootObjectId && aeui_UiaReturn) {
+        AeuiUia* u = aeui_uia_for((int)ref);
+        if (u) return aeui_UiaReturn(hwnd, wp, lp, &u->simple);
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+// Win32 takes a role at any time: nothing beyond what a11y_role does.
+void aether_ui_a11y_next_role_impl(const char* role) { (void)role; }
+
+// Driver readback through the UI Automation provider a client gets: the
+// grid's IGridProvider counts, a cell's IGridItemProvider row and column and
+// its ITableItemProvider header, each only if the part's window really
+// answers WM_GETOBJECT with it (the subclass is in place).
+int aether_ui_a11y_grid_get_impl(int handle, int* kind, int* row, int* col,
+                                 int* rows, int* cols, int* header) {
+    if (!aeui_ga_get(handle, kind, row, col, rows, cols, header)) return 0;
+    Widget* w = widget_at(handle);
+    AeuiUia* u = (w && w->uia_armed) ? aeui_uia_for(handle) : NULL;
+    if (!u) {
+        *row = *col = *rows = *cols = -1;
+        *header = 0;
+        return 1;
+    }
+    if (*kind == 0) {
+        u->grid.lpVtbl->get_RowCount(&u->grid, rows);
+        u->grid.lpVtbl->get_ColumnCount(&u->grid, cols);
+    } else if (*kind >= 2) {
+        u->item.lpVtbl->get_Row(&u->item, row);
+        u->item.lpVtbl->get_Column(&u->item, col);
+        if (*kind == 2) {
+            SAFEARRAY* hs = NULL;
+            *header = 0;
+            u->titem.lpVtbl->GetColumnHeaderItems(&u->titem, &hs);
+            if (hs) {
+                LONG i = 0;
+                IUnknown* unk = NULL;
+                if (hs->rgsabound[0].cElements > 0 && SafeArrayGetElement(hs, &i, &unk) == S_OK && unk) {
+                    *header = AEUIA_SELF(unk, simple)->handle;
+                    unk->lpVtbl->Release(unk);
+                }
+                SafeArrayDestroy(hs);
+            }
+        }
+    }
+    return 1;
+}
+
+void aether_ui_a11y_grid_impl(int handle, int kind, int row, int col,
+                              int rows, int cols, int header) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    if (!aeui_ga_store(handle, kind, row, col, rows, cols, header)) return;
+    static const char* roles[] = { "grid", "row", "gridcell", "columnheader" };
+    if (kind >= 0 && kind <= 3 && (!w->a11y_role || strcmp(w->a11y_role, roles[kind]) != 0))
+        aether_ui_a11y_set_role_impl(handle, roles[kind]);
+    if (!w->uia_armed && w->hwnd && aeui_uia_load()) {
+        OleInitialize(NULL);   /* the provider's COM threading wants an STA here */
+        if (SetWindowSubclass(w->hwnd, w32_uia_proc, 12, (DWORD_PTR)handle)) w->uia_armed = 1;
+    }
 }
 
 void aether_ui_a11y_set_role_impl(int handle, const char* role) {

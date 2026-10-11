@@ -5,6 +5,7 @@
 //   ae build app.ae --extra aether_ui_gtk4.c $(pkg-config --cflags --libs gtk4)
 
 #include "aether_ui_backend.h"
+#include "aether_ui_a11y_grid.h"
 #include "aether_ui_system_extras.h"
 #include "aether_ui_sni.h"
 #include <gtk/gtk.h>
@@ -685,9 +686,17 @@ void aether_ui_app_run_raw(int app_handle) {
 // Widget creation
 // ---------------------------------------------------------------------------
 
+// a11y_next_role: the role the next widget is built with (GTK4 takes a
+// widget's accessible role only at construction). Defined with the a11y
+// layer below.
+static int aeui_take_next_role(GtkAccessibleRole* out);
+
 int aether_ui_text_create(const char* text) {
     ensure_gtk_init();
-    GtkWidget* label = gtk_label_new(text ? text : "");
+    GtkAccessibleRole nr;
+    GtkWidget* label = aeui_take_next_role(&nr)
+        ? GTK_WIDGET(g_object_new(GTK_TYPE_LABEL, "label", text ? text : "", "accessible-role", nr, NULL))
+        : gtk_label_new(text ? text : "");
     gtk_label_set_xalign(GTK_LABEL(label), 0.0);
     return aether_ui_register_widget(label);
 }
@@ -1192,15 +1201,23 @@ int aether_ui_button_create(const char* label, void* boxed_closure) {
     return aether_ui_register_widget(btn);
 }
 
+static GtkWidget* aeui_box_new(GtkOrientation o, int spacing) {
+    GtkAccessibleRole nr;
+    if (aeui_take_next_role(&nr))
+        return GTK_WIDGET(g_object_new(GTK_TYPE_BOX, "orientation", o, "spacing", spacing,
+                                       "accessible-role", nr, NULL));
+    return gtk_box_new(o, spacing);
+}
+
 int aether_ui_vstack_create(int spacing) {
     ensure_gtk_init();
-    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, spacing);
+    GtkWidget* box = aeui_box_new(GTK_ORIENTATION_VERTICAL, spacing);
     return aether_ui_register_widget(box);
 }
 
 int aether_ui_hstack_create(int spacing) {
     ensure_gtk_init();
-    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, spacing);
+    GtkWidget* box = aeui_box_new(GTK_ORIENTATION_HORIZONTAL, spacing);
     return aether_ui_register_widget(box);
 }
 
@@ -2968,6 +2985,9 @@ static const struct { const char* name; GtkAccessibleRole role; } aeui_a11y_role
     {"image", GTK_ACCESSIBLE_ROLE_IMG},
     {"group", GTK_ACCESSIBLE_ROLE_GROUP},
     {"table", GTK_ACCESSIBLE_ROLE_TABLE},
+    {"grid", GTK_ACCESSIBLE_ROLE_GRID},
+    {"gridcell", GTK_ACCESSIBLE_ROLE_GRID_CELL},
+    {"rowheader", GTK_ACCESSIBLE_ROLE_ROW_HEADER},
     {"columnheader", GTK_ACCESSIBLE_ROLE_COLUMN_HEADER},
     {"row", GTK_ACCESSIBLE_ROLE_ROW},
     {"list", GTK_ACCESSIBLE_ROLE_LIST},
@@ -2990,6 +3010,83 @@ static const char* aeui_a11y_role_name(GtkAccessibleRole r) {
     for (size_t i = 0; i < G_N_ELEMENTS(aeui_a11y_roles); i++)
         if (aeui_a11y_roles[i].role == r) return aeui_a11y_roles[i].name;
     return "";
+}
+
+static char* aeui_next_role = NULL;
+
+void aether_ui_a11y_next_role_impl(const char* role) {
+    g_free(aeui_next_role);
+    aeui_next_role = role ? g_strdup(role) : NULL;
+}
+
+// Consume the pending role: 1 with the GtkAccessibleRole, 0 when there is
+// none (or it is not in the vocabulary).
+static int aeui_take_next_role(GtkAccessibleRole* out) {
+    if (!aeui_next_role) return 0;
+    int found = 0;
+    for (size_t i = 0; i < G_N_ELEMENTS(aeui_a11y_roles); i++) {
+        if (strcmp(aeui_a11y_roles[i].name, aeui_next_role) == 0) {
+            *out = aeui_a11y_roles[i].role;
+            found = 1;
+        }
+    }
+    g_free(aeui_next_role);
+    aeui_next_role = NULL;
+    return found;
+}
+
+// A grid's structure (aether_ui_a11y_grid.h): the role (recorded; a real one
+// needs a11y_next_role at construction) and GTK's ARIA-style relations,
+// which count from 1. GTK has no relation naming a cell's column header; an
+// AT finds it by column index among the grid's columnheader cells.
+void aether_ui_a11y_grid_impl(int handle, int kind, int row, int col,
+                              int rows, int cols, int header) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    if (!aeui_ga_store(handle, kind, row, col, rows, cols, header)) return;
+    static const char* roles[] = { "grid", "row", "gridcell", "columnheader" };
+    if (kind >= 0 && kind <= 3) {
+        const char* had = g_object_get_data(G_OBJECT(w), "aeui-a11y-role");
+        if (!had || strcmp(had, roles[kind]) != 0) aether_ui_a11y_set_role_impl(handle, roles[kind]);
+    }
+    GtkAccessible* a = GTK_ACCESSIBLE(w);
+    if (kind == 0) {
+        gtk_accessible_update_relation(a, GTK_ACCESSIBLE_RELATION_ROW_COUNT, rows,
+                                       GTK_ACCESSIBLE_RELATION_COL_COUNT, cols, -1);
+    } else if (kind == 1) {
+        gtk_accessible_update_relation(a, GTK_ACCESSIBLE_RELATION_ROW_INDEX, row + 1, -1);
+    } else {
+        gtk_accessible_update_relation(a, GTK_ACCESSIBLE_RELATION_ROW_INDEX, row + 1,
+                                       GTK_ACCESSIBLE_RELATION_COL_INDEX, col + 1, -1);
+    }
+}
+
+// Driver readback, from GTK's own AT view (the requests run on the GTK
+// thread): each recorded index or count is reported only if the widget's
+// accessible relation holds it (gtk_test_accessible_check_relation), else
+// -1, so a value that never reached GTK fails the spec rather than passing
+// on the record alone.
+int aether_ui_a11y_grid_get_impl(int handle, int* kind, int* row, int* col,
+                                 int* rows, int* cols, int* header) {
+    if (!aeui_ga_get(handle, kind, row, col, rows, cols, header)) return 0;
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return 0;
+    GtkAccessible* a = GTK_ACCESSIBLE(w);
+    char* err;
+    if (*kind == 0) {
+        err = gtk_test_accessible_check_relation(a, GTK_ACCESSIBLE_RELATION_ROW_COUNT, *rows);
+        if (err) { *rows = -1; g_free(err); }
+        err = gtk_test_accessible_check_relation(a, GTK_ACCESSIBLE_RELATION_COL_COUNT, *cols);
+        if (err) { *cols = -1; g_free(err); }
+    } else {
+        err = gtk_test_accessible_check_relation(a, GTK_ACCESSIBLE_RELATION_ROW_INDEX, *row + 1);
+        if (err) { *row = -1; g_free(err); }
+        if (*kind >= 2) {
+            err = gtk_test_accessible_check_relation(a, GTK_ACCESSIBLE_RELATION_COL_INDEX, *col + 1);
+            if (err) { *col = -1; g_free(err); }
+        }
+    }
+    return 1;
 }
 
 void aether_ui_a11y_set_role_impl(int handle, const char* role) {
@@ -3035,6 +3132,13 @@ void aether_ui_a11y_get_impl(int handle,
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return;
 
+    if (role && rolesz && aeui_ga_at(handle, 0) && aeui_ga_at(handle, 0)->set) {
+        // A grid part was built with its role (a11y_next_role), so report
+        // GTK's own: a part built without it reads as what GTK made it.
+        const char* rn = aeui_a11y_role_name(gtk_accessible_get_accessible_role(GTK_ACCESSIBLE(w)));
+        g_strlcpy(role, rn ? rn : "", rolesz);
+        role = NULL;
+    }
     if (role && rolesz) {
         const char* over = g_object_get_data(G_OBJECT(w), "aeui-a11y-role");
         const char* rn = over ? over

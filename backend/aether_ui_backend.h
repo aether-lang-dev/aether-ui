@@ -272,6 +272,21 @@ void aether_ui_a11y_set_label_impl(int handle, const char* name);
 void aether_ui_a11y_set_description_impl(int handle, const char* desc);
 // Driver readback: fill role/name/description with the widget's EFFECTIVE
 // accessible values (auto when unset). Any buffer may be left empty.
+// A grid's accessible structure (docs/design/data-grid.md, phase 5). kind 0
+// a grid of rows x cols, 1 a row (row), 2 a cell at (row, col) whose column
+// header is the widget `header` (0: none), 3 a column header at (0, col).
+// Rows and columns count from 0. Each backend hands it to the platform
+// (relations, index ranges, collection info, UIA Grid/GridItem) and keeps it
+// in the shared side-store (aether_ui_a11y_grid.h) the driver reads.
+void aether_ui_a11y_grid_impl(int handle, int kind, int row, int col,
+                              int rows, int cols, int header);
+int aether_ui_a11y_grid_get_impl(int handle, int* kind, int* row, int* col,
+                                 int* rows, int* cols, int* header);
+// The next widget made takes this role from construction. GTK4 fixes a
+// widget's accessible role when it is built, so a role set afterwards reaches
+// only the driver's side-store there; elsewhere a role can change at any
+// time and this is a no-op beyond what a11y_role does.
+void aether_ui_a11y_next_role_impl(const char* role);
 void aether_ui_a11y_get_impl(int handle,
                              char* role, int rolesz,
                              char* name, int namesz,
