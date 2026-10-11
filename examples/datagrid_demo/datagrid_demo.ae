@@ -78,8 +78,9 @@ main() {
             // closure in the block above is made before `g` is assigned),
             // here chained as a method: `g.datagrid_on_select()` is
             // `datagrid_on_select(g)`. (Not in the selective import above:
-            // ae 0.801 mangles a method call on a selectively imported name
-            // wrongly; the fix is aether's ufcs_selective_import.)
+            // before ae 0.804.0 a method call on a selectively imported name
+            // was mangled wrongly (aether #2715), and aether-ui's floor is
+            // older than that.)
             g.datagrid_col_limits(24, 1000).datagrid_on_select() callback |r: int, c: int| {
                 _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}")
             }

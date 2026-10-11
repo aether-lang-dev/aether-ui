@@ -172,10 +172,10 @@ more.style_flat()                 // or, in a block: button("…") { flat() }
 ```
 
 (A method call on a name you ALSO import selectively —
-`import ui (datagrid_cells)` then `g.datagrid_cells()` — needs an aether with
-the fix in its `tests/integration/ufcs_selective_import`; before it, leave such
-names out of the selective import list and the call resolves through
-`import ui`.)
+`import ui (datagrid_cells)` then `g.datagrid_cells()` — needs ae 0.804.0 or
+later (aether #2715). On an older ae, leave such names out of the selective
+import list and the call resolves through `import ui`; aether-ui's own demo
+does this, so its floor stays where it is.)
 
 Both forms still work — UFCS is a *last-resort* fallback (it only fires when a
 dotted call would otherwise be undefined), so the flat
