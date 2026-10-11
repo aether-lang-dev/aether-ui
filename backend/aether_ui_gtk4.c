@@ -697,9 +697,21 @@ void aether_ui_app_run_raw(int app_handle) {
 // layer below.
 static int aeui_take_next_role(GtkAccessibleRole* out);
 
+// Checked once, from idle, where focus came to rest: a focus move can pass
+// through no widget at all on its way.
+static gboolean aeui_focus_idle(gpointer d) {
+    (void)d;
+    *(int*)g_object_get_data(G_OBJECT(primary_window), "aeui-focus-pending") = 0;
+    aeui_focus_watch_check();
+    return G_SOURCE_REMOVE;
+}
+static int aeui_focus_pending = 0;
 static void aeui_focus_notify(GObject* o, GParamSpec* p, gpointer d) {
     (void)o; (void)p; (void)d;
-    aeui_focus_watch_check();
+    if (aeui_focus_pending) return;
+    aeui_focus_pending = 1;
+    g_object_set_data(G_OBJECT(primary_window), "aeui-focus-pending", &aeui_focus_pending);
+    g_idle_add(aeui_focus_idle, NULL);
 }
 
 void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {

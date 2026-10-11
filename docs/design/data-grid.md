@@ -148,7 +148,12 @@ store); everything else speaks view columns.
    (`key_text`; every backend now names punctuation as GDK does), and focus
    leaving the grid (another control, Tab out) commits the open editor
    (`on_focus_change` on the grid, new on every backend); switching to
-   another application does not.
+   another application does not. Also since then, `edit_text(r, c)` gives
+   an editor its starting text when that is not what the cell shows (a
+   formula behind its value), and `cell_style(r, c)` styles a cell from the
+   model in AeCS's vocabulary (background, color, font-weight, text-align);
+   the selection range is blended over a styled cell's background and the
+   cursor is a 2px border, so a coloured cell still reads as coloured.
 5. **Accessibility.** DONE: `a11y_grid`, `a11y_grid_row`, `a11y_grid_cell`
    and `a11y_grid_header` (and `a11y_next_role`, since GTK4 takes a role
    only at construction). The grid is a grid of rows + 1 (the header row is

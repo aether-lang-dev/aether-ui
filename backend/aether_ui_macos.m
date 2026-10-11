@@ -821,7 +821,17 @@ static NSWindow* primary_window = nil;
 - (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object
                         change:(NSDictionary*)change context:(void*)context {
     (void)keyPath; (void)object; (void)change; (void)context;
-    aeui_focus_watch_check();
+    // A focus change passes through the window itself (the old responder
+    // resigns before the new one takes over), and a check then would see
+    // focus nowhere and close, say, a grid's editor as it opens. So check
+    // once, on the next turn of the run loop, where focus came to rest.
+    static int pending = 0;
+    if (pending) return;
+    pending = 1;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        pending = 0;
+        aeui_focus_watch_check();
+    });
 }
 @end
 

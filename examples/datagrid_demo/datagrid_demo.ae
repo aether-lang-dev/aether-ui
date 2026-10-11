@@ -13,12 +13,29 @@
 
 import ui
 import ui (window, vstack, text, textfield_bound, datagrid, cells, headers, column_width, on_cell_click,
+    edit_text, cell_style,
     on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.map
+
+// What a cell shows for what was typed into it: "=2+3" is a formula, shown
+// as its sum; anything else as itself.
+shown(raw: string) -> string {
+    if string.starts_with(raw, "=") == 0 { return raw }
+    parts = string.string_split(string.substring(raw, 1, string.length(raw)), "+")
+    sum = 0
+    i = 0
+    while i < string.string_array_size(parts) {
+        n, _err = string.to_int(string.trim(string.string_array_get(parts, i)))
+        sum = sum + n
+        i = i + 1
+    }
+    string.string_array_free(parts)
+    return string.from_int(sum)
+}
 
 // Column letters: A..Z, AA..AZ, ... (a spreadsheet's).
 letters(c: int) -> string {
@@ -51,8 +68,23 @@ main() {
                 cells() callback |r: int, c: int| {
                     if c == 0 { return string.from_int(r + 1) }
                     v, _e = map.get(edits, "${r},${c}")
+                    if v != null { return shown(v) }
+                    return "R${r}C${c}"
+                }
+                // An editor starts with what was typed (a formula), not
+                // what the cell shows (its value).
+                edit_text() callback |r: int, c: int| {
+                    v, _e = map.get(edits, "${r},${c}")
                     if v != null { return v }
                     return "R${r}C${c}"
+                }
+                // Every seventh row's column 2 is an alarm; a formula's
+                // value sits at the right, as a spreadsheet's number does.
+                cell_style() callback |r: int, c: int| {
+                    if c == 2 && r % 7 == 0 { return "background: #ffe0e0; color: #b00000; font-weight: bold" }
+                    v, _e = map.get(edits, "${r},${c}")
+                    if v != null && string.starts_with(v, "=") == 1 { return "text-align: end" }
+                    return ""
                 }
                 headers() callback |c: int| {
                     if c == 0 { return "#" }

@@ -44,6 +44,16 @@ field_of_text(t: string, f: string) -> int {
     return uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(t), f)
 }
 
+// The string field f of the widget with text t.
+fstr(t: string, f: string) -> string {
+    body = uidriver.get_body("/widget/${uidriver.widget_id_by_text(t)}")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = uidriver.field_str(v, f)
+    json.json_free(v)
+    return r
+}
+
 // The colour a cell was painted, "#rrggbb" ("" when never set).
 bg_of(t: string) -> string {
     body = uidriver.get_body("/widget/${uidriver.widget_id_by_text(t)}")
@@ -227,7 +237,8 @@ main() {
         spec.it("a click puts the cursor on the cell and paints it") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99990C41")}/click", "click R99990C41")
             spec.assert_true(shows("selection: 99990,41 from 99990,41") == 1, "one cell selected")
-            spec.assert_str_eq(bg_of("R99990C41"), "#99c2ff", "the cursor's colour")
+            spec.assert_str_eq(bg_of("R99990C41"), "#cce0ff", "the cursor's colour")
+            spec.assert_eq(field_of_text("R99990C41", "borderWidth"), 2, "and its 2px border")
             spec.assert_str_eq(bg_of("R99990C42"), "#ffffff", "its neighbour plain")
         }
         spec.it("arrows move the cursor") callback {
@@ -246,7 +257,8 @@ main() {
             spec.assert_true(shows("selection: 99992,42 from 99991,40") == 1, "a 2 x 3 range")
             spec.assert_str_eq(bg_of("R99991C40"), "#cce0ff", "the anchor is in the range")
             spec.assert_str_eq(bg_of("R99992C41"), "#cce0ff", "so is the middle")
-            spec.assert_str_eq(bg_of("R99992C42"), "#99c2ff", "the cursor")
+            spec.assert_eq(field_of_text("R99992C42", "borderWidth"), 2, "the cursor has the border")
+            spec.assert_eq(field_of_text("R99991C40", "borderWidth"), 0, "the anchor does not")
             spec.assert_str_eq(bg_of("R99993C41"), "#ffffff", "below the range is plain")
             key("Up")
             spec.assert_true(shows("selection: 99991,42 from 99991,42") == 1, "a plain arrow collapses it")
@@ -254,7 +266,7 @@ main() {
         spec.it("Home goes to the row's start (the frozen column), End to its end, scrolling") callback {
             key("Home")
             spec.assert_true(shows("selection: 99991,0 from 99991,0") == 1, "Home")
-            spec.assert_str_eq(bg_of("99992"), "#99c2ff", "the row-number cell is the cursor")
+            spec.assert_eq(field_of_text("99992", "borderWidth"), 2, "the row-number cell is the cursor")
             key("End")
             spec.assert_true(shows("selection: 99991,49 from 99991,49") == 1, "End")
             spec.assert_true(shows("R99991C49") == 1, "the last column scrolled into view")
@@ -436,6 +448,37 @@ main() {
             spec.assert_true(shows("R0C1") == 1, "row 0 shown")
             spec.assert_eq(field_of_text("R0C1", "a11y_row"), 1, "model row 0 is row 1")
             spec.assert_eq(field_of_text("R2C1", "a11y_row"), 3, "model row 2 is row 3")
+        }
+    }
+
+    spec.describe(fw, "a cell's style and an editor's starting text") {
+        spec.it("cell_style colours a cell from the model") callback {
+            spec.assert_str_eq(bg_of("R7C2"), "#ffe0e0", "row 7's column 2: the alarm background")
+            spec.assert_str_eq(fstr("R7C2", "fg"), "#b00000", "its text colour")
+            spec.assert_str_eq(fstr("R7C2", "fontWeight"), "bold", "bold")
+            spec.assert_str_eq(bg_of("R8C2"), "#ffffff", "row 8's is plain")
+        }
+        spec.it("the selection lies over a styled cell's colour; the cursor is a border") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R7C2")}/click", "click R7C2")
+            spec.assert_str_eq(bg_of("R7C2"), "#e5e0ef", "#ffe0e0 and #cce0ff, half and half")
+            spec.assert_eq(field_of_text("R7C2", "borderWidth"), 2, "a 2px border")
+            spec.assert_str_eq(fstr("R7C2", "borderColor"), "#2f6fd0", "in the cursor's blue")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R8C2")}/click", "click R8C2")
+            spec.assert_str_eq(bg_of("R7C2"), "#ffe0e0", "R7C2 is its own colour again")
+            spec.assert_eq(field_of_text("R7C2", "borderWidth"), 0, "without the border")
+        }
+        spec.it("an editor starts with edit_text, the formula, not the value shown") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R9C1")}/double_click", "double-click R9C1")
+            spec.assert_true(editor_open(1) == 1, "an editor opened")
+            uidriver.post_ok("/widget/${editor()}/set_text?v=%3D200%2B34", "type =200+34")
+            uidriver.post_ok("/widget/${editor()}/submit", "Return")
+            spec.assert_true(shows("234") == 1, "the cell shows the formula's value")
+            spec.assert_str_eq(fstr("234", "anchor"), "end", "at the right (cell_style)")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("234")}/double_click", "double-click it again")
+            spec.assert_true(editor_open(1) == 1, "an editor opened")
+            spec.assert_str_eq(uidriver.widget_text_by_id(editor()), "=200+34", "holding the formula")
+            key("Escape")
+            spec.assert_true(editor_open(0) == 1, "Escape closed it")
         }
     }
 

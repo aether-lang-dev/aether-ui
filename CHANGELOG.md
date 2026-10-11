@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`datagrid` cell styles and editor starting text.** `cell_style()`
+  (`datagrid_cell_style`) styles a cell from the model as AeCS properties:
+  `"background: #ffe0e0; color: #b00000; font-weight: bold; text-align:
+  end"`, re-applied to a widget only when its string changes. `edit_text()`
+  (`datagrid_edit_text`) is what an editor opened by F2, a double click or
+  Return starts with: a spreadsheet shows `234` and edits `=200+34`. The
+  selection range is now blended half and half over a cell's own
+  background, and the cursor is a 2px `#2f6fd0` border over the range
+  colour (it was a darker fill, which hid a styled cell).
 - **`on_focus_change(widget) |inside|`** and its ambient form
   `onfocuschange()`: keyboard focus came into a widget or anything inside
   it, or left. Focus leaving the application is not a change. GTK4 the
@@ -174,6 +183,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **on_focus_change no longer sees focus "nowhere" mid-move.** AppKit
+  passes the first responder through the window on its way to the next
+  view, and a check then closed a grid's editor as it opened (flaky). macOS
+  and GTK4 now check once, on the next turn of the loop, where focus came
+  to rest.
 - **Punctuation keys have the same names on every backend: GDK's.** GTK4
   said `"comma"`, AppKit and Android `","`, and Win32 reported punctuation
   not at all and a shifted letter in lower case. AppKit, Android and Win32
