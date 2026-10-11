@@ -190,6 +190,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A datagrid cell whose style changes is redrawn.** The style cache keyed
+  on a djb2 hash computed in a 32-bit int: `h * 33` overflowed, most long
+  style strings hashed negative, every negative hash became 1, and a cell
+  switching between two such styles kept the first through any refresh
+  (sae's sorted spreadsheet: a red cell that should have turned green). The
+  hash is now 64-bit, reduced mod a prime below 2^30, combined with the
+  string's length, bytes read as 0..255.
 - **GTK4 sliders no longer draw their value** beside the track (a grid's
   horizontal scrollbar showed "0.0"); no other backend's slider draws one.
 - **on_focus_change no longer sees focus "nowhere" mid-move.** AppKit

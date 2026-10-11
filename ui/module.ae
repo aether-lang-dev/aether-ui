@@ -181,6 +181,7 @@ _chrome_invoke_toggle(cb: fn, label: string, user_boxed: ptr) -> int {
 }
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
+import std.longarr (longarr_new_raw, longarr_get_raw, longarr_set_raw)   // the grid's style cache
 import std.fs      // load_styles (AeCS theme files)
 import std.worker  // background(): work off the UI thread, completion back on it
 
@@ -6418,7 +6419,7 @@ struct DataGrid {
     row_boxes: ptr    // intarr of the shown rows' hstacks (their a11y row index)
     edit_text: ptr    // boxed |r, c| -> string, or null: the cell's text
     style: ptr        // boxed |r, c| -> string, or null: no cell styling
-    style_hash: ptr   // intarr: a hash of the style each shown cell last had
+    style_hash: ptr   // longarr: the key (_datagrid_hash) of the style each shown cell last had
     style_bg: ptr     // intarr: that style's background, -1 for none
 }
 
@@ -6562,7 +6563,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.cells = intarr_new_raw(vr * (fz + vc) + 1)
     g.painted = intarr_new_raw(vr * (fz + vc) + 1)
     g.boxes = intarr_new_raw(vr * (fz + vc) + 1)
-    g.style_hash = intarr_new_raw(vr * (fz + vc) + 1)
+    g.style_hash = longarr_new_raw(vr * (fz + vc) + 1)
     g.style_bg = intarr_new_raw(vr * (fz + vc) + 1)
     ri = 0
     g.row_boxes = intarr_new_raw(vr + 1)
@@ -6590,7 +6591,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             }
             intarr_set_raw(g.cells, ri * (fz + vc) + ci, ch)
             intarr_set_raw(g.painted, ri * (fz + vc) + ci, -1)
-            intarr_set_raw(g.style_hash, ri * (fz + vc) + ci, 0)
+            longarr_set_raw(g.style_hash, ri * (fz + vc) + ci, 0)
             intarr_set_raw(g.style_bg, ri * (fz + vc) + ci, 0 - 1)
             vr2 = ri
             vc2 = ci
@@ -6952,8 +6953,8 @@ _datagrid_style(g: *DataGrid) {
             i = r * w + c
             st = _datagrid_invoke_cell(sf, g.first_row + r, _datagrid_model(g, _datagrid_col_at(g, c)))
             hh = _datagrid_hash(st)
-            if intarr_get_raw(g.style_hash, i) != hh {
-                intarr_set_raw(g.style_hash, i, hh)
+            if longarr_get_raw(g.style_hash, i) != hh {
+                longarr_set_raw(g.style_hash, i, hh)
                 _datagrid_apply_style(g, i, st)
             }
             c = c + 1
@@ -6962,17 +6963,27 @@ _datagrid_style(g: *DataGrid) {
     }
 }
 
-// A string's hash (djb2, kept positive); never 0, so 0 means "none yet".
-_datagrid_hash(s: string) -> int {
-    h = 5381
+// A style string's key for the redraw cache: djb2 in 64 bits, reduced mod a
+// prime below 2^30 each step (so h * 33 + 255 never overflows a long), then
+// combined with the string's length; never 0, so 0 means "none yet". It was
+// djb2 in a 32-bit int: h * 33 overflowed after a few characters, most long
+// styles came out negative, every negative hash became 1, and a cell whose
+// style changed between two such strings was never redrawn (sae's sorted
+// spreadsheet, a red cell that should have turned green). Bytes are read as
+// 0..255 (char_at sign-extends on macOS).
+_datagrid_hash(s: string) -> long {
+    long h = 5381
     n = string.length(s)
     i = 0
     while i < n {
-        h = (h * 33 + string.char_at(s, i)) % 2147483647
+        b = string.char_at(s, i)
+        if b < 0 { b = b + 256 }
+        h = (h * 33 + b) % 1073741789
         i = i + 1
     }
-    if h <= 0 { h = 1 }
-    return h
+    long key = h * 65536 + (n % 65536)
+    if key == 0 { key = 1 }
+    return key
 }
 
 // Parse "background: #hex; color: #hex; font-weight: bold; text-align: end"

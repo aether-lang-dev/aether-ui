@@ -480,6 +480,15 @@ main() {
             key("Escape")
             spec.assert_true(editor_open(0) == 1, "Escape closed it")
         }
+        spec.it("a cell whose style changes is redrawn, however long the two styles") callback {
+            // Two long styles a 32-bit djb2 hash wrapped to the same value,
+            // so the cell kept the first through any refresh.
+            spec.assert_str_eq(bg_of("R10C3"), "#ffebee", "R10C3 starts pink")
+            uidriver.post_ok("/widget/${uidriver.widget_id_of("button", "Swap colours")}/click", "Swap colours (refreshes the grid)")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${uidriver.widget_id_by_text("R10C3")}", "\"bg\":\"#e8f5e9\"", 20), "and turns green")
+            uidriver.post_ok("/widget/${uidriver.widget_id_of("button", "Swap colours")}/click", "and back")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${uidriver.widget_id_by_text("R10C3")}", "\"bg\":\"#ffebee\"", 20), "pink again")
+        }
     }
 
     spec.describe(fw, "fit a column to its text") {
