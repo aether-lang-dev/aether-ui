@@ -5,16 +5,16 @@
 // select; the selection and Return are shown under the grid, and so are
 // column resizes and moves (drag a header's right edge, or the header).
 // Cells are editable (F2, a double click or typing); edits are kept in a map
-// over the computed model, by model row and column.
+// over the computed model, by model row and column. Written declaratively:
+// the grid is the receiver of its block, as a button is of its own.
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
 
 import ui
-import ui (window, vstack, text, datagrid, datagrid_header, datagrid_on_click,
-    datagrid_on_select, datagrid_on_activate, datagrid_anchor_row, datagrid_anchor_col,
-    datagrid_on_col_resize, datagrid_on_col_move, datagrid_set_col_width,
-    datagrid_on_edit, datagrid_col_model,
+import ui (window, vstack, text, datagrid, cells, headers, column_width, on_cell_click,
+    on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
+    datagrid_anchor_row, datagrid_anchor_col,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -42,42 +42,46 @@ main() {
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
-            g = datagrid(100000, 50, 20, 6, 1) callback |r: int, c: int| {
-                if c == 0 { return string.from_int(r + 1) }
-                key = "${r},${c}"
-                v, _e = map.get(edits, key)
-                if v != null { return v }
-                return "R${r}C${c}"
+            g = datagrid(100000, 50, 20, 6, 1) {
+                // 36 wide, so seven columns (and one widened by a drag)
+                // still fit an iPhone's screen, where the iOS simulator
+                // runs the spec.
+                column_width(36)
+                cells() callback |r: int, c: int| {
+                    if c == 0 { return string.from_int(r + 1) }
+                    v, _e = map.get(edits, "${r},${c}")
+                    if v != null { return v }
+                    return "R${r}C${c}"
+                }
+                headers() callback |c: int| {
+                    if c == 0 { return "#" }
+                    return letters(c - 1)
+                }
+                on_cell_click() callback |r: int, c: int| {
+                    _s = ui_set_s(clicked, "${r},${c}")
+                }
+                on_cell_activate() callback |r: int, c: int| {
+                    _s3 = ui_set_s(activated, "${r},${c}")
+                }
+                on_col_resize() callback |c: int, w: int| {
+                    _s4 = ui_set_s(resized, "${c} to ${w}")
+                }
+                on_col_move() callback |from: int, to: int| {
+                    _s5 = ui_set_s(moved, "${from} to ${to}")
+                }
+                on_cell_edit() callback |r: int, c: int, t: string| {
+                    _p = map.put(edits, "${r},${c}", t)
+                    _s6 = ui_set_s(edited, "${r},${c} = ${t}")
+                }
             }
-            // 36 wide, so seven columns (and one widened by a drag) still
-            // fit an iPhone's screen, where the iOS simulator runs the spec.
-            ci = 0
-            while ci < 50 {
-                datagrid_set_col_width(g, ci, 36)
-                ci = ci + 1
-            }
-            datagrid_header(g) callback |c: int| {
-                if c == 0 { return "#" }
-                return letters(c - 1)
-            }
-            datagrid_on_click(g) callback |r: int, c: int| {
-                _s = ui_set_s(clicked, "${r},${c}")
-            }
-            datagrid_on_select(g) callback |r: int, c: int| {
+            // A handler that needs the grid itself takes the handle form (a
+            // closure in the block above is made before `g` is assigned),
+            // here chained as a method: `g.datagrid_on_select()` is
+            // `datagrid_on_select(g)`. (Not in the selective import above:
+            // ae 0.801 mangles a method call on a selectively imported name
+            // wrongly; the fix is aether's ufcs_selective_import.)
+            g.datagrid_col_limits(24, 1000).datagrid_on_select() callback |r: int, c: int| {
                 _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}")
-            }
-            datagrid_on_activate(g) callback |r: int, c: int| {
-                _s3 = ui_set_s(activated, "${r},${c}")
-            }
-            datagrid_on_col_resize(g) callback |c: int, w: int| {
-                _s4 = ui_set_s(resized, "${c} to ${w}")
-            }
-            datagrid_on_col_move(g) callback |from: int, to: int| {
-                _s5 = ui_set_s(moved, "${from} to ${to}")
-            }
-            datagrid_on_edit(g) callback |r: int, c: int, t: string| {
-                _p = map.put(edits, "${r},${datagrid_col_model(g, c)}", t)
-                _s6 = ui_set_s(edited, "${r},${c} = ${t}")
             }
             text_bound(clicked, "clicked: ", "")
             text_bound(selected, "selection: ", "")

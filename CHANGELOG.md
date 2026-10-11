@@ -118,6 +118,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`datagrid` is written declaratively.** `datagrid(rows, cols, vis_rows,
+  vis_cols, frozen) { ... }`: the grid is the receiver of its block, as a
+  button is of its own, with verbs `cells()`, `headers()`, `column_width()`,
+  `column_limits()`, `on_cell_click()`, `on_cell_select()`,
+  `on_cell_activate()`, `on_cell_edit()`, `on_col_resize()` and
+  `on_col_move()`. The cell function moved from datagrid's trailing
+  callback into `cells()` (or `datagrid_cells(g, fn)`). Every
+  `datagrid_*` setter and registration now returns the grid, so they chain
+  (`g.datagrid_col_limits(24, 400).datagrid_on_select() callback { ... }`);
+  `on_submit` and `textfield_select` return their field. `on_edit` is
+  given the MODEL column, as the cell function is. New ambient forms
+  `ondrag()` and `onsubmit()` for a widget's own block; a field that takes a
+  block is `textfield_bound`. docs/guide/dsl-with-scope.md shows the forms.
 - **Aether floor 0.801.0, aeb v0.326** (CI `AETHER_REF`/`AEB_REF`,
   `bootstrap.sh` `MIN_AE`). A real floor: 0.796.0-0.800.x crash vg click
   handlers that capture (aether #2670/#2671 defeated the `kept = h` alias

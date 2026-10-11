@@ -1,12 +1,14 @@
 // submit_demo — on_submit: Return in a text field (Swing's ActionListener,
 // QML's onAccepted). A text field and a secure field each report what was
-// submitted; typing alone reports nothing.
+// submitted; typing alone reports nothing. A third field and a label are
+// written in the ambient form, inside their own blocks: onsubmit() and
+// ondrag() act on the widget whose block they are in.
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/submit_demo/bin/submit_demo &
 //   UI_SPEC=submit_demo/spec_submit_demo tests/run_spec.sh
 
 import ui
-import ui (window, vstack, text, textfield, securefield, on_submit,
+import ui (window, vstack, text, textfield, textfield_bound, securefield, on_submit, onsubmit, ondrag,
     ui_state_s, ui_set_s, text_bound, ui_state_i, ui_set_i, ui_get_i,
     enable_test_server)
 import std.os (os_getenv)
@@ -15,7 +17,9 @@ import std.string
 main() {
     last = ui_state_s("nothing yet")
     count = ui_state_i(0)
-    window("submit", 320, 220) {
+    dragged = ui_state_s("not yet")
+    typed = ui_state_s("")
+    window("submit", 320, 300) {
         vstack(8) {
             f = textfield("type, then Return") callback |t: string| { }
             on_submit(f) callback |t: string| {
@@ -27,6 +31,20 @@ main() {
                 _s = ui_set_s(last, "secret of ${string.length(t)}")
                 _n = ui_set_i(count, ui_get_i(count) + 1)
             }
+            // textfield_bound takes no callback, so its trailing block is the
+            // field's own (textfield's trailing slot is its on_change).
+            textfield_bound("ambient", typed) {
+                onsubmit() callback |t: string| {
+                    _s = ui_set_s(last, "ambient: ${t}")
+                    _n = ui_set_i(count, ui_get_i(count) + 1)
+                }
+            }
+            text("drag me") {
+                ondrag() callback |phase: int, x: float, y: float| {
+                    if phase == 2 { _d = ui_set_s(dragged, "by ${x as int},${y as int}") }
+                }
+            }
+            text_bound(dragged, "dragged ", "")
             text_bound(last, "submitted ", "")
             text_bound(count, "submits: ", "")
         }

@@ -309,7 +309,7 @@ main() {
             spec.assert_str_eq(uidriver.widget_text_by_id(editor()), "R99982C3", "on C's cell")
             uidriver.post_ok("/widget/${editor()}/set_text?v=zz", "type zz")
             uidriver.post_ok("/widget/${editor()}/submit", "Return")
-            spec.assert_true(shows("edited: 99982,2 = zz") == 1, "on_edit heard view column 2")
+            spec.assert_true(shows("edited: 99982,3 = zz") == 1, "on_edit heard model column 3 (C)")
             spec.assert_true(shows("zz") == 1, "and the cell shows it")
         }
         spec.it("clicking another cell commits the open editor") callback {
@@ -317,7 +317,7 @@ main() {
             spec.assert_true(editor_open(1) == 1, "an editor opened")
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99990C1")}/click", "click elsewhere")
             spec.assert_true(editor_open(0) == 1, "the editor closed")
-            spec.assert_true(shows("edited: 99983,2 = q") == 1, "and committed q")
+            spec.assert_true(shows("edited: 99983,3 = q") == 1, "and committed q (model column 3)")
             spec.assert_eq(count_of("text"), 154, "no widgets left behind")
         }
     }

@@ -101,6 +101,46 @@ loop. Splitting the one verb into three surface kinds makes the lifecycle
 honest — and means "applications need not have a fat UI": a program can open a
 `record` or `render_to` surface, draw, and exit, never touching a window loop.
 
+## Composite widgets take a block too
+
+A composite like the data grid is configured the same way a button is: its
+block runs with the grid as the receiver, and the grid's own verbs act on
+it. The SAME verbs exist by handle (`datagrid_cells`, `datagrid_header`,
+`datagrid_on_select`, …), each returning the grid so they chain.
+
+```aether
+g = datagrid(100000, 50, 20, 6, 1) {      // rows, cols, shown rows, shown cols, frozen
+    column_width(80)
+    cells() callback |r: int, c: int| { return "R${r}C${c}" }
+    headers() callback |c: int| { return letters(c) }
+    on_cell_activate() callback |r: int, c: int| { open_row(r) }
+    on_cell_edit() callback |r: int, c: int, t: string| { store(r, c, t) }
+}
+// A handler that needs `g` itself: a closure made inside the block is made
+// before `g` is assigned (closures capture by value), so it takes the
+// handle form after the block.
+g.datagrid_on_select() callback |r: int, c: int| { show(datagrid_anchor_row(g), r) }
+```
+
+The grid's verbs (`cells`, `headers`, `column_width`, `column_limits`,
+`on_cell_click`, `on_cell_select`, `on_cell_activate`, `on_cell_edit`,
+`on_col_resize`, `on_col_move`) do nothing outside a grid's block.
+
+Two event handlers have ambient forms for any widget's block, as `onclick`
+does: `ondrag()` (press, drag, release) and `onsubmit()` (Return in a field).
+A `textfield`'s trailing slot is its `on_change` closure, so the field that
+takes a block is `textfield_bound`:
+
+```aether
+text("⋮") { ondrag() callback |phase: int, x: float, y: float| { resize(phase, x) } }
+textfield_bound("Formula…", formula) { onsubmit() callback |t: string| { run(t) } }
+```
+
+sae pages write the same shapes in TypeScript, the block as a last-argument
+arrow function: `ui.datagrid(1000, 40, 15, 5, 1, () => { cells((r, c) => …);
+on_cell_edit((r, c, t) => …) })`, `text("⋮", () => { ondrag(…) })`,
+`textfield("Formula…", onChange, () => { onsubmit(…) })`.
+
 ## Chaining explicit-handle modifiers (UFCS)
 
 The `_ctx` axis above styles the *ambient* widget inside a block
@@ -119,11 +159,23 @@ submit.style_bg_color(0.2, 0.6, 0.3, 1.0)
       .style_corner_radius(8)
       .style_tooltip("Click to submit the form")
 
+// A grid configured by handle, chained (a chain carries on past a trailing
+// callback block):
+g.datagrid_set_col_widths(80).datagrid_col_limits(40, 400)
+ .datagrid_cells() callback |r: int, c: int| { return cell(r, c) }
+ .datagrid_header() callback |c: int| { return title(c) }
+
 // A flat button: no frame and no face of its own until the pointer is over
 // it -- toolbar icons, a tree's disclosure chevron, an inline action.
 more = btn("…") callback { open_menu() }
 more.style_flat()                 // or, in a block: button("…") { flat() }
 ```
+
+(A method call on a name you ALSO import selectively —
+`import ui (datagrid_cells)` then `g.datagrid_cells()` — needs an aether with
+the fix in its `tests/integration/ufcs_selective_import`; before it, leave such
+names out of the selective import list and the call resolves through
+`import ui`.)
 
 Both forms still work — UFCS is a *last-resort* fallback (it only fires when a
 dotted call would otherwise be undefined), so the flat

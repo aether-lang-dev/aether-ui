@@ -76,6 +76,26 @@ The contract:
 - **Scrolling:** a body scrolled in both directions, the header row (and any
   frozen columns) pinned and kept in step with the body's offsets.
 
+## As written
+
+Declaratively, the grid is the receiver of its block (aether-ui's DSL with
+scope, `docs/guide/dsl-with-scope.md`), and every verb also exists by handle,
+returning the grid so calls chain:
+
+```aether
+g = datagrid(100000, 50, 20, 6, 1) {
+    column_width(80)
+    cells() callback |r: int, c: int| { return model_text(r, c) }
+    headers() callback |c: int| { return letters(c) }
+    on_cell_edit() callback |r: int, c: int, t: string| { model_store(r, c, t) }
+}
+```
+
+sae pages write it in TypeScript the same way:
+`ui.datagrid(1000000, 40, 15, 5, 1, () => { cells(…); headers(…); on_cell_edit(…) })`.
+The cell function and `on_edit` get MODEL columns (what to show, what to
+store); everything else speaks view columns.
+
 ## Phases, each with its proof
 
 1. **Static grid with a sticky header.** DONE: `datagrid` (148 widgets for

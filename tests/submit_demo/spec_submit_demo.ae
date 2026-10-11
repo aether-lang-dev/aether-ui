@@ -36,6 +36,18 @@ main() {
             spec.assert_true(uidriver.wait_body_contains("/widgets", "submitted secret of 6", 20),
                 "the callback got the password (its length shown)")
         }
+        spec.it("onsubmit() in a field's block is on_submit for that field") callback {
+            a = uidriver.widget_id_last_of("textfield", "")
+            uidriver.post_ok("/widget/${a}/set_text?v=hi", "type hi")
+            uidriver.post_ok("/widget/${a}/submit", "press Return")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "submitted ambient: hi", 20),
+                "the ambient handler ran")
+        }
+        spec.it("ondrag() in a label's block is on_drag for that label") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("drag me")}/drag?x=4&y=4&dx=30&dy=-7", "drag the label")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "dragged by 30,-7", 20),
+                "the release reported the offset")
+        }
         spec.it("a widget that is not a field cannot be submitted") callback {
             t = uidriver.widget_id_of("text", "")
             spec.assert_eq(uidriver.post_status("/widget/${t}/submit"), 404, "404 for a label")

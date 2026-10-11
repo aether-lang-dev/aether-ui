@@ -22,8 +22,10 @@ exports (
     tabs, tab, on_tab_change, tab_select, tab_selected,
     nav_push, nav_pop, nav_depth, nav_page,
     text, text_wrapped, text_anchor, text_truncate, button, btn, spacer, divider,
-    textfield, textfield_bound, textfield_select, securefield, on_submit, vslider,
-    datagrid, datagrid_header, datagrid_scroll_to, datagrid_refresh,
+    textfield, textfield_bound, textfield_select, securefield, on_submit, onsubmit, vslider,
+    datagrid, datagrid_cells, datagrid_header, datagrid_scroll_to, datagrid_refresh,
+    datagrid_set_col_widths, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
+    on_cell_edit, on_col_resize, on_col_move, column_width, column_limits,
     datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll,
     datagrid_on_click, datagrid_select, datagrid_select_range, datagrid_cursor_row,
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
@@ -136,7 +138,7 @@ exports (
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
-    on_hover, on_double_click, on_click, on_drag,
+    on_hover, on_double_click, on_click, on_drag, ondrag,
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
@@ -180,6 +182,7 @@ import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 import std.fs      // load_styles (AeCS theme files)
 import std.worker  // background(): work off the UI thread, completion back on it
 
+extern aether_mem_ptr_to_long(p: ptr) -> long   // ambient grid verbs tell a grid _ctx from a widget handle
 extern malloc(size: int) -> ptr   // EachGroup allocation (house pattern, vg/module.ae:84)
 extern free(p: ptr)               // derived-view rows the toolkit mints per rebuild
 
@@ -1485,8 +1488,9 @@ textfield(_ctx: ptr, placeholder: string, on_change: fn) {
 //   focus(f)
 //   textfield_select(f, -1, -1)   // caret after the typed character
 // The driver reports a field's selection as sel_start / sel_end.
-textfield_select(handle: int, start: int, end: int) {
+textfield_select(handle: int, start: int, end: int) -> int {
     aether_ui_textfield_select_impl(handle, start, end)
+    return handle
 }
 
 textfield_bound(_ctx: ptr, placeholder: string, state_handle: int) {
@@ -1503,8 +1507,19 @@ textfield_bound(_ctx: ptr, placeholder: string, state_handle: int) {
 // driver's POST /widget/{id}/submit takes the same path.
 //   f = textfield("Formula…") callback |t: string| { }
 //   on_submit(f) callback |t: string| { commit(t) }
-on_submit(widget: int, cb: fn) {
+on_submit(widget: int, cb: fn) -> int {
     aether_ui_textfield_on_submit_impl(widget, box_closure(cb))
+    return widget
+}
+
+// onsubmit() callback |t: string| { ... }: on_submit for the field whose
+// block this is, the ambient form (as onclick is to on_click). textfield's
+// trailing slot is its on_change, so the field with a block of its own is
+// textfield_bound:
+//   textfield_bound("Formula…", formula) { onsubmit() callback |t: string| { run(t) } }
+onsubmit(_ctx: ptr, cb: fn) {
+    if _ctx == null { return }
+    aether_ui_textfield_on_submit_impl(aether_mem_ptr_to_long(_ctx) as int, box_closure(cb))
 }
 
 securefield(_ctx: ptr, placeholder: string, on_change: fn) {
@@ -6249,8 +6264,21 @@ vlist_native(vp: ptr) -> int {
 
 // ── datagrid: a virtualised grid (docs/design/data-grid.md, phases 1-4) ──
 //
-//   g = datagrid(rows, cols, vis_rows, vis_cols, frozen) callback |r: int, c: int| -> string { ... }
-//   datagrid_header(g) callback |c: int| -> string { ... }
+// Declarative, with the grid as the block's receiver:
+//
+//   datagrid(100000, 50, 20, 6, 1) {
+//       column_width(80)
+//       cells() callback |r: int, c: int| { return "R${r}C${c}" }
+//       headers() callback |c: int| { return letters(c) }
+//       on_cell_select() callback |r: int, c: int| { ... }
+//       on_cell_edit() callback |r: int, c: int, t: string| { ... }
+//   }
+//
+// or by handle, each call returning the grid so they chain:
+//
+//   g = datagrid(100000, 50, 20, 6, 1)
+//   g.datagrid_cells() callback |r: int, c: int| { ... }
+//    .datagrid_header() callback |c: int| { ... }
 //
 // A grid of `rows` x `cols` cells whose text comes from `cell(r, c)` when a
 // cell is shown, so a model of 100,000 rows costs nothing until scrolled to.
@@ -6277,8 +6305,8 @@ vlist_native(vp: ptr) -> int {
 // column's header moves the column to where it is released (frozen columns
 // stay put). A column's width goes with it when it moves. Every column
 // number in this API is a VIEW column (its place on screen) except the
-// ones the cell and header functions are given, which are MODEL columns
-// (what to show); datagrid_col_model converts.
+// ones the cell and header functions and on_edit are given, which are MODEL
+// columns (what to show, what to store); datagrid_col_model converts.
 //
 // A grid with datagrid_on_edit is editable: F2, a double click or Return
 // (when the grid has no datagrid_on_activate) opens an editor (a text field over the cell) holding the cell's text, and
@@ -6288,6 +6316,7 @@ vlist_native(vp: ptr) -> int {
 // app's on_edit stores the text; the grid then shows the cell function's
 // answer again.
 struct DataGrid {
+    magic: long       // DATAGRID_MAGIC: what tells an ambient verb its _ctx is a grid
     rows: int
     cols: int
     vis_rows: int
@@ -6297,7 +6326,7 @@ struct DataGrid {
     row_h: int
     first_row: int
     first_col: int    // the first SCROLLING column shown (>= frozen)
-    cell: ptr         // boxed |r, c| -> string
+    cell: ptr         // boxed |r, c| -> string, or null until cells() / datagrid_cells
     header: ptr       // boxed |c| -> string, or null
     root: int
     hdr_cells: ptr    // intarr of text handles: frozen, then vis_cols
@@ -6333,6 +6362,22 @@ struct DataGrid {
 
 // A header cell's grip: a press this close to its right edge resizes.
 const DATAGRID_GRIP = 6
+const DATAGRID_MAGIC = 1597463007
+
+// The grid an ambient verb's _ctx is, or null: inside a datagrid block _ctx
+// is the grid; inside any other block it is a widget handle (a small int,
+// never dereferenced) or another builder's own struct (no magic).
+_datagrid_ctx(_ctx: ptr) -> ptr {
+    if _ctx == null { return null }
+    // A handle is a small non-negative number. A heap pointer can read as
+    // NEGATIVE: Android tags the top byte of its heap pointers, so a grid
+    // there was taken for a handle and its block's verbs did nothing.
+    addr = aether_mem_ptr_to_long(_ctx)
+    if addr >= 0 && addr < 1048576 { return null }
+    g = _ctx as *DataGrid
+    if g.magic != DATAGRID_MAGIC { return null }
+    return _ctx
+}
 
 _datagrid_invoke_cell(cb: fn, r: int, c: int) -> string {
     return cb(r, c)
@@ -6341,8 +6386,9 @@ _datagrid_invoke_header(cb: fn, c: int) -> string {
     return cb(c)
 }
 
-datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: int, cell: fn) -> ptr {
+datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: int) -> ptr {
     g = malloc(sizeof(DataGrid)) as *DataGrid
+    g.magic = DATAGRID_MAGIC
     g.rows = rows
     g.cols = cols
     fz = frozen
@@ -6361,7 +6407,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.row_h = 24
     g.first_row = 0
     g.first_col = fz
-    g.cell = box_closure(cell)
+    g.cell = null
     g.header = null
     g.click = null
     g.cur_r = -1
@@ -6501,6 +6547,11 @@ _datagrid_bind(g: *DataGrid) {
             j = j + 1
         }
     }
+    if g.cell == null {
+        _datagrid_size(g)
+        _datagrid_paint(g)
+        return
+    }
     cf = unbox_closure(g.cell)
     r = 0
     while r < g.vis_rows {
@@ -6619,15 +6670,16 @@ datagrid_col_width(gp: ptr, c: int) -> int {
     return intarr_get_raw(g.widths, _datagrid_model(g, c))
 }
 
-datagrid_set_col_width(gp: ptr, c: int, w: int) {
+datagrid_set_col_width(gp: ptr, c: int, w: int) -> ptr {
     g = gp as *DataGrid
-    if c < 0 || c >= g.cols { return }
+    if c < 0 || c >= g.cols { return gp }
     _datagrid_width_to(g, c, w)
+    return gp
 }
 
 // datagrid_col_limits(g, min, max): the narrowest and widest a column may be
 // made, by a drag or from code.
-datagrid_col_limits(gp: ptr, min: int, max: int) {
+datagrid_col_limits(gp: ptr, min: int, max: int) -> ptr {
     g = gp as *DataGrid
     lo = min
     if lo < 1 { lo = 1 }
@@ -6635,16 +6687,17 @@ datagrid_col_limits(gp: ptr, min: int, max: int) {
     if hi < lo { hi = lo }
     g.min_w = lo
     g.max_w = hi
+    return gp
 }
 
 // datagrid_move_col(g, from, to): take view column `from` out and put it
 // back at `to` (both scrolling columns; frozen ones do not move). The model
 // does not change, only which model column each view column shows;
 // on_col_move hears it, as it hears a header drag.
-datagrid_move_col(gp: ptr, from: int, to: int) {
+datagrid_move_col(gp: ptr, from: int, to: int) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
-    if from < g.frozen || to < g.frozen || from >= g.cols || to >= g.cols || from == to { return }
+    if from < g.frozen || to < g.frozen || from >= g.cols || to >= g.cols || from == to { return gp }
     m = intarr_get_raw(g.order, from)
     if from < to {
         i = from
@@ -6664,6 +6717,7 @@ datagrid_move_col(gp: ptr, from: int, to: int) {
     if g.on_move != null {
         _datagrid_invoke_click(unbox_closure(g.on_move), from, to)
     }
+    return gp
 }
 
 // datagrid_col_model(g, c): the model column view column c shows.
@@ -6675,15 +6729,17 @@ datagrid_col_model(gp: ptr, c: int) -> int {
 
 // datagrid_on_col_resize(g) callback |c, w| { ... }: view column c was given
 // width w by a header drag (when the drag ends).
-datagrid_on_col_resize(gp: ptr, cb: fn) {
+datagrid_on_col_resize(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_resize = box_closure(cb)
+    return gp
 }
 
 // datagrid_on_col_move(g) callback |from, to| { ... }: a column moved.
-datagrid_on_col_move(gp: ptr, cb: fn) {
+datagrid_on_col_move(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_move = box_closure(cb)
+    return gp
 }
 
 // Colour every shown cell for the selection. A widget is only touched when
@@ -6844,17 +6900,86 @@ _datagrid_key(gp: ptr, k: string, m: int) {
 }
 
 // datagrid_header(g) callback |c| -> string: the header's text per column.
-datagrid_header(gp: ptr, header: fn) {
+datagrid_header(gp: ptr, header: fn) -> ptr {
     g = gp as *DataGrid
     g.header = box_closure(header)
     _datagrid_bind(g)
+    return gp
+}
+
+// datagrid_cells(g) callback |r: int, c: int| -> string: the cells' text,
+// asked for as each is shown (r a row, c a MODEL column).
+datagrid_cells(gp: ptr, cell: fn) -> ptr {
+    g = gp as *DataGrid
+    g.cell = box_closure(cell)
+    _datagrid_bind(g)
+    return gp
+}
+
+// datagrid_set_col_widths(g, w): every column w wide (clamped to the limits).
+datagrid_set_col_widths(gp: ptr, w: int) -> ptr {
+    g = gp as *DataGrid
+    c = 0
+    while c < g.cols {
+        nw = w
+        if nw < g.min_w { nw = g.min_w }
+        if nw > g.max_w { nw = g.max_w }
+        intarr_set_raw(g.widths, c, nw)
+        c = c + 1
+    }
+    _datagrid_size(g)
+    return gp
+}
+
+// ── The grid's ambient verbs: inside datagrid(...) { ... } the grid is the
+// receiver, as a button is inside button("OK") { ... }. Each is its
+// datagrid_* form for that grid; outside a grid's block they do nothing.
+cells(_ctx: ptr, cell: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_cells(g, cell) }
+}
+headers(_ctx: ptr, header: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_header(g, header) }
+}
+on_cell_click(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_click(g, cb) }
+}
+on_cell_select(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_select(g, cb) }
+}
+on_cell_activate(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_activate(g, cb) }
+}
+on_cell_edit(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_edit(g, cb) }
+}
+on_col_resize(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_col_resize(g, cb) }
+}
+on_col_move(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_col_move(g, cb) }
+}
+column_width(_ctx: ptr, w: int) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_set_col_widths(g, w) }
+}
+column_limits(_ctx: ptr, min: int, max: int) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_col_limits(g, min, max) }
 }
 
 // datagrid_scroll_to(g, row, col): show `row` at the top and `col` as the
 // first scrolling column (clamped so the window never runs past the end; a
 // frozen column is always shown, so col below `frozen` reads as `frozen`).
 // The scrollbars follow.
-datagrid_scroll_to(gp: ptr, row: int, col: int) {
+datagrid_scroll_to(gp: ptr, row: int, col: int) -> ptr {
     g = gp as *DataGrid
     // An open editor sits on a widget that is about to show another cell.
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
@@ -6873,20 +6998,23 @@ datagrid_scroll_to(gp: ptr, row: int, col: int) {
     aether_ui_slider_set_value(g.vsl, r * 1.0)
     aether_ui_slider_set_value(g.hsl, (c - g.frozen) * 1.0)
     _datagrid_bind(g)
+    return gp
 }
 
 // datagrid_refresh(g): the model changed; show it again.
-datagrid_refresh(gp: ptr) {
+datagrid_refresh(gp: ptr) -> ptr {
     _datagrid_bind(gp as *DataGrid)
+    return gp
 }
 
 // datagrid_on_click(g) callback |r, c| { ... }: a click on a cell, with the
 // row and column it shows now (scrolling moves what a cell widget shows, so
 // the position is worked out at the click, not when the handler was set).
 // The click has already selected the cell (or, with Shift, extended to it).
-datagrid_on_click(gp: ptr, cb: fn) {
+datagrid_on_click(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.click = box_closure(cb)
+    return gp
 }
 
 _datagrid_clicked(gp: ptr, vr: int, vc: int) {
@@ -6903,12 +7031,14 @@ _datagrid_clicked(gp: ptr, vr: int, vc: int) {
 // datagrid_select(g, r, c): put the cursor on one cell (scrolled into view);
 // datagrid_select_range(g, ar, ac, r, c) selects from (ar, ac) to the cursor
 // at (r, c). on_select hears both, as it hears a click or a key.
-datagrid_select(gp: ptr, r: int, c: int) {
+datagrid_select(gp: ptr, r: int, c: int) -> ptr {
     _datagrid_move(gp as *DataGrid, r, c, 0)
+    return gp
 }
 
-datagrid_select_range(gp: ptr, ar: int, ac: int, r: int, c: int) {
+datagrid_select_range(gp: ptr, ar: int, ac: int, r: int, c: int) -> ptr {
     _datagrid_set(gp as *DataGrid, ar, ac, r, c)
+    return gp
 }
 
 // The cursor and the anchor (-1 before anything is selected), and whether a
@@ -6923,55 +7053,62 @@ datagrid_is_selected(gp: ptr, r: int, c: int) -> int {
 
 // datagrid_on_select(g) callback |r, c| { ... }: the selection changed; the
 // cursor is at (r, c) (read the anchor for the range).
-datagrid_on_select(gp: ptr, cb: fn) {
+datagrid_on_select(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_sel = box_closure(cb)
+    return gp
 }
 
 // datagrid_on_activate(g) callback |r, c| { ... }: Return on the cursor cell.
-datagrid_on_activate(gp: ptr, cb: fn) {
+datagrid_on_activate(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_act = box_closure(cb)
+    return gp
 }
 
 // datagrid_on_edit(g) callback |r: int, c: int, text: string| { ... }: makes
-// the grid editable; called when an edit of (r, view column c) commits, to
-// store the text (datagrid_col_model gives the model column). The grid then
-// shows the cell function's answer for it.
-datagrid_on_edit(gp: ptr, cb: fn) {
+// the grid editable; called when an edit of row r, MODEL column c (the one
+// the cell function is given for that cell) commits, to store the text. The
+// grid then shows the cell function's answer for it.
+datagrid_on_edit(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_edit = box_closure(cb)
+    return gp
 }
 
 // datagrid_edit(g, r, c): open the editor on a cell from code, holding its
 // text (an editable grid only).
-datagrid_edit(gp: ptr, r: int, c: int) {
+datagrid_edit(gp: ptr, r: int, c: int) -> ptr {
     g = gp as *DataGrid
     _datagrid_edit_begin(g, r, c, _datagrid_cell_text(g, r, c))
+    return gp
 }
 
 // datagrid_edit_commit(g) / datagrid_edit_cancel(g): close the open editor,
 // storing its text or not. Nothing happens when none is open.
-datagrid_edit_commit(gp: ptr) {
+datagrid_edit_commit(gp: ptr) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 {
         _datagrid_edit_finish(g, 1)
         focus(g.root)
     }
+    return gp
 }
 
-datagrid_edit_cancel(gp: ptr) {
+datagrid_edit_cancel(gp: ptr) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 {
         _datagrid_edit_finish(g, 0)
         focus(g.root)
     }
+    return gp
 }
 
 // datagrid_editor(g): the open editor's text field, or 0.
 datagrid_editor(gp: ptr) -> int { g = gp as *DataGrid; return g.edit_field }
 
 _datagrid_cell_text(g: *DataGrid, r: int, c: int) -> string {
+    if g.cell == null { return "" }
     return _datagrid_invoke_cell(unbox_closure(g.cell), r, _datagrid_model(g, c))
 }
 
@@ -7063,7 +7200,9 @@ _datagrid_edit_finish(g: *DataGrid, keep: int) {
     remove_child(g.edit_box, f)
     g.edit_box = 0
     if keep == 1 && g.on_edit != null {
-        _datagrid_invoke_edit(unbox_closure(g.on_edit), er, ec, t)
+        // The MODEL column, as the cell function is given: an edit is the
+        // other half of "what is in this cell".
+        _datagrid_invoke_edit(unbox_closure(g.on_edit), er, _datagrid_model(g, ec), t)
     }
     _datagrid_bind(g)
 }
@@ -7505,6 +7644,14 @@ on_hover(handle: int, handler: fn) -> int {
 on_drag(handle: int, handler: fn) -> int {
     aether_ui_on_drag_impl(handle, box_closure(handler))
     return handle
+}
+
+// ondrag() callback |phase: int, x: float, y: float| { ... }: on_drag for the
+// widget whose block this is, the ambient form:
+//   text("⋮") { ondrag() callback |phase: int, x: float, y: float| { ... } }
+ondrag(_ctx: ptr, handler: fn) {
+    if _ctx == null { return }
+    aether_ui_on_drag_impl(aether_mem_ptr_to_long(_ctx) as int, box_closure(handler))
 }
 
 // edge(side, size, cb) -> (zone, content) — a self-positioning container:
