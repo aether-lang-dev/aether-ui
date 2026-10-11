@@ -6,6 +6,7 @@
 
 #include "aether_ui_backend.h"
 #include "aether_ui_a11y_grid.h"
+#include "aether_ui_focus_watch.h"   // on_focus_change
 #include "aether_ui_system_extras.h"
 #include "aether_ui_sni.h"
 #include <gtk/gtk.h>
@@ -51,6 +52,8 @@ typedef struct {
     void (*fn)(void);
     void* env;
 } AeClosure;
+
+static void aeui_focus_notify(GObject* o, GParamSpec* p, gpointer d);   // on_focus_change
 
 // Give back a boxed Aether closure: the box and the environment it captured
 // are both ours, and once the widget holding them is gone nothing can reach
@@ -561,6 +564,9 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
     gtk_window_set_title(GTK_WINDOW(window), entry->title);
     gtk_window_set_default_size(GTK_WINDOW(window), entry->width, entry->height);
     primary_window = GTK_WINDOW(window);   // overlay layer resolves handle 0 here
+    // on_focus_change: the window's focus widget is where focus moved (it
+    // does not change when the window merely stops being the active one).
+    g_signal_connect(window, "notify::focus-widget", G_CALLBACK(aeui_focus_notify), NULL);
     aeui_register_primary_window(GTK_WINDOW(window), entry->title);  // = handle 1
     aeui_attach_pending_shortcuts();       // item 9: queued ui.shortcut regs
     aeui_attach_pending_menus(gtk_app, GTK_WINDOW(window));  // real menu bar
@@ -690,6 +696,16 @@ void aether_ui_app_run_raw(int app_handle) {
 // widget's accessible role only at construction). Defined with the a11y
 // layer below.
 static int aeui_take_next_role(GtkAccessibleRole* out);
+
+static void aeui_focus_notify(GObject* o, GParamSpec* p, gpointer d) {
+    (void)o; (void)p; (void)d;
+    aeui_focus_watch_check();
+}
+
+void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
+    if (!aether_ui_get_widget(handle) || !boxed_closure) return;
+    aeui_focus_watch_add(handle, boxed_closure);
+}
 
 int aether_ui_text_create(const char* text) {
     ensure_gtk_init();

@@ -143,10 +143,12 @@ store); everything else speaks view columns.
    `datagrid_edit_commit`, `datagrid_edit_cancel`, `datagrid_editor`. Spec:
    open by double click, F2 and typing; commit by Return, Tab and a click
    elsewhere; cancel by Escape; on_edit's row and column (view) and the
-   caret, read back over the driver. Not yet: typing a character whose key
-   name is a word ("comma", "minus") does not open an editor, and an editor
-   that loses focus some other way (a click outside the grid) stays open
-   until the grid next commits.
+   caret, read back over the driver. Since 2026-10-11 a key named by a word
+   ("comma", "exclam", "KP_7") opens an editor holding its character
+   (`key_text`; every backend now names punctuation as GDK does), and focus
+   leaving the grid (another control, Tab out) commits the open editor
+   (`on_focus_change` on the grid, new on every backend); switching to
+   another application does not.
 5. **Accessibility.** DONE: `a11y_grid`, `a11y_grid_row`, `a11y_grid_cell`
    and `a11y_grid_header` (and `a11y_next_role`, since GTK4 takes a role
    only at construction). The grid is a grid of rows + 1 (the header row is

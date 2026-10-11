@@ -98,10 +98,11 @@ id_of_role(role: string) -> int {
     return id
 }
 
-// The open editor (the demo's only text field), 0 when none.
+// The open editor, 0 when none: the newest text field (the demo's Notes
+// field, outside the grid, is the first).
 editor() -> int {
-    if count_of("textfield") < 1 { return 0 }
-    return uidriver.widget_id_of("textfield", "")
+    if count_of("textfield") < 2 { return 0 }
+    return uidriver.widget_id_last_of("textfield", "")
 }
 
 // Wait for the editor to be open (with the caret placed) or gone.
@@ -394,6 +395,20 @@ main() {
             spec.assert_true(editor_open(0) == 1, "the editor closed")
             spec.assert_true(shows("edited: 99983,3 = q") == 1, "and committed q (model column 3)")
             spec.assert_eq(count_of("text"), 154, "no widgets left behind")
+        }
+        spec.it("a key named by a word opens an editor holding its character") callback {
+            key("comma")
+            spec.assert_true(editor_open(1) == 1, "an editor opened")
+            spec.assert_str_eq(uidriver.widget_text_by_id(editor()), ",", "holding the comma")
+            key("Escape")
+            spec.assert_true(editor_open(0) == 1, "and Escape closed it")
+        }
+        spec.it("focus leaving the grid commits the open editor") callback {
+            key("w")
+            spec.assert_true(editor_open(1) == 1, "an editor opened")
+            uidriver.post_ok("/widget/${uidriver.widget_id_of("textfield", "")}/focus", "focus the Notes field outside the grid")
+            spec.assert_true(editor_open(0) == 1, "the editor closed")
+            spec.assert_true(shows("edited: 99990,1 = w") == 1, "and committed w")
         }
     }
     spec.describe(fw, "accessibility") {

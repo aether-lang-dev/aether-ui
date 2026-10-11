@@ -128,7 +128,10 @@ The grid's verbs (`cells`, `headers`, `column_width`, `column_limits`,
 
 Two event handlers have ambient forms for any widget's block, as `onclick`
 does: `ondrag()` (press, drag, release) and `onsubmit()` (Return in a field);
-`pointer_shape()` sets the mouse pointer over it (`pointer_cursor` by handle).
+`pointer_shape()` sets the mouse pointer over it (`pointer_cursor` by handle),
+and `onfocuschange()` hears keyboard focus come into it or leave it
+(`on_focus_change` by handle). `key_text(name)` turns a key name back into
+what it types ("comma" is ","), for a key handler that builds text.
 A `textfield`'s trailing slot is its `on_change` closure, so the field that
 takes a block is `textfield_bound`:
 

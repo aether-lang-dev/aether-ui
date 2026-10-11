@@ -827,6 +827,11 @@ void aether_ui_on_drag_impl(int handle, void* boxed_closure);
 // "default" (NULL or "" too: the platform's own). aether_ui_cursor_impl
 // reads back the name in force ("" when none was set).
 void aether_ui_set_cursor_impl(int handle, const char* name);
+// on_focus_change: the closure (void*, intptr_t inside) hears keyboard focus
+// come into the widget or anything inside it (1) and leave it (0). Focus
+// leaving the application is not a change. Shared logic in
+// aether_ui_focus_watch.h; each backend signals where focus may have moved.
+void aether_ui_on_focus_change_impl(int handle, void* boxed_closure);
 const char* aether_ui_cursor_impl(int handle);
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure);
 void aether_ui_on_click_impl(int handle, void* boxed_closure);

@@ -226,6 +226,8 @@
 
 #include "aether_ui_backend.h"
 #include "aether_ui_a11y_grid.h"   // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_keynames.h"    // a typed character -> its GDK key name
+#include "aether_ui_focus_watch.h" // on_focus_change
 #include "aether_ui_test_server.h"    // AetherDriverHooks + aether_ui_test_server_start
 #include "aether_ui_system_extras.h"  // aether_ui_state_notify (observers live above the ABI)
 
@@ -1657,7 +1659,7 @@ enum { AEUI_EV_CLICK = 1, AEUI_EV_TEXT = 2, AEUI_EV_CHECK = 3, AEUI_EV_SEEK = 4,
        AEUI_EV_DISMISS = 13, AEUI_EV_DRAG = 14, AEUI_EV_WHEEL = 15, AEUI_EV_MENU_CLOSED = 16,
        AEUI_EV_SURFACE = 17, AEUI_EV_MENU_OPEN = 18, AEUI_EV_ROW_DRAG = 19, AEUI_EV_ROW_DROP = 20,
        AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22, AEUI_EV_SUBMIT = 23,
-       AEUI_EV_WDRAG = 24 };
+       AEUI_EV_WDRAG = 24, AEUI_EV_FOCUS = 25 };
 
 static jobject aeui_listener(JNIEnv* env, int handle, int kind) {
     jobject l = (*env)->NewObject(env, J.Listener, J.Listener_init, (jint)handle, (jint)kind);
@@ -3239,6 +3241,31 @@ void aether_ui_set_focusable_impl(int handle, int on) {
 
 JCLASS(C_Activity, "android/app/Activity");
 JMETHOD(M_Act_getCurrentFocus, C_Activity, "getCurrentFocus", "()Landroid/view/View;");
+
+// on_focus_change: the decor view's ViewTreeObserver reports every focus
+// move in the window (OnGlobalFocusChangeListener, through AetherListener);
+// pausing the activity moves no focus.
+JMETHOD(M_View_getVTO, C_View, "getViewTreeObserver", "()Landroid/view/ViewTreeObserver;");
+JCLASS(C_VTO, "android/view/ViewTreeObserver");
+JMETHOD(M_VTO_addGlobalFocus, C_VTO, "addOnGlobalFocusChangeListener",
+        "(Landroid/view/ViewTreeObserver$OnGlobalFocusChangeListener;)V");
+
+void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
+    if (!live_widget(handle) || !boxed_closure) return;
+    if (!aeui_focus_watch_add(handle, boxed_closure)) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    jobject window = g_activity ? (*env)->CallObjectMethod(env, g_activity, J.Activity_getWindow) : NULL;
+    jobject decor = window ? (*env)->CallObjectMethod(env, window, J.Window_getDecorView) : NULL;
+    jobject vto = decor ? JO(decor, M_View_getVTO) : NULL;
+    jobject l = vto ? aeui_listener(env, 0, AEUI_EV_FOCUS) : NULL;
+    if (l) {
+        (*env)->NewGlobalRef(env, l);   /* the observer holds it too; kept for the app's life */
+        JV(vto, M_VTO_addGlobalFocus, l);
+    }
+    aeui_check(env, "addOnGlobalFocusChangeListener");
+    aeui_unframe(env);
+}
 
 void aether_ui_focus_impl(int handle) {
     AeuiWidget* w = live_widget(handle);
@@ -6030,8 +6057,11 @@ static jboolean JNICALL native_key(JNIEnv* env, jclass cls, jint code, jint meta
         else snprintf(name, sizeof(name), "%s", base);
     } else if (unicode > 0) {
         // Anything else printable is its character, shift folded into it.
-        char u[8] = "";
-        if (unicode < 0x80) { u[0] = (char)unicode; }
+        char u[16] = "";
+        // Printable ASCII by its GDK name ("comma", "exclam"), as GTK
+        // reports it; anything else as its character.
+        if (unicode < 0x80 && aeui_keyname_for_char(unicode, u, (int)sizeof(u))) { }
+        else if (unicode < 0x80) { u[0] = (char)unicode; }
         else if (unicode < 0x800) { u[0] = (char)(0xC0 | (unicode >> 6)); u[1] = (char)(0x80 | (unicode & 63)); }
         else { u[0] = (char)(0xE0 | (unicode >> 12)); u[1] = (char)(0x80 | ((unicode >> 6) & 63)); u[2] = (char)(0x80 | (unicode & 63)); }
         snprintf(name, sizeof(name), "%s", u);
@@ -9266,6 +9296,9 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
     // Events whose handle is not a widget's: a menu's, an overlay's, a
     // window's, the activity's.
     switch (kind) {
+        case AEUI_EV_FOCUS:
+            aeui_focus_watch_check();
+            return;
         case AEUI_EV_MENU:
             if (b == 1) aeui_ctx_fire(handle, a - 1);   // a context menu: handle = the widget
             else aeui_menu_fire_id(a);                 // the options menu, a popup

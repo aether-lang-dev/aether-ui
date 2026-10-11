@@ -12,7 +12,7 @@
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
 
 import ui
-import ui (window, vstack, text, datagrid, cells, headers, column_width, on_cell_click,
+import ui (window, vstack, text, textfield_bound, datagrid, cells, headers, column_width, on_cell_click,
     on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
@@ -39,6 +39,7 @@ main() {
     moved = ui_state_s("none")
     edited = ui_state_s("none")
     edits = map.map_new()
+    notes = ui_state_s("")
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
@@ -84,6 +85,9 @@ main() {
             g.datagrid_col_limits(24, 1000).datagrid_on_select() callback |r: int, c: int| {
                 _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}")
             }
+            // A field outside the grid: focus moving to it commits an open
+            // editor (a field, since a button takes no focus on iOS).
+            _notes = textfield_bound("Notes", notes)
             text_bound(clicked, "clicked: ", "")
             text_bound(selected, "selection: ", "")
             text_bound(activated, "activated: ", "")

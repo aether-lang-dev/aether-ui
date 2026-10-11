@@ -90,6 +90,7 @@
 #include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
 #include "aether_ui_system_extras.h" // headless open_url record (GET /opened_urls)
 #include "aether_ui_a11y_grid.h"     // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_focus_watch.h"   // on_focus_change
 
 // ---------------------------------------------------------------------------
 // Closure struct — must match Aether codegen's _AeClosure layout (identical to
@@ -4205,6 +4206,24 @@ int aether_ui_zstack_create(void) {
 void aether_ui_focus_impl(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (v) [v becomeFirstResponder];
+    aeui_focus_watch_check();
+}
+
+// on_focus_change: on iOS focus is the first responder, which moves when a
+// text field or view begins or ends editing (a tap, the keyboard's Done, a
+// hardware Tab) or by focus(); those are the signals.
+void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
+    if (!aether_ui_get_widget(handle) || !boxed_closure) return;
+    if (aeui_focus_watch_add(handle, boxed_closure)) {
+        NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+        for (NSNotificationName n in @[UITextFieldTextDidBeginEditingNotification,
+                                       UITextFieldTextDidEndEditingNotification,
+                                       UITextViewTextDidBeginEditingNotification,
+                                       UITextViewTextDidEndEditingNotification]) {
+            [nc addObserverForName:n object:nil queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification* note) { (void)note; aeui_focus_watch_check(); }];
+        }
+    }
 }
 int aether_ui_focused_widget(void) {
     for (int i = 0; i < widget_count; i++)

@@ -24,6 +24,8 @@
 #include "aether_ui_backend.h"  // cross-platform backend ABI
 #include "aether_ui_system_extras.h"
 #include "aether_ui_a11y_grid.h"      // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_keynames.h"       // a typed character -> its GDK key name
+#include "aether_ui_focus_watch.h"    // on_focus_change
 #include <stdint.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -813,6 +815,16 @@ static NSLayoutConstraint* aeui_win_cap_h = nil;
 static AetherAppDelegate* app_delegate = nil;
 static NSWindow* primary_window = nil;
 
+@interface AeuiFocusObserver : NSObject
+@end
+@implementation AeuiFocusObserver
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object
+                        change:(NSDictionary*)change context:(void*)context {
+    (void)keyPath; (void)object; (void)change; (void)context;
+    aeui_focus_watch_check();
+}
+@end
+
 // ── Background work: std.worker's main-thread poster ───────────────────
 // A finished job is handed to the main dispatch queue from the pool thread
 // and delivered there. Not installed under AETHER_UI_HEADLESS: that run
@@ -868,6 +880,12 @@ int aether_ui_app_create(const char* title, int width, int height) {
     app_delegate.wantW = width;
     app_delegate.wantH = height;
     primary_window = window;
+    // on_focus_change: the window's first responder is where focus moved
+    // (it does not change when the app is merely deactivated).
+    static AeuiFocusObserver* focus_observer;
+    if (!focus_observer) focus_observer = [AeuiFocusObserver new];
+    [window addObserver:focus_observer forKeyPath:@"firstResponder"
+                options:NSKeyValueObservingOptionNew context:NULL];
     return 1;
 }
 
@@ -1568,6 +1586,11 @@ void aether_ui_set_focusable_impl(int handle, int on) {
     }
     // Native controls (buttons, fields) accept focus by their own rules and
     // need nothing here; saying so beats silently doing nothing for them.
+}
+
+void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
+    if (!aether_ui_get_widget(handle) || !boxed_closure) return;
+    aeui_focus_watch_add(handle, boxed_closure);
 }
 
 void aether_ui_focus_impl(int handle) {
@@ -5548,6 +5571,12 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
         default: break;
     }
     NSString* chars = [ev charactersIgnoringModifiers];
+    // A printable ASCII key by its GDK name ("comma", "exclam"), as GTK
+    // reports it; shift is already folded into the character.
+    if (chars && [chars length] == 1 && [chars characterAtIndex:0] < 0x80
+        && aeui_keyname_for_char([chars characterAtIndex:0], out, outsize)) {
+        return;
+    }
     if (chars && [chars length] > 0) {
         snprintf(out, outsize, "%s", [chars UTF8String]);
     } else {

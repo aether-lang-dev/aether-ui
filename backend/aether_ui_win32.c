@@ -15,6 +15,8 @@
 #include "aether_ui_backend.h"
 #include "aether_ui_system_extras.h"
 #include "aether_ui_a11y_grid.h"   // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_keynames.h"    // a typed character -> its GDK key name
+#include "aether_ui_focus_watch.h" // on_focus_change
 
 #ifndef UNICODE
 #define UNICODE
@@ -854,6 +856,7 @@ static int g_press_target = 0;   // what the last press on a container was for
 static int g_drag_target = 0;
 static HWND g_drag_hwnd = NULL;
 static POINT g_drag_origin;
+static void w32_focus_poll(void);
 static int w32_drag_begin(HWND hwnd, LPARAM lp);
 static int w32_set_cursor_under(HWND hwnd);
 static int w32_drag_track(HWND hwnd, POINT screen, int phase);
@@ -3551,6 +3554,7 @@ void aether_ui_app_run_raw(int app_handle) {
         if (canvas_has_focus || !IsDialogMessageW(e->hwnd, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
+            w32_focus_poll();
         }
     }
 }
@@ -4310,21 +4314,32 @@ static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
         case VK_NEXT:   n = "Page_Down"; break;
         default: break;
     }
-    char one[2] = {0, 0};
     if (!n) {
         if (vk >= VK_F1 && vk <= VK_F24) {
             snprintf(name, namesize, "F%d", (int)(vk - VK_F1 + 1));
             n = name;
-        } else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
-            // VK codes for letters are the UPPERCASE character. The any-key
-            // name is lower-case, matching what the other two deliver for an
-            // unmodified letter; the combo keeps the upper-case form the app
-            // writes in shortcut("Ctrl+R").
-            one[0] = (char)((vk >= 'A' && vk <= 'Z') ? vk + 32 : vk);
-            snprintf(name, namesize, "%s", one);
-            n = name;
         } else {
-            return -1;  // punctuation and the rest: not worth guessing
+            // A key that types something: what it types with shift (and the
+            // layout) but not Ctrl or Alt, named as GDK names it -- "a",
+            // "A" with shift, "comma", "exclam" -- as GTK, AppKit and
+            // Android report it. Punctuation used to go unreported, and a
+            // shifted letter came as lower-case.
+            BYTE ks[256];
+            GetKeyboardState(ks);
+            ks[VK_CONTROL] = ks[VK_LCONTROL] = ks[VK_RCONTROL] = 0;
+            ks[VK_MENU] = ks[VK_LMENU] = ks[VK_RMENU] = 0;
+            WCHAR wc[4] = {0};
+            /* flag 4: leave the keyboard's dead-key state alone */
+            int got = ToUnicodeEx((UINT)vk, MapVirtualKeyW((UINT)vk, MAPVK_VK_TO_VSC), ks,
+                                  wc, 4, 4, GetKeyboardLayout(0));
+            if (got == 1 && wc[0] < 0x80 && aeui_keyname_for_char((int)wc[0], name, namesize)) {
+                n = name;
+            } else if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
+                snprintf(name, namesize, "%c", (char)((vk >= 'A' && vk <= 'Z') ? vk + 32 : vk));
+                n = name;
+            } else {
+                return -1;  // types nothing ASCII: not a key worth reporting
+            }
         }
     } else {
         snprintf(name, namesize, "%s", n);
@@ -4373,9 +4388,29 @@ void aether_ui_set_focusable_impl(int handle, int on) {
                       on ? (st | WS_TABSTOP) : (st & ~(LONG_PTR)WS_TABSTOP));
 }
 
+// on_focus_change: focus moves with input (a click, a key) or by SetFocus,
+// so the focused window is compared after each message and after focus(),
+// and the watchers checked when it changed. NULL (the app is not the
+// active one) is not a change: focus leaving the app is not "moving on".
+static HWND w32_focus_last = NULL;
+static void w32_focus_poll(void) {
+    if (aeui_fw_n == 0) return;
+    HWND f = GetFocus();
+    if (!f || f == w32_focus_last) return;
+    w32_focus_last = f;
+    aeui_focus_watch_check();
+}
+
+void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
+    if (!widget_at(handle) || !boxed_closure) return;
+    aeui_focus_watch_add(handle, boxed_closure);
+    if (!w32_focus_last) w32_focus_last = GetFocus();
+}
+
 void aether_ui_focus_impl(int handle) {
     Widget* w = widget_at(handle);
     if (w) SetFocus(w->hwnd);
+    w32_focus_poll();
 }
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
                                             const char* accel,
@@ -13452,7 +13487,9 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             ctx->result = 3; ctx->done = 1; return 0;
         }
         if (ctx->action == AETHER_DRV_FOCUS) {
-            SetFocus(w->hwnd);
+            // Through focus(), as an app's call goes, so on_focus_change
+            // hears it (a direct SetFocus here moved focus unseen).
+            aether_ui_focus_impl(ctx->handle);
             ctx->result = 0;
             ctx->done = 1;
             return 0;

@@ -27,6 +27,7 @@ import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
 import android.widget.TextView;
@@ -42,7 +43,7 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
         PopupMenu.OnMenuItemClickListener, PopupMenu.OnDismissListener,
         DialogInterface.OnDismissListener, DialogInterface.OnClickListener,
         View.OnGenericMotionListener, SurfaceHolder.Callback, View.OnDragListener,
-        TextView.OnEditorActionListener {
+        TextView.OnEditorActionListener, ViewTreeObserver.OnGlobalFocusChangeListener {
     // Event kinds; the same numbers are AEUI_EV_* in aether_ui_android.c.
     static final int CLICK = 1, TEXT = 2, CHECK = 3, SEEK = 4, SELECT = 5,
                      HOVER = 6, LAYOUT = 7, DOUBLE = 8,
@@ -61,7 +62,8 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
                      FILE_DRAG = 21, // a draggable file's widget long-pressed: start the drag
                      FILE_DROP = 22, // files dropped on the window: s = paths, newline-separated
                      SUBMIT = 23,    // Return / the keyboard's Done in a field: s = its text
-                     WDRAG = 24;     // on_drag: a = phase, b = packed x/y px (see onTouch)
+                     WDRAG = 24,     // on_drag: a = phase, b = packed x/y px (see onTouch)
+                     FOCUS = 25;     // focus moved somewhere in the window (on_focus_change)
 
     private final int handle;
     private final int kind;
@@ -184,6 +186,11 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
         }
         if (taps != null) taps.onTouchEvent(e);
         return false;
+    }
+
+    // Focus moved in the window: native code checks every on_focus_change.
+    @Override public void onGlobalFocusChanged(View oldFocus, View newFocus) {
+        AetherActivity.nativeEvent(handle, FOCUS, 0, 0, null);
     }
 
     // Two signed 16-bit pixel counts in one int, x high (native code unpacks).

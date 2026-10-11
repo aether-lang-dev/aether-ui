@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`on_focus_change(widget) |inside|`** and its ambient form
+  `onfocuschange()`: keyboard focus came into a widget or anything inside
+  it, or left. Focus leaving the application is not a change. GTK4 the
+  window's focus-widget, AppKit the window's first responder (KVO), Win32
+  the focused window after each message and focus(), UIKit text editing
+  begin/end, Android the view tree's global focus listener. `datagrid`
+  commits an open editor when focus leaves the grid.
+- **`key_text(name)`**: the text a key name types (`"comma"` is `","`,
+  `"KP_7"` is `"7"`, `"Left"` is `""`). `datagrid` opens an editor for any
+  key that types something, punctuation included.
 - **`pointer_cursor(widget, name)`** and its ambient form
   `pointer_shape(name)`: the mouse pointer's shape over a widget
   ("col-resize", "row-resize", "move", "grab", "pointer", "text",
@@ -164,6 +174,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Punctuation keys have the same names on every backend: GDK's.** GTK4
+  said `"comma"`, AppKit and Android `","`, and Win32 reported punctuation
+  not at all and a shifted letter in lower case. AppKit, Android and Win32
+  now name a printable key as GDK does (`"comma"`, `"exclam"`, `"A"`), Win32
+  through ToUnicodeEx with the layout and shift.
+- **Win32's driver `/widget/{id}/focus` goes through `focus()`**, so what
+  watches focus hears it.
 - **macOS: function keys have names.** A key handler was given F1-F12 as
   the private-use characters AppKit reports for them; they are now "F1" to
   "F12", as on GTK, Win32 and Android, and the driver's "f2" arrives as "F2".

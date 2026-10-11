@@ -139,6 +139,7 @@ exports (
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
     on_hover, on_double_click, on_click, on_drag, ondrag, pointer_cursor, pointer_shape,
+    on_focus_change, onfocuschange, key_text,
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
@@ -876,6 +877,7 @@ extern aether_ui_canvas_render_range_rgba_impl(canvas_id: int, start: int, end: 
 extern aether_ui_on_hover_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_on_drag_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_set_cursor_impl(handle: int, name: string)
+extern aether_ui_on_focus_change_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 // Row drag-reorder: make `row` a drag source (carrying its index) + a drop
 // target; on drop of another row, fire on_drop(source_index).
@@ -6355,7 +6357,8 @@ vlist_native(vp: ptr) -> int {
 // (when the grid has no datagrid_on_activate) opens an editor (a text field over the cell) holding the cell's text, and
 // typing a character opens one holding that character. Return commits and
 // moves down, Tab commits and moves right (Shift+Tab left), Escape cancels;
-// clicking another cell, scrolling or a column change commits first. The
+// clicking another cell, scrolling, a column change or focus leaving the
+// grid commits first. The
 // app's on_edit stores the text; the grid then shows the cell function's
 // answer again.
 struct DataGrid {
@@ -6586,6 +6589,12 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     _hw2 = width(g.hsl, (fz + vc) * g.col_w)
     on_key(root) callback |k: string, m: int| {
         _datagrid_key(gp, k, m)
+    }
+    // Focus leaving the grid (a click on another control, Tab out) commits
+    // an open editor, as a spreadsheet does; focus moving inside it (the
+    // editor taking it, the grid taking it back) is not leaving.
+    _fc = on_focus_change(root) callback |inside: int| {
+        if inside == 0 { _datagrid_focus_left(gp) }
     }
     // While an editor is open (and has the focus) Tab, Shift+Tab and Escape
     // are the grid's: as shortcuts they come before the window's own focus
@@ -6958,10 +6967,10 @@ _datagrid_key(gp: ptr, k: string, m: int) {
             _datagrid_edit_begin(g, r, c, _datagrid_cell_text(g, r, c))
             return
         }
-        typed = ""
-        if string.length(k) == 1 { typed = k }
-        if string.equals(k, "space") == 1 { typed = " " }
-        if string.length(typed) == 1 {
+        // A key that types something opens an editor holding it, a word
+        // name too ("comma" types ",", "KP_7" types "7").
+        typed = key_text(k)
+        if string.length(typed) >= 1 {
             _datagrid_edit_begin(g, r, c, typed)
             return
         }
@@ -7212,6 +7221,11 @@ datagrid_editor(gp: ptr) -> int { g = gp as *DataGrid; return g.edit_field }
 _datagrid_cell_text(g: *DataGrid, r: int, c: int) -> string {
     if g.cell == null { return "" }
     return _datagrid_invoke_cell(unbox_closure(g.cell), r, _datagrid_model(g, c))
+}
+
+_datagrid_focus_left(gp: ptr) {
+    g = gp as *DataGrid
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
 }
 
 // Is one of this grid's editors open and holding the focus?
@@ -7760,6 +7774,62 @@ on_drag(handle: int, handler: fn) -> int {
 pointer_cursor(handle: int, name: string) -> int {
     aether_ui_set_cursor_impl(handle, name)
     return handle
+}
+
+// on_focus_change(widget) callback |inside: int| { ... }: keyboard focus came
+// into the widget or anything inside it (inside = 1), or left it (0). The
+// way to notice "the user moved on" (an editor committing when its field
+// loses focus, a panel closing). Focus leaving the application, another one
+// activated, is not a change. GTK4 the window's focus-widget; AppKit the
+// window's first responder; Win32 the focused window after each message;
+// UIKit text editing begin and end; Android the view tree's global focus
+// listener. The driver's /widget/{id}/focus moves real focus, so it fires
+// this too.
+on_focus_change(handle: int, cb: fn) -> int {
+    aether_ui_on_focus_change_impl(handle, box_closure(cb))
+    return handle
+}
+
+// onfocuschange() callback |inside: int| { ... }: on_focus_change for the
+// widget whose block this is.
+onfocuschange(_ctx: ptr, cb: fn) {
+    if _ctx == null { return }
+    aether_ui_on_focus_change_impl(aether_mem_ptr_to_long(_ctx) as int, box_closure(cb))
+}
+
+// key_text(name) -> the text a key name types: "a" for "a", "A" for "A", ","
+// for "comma", "!" for "exclam", " " for "space", "7" for "KP_7"; "" for a
+// key that types nothing ("Left", "Return", "F2"). Key names are GDK's on
+// every backend, so punctuation arrives as a word; this turns it back.
+//   on_key(list) callback |k: string, m: int| { typeahead(key_text(k)) }
+key_text(name: string) -> string {
+    n = string.length(name)
+    if n == 1 { return name }
+    if string.equals(name, "space") == 1 { return " " }
+    if string.starts_with(name, "KP_") == 1 && n == 4 {
+        d = string.substring(name, 3, 4)
+        if string.contains("0123456789", d) == 1 { return d }
+    }
+    i = 0
+    while i < _KEY_NAMES_N {
+        if string.equals(name, _key_name_at(i)) == 1 { return _key_char_at(i) }
+        i = i + 1
+    }
+    return ""
+}
+
+// The punctuation keys GDK names by word, and what each types.
+const _KEY_NAMES_N = 38
+_key_name_at(i: int) -> string {
+    names = "exclam,quotedbl,numbersign,dollar,percent,ampersand,apostrophe,parenleft,parenright,asterisk,plus,comma,minus,period,slash,colon,semicolon,less,equal,greater,question,at,bracketleft,backslash,bracketright,asciicircum,underscore,grave,braceleft,bar,braceright,asciitilde,KP_Add,KP_Subtract,KP_Multiply,KP_Divide,KP_Decimal,KP_Separator"
+    parts = string.string_split(names, ",")
+    r = string.copy(string.string_array_get(parts, i))
+    string.string_array_free(parts)
+    return r
+}
+_key_char_at(i: int) -> string {
+    chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~+-*/.,"
+    return string.substring(chars, i, i + 1)
 }
 
 // pointer_shape(name): pointer_cursor for the widget whose block this is.
