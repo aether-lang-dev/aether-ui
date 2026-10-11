@@ -9,6 +9,7 @@
 
 import ui
 import ui (window, vstack, text, textfield, textfield_bound, securefield, on_submit, onsubmit, ondrag,
+    pointer_shape,
     ui_state_s, ui_set_s, text_bound, ui_state_i, ui_set_i, ui_get_i,
     enable_test_server)
 import std.os (os_getenv)
@@ -40,6 +41,7 @@ main() {
                 }
             }
             text("drag me") {
+                pointer_shape("grab")
                 ondrag() callback |phase: int, x: float, y: float| {
                     if phase == 2 { _d = ui_set_s(dragged, "by ${x as int},${y as int}") }
                 }

@@ -127,12 +127,16 @@ The grid's verbs (`cells`, `headers`, `column_width`, `column_limits`,
 `on_col_resize`, `on_col_move`) do nothing outside a grid's block.
 
 Two event handlers have ambient forms for any widget's block, as `onclick`
-does: `ondrag()` (press, drag, release) and `onsubmit()` (Return in a field).
+does: `ondrag()` (press, drag, release) and `onsubmit()` (Return in a field);
+`pointer_shape()` sets the mouse pointer over it (`pointer_cursor` by handle).
 A `textfield`'s trailing slot is its `on_change` closure, so the field that
 takes a block is `textfield_bound`:
 
 ```aether
-text("⋮") { ondrag() callback |phase: int, x: float, y: float| { resize(phase, x) } }
+text("⋮") {
+    pointer_shape("col-resize")
+    ondrag() callback |phase: int, x: float, y: float| { resize(phase, x) }
+}
 textfield_bound("Formula…", formula) { onsubmit() callback |t: string| { run(t) } }
 ```
 

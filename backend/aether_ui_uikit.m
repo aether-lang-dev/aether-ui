@@ -4105,6 +4105,70 @@ static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
 }
 @end
 
+// pointer_cursor: iPadOS has a pointer only under a trackpad or mouse; a
+// UIPointerInteraction gives the view its style there: a beam with left and
+// right arrows for col-resize (up and down for row-resize), a text beam, the
+// lift effect for "pointer", the system pointer otherwise.
+static const char kCursorName;
+
+@interface AeuiPointerDelegate : NSObject <UIPointerInteractionDelegate>
+@end
+@implementation AeuiPointerDelegate
+- (UIPointerStyle*)pointerInteraction:(UIPointerInteraction*)interaction styleForRegion:(UIPointerRegion*)region
+    API_AVAILABLE(ios(13.4)) {
+    (void)region;
+    UIView* v = interaction.view;
+    NSString* n = v ? objc_getAssociatedObject(v, &kCursorName) : nil;
+    if (!n) return nil;
+    if ([n isEqualToString:@"pointer"]) {
+        UITargetedPreview* p = [[UITargetedPreview alloc] initWithView:v];
+        return [UIPointerStyle styleWithEffect:[UIPointerLiftEffect effectWithPreview:p] shape:nil];
+    }
+    if ([n isEqualToString:@"text"])
+        return [UIPointerStyle styleWithShape:[UIPointerShape beamWithPreferredLength:20 axis:UIAxisVertical]
+                              constrainedAxes:UIAxisNeither];
+    if ([n isEqualToString:@"col-resize"] || [n isEqualToString:@"row-resize"]) {
+        BOOL col = [n isEqualToString:@"col-resize"];
+        UIPointerStyle* s = [UIPointerStyle styleWithShape:
+            [UIPointerShape beamWithPreferredLength:16 axis:col ? UIAxisHorizontal : UIAxisVertical]
+                                         constrainedAxes:UIAxisNeither];
+        if (@available(iOS 15.0, *)) {
+            s.accessories = col
+                ? @[[UIPointerAccessory arrowAccessoryWithPosition:UIPointerAccessoryPositionLeft],
+                    [UIPointerAccessory arrowAccessoryWithPosition:UIPointerAccessoryPositionRight]]
+                : @[[UIPointerAccessory arrowAccessoryWithPosition:UIPointerAccessoryPositionTop],
+                    [UIPointerAccessory arrowAccessoryWithPosition:UIPointerAccessoryPositionBottom]];
+        }
+        return s;
+    }
+    return nil;   /* the system pointer */
+}
+@end
+
+void aether_ui_set_cursor_impl(int handle, const char* name) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    BOOL none = (!name || !*name || !strcmp(name, "default"));
+    objc_setAssociatedObject(v, &kCursorName, none ? nil : [NSString stringWithUTF8String:name],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (@available(iOS 13.4, *)) {
+        static AeuiPointerDelegate* delegate;
+        if (!delegate) delegate = [AeuiPointerDelegate new];
+        BOOL has = NO;
+        for (id<UIInteraction> i in v.interactions) if ([(id)i isKindOfClass:[UIPointerInteraction class]]) has = YES;
+        if (!has && !none) {
+            [v addInteraction:[[UIPointerInteraction alloc] initWithDelegate:delegate]];
+            v.userInteractionEnabled = YES;
+        }
+    }
+}
+
+const char* aether_ui_cursor_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    NSString* n = v ? objc_getAssociatedObject(v, &kCursorName) : nil;
+    return n ? [n UTF8String] : "";
+}
+
 void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v || !boxed_closure) return;

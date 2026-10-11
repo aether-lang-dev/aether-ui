@@ -114,8 +114,8 @@ store); everything else speaks view columns.
    stop); Tab along a row moves to phase 4, where it is the editor's key.
    Spec: `spec_datagrid_demo`'s second half reads the selection back as text
    and as the cells' painted colours.
-3. **Column resize and reorder.** DONE: a drag that starts within 6px of
-   a header cell's right edge resizes the column as it goes (clamped,
+3. **Column resize and reorder.** DONE: a drag on the grip at a header
+   cell's right edge resizes the column as it goes (clamped,
    24-1000 by default, `datagrid_col_limits`); one that starts elsewhere on
    a scrolling column's header moves it to where it is released; frozen
    columns stay. A view-to-model column map, widths kept per model column
@@ -124,8 +124,10 @@ store); everything else speaks view columns.
    `datagrid_on_col_resize`, `datagrid_on_col_move`. Built on a new
    `on_drag(widget)` (press point, then offsets) that is real on every
    backend, with the driver verb `POST /widget/{id}/drag`. Spec: widths,
-   positions and order read back as geometry; cells follow. Not yet: a
-   resize pointer over the grip (aether-ui has no pointer-cursor API), and
+   positions and order read back as geometry; cells follow. Since
+   2026-10-11 the resize zone is a real 6px grip widget at each header
+   cell's right edge, showing the col-resize pointer (`pointer_cursor`, new
+   on every backend), so the pointer says where a drag resizes. Not yet:
    live feedback while a column is being moved (it moves on release).
 4. **Editing.** DONE: `datagrid_on_edit(g) |r, c, text|` makes a grid
    editable. F2, a double click, Return (when the grid has no on_activate)

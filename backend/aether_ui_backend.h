@@ -822,6 +822,12 @@ void aether_ui_on_hover_impl(int handle, void* boxed_closure);
 // (void*, intptr_t phase, double x, double y): phase 0 the press at (x, y)
 // widget-local, 1 a move and 2 the release at offset (x, y) from the press.
 void aether_ui_on_drag_impl(int handle, void* boxed_closure);
+// The mouse pointer's shape over a widget: "col-resize", "row-resize",
+// "move", "grab", "pointer", "text", "crosshair", "not-allowed", "wait" or
+// "default" (NULL or "" too: the platform's own). aether_ui_cursor_impl
+// reads back the name in force ("" when none was set).
+void aether_ui_set_cursor_impl(int handle, const char* name);
+const char* aether_ui_cursor_impl(int handle);
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure);
 void aether_ui_on_click_impl(int handle, void* boxed_closure);
 

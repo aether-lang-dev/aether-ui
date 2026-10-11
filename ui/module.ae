@@ -138,7 +138,7 @@ exports (
     canvas_arc, canvas_close_path, canvas_fill, canvas_fill_text, canvas_stroke_text,
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
-    on_hover, on_double_click, on_click, on_drag, ondrag,
+    on_hover, on_double_click, on_click, on_drag, ondrag, pointer_cursor, pointer_shape,
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
@@ -875,6 +875,7 @@ extern aether_ui_canvas_render_range_rgba_impl(canvas_id: int, start: int, end: 
 
 extern aether_ui_on_hover_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_on_drag_impl(handle: int, boxed_closure: ptr)
+extern aether_ui_set_cursor_impl(handle: int, name: string)
 extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 // Row drag-reorder: make `row` a drag source (carrying its index) + a drop
 // target; on drop of another row, fire on_drop(source_index).
@@ -6342,10 +6343,10 @@ vlist_native(vp: ptr) -> int {
 // #99c2ff, frozen cells #f2f2f5, the rest white.
 //
 // Columns can be resized and reordered by dragging their header (on_drag):
-// a drag that starts within 6px of a header cell's right edge sets that
-// column's width as it goes; one that starts elsewhere on a scrolling
-// column's header moves the column to where it is released (frozen columns
-// stay put). A column's width goes with it when it moves. Every column
+// a drag on the 6px grip at a header cell's right edge (the col-resize
+// pointer shows over it) sets that column's width as it goes; one on the
+// label of a scrolling column's header moves the column to where it is
+// released (frozen columns stay put). A column's width goes with it when it moves. Every column
 // number in this API is a VIEW column (its place on screen) except the
 // ones the cell and header functions and on_edit are given, which are MODEL
 // columns (what to show, what to store); datagrid_col_model converts.
@@ -6371,7 +6372,9 @@ struct DataGrid {
     cell: ptr         // boxed |r, c| -> string, or null until cells() / datagrid_cells
     header: ptr       // boxed |c| -> string, or null
     root: int
-    hdr_cells: ptr    // intarr of text handles: frozen, then vis_cols
+    hdr_cells: ptr    // intarr of the header labels: frozen, then vis_cols
+    hdr_boxes: ptr    // intarr of the header cells (label + grip)
+    hdr_grips: ptr    // intarr of the grips at the header cells' right edges
     cells: ptr        // intarr of text handles, row-major
     vsl: int
     hsl: int
@@ -6403,7 +6406,7 @@ struct DataGrid {
     row_boxes: ptr    // intarr of the shown rows' hstacks (their a11y row index)
 }
 
-// A header cell's grip: a press this close to its right edge resizes.
+// A header cell's grip: the strip at its right edge that resizes the column.
 const DATAGRID_GRIP = 6
 const DATAGRID_MAGIC = 1597463007
 
@@ -6489,20 +6492,40 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     hdr = hstack(root, 0)
     _agr = a11y_grid_row(hdr, 0)
     g.hdr_cells = intarr_new_raw(fz + vc + 1)
+    g.hdr_boxes = intarr_new_raw(fz + vc + 1)
+    g.hdr_grips = intarr_new_raw(fz + vc + 1)
     hi = 0
     while hi < fz + vc {
+        // A header cell: its label, and at its right edge a grip that
+        // resizes the column (with the col-resize pointer over it).
+        hb = hstack(hdr, 0)
+        _hbw = width(hb, g.col_w)
+        _hbh = height(hb, g.row_h)
+        intarr_set_raw(g.hdr_boxes, hi, hb)
         a11y_next_role("columnheader")
-        hh = text(hdr, "")
-        _hw = width(hh, g.col_w)
+        hh = text(hb, "")
+        _hw = width(hh, g.col_w - DATAGRID_GRIP)
         _hhh = height(hh, g.row_h)
         text_truncate(hh, "tail")
         add_css_class(hh, "aui-grid-header")
         aether_ui_set_bg_color(hh, 0.90, 0.91, 0.93, 1.0)
         intarr_set_raw(g.hdr_cells, hi, hh)
         intarr_set_raw(g.shown_w, hi, g.col_w)
+        a11y_next_role("none")
+        grip = vstack(hb, 0)
+        _gw = width(grip, DATAGRID_GRIP)
+        _gh = height(grip, g.row_h)
+        add_css_class(grip, "aui-grid-grip")
+        aether_ui_set_bg_color(grip, 0.80, 0.82, 0.86, 1.0)
+        _ga = a11y_role(grip, "none")
+        _gc = pointer_cursor(grip, "col-resize")
+        intarr_set_raw(g.hdr_grips, hi, grip)
         hpos = hi
         _hd = on_drag(hh) callback |ph: int, dx: float, _dy: float| {
-            _datagrid_header_drag(gp, hpos, ph, dx)
+            _datagrid_header_drag(gp, hpos, 0, ph, dx)
+        }
+        _gd = on_drag(grip) callback |ph: int, dx: float, _dy: float| {
+            _datagrid_header_drag(gp, hpos, 1, ph, dx)
         }
         hi = hi + 1
     }
@@ -6658,7 +6681,8 @@ _datagrid_size(g: *DataGrid) {
         total = total + cw
         if intarr_get_raw(g.shown_w, j) != cw {
             intarr_set_raw(g.shown_w, j, cw)
-            _hw = width(intarr_get_raw(g.hdr_cells, j), cw)
+            _hbw = width(intarr_get_raw(g.hdr_boxes, j), cw)
+            _hw = width(intarr_get_raw(g.hdr_cells, j), cw - DATAGRID_GRIP)
             r = 0
             while r < g.vis_rows {
                 _cw = width(intarr_get_raw(g.cells, r * w + j), cw)
@@ -6671,9 +6695,10 @@ _datagrid_size(g: *DataGrid) {
     _sw2 = width(g.hsl, total)
 }
 
-// A drag on the header cell at shown position `pos`: near its right edge a
-// resize, as it goes; elsewhere (a scrolling column) a move, on release.
-_datagrid_header_drag(gp: ptr, pos: int, phase: int, x: float) {
+// A drag on the header cell at shown position `pos`: on its grip (grip = 1)
+// a resize, as it goes; on its label (a scrolling column) a move, on
+// release.
+_datagrid_header_drag(gp: ptr, pos: int, grip: int, phase: int, x: float) {
     g = gp as *DataGrid
     view = _datagrid_col_at(g, pos)
     if phase == 0 {
@@ -6681,7 +6706,7 @@ _datagrid_header_drag(gp: ptr, pos: int, phase: int, x: float) {
         g.drag_pos = pos
         g.drag_kind = 0
         cw = intarr_get_raw(g.shown_w, pos)
-        if x >= (cw - DATAGRID_GRIP) * 1.0 {
+        if grip == 1 {
             g.drag_kind = 1
             g.drag_w0 = cw
         } else if pos >= g.frozen {
@@ -7721,6 +7746,27 @@ on_hover(handle: int, handler: fn) -> int {
 on_drag(handle: int, handler: fn) -> int {
     aether_ui_on_drag_impl(handle, box_closure(handler))
     return handle
+}
+
+// pointer_cursor(widget, name): the mouse pointer's shape while it is over
+// the widget. Names: "col-resize", "row-resize" (a splitter, a column's
+// edge), "move", "grab", "pointer" (a link), "text", "crosshair",
+// "not-allowed", "wait", and "default" (the platform's own). GTK4
+// gtk_widget_set_cursor_from_name; AppKit a cursor-update tracking area;
+// Win32 WM_SETCURSOR; Android View.setPointerIcon; iPadOS a pointer
+// interaction (a pointer only exists there with a trackpad or mouse). The
+// driver reports it as `cursor`.
+//   grip.pointer_cursor("col-resize")
+pointer_cursor(handle: int, name: string) -> int {
+    aether_ui_set_cursor_impl(handle, name)
+    return handle
+}
+
+// pointer_shape(name): pointer_cursor for the widget whose block this is.
+//   vstack(0) { pointer_shape("row-resize") }
+pointer_shape(_ctx: ptr, name: string) {
+    if _ctx == null { return }
+    aether_ui_set_cursor_impl(aether_mem_ptr_to_long(_ctx) as int, name)
 }
 
 // ondrag() callback |phase: int, x: float, y: float| { ... }: on_drag for the

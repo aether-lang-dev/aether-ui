@@ -47,6 +47,8 @@ main() {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("drag me")}/drag?x=4&y=4&dx=30&dy=-7", "drag the label")
             spec.assert_true(uidriver.wait_body_contains("/widgets", "dragged by 30,-7", 20),
                 "the release reported the offset")
+            spec.assert_contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("drag me")}"),
+                "\"cursor\":\"grab\"", "pointer_shape() in its block gave it the grab pointer")
         }
         spec.it("a widget that is not a field cannot be submitted") callback {
             t = uidriver.widget_id_of("text", "")

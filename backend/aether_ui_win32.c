@@ -272,6 +272,8 @@ typedef struct {
     int image_fill;       // WK_IMAGE: EFFECTIVE fill 0=original 3=stretch
     int drag_armed;       // draggable(): the drag-source subclass is installed
     int uia_armed;        // a11y_grid*: the UI Automation provider subclass is installed
+    char* cursor_name;    // pointer_cursor's name, or NULL
+    int cursor_armed;     // pointer_cursor: the WM_SETCURSOR subclass is installed
 
     // Per-widget data (union over kind)
     union {
@@ -853,6 +855,7 @@ static int g_drag_target = 0;
 static HWND g_drag_hwnd = NULL;
 static POINT g_drag_origin;
 static int w32_drag_begin(HWND hwnd, LPARAM lp);
+static int w32_set_cursor_under(HWND hwnd);
 static int w32_drag_track(HWND hwnd, POINT screen, int phase);
 
 typedef struct {
@@ -2362,6 +2365,10 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         }
 
         case WM_SETCURSOR: {
+            // pointer_cursor: the widget under the pointer that has one (a
+            // label passes its mouse here, so it is found under this window).
+            if ((HWND)wp == hwnd && LOWORD(lp) == HTCLIENT && w32_set_cursor_under(hwnd))
+                return TRUE;
             // Over the sash (or dragging it): the resize cursor, so the
             // band reads as something to take hold of.
             Widget* w = widget_at(handle_for_hwnd(hwnd));
@@ -6864,6 +6871,76 @@ static LRESULT CALLBACK w32_wdrag_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         default: break;
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+// ── pointer_cursor ─────────────────────────────────────────────────────
+static LPCWSTR w32_cursor_id(const char* n) {
+    if (!n || !*n || !strcmp(n, "default")) return IDC_ARROW;
+    if (!strcmp(n, "col-resize"))  return IDC_SIZEWE;
+    if (!strcmp(n, "row-resize"))  return IDC_SIZENS;
+    if (!strcmp(n, "move"))        return IDC_SIZEALL;
+    if (!strcmp(n, "grab"))        return IDC_HAND;
+    if (!strcmp(n, "pointer"))     return IDC_HAND;
+    if (!strcmp(n, "text"))        return IDC_IBEAM;
+    if (!strcmp(n, "crosshair"))   return IDC_CROSS;
+    if (!strcmp(n, "not-allowed")) return IDC_NO;
+    if (!strcmp(n, "wait"))        return IDC_WAIT;
+    return IDC_ARROW;
+}
+
+// The deepest widget at the pointer inside hwnd (or hwnd itself), and up
+// from it to hwnd, the first with a cursor: set it. 1 when one was.
+static int w32_set_cursor_under(HWND hwnd) {
+    POINT at;
+    GetCursorPos(&at);
+    ScreenToClient(hwnd, &at);
+    HWND deepest = hwnd;
+    POINT local = at;
+    for (;;) {
+        HWND child = ChildWindowFromPointEx(deepest, local, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+        if (!child || child == deepest) break;
+        MapWindowPoints(deepest, child, &local, 1);
+        deepest = child;
+    }
+    for (HWND h = deepest; h; h = (h == hwnd) ? NULL : GetParent(h)) {
+        Widget* w = widget_at(handle_for_hwnd(h));
+        if (w && w->cursor_name) {
+            SetCursor(LoadCursorW(NULL, w32_cursor_id(w->cursor_name)));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// A control that takes its own mouse answers WM_SETCURSOR itself.
+static LRESULT CALLBACK w32_cursor_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                        UINT_PTR id, DWORD_PTR ref) {
+    (void)id;
+    if (msg == WM_SETCURSOR && (HWND)wp == hwnd && LOWORD(lp) == HTCLIENT) {
+        Widget* w = widget_at((int)ref);
+        if (w && w->cursor_name) {
+            SetCursor(LoadCursorW(NULL, w32_cursor_id(w->cursor_name)));
+            return TRUE;
+        }
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+void aether_ui_set_cursor_impl(int handle, const char* name) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    free(w->cursor_name);
+    w->cursor_name = (name && *name && strcmp(name, "default") != 0) ? _strdup(name) : NULL;
+    // A label or a stack is found by the window that gets its mouse; anything
+    // else is asked directly.
+    if (!w->cursor_armed && w->hwnd && w->kind != WK_TEXT && !w32_is_stack(w->kind)) {
+        if (SetWindowSubclass(w->hwnd, w32_cursor_proc, 13, (DWORD_PTR)handle)) w->cursor_armed = 1;
+    }
+}
+
+const char* aether_ui_cursor_impl(int handle) {
+    Widget* w = widget_at(handle);
+    return (w && w->cursor_name) ? w->cursor_name : "";
 }
 
 void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
@@ -12718,6 +12795,8 @@ static void w32_release_handle_state(int h) {
     if (w) {
         w32_release_box(&w->on_click);
         w32_release_box(&w->on_drag);
+        free(w->cursor_name);
+        w->cursor_name = NULL;
         w32_release_box(&w->on_hover);
         w32_release_box(&w->on_double_click);
         w32_release_box(&w->on_change);

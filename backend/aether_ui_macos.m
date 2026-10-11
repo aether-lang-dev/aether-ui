@@ -7334,6 +7334,57 @@ static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
 }
 @end
 
+// pointer_cursor: a tracking area per view whose owner answers
+// cursorUpdate: with the named NSCursor, the AppKit way for a cursor that
+// belongs to a region rather than to a whole window.
+static NSCursor* aeui_ns_cursor(const char* n) {
+    if (!n || !*n || !strcmp(n, "default")) return [NSCursor arrowCursor];
+    if (!strcmp(n, "col-resize"))  return [NSCursor resizeLeftRightCursor];
+    if (!strcmp(n, "row-resize"))  return [NSCursor resizeUpDownCursor];
+    if (!strcmp(n, "move"))        return [NSCursor openHandCursor];
+    if (!strcmp(n, "grab"))        return [NSCursor openHandCursor];
+    if (!strcmp(n, "pointer"))     return [NSCursor pointingHandCursor];
+    if (!strcmp(n, "text"))        return [NSCursor IBeamCursor];
+    if (!strcmp(n, "crosshair"))   return [NSCursor crosshairCursor];
+    if (!strcmp(n, "not-allowed")) return [NSCursor operationNotAllowedCursor];
+    return [NSCursor arrowCursor];
+}
+
+@interface AeuiCursorOwner : NSObject
+@property (nonatomic, strong) NSCursor* cursor;
+@end
+@implementation AeuiCursorOwner
+- (void)cursorUpdate:(NSEvent*)e { (void)e; [self.cursor set]; }
+- (void)mouseEntered:(NSEvent*)e { (void)e; [self.cursor set]; }
+- (void)mouseExited:(NSEvent*)e { (void)e; [[NSCursor arrowCursor] set]; }
+@end
+
+void aether_ui_set_cursor_impl(int handle, const char* name) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    objc_setAssociatedObject(v, "aeui_cursor_name",
+        (name && *name && strcmp(name, "default") != 0) ? [NSString stringWithUTF8String:name] : nil,
+        OBJC_ASSOCIATION_RETAIN);
+    for (NSTrackingArea* t in [[v trackingAreas] copy]) {
+        if ([[t owner] isKindOfClass:[AeuiCursorOwner class]]) [v removeTrackingArea:t];
+    }
+    if (!name || !*name || !strcmp(name, "default")) return;
+    AeuiCursorOwner* o = [AeuiCursorOwner new];
+    o.cursor = aeui_ns_cursor(name);
+    objc_setAssociatedObject(v, "aeui_cursor_owner", o, OBJC_ASSOCIATION_RETAIN);
+    NSTrackingArea* t = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+        options:NSTrackingCursorUpdate | NSTrackingMouseEnteredAndExited
+              | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+        owner:o userInfo:nil];
+    [v addTrackingArea:t];
+}
+
+const char* aether_ui_cursor_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    NSString* n = v ? objc_getAssociatedObject(v, "aeui_cursor_name") : nil;
+    return n ? [n UTF8String] : "";
+}
+
 void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v || !boxed_closure) return;

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`pointer_cursor(widget, name)`** and its ambient form
+  `pointer_shape(name)`: the mouse pointer's shape over a widget
+  ("col-resize", "row-resize", "move", "grab", "pointer", "text",
+  "crosshair", "not-allowed", "wait", "default"). GTK4
+  `gtk_widget_set_cursor_from_name` (the driver reads GTK's cursor back),
+  AppKit a cursor-update tracking area, Win32 `WM_SETCURSOR` (a label's
+  through the window that gets its mouse), Android `View.setPointerIcon`,
+  iPadOS a `UIPointerInteraction` (resize arrows as pointer accessories).
+  The driver reports it as `cursor`. `datagrid`'s resize zone is now a 6px
+  grip at each header cell's right edge with the col-resize pointer; a drag
+  on it resizes, a drag on the label moves the column.
 - **Accessible grids** (docs/design/data-grid.md, phase 5):
   `a11y_grid`, `a11y_grid_row`, `a11y_grid_cell`, `a11y_grid_header` and
   `a11y_next_role`, real on every backend (GTK4 relations and construction

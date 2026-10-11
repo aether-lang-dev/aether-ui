@@ -7016,6 +7016,23 @@ static void on_wdrag_end(GtkGestureDrag* g, double x, double y, gpointer d) {
     (void)g; aeui_drag_call((AeClosure*)d, 2, x, y);
 }
 
+// pointer_cursor: GTK names cursors as CSS does, so the vocabulary passes
+// through but for "default" (no cursor of the widget's own). The readback
+// is GTK's: the cursor the widget actually carries.
+void aether_ui_set_cursor_impl(int handle, const char* name) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    if (!name || !*name || strcmp(name, "default") == 0) gtk_widget_set_cursor(w, NULL);
+    else gtk_widget_set_cursor_from_name(w, name);
+}
+
+const char* aether_ui_cursor_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    GdkCursor* c = w ? gtk_widget_get_cursor(w) : NULL;
+    const char* n = c ? gdk_cursor_get_name(c) : NULL;
+    return n ? n : "";
+}
+
 void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !boxed_closure) return;

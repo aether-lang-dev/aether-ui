@@ -119,6 +119,45 @@ editor_open(want: int) -> int {
     return 0
 }
 
+// The grip at the right edge of the header cell whose label is t: the
+// widget with class aui-grid-grip that shares the label's parent.
+grip_of(t: string) -> int {
+    parent = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(t), "parent")
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if uidriver.field_int(w, "parent") == parent && string.contains(uidriver.field_str(w, "classes"), "aui-grid-grip") == 1 {
+            id = uidriver.field_int(w, "id")
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
+// Drag the grip of header t by dx (a resize).
+drag_grip(t: string, dx: int) {
+    uidriver.post_ok("/widget/${grip_of(t)}/drag?x=3&y=8&dx=${dx}&dy=0", "drag ${t}'s grip")
+}
+
+// A header cell's width (the label's parent, which holds it and its grip),
+// once it reads `want` or after ~3s.
+header_w(t: string, want: int) -> int {
+    box = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text(t), "parent")
+    v = uidriver.widget_int_field_by_id(box, "w")
+    i = 0
+    while i < 20 && v != want {
+        sleep(150)
+        v = uidriver.widget_int_field_by_id(box, "w")
+        i = i + 1
+    }
+    return v
+}
+
 // Drag widget-with-text t: pressed at (x, 8) inside it, moved by dx.
 drag(t: string, x: int, dx: int) {
     uidriver.post_ok("/widget/${uidriver.widget_id_by_text(t)}/drag?x=${x}&y=8&dx=${dx}&dy=0", "drag ${t}")
@@ -255,19 +294,28 @@ main() {
             hs = nth_of("slider", 1)
             uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll left")
             spec.assert_true(shows("R99980C1") == 1, "column 1 first again")
-            spec.assert_eq(settled("C", "w", 36), 36, "C starts 36 wide (the demo's width)")
+            spec.assert_eq(header_w("C", 36), 36, "C starts 36 wide (the demo's width)")
+        }
+        spec.it("a grip at each header's right edge shows the col-resize pointer") callback {
+            g = grip_of("C")
+            spec.assert_true(g > 0, "C's header has a grip")
+            body = uidriver.get_body("/widget/${g}")
+            spec.assert_contains(body, "\"cursor\":\"col-resize\"", "the col-resize pointer over it")
+            spec.assert_eq(uidriver.widget_int_field_by_id(g, "w"), 6, "6px wide")
+            spec.assert_eq(uidriver.widget_int_field_by_id(g, "x"), field_of_text("C", "x") + field_of_text("C", "w"), "at the label's right edge")
+            spec.assert_false(string.contains(uidriver.get_body("/widget/${uidriver.widget_id_by_text("C")}"), "\"cursor\"") == 1, "the label keeps the ordinary pointer")
         }
         spec.it("dragging a header's right edge resizes the column, cells and all") callback {
-            drag("C", 33, 60)
+            drag_grip("C", 60)
             spec.assert_true(shows("resized: 3 to 96") == 1, "on_col_resize heard 3 to 96")
-            spec.assert_eq(settled("C", "w", 96), 96, "the header is 96 wide")
+            spec.assert_eq(header_w("C", 96), 96, "the header is 96 wide")
             spec.assert_eq(settled("R99980C3", "w", 96), 96, "so is its column's cell")
             spec.assert_eq(settled("D", "x", field_of_text("C", "x") + 96), field_of_text("C", "x") + 96, "D starts where C ends")
         }
         spec.it("widths are clamped") callback {
-            drag("C", 93, 0 - 500)
+            drag_grip("C", 0 - 500)
             spec.assert_true(shows("resized: 3 to 24") == 1, "no narrower than 24")
-            spec.assert_eq(settled("C", "w", 24), 24, "the header is 24 wide")
+            spec.assert_eq(header_w("C", 24), 24, "the header is 24 wide")
         }
         spec.it("dragging a header elsewhere moves the column") callback {
             // 36 each but C at 24: B starts at 72, and pressed 18px in and
@@ -278,7 +326,7 @@ main() {
             spec.assert_true(field_of_text("B", "x") > field_of_text("E", "x"), "B now right of E")
             spec.assert_true(field_of_text("C", "x") < field_of_text("D", "x"), "C, D and E slid left")
             spec.assert_eq(settled("R99980C2", "x", field_of_text("B", "x")), field_of_text("B", "x"), "B's cells moved with it")
-            spec.assert_eq(settled("C", "w", 24), 24, "and C kept its width")
+            spec.assert_eq(header_w("C", 24), 24, "and C kept its width")
             spec.assert_eq(count_of("text"), 154, "no widgets added")
         }
         spec.it("a frozen column does not move") callback {

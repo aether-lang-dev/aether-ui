@@ -387,6 +387,10 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
             else n += snprintf(buf + n, bufsize - n, ",\"a11y_row\":%d,\"a11y_col\":%d", gr, gc);
             if (gk == 2 && gh > 0) n += snprintf(buf + n, bufsize - n, ",\"a11y_header\":%d", gh);
         }
+        {
+            const char* cur = aether_ui_cursor_impl(handle);
+            if (cur && cur[0]) n += snprintf(buf + n, bufsize - n, ",\"cursor\":\"%s\"", cur);
+        }
         int ss = 0, se = 0;
         if (aether_ui_textfield_selection_impl(handle, &ss, &se))
             n += snprintf(buf + n, bufsize - n, ",\"sel_start\":%d,\"sel_end\":%d", ss, se);

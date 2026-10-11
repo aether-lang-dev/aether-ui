@@ -693,6 +693,7 @@ typedef struct {
     AeClosure* scroll_cb;      // vlist_attach_scroll: on_scroll(dy)
     AeClosure* row_drop;       // row_drag_reorder: on_drop(src)
     AeClosure* wdrag;          // on_drag(phase, x, y)
+    char* cursor;              // pointer_cursor's name, or NULL
     int row_index;             //   ... and this row's index
     char* drag_path;           // widget_draggable_file
     int face;                  // set_child on a non-container: the face widget laid over it
@@ -3501,6 +3502,44 @@ void aether_ui_on_click_impl(int handle, void* boxed_closure) {
 static void aeui_drag_call(AeClosure* c, int phase, double x, double y) {
     if (c && c->fn)
         ((void(*)(void*, intptr_t, double, double))c->fn)(c->env, (intptr_t)phase, x, y);
+}
+
+// pointer_cursor: View.setPointerIcon with the system icon (API 24), shown
+// under a mouse or a stylus; the readback is the name set.
+JCLASS(C_PointerIcon, "android/view/PointerIcon");
+JSTATIC(M_PI_getSystemIcon, C_PointerIcon, "getSystemIcon", "(Landroid/content/Context;I)Landroid/view/PointerIcon;");
+JMETHOD(M_View_setPointerIcon, C_View, "setPointerIcon", "(Landroid/view/PointerIcon;)V");
+
+static int aeui_pointer_type(const char* n) {
+    if (!n || !*n || !strcmp(n, "default")) return 1000;   /* TYPE_ARROW */
+    if (!strcmp(n, "col-resize"))  return 1014;   /* TYPE_HORIZONTAL_DOUBLE_ARROW */
+    if (!strcmp(n, "row-resize"))  return 1015;   /* TYPE_VERTICAL_DOUBLE_ARROW */
+    if (!strcmp(n, "move"))        return 1013;   /* TYPE_ALL_SCROLL */
+    if (!strcmp(n, "grab"))        return 1020;   /* TYPE_GRAB */
+    if (!strcmp(n, "pointer"))     return 1002;   /* TYPE_HAND */
+    if (!strcmp(n, "text"))        return 1008;   /* TYPE_TEXT */
+    if (!strcmp(n, "crosshair"))   return 1007;   /* TYPE_CROSSHAIR */
+    if (!strcmp(n, "not-allowed")) return 1012;   /* TYPE_NO_DROP */
+    if (!strcmp(n, "wait"))        return 1004;   /* TYPE_WAIT */
+    return 1000;
+}
+
+void aether_ui_set_cursor_impl(int handle, const char* name) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    free(w->cursor);
+    w->cursor = (name && *name && strcmp(name, "default") != 0) ? strdup(name) : NULL;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    jobject icon = w->cursor ? JSO(M_PI_getSystemIcon, g_activity, (jint)aeui_pointer_type(name)) : NULL;
+    aeui_check(env, "PointerIcon.getSystemIcon");
+    JV(w->view, M_View_setPointerIcon, icon);
+    aeui_unframe(env);
+}
+
+const char* aether_ui_cursor_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    return (w && w->cursor) ? w->cursor : "";
 }
 
 void aether_ui_on_drag_impl(int handle, void* boxed_closure) {
