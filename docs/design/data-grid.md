@@ -129,6 +129,9 @@ store); everything else speaks view columns.
    cell's right edge, showing the col-resize pointer (`pointer_cursor`, new
    on every backend), so the pointer says where a drag resizes. Not yet:
    live feedback while a column is being moved (it moves on release).
+   `datagrid_fit_col(g, c)` (and a double click on the grip) fits a column
+   to its header and the cells on screen, measured in their own fonts
+   (`text_measure`, new on every backend).
 4. **Editing.** DONE: `datagrid_on_edit(g) |r, c, text|` makes a grid
    editable. F2, a double click, Return (when the grid has no on_activate)
    or typing a character opens a text field laid over the cell (each body

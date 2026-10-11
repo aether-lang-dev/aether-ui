@@ -1821,6 +1821,22 @@ static void aeui_set_edit_text(JNIEnv* env, AeuiWidget* w, const char* text);
 // A label, a button, or a field's content (as UIKit's set_text reaches a
 // UITextField). A button showing a disclosure keeps its caption off screen
 // for the driver and a screen reader; that caption is what changes.
+// text_measure: the TextView's own Paint (its size and typeface), in dp.
+JMETHOD(M_TV_getPaint, C_TextView, "getPaint", "()Landroid/text/TextPaint;");
+JCLASS(C_Paint2, "android/graphics/Paint");
+JMETHOD(M_Paint2_measureText, C_Paint2, "measureText", "(Ljava/lang/String;)F");
+
+int aether_ui_text_measure_impl(int handle, const char* text) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_TEXT) return 0;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    jobject paint = JO(w->view, M_TV_getPaint);
+    float px = paint ? JF(paint, M_Paint2_measureText, aeui_jstring(env, text ? text : "")) : 0.0f;
+    aeui_unframe(env);
+    return (int)ceil(px / g_density);
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     AeuiWidget* w = live_widget(handle);
     if (!w) return;

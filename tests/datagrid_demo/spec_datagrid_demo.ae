@@ -482,5 +482,28 @@ main() {
         }
     }
 
+    spec.describe(fw, "fit a column to its text") {
+        spec.it("a double click on a header's grip fits the column") callback {
+            uidriver.post_ok("/widget/${grip_of("A")}/double_click", "double-click A's grip")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "resized: 1 to ", 20), "on_col_resize heard column 1")
+            w = header_w("A", 0)
+            spec.assert_true(w > 36, "wider than 36 (\"R19C1\" does not fit in 36): ${w}")
+            spec.assert_true(w < 120, "but only as wide as its text: ${w}")
+            spec.assert_true(shows("resized: 1 to ${w}") == 1, "the width it reported is the header's")
+        }
+        spec.it("fitting again changes nothing") callback {
+            before = header_w("A", 0)
+            uidriver.post_ok("/widget/${grip_of("A")}/double_click", "again")
+            sleep(300)
+            spec.assert_eq(header_w("A", before), before, "the same width")
+        }
+        spec.it("a squeezed column grows to fit") callback {
+            spec.assert_eq(header_w("C", 24), 24, "C was clamped to 24")
+            uidriver.post_ok("/widget/${grip_of("C")}/double_click", "double-click C's grip")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "resized: 2 to ", 20), "on_col_resize heard view column 2")
+            spec.assert_true(header_w("C", 0) > 36, "C grew")
+        }
+    }
+
     return spec.run_summary(fw)
 }

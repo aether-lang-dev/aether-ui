@@ -832,6 +832,10 @@ void aether_ui_set_cursor_impl(int handle, const char* name);
 // leaving the application is not a change. Shared logic in
 // aether_ui_focus_watch.h; each backend signals where focus may have moved.
 void aether_ui_on_focus_change_impl(int handle, void* boxed_closure);
+// How wide `text` would be, in px (the units width() takes), set in the
+// font of label `handle` (its size and weight as styled): for sizing a box
+// to fit text that is not in it yet. 0 when the widget is not a label.
+int aether_ui_text_measure_impl(int handle, const char* text);
 const char* aether_ui_cursor_impl(int handle);
 void aether_ui_on_double_click_impl(int handle, void* boxed_closure);
 void aether_ui_on_click_impl(int handle, void* boxed_closure);

@@ -26,7 +26,7 @@ exports (
     datagrid, datagrid_cells, datagrid_header, datagrid_scroll_to, datagrid_refresh,
     datagrid_set_col_widths, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
     on_cell_edit, on_col_resize, on_col_move, column_width, column_limits,
-    datagrid_edit_text, datagrid_cell_style, edit_text, cell_style,
+    datagrid_edit_text, datagrid_cell_style, edit_text, cell_style, datagrid_fit_col,
     datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll,
     datagrid_on_click, datagrid_select, datagrid_select_range, datagrid_cursor_row,
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
@@ -140,7 +140,7 @@ exports (
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
     on_hover, on_double_click, on_click, on_drag, ondrag, pointer_cursor, pointer_shape,
-    on_focus_change, onfocuschange, key_text,
+    on_focus_change, onfocuschange, key_text, text_measure,
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
@@ -879,6 +879,7 @@ extern aether_ui_on_hover_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_on_drag_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_set_cursor_impl(handle: int, name: string)
 extern aether_ui_on_focus_change_impl(handle: int, boxed_closure: ptr)
+extern aether_ui_text_measure_impl(handle: int, text: string) -> int
 extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 // Row drag-reorder: make `row` a drag source (carrying its index) + a drop
 // target; on drop of another row, fire on_drop(source_index).
@@ -6424,6 +6425,9 @@ struct DataGrid {
 // The cursor's border.
 const DATAGRID_CURSOR_BORDER = 3108816   // #2f6fd0
 
+// Room either side of a fitted column's widest text.
+const DATAGRID_FIT_ROOM = 12
+
 // A header cell's grip: the strip at its right edge that resizes the column.
 const DATAGRID_GRIP = 6
 const DATAGRID_MAGIC = 1597463007
@@ -6546,6 +6550,10 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
         }
         _gd = on_drag(grip) callback |ph: int, dx: float, _dy: float| {
             _datagrid_header_drag(gp, hpos, 1, ph, dx)
+        }
+        // A double click on the grip fits the column to its text.
+        _gdc = on_double_click(grip) callback {
+            _f = datagrid_fit_col(gp, _datagrid_col_at(gp as *DataGrid, hpos))
         }
         hi = hi + 1
     }
@@ -7202,6 +7210,43 @@ datagrid_cell_style(gp: ptr, fn_: fn) -> ptr {
     g = gp as *DataGrid
     g.style = box_closure(fn_)
     _datagrid_bind(g)
+    return gp
+}
+
+// datagrid_fit_col(g, c): view column c as wide as its widest text: its
+// header and the cells on screen (the grid holds no others), each measured
+// in its own label's font, plus a little room; clamped to the limits. As a
+// header drag does, it tells on_col_resize. A double click on a header's
+// grip does this.
+datagrid_fit_col(gp: ptr, c: int) -> ptr {
+    g = gp as *DataGrid
+    if c < 0 || c >= g.cols { return gp }
+    m = _datagrid_model(g, c)
+    w = g.frozen + g.vis_cols
+    // Any shown position's widgets carry the same fonts; measure with the
+    // ones at c's position if it is shown, else the first scrolling one.
+    pos = c
+    if c >= g.frozen { pos = g.frozen + (c - g.first_col) }
+    if pos < 0 || pos >= w { pos = g.frozen }
+    if pos >= w { pos = 0 }
+    best = 0
+    if g.header != null {
+        ht = _datagrid_invoke_header(unbox_closure(g.header), m)
+        best = text_measure(intarr_get_raw(g.hdr_cells, pos), ht) + DATAGRID_GRIP
+    }
+    if g.cell != null {
+        cf = unbox_closure(g.cell)
+        r = 0
+        while r < g.vis_rows {
+            tw = text_measure(intarr_get_raw(g.cells, r * w + pos), _datagrid_invoke_cell(cf, g.first_row + r, m))
+            if tw > best { best = tw }
+            r = r + 1
+        }
+    }
+    _datagrid_width_to(g, c, best + DATAGRID_FIT_ROOM)
+    if g.on_resize != null {
+        _datagrid_invoke_click(unbox_closure(g.on_resize), c, datagrid_col_width(gp, c))
+    }
     return gp
 }
 
@@ -7988,6 +8033,16 @@ on_focus_change(handle: int, cb: fn) -> int {
 onfocuschange(_ctx: ptr, cb: fn) {
     if _ctx == null { return }
     aether_ui_on_focus_change_impl(aether_mem_ptr_to_long(_ctx) as int, box_closure(cb))
+}
+
+// text_measure(label, text) -> how wide `text` would be, in the units
+// width() takes, set in the font of `label` (its size and weight as styled):
+// to size a box to text it does not hold yet. 0 for a widget that is not a
+// label. GTK4 a Pango layout from the label, AppKit and UIKit
+// sizeWithAttributes in its font, Win32 GetTextExtentPoint32 with its font,
+// Android its Paint's measureText.
+text_measure(handle: int, text: string) -> int {
+    return aether_ui_text_measure_impl(handle, text)
 }
 
 // key_text(name) -> the text a key name types: "a" for "a", "A" for "A", ","

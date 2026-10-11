@@ -3749,6 +3749,23 @@ static void w32_refit_text(Widget* w) {
     }
 }
 
+// text_measure: GetTextExtentPoint32 with the control's own font (its DPI
+// and any styled size or weight).
+int aether_ui_text_measure_impl(int handle, const char* text) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd || w->kind != WK_TEXT) return 0;
+    HDC dc = GetDC(w->hwnd);
+    if (!dc) return 0;
+    HFONT f = (HFONT)SendMessageW(w->hwnd, WM_GETFONT, 0, 0);
+    HGDIOBJ old = f ? SelectObject(dc, f) : NULL;
+    const wchar_t* ws = utf8_to_wide(text ? text : "");
+    SIZE sz = {0, 0};
+    GetTextExtentPoint32W(dc, ws, (int)wcslen(ws), &sz);
+    if (old) SelectObject(dc, old);
+    ReleaseDC(w->hwnd, dc);
+    return (int)sz.cx;
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     Widget* w = widget_at(handle);
     if (!w || !w->hwnd) return;

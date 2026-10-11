@@ -810,6 +810,18 @@ int aether_ui_text_get_anchor(int handle) {
     return x > 0.75f ? 2 : x > 0.25f ? 1 : 0;
 }
 
+// text_measure: a Pango layout made from the label carries its font (CSS
+// size and weight included).
+int aether_ui_text_measure_impl(int handle, const char* text) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return 0;
+    PangoLayout* l = gtk_widget_create_pango_layout(w, text ? text : "");
+    int pw = 0, ph = 0;
+    pango_layout_get_pixel_size(l, &pw, &ph);
+    g_object_unref(l);
+    return pw;
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_LABEL(w)) {
@@ -1978,7 +1990,9 @@ int aether_ui_slider_create(double min_val, double max_val,
     GtkAdjustment* adj = gtk_adjustment_new(initial, min_val, max_val,
                                              1.0, 10.0, 0.0);
     GtkWidget* scale = gtk_scale_new(GTK_ORIENTATION_HORIZONTAL, adj);
-    gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
+    // No number beside the track: no other backend's slider draws one, and
+    // under a grid it read as a stray "0.0".
+    gtk_scale_set_draw_value(GTK_SCALE(scale), FALSE);
     gtk_widget_set_hexpand(scale, TRUE);
     if (boxed_closure) {
         g_signal_connect_data(scale, "value-changed",
@@ -2005,7 +2019,7 @@ static void aeui_slider_set_vertical(int handle, int on) {
     if (!w || !GTK_IS_SCALE(w)) return;
     gtk_orientable_set_orientation(GTK_ORIENTABLE(w),
         on ? GTK_ORIENTATION_VERTICAL : GTK_ORIENTATION_HORIZONTAL);
-    gtk_scale_set_draw_value(GTK_SCALE(w), on ? FALSE : TRUE);
+    gtk_scale_set_draw_value(GTK_SCALE(w), FALSE);
     gtk_widget_set_hexpand(w, on ? FALSE : TRUE);
     gtk_widget_set_vexpand(w, on ? TRUE : FALSE);
 }

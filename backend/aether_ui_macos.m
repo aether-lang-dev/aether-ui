@@ -1109,6 +1109,15 @@ int aether_ui_text_get_anchor(int handle) {
     return a == NSTextAlignmentCenter ? 1 : a == NSTextAlignmentRight ? 2 : 0;
 }
 
+// text_measure: the string set in the field's own font.
+int aether_ui_text_measure_impl(int handle, const char* text) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[NSTextField class]]) return 0;
+    NSFont* f = [(NSTextField*)v font] ?: [NSFont systemFontOfSize:0];
+    NSString* s = [NSString stringWithUTF8String:text ? text : ""] ?: @"";
+    return (int)ceil([s sizeWithAttributes:@{NSFontAttributeName: f}].width);
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSTextField class]]) {

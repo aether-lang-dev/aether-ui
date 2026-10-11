@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`datagrid_fit_col(g, c)`**, and a double click on a header's grip: a
+  column as wide as its header and the cells on screen, each measured in
+  its own label's font, plus room; clamped, and told to `on_col_resize`.
+- **`text_measure(label, text)`**: how wide `text` would be in a label's
+  font (GTK4 a Pango layout from the label, AppKit and UIKit
+  sizeWithAttributes, Win32 GetTextExtentPoint32 with its font, Android its
+  Paint's measureText).
 - **`datagrid` cell styles and editor starting text.** `cell_style()`
   (`datagrid_cell_style`) styles a cell from the model as AeCS properties:
   `"background: #ffe0e0; color: #b00000; font-weight: bold; text-align:
@@ -183,6 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GTK4 sliders no longer draw their value** beside the track (a grid's
+  horizontal scrollbar showed "0.0"); no other backend's slider draws one.
 - **on_focus_change no longer sees focus "nowhere" mid-move.** AppKit
   passes the first responder through the window on its way to the next
   view, and a check then closed a grid's editor as it opened (flaky). macOS

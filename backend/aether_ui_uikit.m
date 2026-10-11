@@ -3549,6 +3549,15 @@ void aether_ui_set_font_family(int handle, const char* family) {
     objc_setAssociatedObject(v, "aeui_styled_family",
         [NSString stringWithUTF8String:family], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
+// text_measure: the string set in the label's own font.
+int aether_ui_text_measure_impl(int handle, const char* text) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UILabel class]]) return 0;
+    UIFont* f = ((UILabel*)v).font ?: [UIFont systemFontOfSize:[UIFont labelFontSize]];
+    NSString* s = [NSString stringWithUTF8String:text ? text : ""] ?: @"";
+    return (int)ceil([s sizeWithAttributes:@{NSFontAttributeName: f}].width);
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     NSString* s = [NSString stringWithUTF8String:text ? text : ""];
