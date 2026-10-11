@@ -765,3 +765,47 @@ flushes: N refreshes in one frame, one flush.
   no desktop to give it a GL context. Run it on the interactive desktop
   (the schtasks /IT recipe) before calling the Win32 GPU view proven or
   broken.
+
+## Consider: build each platform backend once per lane, as a dead-stripped library (2026-10-11)
+
+Every example compiles the whole platform backend (`aether_ui_<platform>.c/.m`,
+10-13k lines plus GTK / AppKit / Win32 headers), the driver and the system
+extras into itself: `build_support/aetherui` hands them to each program as
+`extra_source`. About 130 programs, so a lane compiles the same C ~130 times.
+
+Measured, one example (`submit_demo`) on the Mac:
+
+| step | time |
+|---|---|
+| `aetherc` (Aether to C, `ui/module.ae` and std merged in) | 0.06 s |
+| C compile of that output (5,498 lines; the merge keeps only what is reachable) | 0.09 s |
+| C compile of `aether_ui_macos.m` | 0.72 s |
+| C compile of `aether_ui_test_server.c` | 0.12 s |
+
+So it is not `ui/module.ae` that repeats expensively; it is the backend C.
+On the fast Mac a cold build of every example is ~32 s, but on the 4-core
+lanes it dominates: a cold `aeb .all.ae` on ae-x64 took 971 s (16 min) of
+that lane's ~28 min full `ci.sh`. FreeBSD (4 cores, GTK headers) is likely
+the same; win11's matrix run is ~40 min.
+
+What to consider:
+- A library node in `build_support/aetherui` that compiles the backend,
+  driver (or no-control stub) and extras ONCE per platform into
+  `libaether_ui.a`, cached by a hash of their sources, and examples linking
+  against it. Expected: each example costs its few hundred lines of
+  generated C plus a link; measure ae-x64's build phase before and after.
+- Compile that library with `-ffunction-sections -fdata-sections` and link
+  with dead-stripping (`-Wl,-dead_strip` on macOS, `-Wl,--gc-sections` on
+  GNU ld / lld / MinGW). Measured on the Mac, `submit_demo` linked against
+  such a library: 508 KB -> 322 KB, `__text` 231 KB -> 116 KB. `-flto` may
+  trim more for some link time.
+- Limits: a driver build keeps most of the backend (the driver's dispatch
+  reaches it), so the big savings are in release builds (the no-control
+  stub); Objective-C methods are kept alive by class metadata on
+  macOS / iOS; anything reached only through a registered function pointer
+  stays.
+- `./build.sh` (the single-app shell twin) links backends too; change both,
+  per AGENTS.md.
+- Separately: most of the rest of a lane's time is running ~100 spec suites
+  one after another. Each takes `$PORT`, so several could run at once on a
+  lane (mind the aether-linux container's 2 GB).
