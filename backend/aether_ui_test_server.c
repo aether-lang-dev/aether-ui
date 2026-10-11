@@ -380,6 +380,9 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         const char* wt  = aether_ui_styled_weight_impl(handle);
         if (fam[0]) n += snprintf(buf + n, bufsize - n, ",\"fontFamily\":\"%s\"", fam);
         if (wt[0])  n += snprintf(buf + n, bufsize - n, ",\"fontWeight\":\"%s\"", wt);
+        int ss = 0, se = 0;
+        if (aether_ui_textfield_selection_impl(handle, &ss, &se))
+            n += snprintf(buf + n, bufsize - n, ",\"sel_start\":%d,\"sel_end\":%d", ss, se);
         int op = aether_ui_styled_opacity_impl(handle);
         if (op >= 0) n += snprintf(buf + n, bufsize - n, ",\"opacity\":%.2f", op / 100.0);
         if (h->widget_hovered && h->widget_hovered(handle))

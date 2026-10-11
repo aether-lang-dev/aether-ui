@@ -1980,6 +1980,35 @@ static char* aeui_edit_text_dup(int handle) {
     return out;
 }
 
+// Selection in UTF-16 units: EditText.setSelection / TextView's getters.
+JMETHOD(M_ET_setSelection2, C_EditText, "setSelection", "(II)V");
+JMETHOD(M_TV_length, C_TextView, "length", "()I");
+JMETHOD(M_TV_getSelectionStart, C_TextView, "getSelectionStart", "()I");
+JMETHOD(M_TV_getSelectionEnd, C_TextView, "getSelectionEnd", "()I");
+
+void aether_ui_textfield_select_impl(int handle, int start, int end) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || (w->type != AUI_TEXTFIELD && w->type != AUI_SECUREFIELD)) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    int n = JI(w->view, M_TV_length);
+    if (start < 0 || start > n) start = n;
+    if (end < 0 || end > n) end = n;
+    JV(w->view, M_ET_setSelection2, (jint)start, (jint)end);
+    aeui_unframe(env);
+}
+
+int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || (w->type != AUI_TEXTFIELD && w->type != AUI_SECUREFIELD)) return 0;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return 0;
+    *start = JI(w->view, M_TV_getSelectionStart);
+    *end = JI(w->view, M_TV_getSelectionEnd);
+    aeui_unframe(env);
+    return 1;
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     AeuiWidget* w = live_widget(handle);
     if (!w || !aeui_is_edit(w->type)) return;

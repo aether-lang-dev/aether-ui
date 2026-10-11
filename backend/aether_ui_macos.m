@@ -1463,6 +1463,12 @@ static int aeui_combo_split(const char* canonical, char* name, int namesize) {
             return mods;
         }
     }
+    // "f2" -> "F2", as a real function key is named.
+    if (p && p[0] == 'f' && p[1] >= '1' && p[1] <= '9'
+        && (p[2] == '\0' || (p[2] >= '0' && p[2] <= '9' && p[3] == '\0'))) {
+        snprintf(name, namesize, "F%s", p + 1);
+        return mods;
+    }
     snprintf(name, namesize, "%s", p ? p : "");
     return mods;
 }
@@ -2531,6 +2537,40 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
         aeui_own_helper(field, "aeui_delegate", d);
     }
     return register_widget_typed((__bridge void*)field, AUI_TEXTFIELD);
+}
+
+// Selection in UTF-16 units, through the field editor: an NSTextField has a
+// selection only while it is being edited (has focus).
+void aether_ui_textfield_select_impl(int handle, int start, int end) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[NSTextField class]]) return;
+    NSText* ed = [(NSTextField*)v currentEditor];
+    if (!ed) return;
+    int n = (int)[[ed string] length];
+    if (start < 0 || start > n) start = n;
+    if (end < 0 || end > n) end = n;
+    if (end < start) { int t = start; start = end; end = t; }
+    [ed setSelectedRange:NSMakeRange((NSUInteger)start, (NSUInteger)(end - start))];
+}
+
+int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
+    // The driver's /widgets is built on its HTTP thread here; the field
+    // editor is the main thread's. Only a field is worth the hop.
+    int t = get_widget_type(handle);
+    if (t != AUI_TEXTFIELD && t != AUI_SECUREFIELD) return 0;
+    if (![NSThread isMainThread]) {
+        __block int r = 0, a = 0, b = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{ r = aether_ui_textfield_selection_impl(handle, &a, &b); });
+        *start = a; *end = b;
+        return r;
+    }
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[NSTextField class]]) return 0;
+    NSText* ed = [(NSTextField*)v currentEditor];
+    if (!ed) return 0;
+    NSRange r = [ed selectedRange];
+    *start = (int)r.location; *end = (int)(r.location + r.length);
+    return 1;
 }
 
 void aether_ui_textfield_set_text(int handle, const char* text) {
@@ -5400,6 +5440,21 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
         case 119: snprintf(out, outsize, "End");       return;
         case 116: snprintf(out, outsize, "Page_Up");   return;
         case 121: snprintf(out, outsize, "Page_Down"); return;
+        // Function keys, as GTK, Win32 and Android name them. Their
+        // characters are private-use code points (NSF2FunctionKey), which
+        // reached a key handler as three bytes no app could compare with.
+        case 122: snprintf(out, outsize, "F1");  return;
+        case 120: snprintf(out, outsize, "F2");  return;
+        case 99:  snprintf(out, outsize, "F3");  return;
+        case 118: snprintf(out, outsize, "F4");  return;
+        case 96:  snprintf(out, outsize, "F5");  return;
+        case 97:  snprintf(out, outsize, "F6");  return;
+        case 98:  snprintf(out, outsize, "F7");  return;
+        case 100: snprintf(out, outsize, "F8");  return;
+        case 101: snprintf(out, outsize, "F9");  return;
+        case 109: snprintf(out, outsize, "F10"); return;
+        case 103: snprintf(out, outsize, "F11"); return;
+        case 111: snprintf(out, outsize, "F12"); return;
         default: break;
     }
     NSString* chars = [ev charactersIgnoringModifiers];
@@ -7263,6 +7318,14 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
 }
 
 int aether_ui_fire_double_click(int handle) {
+    // The driver's /double_click route calls in on its HTTP thread, and the
+    // closure may build views (a grid's cell editor): AppKit aborts on that
+    // off the main thread. Marshal, as aether_ui_fire_row_drop does.
+    if (![NSThread isMainThread]) {
+        __block int r = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{ r = aether_ui_fire_double_click(handle); });
+        return r;
+    }
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return 0;
     NSValue* nv = objc_getAssociatedObject(v, "aeui_dblclick");

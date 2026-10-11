@@ -6,7 +6,8 @@ viewport with native sliders (option B below, Paul's call), not a native
 scroll view. Phase 2 built the same day (selection and keys), and phase 6
 began: sae pages have `ui.datagrid`; moving sae's spreadsheet onto it is that
 demo's own session's work. Phase 3 (column resize and reorder) built
-2026-10-11 on a new any-widget `on_drag`. Phases 4-5 open. Asked for by sae's spreadsheet (demo 18), which
+2026-10-11 on a new any-widget `on_drag`. Phase 4 (editing) built the
+same day. Phase 5 (accessibility) open. Asked for by sae's spreadsheet (demo 18), which
 built about 120 lines of grid by hand in `vg`; the same widget would make data
 grids, log viewers and property sheets cheap. The ask, from a cloud session
 building that demo: Swing's `JTable`, QML's `TableView` or Flutter's
@@ -105,8 +106,24 @@ The contract:
    positions and order read back as geometry; cells follow. Not yet: a
    resize pointer over the grip (aether-ui has no pointer-cursor API), and
    live feedback while a column is being moved (it moves on release).
-4. **Editing.** The overlaid editor with `on_submit`, Tab and Escape. Spec:
-   edit, commit, cancel, and the model's `on_edit` call.
+4. **Editing.** DONE: `datagrid_on_edit(g) |r, c, text|` makes a grid
+   editable. F2, a double click, Return (when the grid has no on_activate)
+   or typing a character opens a text field laid over the cell (each body
+   cell is a zstack holding its text, so the field sits exactly on it),
+   holding the cell's text (or the typed character) with the caret at the
+   end (`textfield_select`, new on every backend). Return (`on_submit`)
+   commits and moves down, Tab commits and moves right (Shift+Tab left),
+   Escape cancels; clicking another cell, scrolling or a column change
+   commits first. Tab, Shift+Tab and Escape are shortcuts live only while
+   an editor has the focus, since GTK's window takes Tab for focus
+   traversal before any key handler. `datagrid_edit`,
+   `datagrid_edit_commit`, `datagrid_edit_cancel`, `datagrid_editor`. Spec:
+   open by double click, F2 and typing; commit by Return, Tab and a click
+   elsewhere; cancel by Escape; on_edit's row and column (view) and the
+   caret, read back over the driver. Not yet: typing a character whose key
+   name is a word ("comma", "minus") does not open an editor, and an editor
+   that loses focus some other way (a click outside the grid) stays open
+   until the grid next commits.
 5. **Accessibility.** `grid` / `row` / `gridcell` / `columnheader` roles
    with row and column index and count on every backend (GTK4
    GtkAccessible, AppKit NSAccessibility table/cell protocols, Win32 UIA or

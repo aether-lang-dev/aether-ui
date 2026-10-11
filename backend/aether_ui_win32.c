@@ -4571,6 +4571,25 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
     return handle;
 }
 
+// Selection in UTF-16 units: EM_SETSEL / EM_GETSEL on the EDIT.
+void aether_ui_textfield_select_impl(int handle, int start, int end) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd || (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD)) return;
+    int n = GetWindowTextLengthW(w->hwnd);
+    if (start < 0 || start > n) start = n;
+    if (end < 0 || end > n) end = n;
+    SendMessageW(w->hwnd, EM_SETSEL, (WPARAM)start, (LPARAM)end);
+}
+
+int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd || (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD)) return 0;
+    DWORD a = 0, b = 0;
+    SendMessageW(w->hwnd, EM_GETSEL, (WPARAM)&a, (LPARAM)&b);
+    *start = (int)a; *end = (int)b;
+    return 1;
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     Widget* w = widget_at(handle);
     if (w) w32_set_text(w, text);
@@ -6538,7 +6557,15 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
     if (w) w->on_double_click = (AeClosure*)boxed_closure;
 }
 
+static HWND driver_host_hwnd;
+#define AE_WM_DBLCLICK (WM_USER + 0x47)
 int aether_ui_fire_double_click(int handle) {
+    // The driver's /double_click route calls in on its HTTP thread, and the
+    // closure builds widgets (a grid's cell editor): a window created there
+    // belongs to that thread and never gets a message. Hop to the UI thread,
+    // as the actions do.
+    if (!aether_ui_on_ui_thread_impl() && driver_host_hwnd)
+        return (int)SendMessageW(driver_host_hwnd, AE_WM_DBLCLICK, 0, (LPARAM)handle);
     Widget* w = widget_at(handle);
     if (!w || !w->on_double_click || !w->on_double_click->fn) return 0;
     invoke_closure(w->on_double_click);
@@ -12404,8 +12431,9 @@ void aether_ui_clear_children_impl(int handle) {
 
 #define AE_WM_DRIVER (WM_USER + 0x42)
 #define AE_WM_FILEDROP (WM_USER + 0x46)   // driver file drop → UI thread
+// AE_WM_DBLCLICK (WM_USER + 0x47), defined at aether_ui_fire_double_click.
 
-static HWND driver_host_hwnd = NULL;
+static HWND driver_host_hwnd = NULL;   // declared earlier for the double-click hop
 
 // -1 when there is no driver host to hop through (the driver is not running,
 // so nothing off the UI thread is delivering anyway).
@@ -12637,6 +12665,9 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
     if (msg == AE_WM_FILEDROP) {
         return aether_ui_window_file_drop_deliver((const char*)lp);
     }
+    if (msg == AE_WM_DBLCLICK) {
+        return aether_ui_fire_double_click((int)lp);
+    }
     if (msg == AE_WM_DRIVER) {
         AetherDriverActionCtx* ctx = (AetherDriverActionCtx*)lp;
         if (ctx->action == AETHER_DRV_SET_STATE) {
@@ -12733,6 +12764,19 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 ctx->done = 1;
                 return 0;
             }
+            // Escape and Tab: a registered shortcut first and then the
+            // any-key handler, as a real key goes (the message loop offers
+            // both before IsDialogMessage), and only then the dialog-ish
+            // default below. Without the shortcut a grid's editor could not
+            // claim Tab from the driver, as it does from the keyboard.
+            if (aeui_win32_fire_shortcut(ctx->sval)) {
+                ctx->retval = 1;
+                ctx->result = 0;
+                ctx->done = 1;
+                return 0;
+            }
+            aether_ui_window_key_deliver(ctx->sval[0] == 'S' ? "Tab" : ctx->sval,
+                                         ctx->sval[0] == 'S' ? 1 : 0);
             if (strcmp(ctx->sval, "Escape") == 0) {
                 // Escape dismisses the topmost live overlay (the same
                 // wiring GTK/macOS give it); unhandled when none is open.

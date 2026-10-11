@@ -1,9 +1,11 @@
-// datagrid_demo — a virtualised grid (docs/design/data-grid.md, phases 1-3):
+// datagrid_demo — a virtualised grid (docs/design/data-grid.md, phases 1-4):
 // 100,000 rows x 50 columns from a function, 20 rows x 6 scrolling columns
 // shown, one frozen column of row numbers, a header of column letters. Only
 // the shown cells exist as widgets; the sliders scroll it. Clicks and keys
 // select; the selection and Return are shown under the grid, and so are
 // column resizes and moves (drag a header's right edge, or the header).
+// Cells are editable (F2, a double click or typing); edits are kept in a map
+// over the computed model, by model row and column.
 //
 //   AETHER_UI_TEST_PORT=9222 ./target/build/examples/datagrid_demo/bin/datagrid_demo &
 //   UI_SPEC=datagrid_demo/spec_datagrid_demo tests/run_spec.sh
@@ -12,9 +14,11 @@ import ui
 import ui (window, vstack, text, datagrid, datagrid_header, datagrid_on_click,
     datagrid_on_select, datagrid_on_activate, datagrid_anchor_row, datagrid_anchor_col,
     datagrid_on_col_resize, datagrid_on_col_move, datagrid_set_col_width,
+    datagrid_on_edit, datagrid_col_model,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
+import std.map
 
 // Column letters: A..Z, AA..AZ, ... (a spreadsheet's).
 letters(c: int) -> string {
@@ -33,11 +37,16 @@ main() {
     activated = ui_state_s("none")
     resized = ui_state_s("none")
     moved = ui_state_s("none")
+    edited = ui_state_s("none")
+    edits = map.map_new()
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
             g = datagrid(100000, 50, 20, 6, 1) callback |r: int, c: int| {
                 if c == 0 { return string.from_int(r + 1) }
+                key = "${r},${c}"
+                v, _e = map.get(edits, key)
+                if v != null { return v }
                 return "R${r}C${c}"
             }
             // 36 wide, so seven columns (and one widened by a drag) still
@@ -66,11 +75,16 @@ main() {
             datagrid_on_col_move(g) callback |from: int, to: int| {
                 _s5 = ui_set_s(moved, "${from} to ${to}")
             }
+            datagrid_on_edit(g) callback |r: int, c: int, t: string| {
+                _p = map.put(edits, "${r},${datagrid_col_model(g, c)}", t)
+                _s6 = ui_set_s(edited, "${r},${c} = ${t}")
+            }
             text_bound(clicked, "clicked: ", "")
             text_bound(selected, "selection: ", "")
             text_bound(activated, "activated: ", "")
             text_bound(resized, "resized: ", "")
             text_bound(moved, "moved: ", "")
+            text_bound(edited, "edited: ", "")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }

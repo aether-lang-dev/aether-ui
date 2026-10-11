@@ -1781,6 +1781,26 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
  *
  * The same property was fixed for Win32 in #129, whose text said this backend
  * already had it. It did not: tests/no_echo fails on all four setters here. */
+// Selection in characters, as GtkEditable counts them.
+void aether_ui_textfield_select_impl(int handle, int start, int end) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_EDITABLE(w)) return;
+    int n = (int)g_utf8_strlen(gtk_editable_get_text(GTK_EDITABLE(w)), -1);
+    if (start < 0 || start > n) start = n;
+    if (end < 0 || end > n) end = n;
+    gtk_editable_select_region(GTK_EDITABLE(w), start, end);
+}
+
+int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_EDITABLE(w)) return 0;
+    int a = 0, b = 0;
+    if (!gtk_editable_get_selection_bounds(GTK_EDITABLE(w), &a, &b))
+        a = b = gtk_editable_get_position(GTK_EDITABLE(w));
+    *start = a; *end = b;
+    return 1;
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_ENTRY(w)) {

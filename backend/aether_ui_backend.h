@@ -99,6 +99,13 @@ int aether_ui_textfield_create(const char* placeholder, void* boxed_closure);
 // cb(text) on Return in a textfield or securefield (ui.on_submit).
 void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure);
 void aether_ui_textfield_set_text(int handle, const char* text);
+// Select characters [start, end) of a text field (start == end: the caret
+// there; either < 0 or past the text: its end). A field that is not being
+// edited may ignore it (AppKit has no selection until it has focus).
+void aether_ui_textfield_select_impl(int handle, int start, int end);
+// The selection [*start, *end) of a text field: 1, or 0 when the widget is
+// not a field or (AppKit) not being edited.
+int aether_ui_textfield_selection_impl(int handle, int* start, int* end);
 const char* aether_ui_textfield_get_text(int handle);
 
 int aether_ui_securefield_create(const char* placeholder, void* boxed_closure);

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`datagrid` editing** (docs/design/data-grid.md, phase 4).
+  `datagrid_on_edit(g) |r, c, text|` makes a grid editable: F2, a double
+  click, Return (with no on_activate) or typing opens a text field over the
+  cell with the caret at the end; Return commits and moves down, Tab right
+  (Shift+Tab left), Escape cancels, a click elsewhere commits.
+  `datagrid_edit`, `datagrid_edit_commit`, `datagrid_edit_cancel`,
+  `datagrid_editor`. `spec_datagrid_demo`: 28/28 on macOS, the iOS
+  simulator, GTK 4.6 and 4.22, win11, FreeBSD and Android.
+- **`textfield_select(field, start, end)`**: select a range of a text field,
+  or place the caret (start == end; -1 is the end), on every backend; the
+  driver reports a field's selection as `sel_start` / `sel_end`.
 - **`on_drag(widget) callback |phase, x, y|`**: a press, drag and release on
   any widget (a label, a stack, a control). Phase 0 is the press at (x, y)
   inside the widget; phases 1 and 2 (move, release) give the offset from the
@@ -117,6 +128,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **macOS: function keys have names.** A key handler was given F1-F12 as
+  the private-use characters AppKit reports for them; they are now "F1" to
+  "F12", as on GTK, Win32 and Android, and the driver's "f2" arrives as "F2".
+- **The driver's `/double_click` runs on the UI thread on macOS and
+  Win32.** It called the app's closure on its HTTP thread there, so a
+  double click that built a widget aborted on AppKit (and on Win32 made a
+  window no message would reach).
+- **Win32's driver offers Escape and Tab to shortcuts and key handlers
+  first**, as a real keystroke does, before dismissing an overlay or moving
+  the focus.
 - **`width()` / `height()` called a second time now take effect** on
   GTK4, AppKit, UIKit and Win32 (a grid column widened by a drag kept its
   old width). GTK4: a size request is both axes, and each call passed -1

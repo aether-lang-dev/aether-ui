@@ -1117,6 +1117,32 @@ int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
         (__bridge void*)make_field(placeholder, boxed_closure, YES), AUI_SECUREFIELD);
 }
 
+// Selection in UTF-16 units, as UITextInput positions.
+void aether_ui_textfield_select_impl(int handle, int start, int end) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UITextField class]]) return;
+    UITextField* f = (UITextField*)v;
+    int n = (int)f.text.length;
+    if (start < 0 || start > n) start = n;
+    if (end < 0 || end > n) end = n;
+    if (end < start) { int t = start; start = end; end = t; }
+    UITextPosition* b = f.beginningOfDocument;
+    UITextPosition* p1 = [f positionFromPosition:b offset:start];
+    UITextPosition* p2 = [f positionFromPosition:b offset:end];
+    if (p1 && p2) f.selectedTextRange = [f textRangeFromPosition:p1 toPosition:p2];
+}
+
+int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UITextField class]]) return 0;
+    UITextField* f = (UITextField*)v;
+    UITextRange* r = f.selectedTextRange;
+    if (!r) return 0;
+    *start = (int)[f offsetFromPosition:f.beginningOfDocument toPosition:r.start];
+    *end = (int)[f offsetFromPosition:f.beginningOfDocument toPosition:r.end];
+    return 1;
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[UITextField class]])
