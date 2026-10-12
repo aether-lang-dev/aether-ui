@@ -35,7 +35,8 @@ exports (
     datagrid_on_col_move, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
-    datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
+    datagrid_merge, datagrid_unmerge, datagrid_merge_of, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -6476,6 +6477,11 @@ struct DataGrid {
                       // alignment (1 italic, 2 underline/line-through, 4 a font size, 8 decorations)
     tip: ptr          // boxed |r, c| -> string, or null (datagrid_cell_tooltip)
     tip_hash: ptr     // longarr: the key of the tooltip each shown cell last had
+    merges: ptr       // intarr: each merge as row, view column, rows, columns (n_merge of them)
+    n_merge: int
+    merge_cap: int
+    cell_w: ptr       // intarr: the width each shown cell was last given (a merge widens one)
+    cell_off: ptr     // intarr: 1 where a shown cell is hidden under a merge
 }
 
 // A data bar's colour when a style gives --fill and no --fill-color (Excel's
@@ -6662,6 +6668,11 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.style_fx = intarr_new_raw(vr * (fz + vc) + 1)
     g.tip = null
     g.tip_hash = longarr_new_raw(vr * (fz + vc) + 1)
+    g.merges = null
+    g.n_merge = 0
+    g.merge_cap = 0
+    g.cell_w = intarr_new_raw(vr * (fz + vc) + 1)
+    g.cell_off = intarr_new_raw(vr * (fz + vc) + 1)
     ri = 0
     g.row_boxes = intarr_new_raw(vr + 1)
     while ri < vr {
@@ -6708,6 +6719,8 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             longarr_set_raw(g.style_hash, ri * (fz + vc) + ci, 0)
             intarr_set_raw(g.style_bg, ri * (fz + vc) + ci, 0 - 1)
             intarr_set_raw(g.style_fx, ri * (fz + vc) + ci, 0)
+            intarr_set_raw(g.cell_w, ri * (fz + vc) + ci, g.col_w)
+            intarr_set_raw(g.cell_off, ri * (fz + vc) + ci, 0)
             longarr_set_raw(g.tip_hash, ri * (fz + vc) + ci, 0)
             vr2 = ri
             vc2 = ci
@@ -6996,6 +7009,181 @@ datagrid_frozen_rows(gp: ptr) -> int {
     return g.frozen_rows
 }
 
+// ── Merged cells. A merge is drawn as one piece per shown row: the first
+// of its cells in that row widened across the rest, which are hidden (the
+// grid has no gridlines to give it away). Each piece takes the top-left
+// cell's style; the first piece on screen shows its text.
+
+// The merge covering model row r, view column c, or -1.
+_datagrid_merge_at(g: *DataGrid, r: int, c: int) -> int {
+    k = 0
+    while k < g.n_merge {
+        r0 = intarr_get_raw(g.merges, k * 4)
+        c0 = intarr_get_raw(g.merges, k * 4 + 1)
+        if r >= r0 && r < r0 + intarr_get_raw(g.merges, k * 4 + 2) && c >= c0 && c < c0 + intarr_get_raw(g.merges, k * 4 + 3) { return k }
+        k = k + 1
+    }
+    return 0 - 1
+}
+
+// What shown cell (s, j) is to a merge: 0 not in one, 1 its piece that
+// shows the text, 2 another row's piece, 3 hidden under a piece.
+_datagrid_merge_role(g: *DataGrid, s: int, j: int) -> int {
+    if g.n_merge == 0 { return 0 }
+    mr = _datagrid_row_at(g, s)
+    mc = _datagrid_col_at(g, j)
+    if mr < 0 || mc < 0 { return 0 }
+    mi = _datagrid_merge_at(g, mr, mc)
+    if mi < 0 { return 0 }
+    // The piece in this row is the first shown position inside the merge.
+    w = g.frozen + g.vis_cols
+    k = 0
+    while k < j {
+        kc = _datagrid_col_at(g, k)
+        if intarr_get_raw(g.pos_off, k) == 0 && kc >= 0 && _datagrid_merge_at(g, mr, kc) == mi { return 3 }
+        k = k + 1
+    }
+    // The text goes in the first shown row of the merge.
+    s2 = 0
+    while s2 < s {
+        r2 = _datagrid_row_at(g, s2)
+        if r2 >= 0 && _datagrid_merge_at(g, r2, mc) == mi { return 2 }
+        s2 = s2 + 1
+    }
+    return 1
+}
+
+// Widen each merge's pieces across the shown cells they cover, hide those,
+// and put every other cell back to its column's width.
+_datagrid_spans(g: *DataGrid) {
+    w = g.frozen + g.vis_cols
+    s = 0
+    while s < g.vis_rows {
+        mr = _datagrid_row_at(g, s)
+        j = 0
+        while j < w && mr >= 0 {
+            i = s * w + j
+            if intarr_get_raw(g.pos_off, j) == 1 {
+                j = j + 1
+                continue
+            }
+            role = _datagrid_merge_role(g, s, j)
+            want = intarr_get_raw(g.shown_w, j)
+            off = 0
+            if role == 3 { off = 1 }
+            if role == 1 || role == 2 {
+                mi = _datagrid_merge_at(g, mr, _datagrid_col_at(g, j))
+                want = 0
+                k = j
+                while k < w {
+                    kc = _datagrid_col_at(g, k)
+                    if intarr_get_raw(g.pos_off, k) == 0 && kc >= 0 && _datagrid_merge_at(g, mr, kc) == mi { want = want + intarr_get_raw(g.shown_w, k) }
+                    k = k + 1
+                }
+            }
+            if intarr_get_raw(g.cell_off, i) != off {
+                intarr_set_raw(g.cell_off, i, off)
+                _ch = set_hidden(intarr_get_raw(g.boxes, i), off)
+            }
+            if off == 0 && intarr_get_raw(g.cell_w, i) != want {
+                intarr_set_raw(g.cell_w, i, want)
+                _cw = width(intarr_get_raw(g.cells, i), want)
+                _bw = width(intarr_get_raw(g.boxes, i), want)
+            }
+            j = j + 1
+        }
+        s = s + 1
+    }
+}
+
+// datagrid_merge(g, r, c, rows, cols): the rows x cols cells from model
+// row r, view column c drawn as one: the top-left cell's text and style
+// over the whole rectangle; a click anywhere in it selects it (the cursor
+// on its top-left), and the cursor keys step over it. A merge that
+// overlaps another replaces it. Merge & Center is this and text-align.
+datagrid_merge(gp: ptr, r: int, c: int, rows: int, cols: int) -> ptr {
+    g = gp as *DataGrid
+    if r < 0 || c < 0 || rows < 1 || cols < 1 || r + rows > g.rows || c + cols > g.cols { return gp }
+    if rows == 1 && cols == 1 { return gp }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    // Out with any it overlaps.
+    k = 0
+    while k < g.n_merge {
+        r0 = intarr_get_raw(g.merges, k * 4)
+        c0 = intarr_get_raw(g.merges, k * 4 + 1)
+        r1 = r0 + intarr_get_raw(g.merges, k * 4 + 2)
+        c1 = c0 + intarr_get_raw(g.merges, k * 4 + 3)
+        if r < r1 && r0 < r + rows && c < c1 && c0 < c + cols {
+            _datagrid_merge_drop(g, k)
+        } else {
+            k = k + 1
+        }
+    }
+    if g.n_merge >= g.merge_cap {
+        cap = g.merge_cap * 2
+        if cap < 8 { cap = 8 }
+        grown = intarr_new_raw(cap * 4 + 1)
+        k2 = 0
+        while k2 < g.n_merge * 4 {
+            intarr_set_raw(grown, k2, intarr_get_raw(g.merges, k2))
+            k2 = k2 + 1
+        }
+        g.merges = grown
+        g.merge_cap = cap
+    }
+    n = g.n_merge
+    intarr_set_raw(g.merges, n * 4, r)
+    intarr_set_raw(g.merges, n * 4 + 1, c)
+    intarr_set_raw(g.merges, n * 4 + 2, rows)
+    intarr_set_raw(g.merges, n * 4 + 3, cols)
+    g.n_merge = n + 1
+    _datagrid_remerge(g)
+    return gp
+}
+
+// datagrid_unmerge(g, r, c): the merge covering (r, c), if any, back to
+// its cells.
+datagrid_unmerge(gp: ptr, r: int, c: int) -> ptr {
+    g = gp as *DataGrid
+    mi = _datagrid_merge_at(g, r, c)
+    if mi < 0 { return gp }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    _datagrid_merge_drop(g, mi)
+    _datagrid_remerge(g)
+    return gp
+}
+
+// datagrid_merge_of(g, r, c): the merge covering (r, c) as "r,c,rows,cols"
+// ("" when none).
+datagrid_merge_of(gp: ptr, r: int, c: int) -> string {
+    g = gp as *DataGrid
+    mi = _datagrid_merge_at(g, r, c)
+    if mi < 0 { return "" }
+    return "${intarr_get_raw(g.merges, mi * 4)},${intarr_get_raw(g.merges, mi * 4 + 1)},${intarr_get_raw(g.merges, mi * 4 + 2)},${intarr_get_raw(g.merges, mi * 4 + 3)}"
+}
+
+_datagrid_merge_drop(g: *DataGrid, k: int) {
+    i = k * 4
+    while i < (g.n_merge - 1) * 4 {
+        intarr_set_raw(g.merges, i, intarr_get_raw(g.merges, i + 4))
+        i = i + 1
+    }
+    g.n_merge = g.n_merge - 1
+}
+
+// After merges change: every shown cell is styled again (a merge's pieces
+// take its style), the cursor reselects what it is on, and it is all shown.
+_datagrid_remerge(g: *DataGrid) {
+    n = g.vis_rows * (g.frozen + g.vis_cols)
+    i = 0
+    while i < n {
+        longarr_set_raw(g.style_hash, i, 0)
+        i = i + 1
+    }
+    if g.cur_r >= 0 { _datagrid_move(g, g.cur_r, g.cur_c, 0) }
+    _datagrid_bind(g)
+}
+
 // Work out what each shown row and position shows, from the first row and
 // column, and hide the rows, positions and gap strips that show nothing.
 _datagrid_layout(g: *DataGrid) {
@@ -7060,6 +7248,9 @@ _datagrid_layout(g: *DataGrid) {
             r = 0
             while r < g.vis_rows {
                 _cb = set_hidden(intarr_get_raw(g.boxes, r * w + j), poff)
+                // Shown or hidden whole, the cell is not under a merge now
+                // (_datagrid_spans hides it again if it is).
+                intarr_set_raw(g.cell_off, r * w + j, 0)
                 if poff == 1 { aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + j), "") }
                 r = r + 1
             }
@@ -7096,13 +7287,24 @@ _datagrid_bind(g: *DataGrid) {
         c = 0
         while c < w && mr >= 0 {
             if intarr_get_raw(g.pos_off, c) == 0 {
-                aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + c), _datagrid_invoke_cell(cf, mr, _datagrid_model(g, _datagrid_col_at(g, c))))
+                // A merge shows its top-left cell's text once, in the first
+                // of its pieces on screen; its other pieces are blank.
+                role = _datagrid_merge_role(g, r, c)
+                t = ""
+                if role == 0 {
+                    t = _datagrid_invoke_cell(cf, mr, _datagrid_model(g, _datagrid_col_at(g, c)))
+                } else if role == 1 {
+                    mi = _datagrid_merge_at(g, mr, _datagrid_col_at(g, c))
+                    t = _datagrid_invoke_cell(cf, intarr_get_raw(g.merges, mi * 4), _datagrid_model(g, intarr_get_raw(g.merges, mi * 4 + 1)))
+                }
+                aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + c), t)
             }
             c = c + 1
         }
         r = r + 1
     }
     _datagrid_size(g)
+    _datagrid_spans(g)
     _datagrid_style(g)
     _datagrid_tips(g)
     _datagrid_paint(g)
@@ -7191,6 +7393,7 @@ _datagrid_size(g: *DataGrid) {
             while r < g.vis_rows {
                 _cw = width(intarr_get_raw(g.cells, r * w + j), cw)
                 _bw = width(intarr_get_raw(g.boxes, r * w + j), cw)
+                intarr_set_raw(g.cell_w, r * w + j, cw)
                 r = r + 1
             }
         }
@@ -7533,7 +7736,14 @@ _datagrid_style(g: *DataGrid) {
                 c = c + 1
                 continue
             }
-            st = _datagrid_invoke_cell(sf, mr, _datagrid_model(g, _datagrid_col_at(g, c)))
+            sr = mr
+            sc = _datagrid_col_at(g, c)
+            smi = _datagrid_merge_at(g, mr, sc)
+            if smi >= 0 {
+                sr = intarr_get_raw(g.merges, smi * 4)
+                sc = intarr_get_raw(g.merges, smi * 4 + 1)
+            }
+            st = _datagrid_invoke_cell(sf, sr, _datagrid_model(g, sc))
             hh = _datagrid_hash(st)
             if longarr_get_raw(g.style_hash, i) != hh {
                 longarr_set_raw(g.style_hash, i, hh)
@@ -7760,6 +7970,14 @@ _datagrid_move(g: *DataGrid, r: int, c: int, extend: int) {
     if extend == 1 && g.cur_r >= 0 {
         _datagrid_set(g, g.anc_r, g.anc_c, r, c)
     } else {
+        // Onto a merge: all of it is selected, the cursor on its top-left.
+        mi = _datagrid_merge_at(g, _datagrid_row_fix(g, r), _datagrid_col_fix(g, c))
+        if mi >= 0 {
+            r0 = intarr_get_raw(g.merges, mi * 4)
+            c0 = intarr_get_raw(g.merges, mi * 4 + 1)
+            _datagrid_set(g, r0 + intarr_get_raw(g.merges, mi * 4 + 2) - 1, c0 + intarr_get_raw(g.merges, mi * 4 + 3) - 1, r0, c0)
+            return
+        }
         _datagrid_set(g, r, c, r, c)
     }
 }
@@ -7854,6 +8072,12 @@ _datagrid_key(gp: ptr, k: string, m: int) {
         // Nothing selected yet: the first key lands on the top-left shown cell.
         _datagrid_move(g, g.first_row, 0, 0)
         return
+    }
+    // From a merge, Down and Right leave by its far edge.
+    cmi = _datagrid_merge_at(g, r, c)
+    if cmi >= 0 && shift == 0 {
+        if string.equals(k, "Down") == 1 || string.equals(k, "Page_Down") == 1 { r = intarr_get_raw(g.merges, cmi * 4) + intarr_get_raw(g.merges, cmi * 4 + 2) - 1 }
+        if string.equals(k, "Right") == 1 { c = intarr_get_raw(g.merges, cmi * 4 + 1) + intarr_get_raw(g.merges, cmi * 4 + 3) - 1 }
     }
     // Moves count the rows and columns shown, so they step over hidden ones.
     if string.equals(k, "Down") == 1 {
@@ -8108,6 +8332,12 @@ _datagrid_clicked(gp: ptr, vr: int, vc: int) {
     focus(g.root)
     _datagrid_move(g, r, c, modifiers() % 2)
     if g.click == null { return }
+    // A click anywhere in a merge is a click on it: its top-left cell.
+    cmi = _datagrid_merge_at(g, r, c)
+    if cmi >= 0 {
+        r = intarr_get_raw(g.merges, cmi * 4)
+        c = intarr_get_raw(g.merges, cmi * 4 + 1)
+    }
     _datagrid_invoke_click(unbox_closure(g.click), r, c)
 }
 
@@ -8253,7 +8483,7 @@ _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
     box = intarr_get_raw(g.boxes, vr * w + pos)
     gp = g as ptr
     f = textfield(box, "") callback |_t: string| { }
-    _fw = width(f, intarr_get_raw(g.shown_w, pos))
+    _fw = width(f, intarr_get_raw(g.cell_w, vr * w + pos))
     _fh = height(f, g.row_h)
     _ft = set_text(f, initial)
     on_submit(f) callback |_t: string| {

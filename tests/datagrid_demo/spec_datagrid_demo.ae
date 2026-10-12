@@ -664,5 +664,49 @@ main() {
         }
     }
 
+    spec.describe(fw, "merged cells") {
+        spec.it("a merge is one cell: its top-left's text across it") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            spec.assert_true(shows("R9C5") == 1, "the four cells are shown")
+            w4 = field_of_text("R8C4", "w")
+            w5 = field_of_text("R8C5", "w")
+            x6 = field_of_text("R8C6", "x")
+            press("Merge D9:E10")
+            spec.assert_true(gone("R8C5") == 1, "R8C5 is part of it")
+            spec.assert_true(gone("R9C4") == 1, "R9C4 too")
+            spec.assert_true(gone("R9C5") == 1, "and R9C5")
+            // Within a pixel: Android reports dp, each width rounded on its own.
+            wm = settled("R8C4", "w", w4 + w5)
+            spec.assert_true(wm >= w4 + w5 - 1 && wm <= w4 + w5 + 1, "R8C4 across both columns: ${wm} for ${w4} + ${w5}")
+            spec.assert_eq(settled("R8C6", "x", x6), x6, "and the next column where it was")
+            spec.assert_true(shows("R10C4") == 1, "the row under it as it was")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
+        }
+        spec.it("a click on it selects all of it, the cursor on its top-left") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R8C4")}/click", "click the merge")
+            spec.assert_true(shows("selection: 8,3 from 9,4") == 1, "the cursor at 8,3, the range to 9,4")
+            spec.assert_true(shows("clicked: 8,3") == 1, "the click is its top-left")
+            spec.assert_str_eq(bg_of("R8C4"), "#cce0ff", "drawn selected")
+        }
+        spec.it("the keys step over it, and into it from either side") callback {
+            key("Down")
+            spec.assert_true(shows("selection: 10,3 from 10,3") == 1, "Down leaves by its bottom edge")
+            key("Up")
+            spec.assert_true(shows("selection: 8,3 from 9,4") == 1, "Up from below selects all of it")
+            key("Right")
+            spec.assert_true(shows("selection: 8,5 from 8,5") == 1, "Right leaves by its right edge")
+            key("Left")
+            spec.assert_true(shows("selection: 8,3 from 9,4") == 1, "Left from beside it selects all of it")
+        }
+        spec.it("unmerged, its cells are back") callback {
+            w4 = header_w("D", 0)
+            press("Merge D9:E10")
+            spec.assert_true(shows("R8C5") == 1, "R8C5")
+            spec.assert_true(shows("R9C4") == 1, "R9C4")
+            spec.assert_true(shows("R9C5") == 1, "R9C5")
+            spec.assert_eq(settled("R8C4", "w", w4), w4, "R8C4 its column's width again")
+        }
+    }
+
     return spec.run_summary(fw)
 }
