@@ -1270,3 +1270,9 @@ int aeui_emit_text_style(char* buf, int n, int bufsize, int handle) {
     }
     return n;
 }
+
+int aether_ui_textfield_caret_impl(int handle) {
+    int a = 0, b = 0;
+    if (!aether_ui_textfield_selection_impl(handle, &a, &b)) return -1;
+    return b;
+}

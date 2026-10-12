@@ -2088,6 +2088,18 @@ int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
     return 1;
 }
 
+// The field's Editable replaced over the selection (AetherCellDecor.insert):
+// its TextWatcher, and so on_change, hears it as a keystroke.
+JSTATIC(M_CD_insert, C_CellDecor, "insert", "(Landroid/widget/TextView;Ljava/lang/String;)V");
+void aether_ui_textfield_insert_impl(int handle, const char* text) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !text || (w->type != AUI_TEXTFIELD && w->type != AUI_SECUREFIELD)) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    JSV(M_CD_insert, w->view, aeui_jstring(env, text));
+    aeui_unframe(env);
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     AeuiWidget* w = live_widget(handle);
     if (!w || !aeui_is_edit(w->type)) return;

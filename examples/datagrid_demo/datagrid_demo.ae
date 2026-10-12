@@ -14,7 +14,7 @@
 import ui
 import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refresh,
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
-    edit_text, cell_style, cell_tooltip,
+    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, shortcut,
     on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
@@ -64,6 +64,7 @@ main() {
     swapped = ui_state_i(0)
     rowmodel = ui_state_s("")
     hidc = ui_state_i(0)
+    typing = ui_state_s("")
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
@@ -130,6 +131,10 @@ main() {
                 on_col_move() callback |from: int, to: int| {
                     _s5 = ui_set_s(moved, "${from} to ${to}")
                 }
+                // The open editor's text and caret as it is typed.
+                on_cell_edit_change() callback |et: string, caret: int| {
+                    _ty = ui_set_s(typing, "${et} @${caret}")
+                }
                 on_cell_edit() callback |r: int, c: int, t: string| {
                     _p = map.put(edits, "${r},${c}", t)
                     _s6 = ui_set_s(edited, "${r},${c} = ${t}")
@@ -189,6 +194,11 @@ main() {
             _fit = btn("Fit row 4") callback {
                 _f = datagrid_fit_row(g, 3)
             }
+            // F4 puts a reference in the open editor at its caret (point mode).
+            shortcut("F4") callback {
+                _ins = datagrid_edit_insert(g, "A1")
+            }
+            text_bound(typing, "typing: ", "")
             text_bound(rowmodel, "row 4 shown is model row ", "")
             text_bound(clicked, "clicked: ", "")
             text_bound(selected, "selection: ", "")

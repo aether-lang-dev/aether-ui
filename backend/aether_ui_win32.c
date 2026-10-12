@@ -4703,6 +4703,14 @@ int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
     return 1;
 }
 
+// EM_REPLACESEL: in place of the selection or at the caret, undoable, and
+// EN_CHANGE (on_change) follows as it does for a keystroke.
+void aether_ui_textfield_insert_impl(int handle, const char* text) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd || !text || (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD)) return;
+    SendMessageW(w->hwnd, EM_REPLACESEL, (WPARAM)TRUE, (LPARAM)utf8_to_wide(text));
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     Widget* w = widget_at(handle);
     if (w) w32_set_text(w, text);

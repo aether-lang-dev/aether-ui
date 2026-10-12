@@ -1235,6 +1235,19 @@ int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
     return 1;
 }
 
+// In place of the selection, or at the caret (the end when there is none);
+// a programmatic replace sends no editing-changed, so it is sent here, as a
+// keystroke's would be.
+void aether_ui_textfield_insert_impl(int handle, const char* text) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UITextField class]] || !text) return;
+    UITextField* f = (UITextField*)v;
+    UITextRange* r = f.selectedTextRange;
+    if (!r) r = [f textRangeFromPosition:f.endOfDocument toPosition:f.endOfDocument];
+    [f replaceRange:r withText:[NSString stringWithUTF8String:text] ?: @""];
+    [f sendActionsForControlEvents:UIControlEventEditingChanged];
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[UITextField class]])

@@ -65,6 +65,15 @@ public final class AetherCellDecor extends Drawable {
         tv.setPaintFlags(f);
     }
 
+    /** Text put in a field as typing puts it: over the selection, or at the caret. */
+    public static void insert(TextView tv, String text) {
+        CharSequence cs = tv.getText();
+        if (!(cs instanceof android.text.Editable)) return;
+        int a = tv.getSelectionStart(), b = tv.getSelectionEnd();
+        if (a < 0 || b < 0) { a = cs.length(); b = a; }
+        ((android.text.Editable) cs).replace(Math.min(a, b), Math.max(a, b), text);
+    }
+
     /** The height, in px, that text takes in the label's paint wrapped at widthPx (one line for 0). */
     public static int measureHeight(TextView tv, String text, int widthPx) {
         String s = (text == null || text.isEmpty()) ? " " : text;

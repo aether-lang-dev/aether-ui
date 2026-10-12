@@ -2803,6 +2803,31 @@ int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
     return 1;
 }
 
+// Through the field editor, over its selection, as typing goes: the
+// delegate's controlTextDidChange (on_change) follows. A field not being
+// edited has no editor: the text goes at its end, and on_change is told.
+void aether_ui_textfield_insert_impl(int handle, const char* text) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[NSTextField class]] || !text) return;
+    NSString* s = [NSString stringWithUTF8String:text] ?: @"";
+    NSText* ed = [(NSTextField*)v currentEditor];
+    if ([ed isKindOfClass:[NSTextView class]]) {
+        NSTextView* tv = (NSTextView*)ed;
+        NSRange r = [tv selectedRange];
+        if ([tv shouldChangeTextInRange:r replacementString:s]) {
+            [tv replaceCharactersInRange:r withString:s];
+            [tv setSelectedRange:NSMakeRange(r.location + [s length], 0)];
+            [tv didChangeText];
+        }
+        return;
+    }
+    NSString* all = [[(NSTextField*)v stringValue] stringByAppendingString:s];
+    aether_ui_textfield_set_text(handle, [all UTF8String]);
+    id d = [(NSTextField*)v delegate];
+    if ([d respondsToSelector:@selector(controlTextDidChange:)])
+        [d controlTextDidChange:[NSNotification notificationWithName:NSControlTextDidChangeNotification object:v]];
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSTextField class]]) {

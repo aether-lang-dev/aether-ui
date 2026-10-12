@@ -212,10 +212,10 @@ main() {
             spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
             spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
         }
-        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and eight labels)") callback {
+        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and nine labels)") callback {
             // 1 caption + 7 header + 140 cells + the clicked, selection,
             // activated, resized, moved and edited lines.
-            spec.assert_eq(count_of("text"), 155, "texts")
+            spec.assert_eq(count_of("text"), 156, "texts")
         }
         spec.it("the vertical scrollbar stands up") callback {
             v = nth_of("slider", 0)
@@ -234,7 +234,7 @@ main() {
             spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
             spec.assert_true(shows("A") == 1, "the header still reads A")
             spec.assert_eq(field_of_text("A", "y"), hdr_y, "and has not moved")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
         spec.it("scrolling across keeps the frozen column and moves the rest") callback {
             hs = nth_of("slider", 1)
@@ -242,7 +242,7 @@ main() {
             spec.assert_true(shows("R90000C40") == 1, "column 40 first")
             spec.assert_true(shows("AN") == 1, "its header letter, AN")
             spec.assert_true(shows("90001") == 1, "the row number stayed")
-            spec.assert_eq(count_of("text"), 155, "still no widgets added")
+            spec.assert_eq(count_of("text"), 156, "still no widgets added")
         }
         spec.it("and after scrolling, the cell's new row and column") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R90003C41")}/click", "click R90003C41")
@@ -320,7 +320,7 @@ main() {
             key("Ctrl%2Ba")
             spec.assert_true(shows("selection: 99999,49 from 0,0") == 1, "the whole grid")
             spec.assert_str_eq(bg_of("R99990C45"), "#cce0ff", "a shown cell is in it")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
     }
 
@@ -362,7 +362,7 @@ main() {
             spec.assert_true(field_of_text("C", "x") < field_of_text("D", "x"), "C, D and E slid left")
             spec.assert_eq(settled("R99980C2", "x", field_of_text("B", "x")), field_of_text("B", "x"), "B's cells moved with it")
             spec.assert_eq(header_w("C", 24), 24, "and C kept its width")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
         spec.it("a frozen column does not move") callback {
             drag("#", 18, 150)
@@ -428,7 +428,7 @@ main() {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99990C1")}/click", "click elsewhere")
             spec.assert_true(editor_open(0) == 1, "the editor closed")
             spec.assert_true(shows("edited: 99983,3 = q") == 1, "and committed q (model column 3)")
-            spec.assert_eq(count_of("text"), 155, "no widgets left behind")
+            spec.assert_eq(count_of("text"), 156, "no widgets left behind")
         }
         spec.it("a key named by a word opens an editor holding its character") callback {
             key("comma")
@@ -548,7 +548,7 @@ main() {
             spec.assert_true(shows("R6C1") == 1, "row 6 is")
             spec.assert_eq(settled("R6C1", "y", y3 + 24 + 3), y3 + 27, "under row 3, below a 3px strip")
             spec.assert_true(shows("row 4 shown is model row 6") == 1, "datagrid_row_model: the fifth row shown is model row 6")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
         spec.it("the keys and a Shift range step over them; callbacks keep model rows") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R3C1")}/click", "click R3C1")
@@ -584,7 +584,7 @@ main() {
             y3 = field_of_text("R3C1", "y")
             spec.assert_eq(settled("R4C1", "y", y3 + 24), y3 + 24, "straight under row 3, no strip")
             spec.assert_true(shows("row 4 shown is model row 4") == 1, "the fifth row shown is model row 4 again")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
     }
 
@@ -600,7 +600,7 @@ main() {
             spec.assert_true(gone("R2C1") == 1, "row 2 has scrolled away")
             spec.assert_eq(settled("R0C1", "y", y0), y0, "row 0 where it was")
             spec.assert_eq(settled("R1002C1", "y", y0 + 48), y0 + 48, "row 1,002 under row 1")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
         spec.it("they are drawn as the frozen columns are") callback {
             spec.assert_str_eq(bg_of("R1C3"), "#f2f2f5", "#f2f2f5")
@@ -680,7 +680,7 @@ main() {
             spec.assert_true(wm >= w4 + w5 - 1 && wm <= w4 + w5 + 1, "R8C4 across both columns: ${wm} for ${w4} + ${w5}")
             spec.assert_eq(settled("R8C6", "x", x6), x6, "and the next column where it was")
             spec.assert_true(shows("R10C4") == 1, "the row under it as it was")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
         spec.it("a click on it selects all of it, the cursor on its top-left") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R8C4")}/click", "click the merge")
@@ -718,7 +718,7 @@ main() {
             spec.assert_eq(settled("R4C1", "y", y3 + 60), y3 + 60, "row 4 under it")
             spec.assert_true(gone("R18C1") == 1, "rows 18 and 19 no longer fit")
             spec.assert_true(shows("R17C1") == 1, "row 17 does")
-            spec.assert_eq(count_of("text"), 155, "no widgets added")
+            spec.assert_eq(count_of("text"), 156, "no widgets added")
         }
         spec.it("the last rows are still reached at the end") callback {
             uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=200000", "scroll to the end")
@@ -742,6 +742,27 @@ main() {
             spec.assert_true(uidriver.wait_body_contains("/widget/${id}", "\"wrap\":true", 20), "and it wraps again")
             press("Tall row 4")
             spec.assert_eq(settled("R3C1", "h", 24), 24, "and back")
+        }
+    }
+
+    spec.describe(fw, "the editor's text as it is typed") {
+        spec.it("on_edit_change hears what an editor opens with, and its caret") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R11C1")}/click", "click R11C1")
+            key("equal")
+            spec.assert_true(editor_open(1) == 1, "an editor opened holding =")
+            spec.assert_true(shows("typing: = @1") == 1, "heard = with the caret after it")
+        }
+        spec.it("datagrid_edit_insert puts text at the caret, and on_edit_change hears it") callback {
+            key("F4")
+            spec.assert_true(shows("typing: =A1 @3") == 1, "=A1, the caret after the reference")
+            spec.assert_str_eq(uidriver.widget_text_by_id(editor()), "=A1", "the editor holds it")
+        }
+        spec.it("typing is heard too") callback {
+            uidriver.post_ok("/widget/${editor()}/set_text?v=%3DSUM(A1", "type =SUM(A1")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "typing: =SUM(A1 @", 20), "heard =SUM(A1")
+            key("Escape")
+            spec.assert_true(editor_open(0) == 1, "Escape closed it")
         }
     }
 

@@ -1899,6 +1899,17 @@ int aether_ui_textfield_selection_impl(int handle, int* start, int* end) {
     return 1;
 }
 
+// In place of the selection, or at the caret, as a keystroke would: the
+// entry's "changed" (and so on_change) hears it.
+void aether_ui_textfield_insert_impl(int handle, const char* text) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_EDITABLE(w) || !text) return;
+    gtk_editable_delete_selection(GTK_EDITABLE(w));
+    int pos = gtk_editable_get_position(GTK_EDITABLE(w));
+    gtk_editable_insert_text(GTK_EDITABLE(w), text, -1, &pos);
+    gtk_editable_set_position(GTK_EDITABLE(w), pos);
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_ENTRY(w)) {

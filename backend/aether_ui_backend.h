@@ -115,6 +115,13 @@ void aether_ui_textfield_select_impl(int handle, int start, int end);
 // The selection [*start, *end) of a text field: 1, or 0 when the widget is
 // not a field or (AppKit) not being edited.
 int aether_ui_textfield_selection_impl(int handle, int* start, int* end);
+// Text put in a field as typing would put it: in place of its selection, or
+// at its caret; the caret ends after it, and the field's on_change hears it.
+void aether_ui_textfield_insert_impl(int handle, const char* text);
+// A field's caret (the end of its selection) in the platform's units --
+// UTF-16 on AppKit, UIKit, Win32 and Android, characters on GTK4; -1 when it
+// has none (not being edited). Shared: from textfield_selection_impl.
+int aether_ui_textfield_caret_impl(int handle);
 const char* aether_ui_textfield_get_text(int handle);
 
 int aether_ui_securefield_create(const char* placeholder, void* boxed_closure);
