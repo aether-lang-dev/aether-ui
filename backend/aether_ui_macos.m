@@ -2562,8 +2562,25 @@ void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
     aeui_own_helper(field, "aeui_submit", st);
 }
 
+// NSTextField selects all of its text when it is resized mid-edit
+// (-setFrameSize: calls -selectText:). A field sized by layout after it took
+// focus (the grid's cell editor) lost its caret that way, and a user typing
+// in a field that grew would have had their text selected under them. Keep
+// the field editor's selection across the resize.
+@interface AetherTextField : NSTextField
+@end
+@implementation AetherTextField
+- (void)setFrameSize:(NSSize)size {
+    NSText* ed = [self currentEditor];
+    NSRange keep = ed ? [ed selectedRange] : NSMakeRange(NSNotFound, 0);
+    [super setFrameSize:size];
+    if (ed && [self currentEditor] == ed && NSMaxRange(keep) <= [[ed string] length])
+        [ed setSelectedRange:keep];
+}
+@end
+
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
-    NSTextField* field = [[NSTextField alloc] init];
+    NSTextField* field = [[AetherTextField alloc] init];
     [field setTranslatesAutoresizingMaskIntoConstraints:NO];
     [field setEditable:YES];
     [field setBordered:YES];

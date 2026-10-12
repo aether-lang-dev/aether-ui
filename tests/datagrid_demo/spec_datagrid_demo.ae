@@ -122,7 +122,10 @@ editor_open(want: int) -> int {
         e = editor()
         if want == 0 && e == 0 { return 1 }
         if want == 1 && e != 0 {
-            if uidriver.widget_int_field_by_id(e, "sel_end") > 0 { return 1 }
+            // Placed means a caret, not the select-all a field can get
+            // as it takes focus.
+            s = uidriver.widget_int_field_by_id(e, "sel_start")
+            if s > 0 && s == uidriver.widget_int_field_by_id(e, "sel_end") { return 1 }
         }
         sleep(100)
         i = i + 1
