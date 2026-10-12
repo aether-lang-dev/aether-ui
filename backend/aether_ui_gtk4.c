@@ -812,14 +812,55 @@ int aether_ui_text_get_anchor(int handle) {
 
 // text_measure: a Pango layout made from the label carries its font (CSS
 // size and weight included).
+// The label's own attributes too (a size, a weight, italic set on it), which
+// the widget's font alone does not carry.
+static PangoLayout* aeui_label_layout(GtkWidget* w, const char* text) {
+    PangoLayout* l = gtk_widget_create_pango_layout(w, text ? text : "");
+    PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+    if (attrs) pango_layout_set_attributes(l, attrs);
+    return l;
+}
+
 int aether_ui_text_measure_impl(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return 0;
-    PangoLayout* l = gtk_widget_create_pango_layout(w, text ? text : "");
+    PangoLayout* l = aeui_label_layout(w, text);
     int pw = 0, ph = 0;
     pango_layout_get_pixel_size(l, &pw, &ph);
     g_object_unref(l);
     return pw;
+}
+
+int aether_ui_text_measure_height_impl(int handle, const char* text, int width) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return 0;
+    PangoLayout* l = aeui_label_layout(w, text);
+    if (width > 0) {
+        pango_layout_set_width(l, width * PANGO_SCALE);
+        pango_layout_set_wrap(l, PANGO_WRAP_WORD_CHAR);
+    }
+    int pw = 0, ph = 0;
+    pango_layout_get_pixel_size(l, &pw, &ph);
+    g_object_unref(l);
+    return ph;
+}
+
+// Wrapping onto at most `lines` lines: GTK limits a wrapping label's lines
+// only when it ellipsizes, which a grid cell's does (text_truncate); one
+// that does not is given an end ellipsis for it.
+void aether_ui_text_set_lines(int handle, int lines) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return;
+    if (lines <= 1) {
+        gtk_label_set_wrap(GTK_LABEL(w), FALSE);
+        gtk_label_set_lines(GTK_LABEL(w), -1);
+        return;
+    }
+    gtk_label_set_wrap(GTK_LABEL(w), TRUE);
+    gtk_label_set_wrap_mode(GTK_LABEL(w), PANGO_WRAP_WORD_CHAR);
+    if (gtk_label_get_ellipsize(GTK_LABEL(w)) == PANGO_ELLIPSIZE_NONE)
+        gtk_label_set_ellipsize(GTK_LABEL(w), PANGO_ELLIPSIZE_END);
+    gtk_label_set_lines(GTK_LABEL(w), lines);
 }
 
 void aether_ui_text_set_string(int handle, const char* text) {

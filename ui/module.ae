@@ -36,7 +36,8 @@ exports (
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
-    datagrid_merge, datagrid_unmerge, datagrid_merge_of, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_merge, datagrid_unmerge, datagrid_merge_of, datagrid_set_row_height,
+    datagrid_row_height, datagrid_fit_row, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -143,7 +144,7 @@ exports (
     canvas_group_begin, canvas_group_end, canvas_read_pixel,
     canvas_draw_image, canvas_draw_image_scaled, canvas_fill_linear_gradient, canvas_fill_radial_gradient,
     on_hover, on_double_click, on_click, on_drag, ondrag, pointer_cursor, pointer_shape,
-    on_focus_change, onfocuschange, key_text, text_measure,
+    on_focus_change, onfocuschange, key_text, text_measure, text_measure_height, text_lines,
     remove_child, clear_children,
     enable_test_server, enable_test_server_root, seal_widget, seal_subtree,
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
@@ -887,6 +888,8 @@ extern aether_ui_on_drag_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_set_cursor_impl(handle: int, name: string)
 extern aether_ui_on_focus_change_impl(handle: int, boxed_closure: ptr)
 extern aether_ui_text_measure_impl(handle: int, text: string) -> int
+extern aether_ui_text_measure_height_impl(handle: int, text: string, width: int) -> int
+extern aether_ui_text_set_lines(handle: int, lines: int)
 extern aether_ui_on_double_click_impl(handle: int, boxed_closure: ptr)
 // Row drag-reorder: make `row` a drag source (carrying its index) + a drop
 // target; on drop of another row, fire on_drop(source_index).
@@ -6482,6 +6485,9 @@ struct DataGrid {
     merge_cap: int
     cell_w: ptr       // intarr: the width each shown cell was last given (a merge widens one)
     cell_off: ptr     // intarr: 1 where a shown cell is hidden under a merge
+    row_hs: ptr       // intarr: each MODEL row's height, 0 for the grid's; null until one is set
+    slot_h: ptr       // intarr: the height each shown row was last given
+    cell_lines: ptr   // intarr: the lines each shown cell was last given (1: not wrapped)
 }
 
 // A data bar's colour when a style gives --fill and no --fill-color (Excel's
@@ -6593,6 +6599,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
         intarr_set_raw(g.slot_row, si, si)
         intarr_set_raw(g.slot_off, si, 0)
         intarr_set_raw(g.gap_on, si, 0)
+        intarr_set_raw(g.slot_h, si, g.row_h)
         si = si + 1
     }
     g.slot_col = intarr_new_raw(fz + vc + 1)
@@ -6672,6 +6679,9 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.n_merge = 0
     g.merge_cap = 0
     g.cell_w = intarr_new_raw(vr * (fz + vc) + 1)
+    g.row_hs = null
+    g.slot_h = intarr_new_raw(vr + 1)
+    g.cell_lines = intarr_new_raw(vr * (fz + vc) + 1)
     g.cell_off = intarr_new_raw(vr * (fz + vc) + 1)
     ri = 0
     g.row_boxes = intarr_new_raw(vr + 1)
@@ -6721,6 +6731,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             intarr_set_raw(g.style_fx, ri * (fz + vc) + ci, 0)
             intarr_set_raw(g.cell_w, ri * (fz + vc) + ci, g.col_w)
             intarr_set_raw(g.cell_off, ri * (fz + vc) + ci, 0)
+            intarr_set_raw(g.cell_lines, ri * (fz + vc) + ci, 1)
             longarr_set_raw(g.tip_hash, ri * (fz + vc) + ci, 0)
             vr2 = ri
             vc2 = ci
@@ -6955,9 +6966,153 @@ _datagrid_vbase(g: *DataGrid) -> int {
     return _datagrid_row_index(g, g.frozen_rows)
 }
 _datagrid_vplaces(g: *DataGrid) -> int {
-    n = _datagrid_rows_shown(g) - _datagrid_vbase(g) - (g.vis_rows - g.frozen_rows)
+    last = _datagrid_row_fix(g, g.rows - 1)
+    if last < g.frozen_rows { return 0 }
+    n = _datagrid_row_index(g, _datagrid_start_for(g, last)) - _datagrid_vbase(g)
     if n < 0 { return 0 }
     return n
+}
+
+// A row's height: its own, or the grid's.
+_datagrid_row_h(g: *DataGrid, r: int) -> int {
+    if g.row_hs == null || r < 0 || r >= g.rows { return g.row_h }
+    h = intarr_get_raw(g.row_hs, r)
+    if h <= 0 { return g.row_h }
+    return h
+}
+
+// The height the scrolling rows have: the grid's, less the frozen rows'.
+_datagrid_scroll_budget(g: *DataGrid) -> int {
+    b = g.vis_rows * g.row_h
+    k = 0
+    while k < g.frozen_rows {
+        if _datagrid_row_hidden(g, k) == 0 { b = b - _datagrid_row_h(g, k) }
+        k = k + 1
+    }
+    return b
+}
+
+// The earliest first row with which row r still fits at the bottom.
+_datagrid_start_for(g: *DataGrid, r: int) -> int {
+    budget = _datagrid_scroll_budget(g)
+    start = r
+    used = _datagrid_row_h(g, r)
+    i = _datagrid_row_index(g, r) - 1
+    base = _datagrid_vbase(g)
+    while i >= base {
+        pr = _datagrid_row_of_index(g, i)
+        ph = _datagrid_row_h(g, pr)
+        if used + ph > budget { break }
+        used = used + ph
+        start = pr
+        i = i - 1
+    }
+    return start
+}
+
+// The last row shown (in the scrolling rows), or the first row.
+_datagrid_last_shown(g: *DataGrid) -> int {
+    last = g.first_row
+    s = g.frozen_rows
+    while s < g.vis_rows {
+        r = _datagrid_row_at(g, s)
+        if r >= 0 { last = r }
+        s = s + 1
+    }
+    return last
+}
+
+// Each shown cell's lines: as many as its row holds where its style wraps
+// it (white-space: normal), one where it does not.
+_datagrid_wraps(g: *DataGrid) {
+    w = g.frozen + g.vis_cols
+    s = 0
+    while s < g.vis_rows {
+        j = 0
+        while j < w {
+            i = s * w + j
+            want = 1
+            if (intarr_get_raw(g.style_fx, i) / 16) % 2 == 1 && _datagrid_row_at(g, s) >= 0 {
+                h = intarr_get_raw(g.cells, i)
+                lh = aether_ui_text_measure_height_impl(h, "Ag", 0)
+                if lh < 1 { lh = 1 }
+                want = intarr_get_raw(g.slot_h, s) / lh
+                // A row one line tall shows one line, cut, as a wrapped
+                // cell in Excel does.
+                if want < 1 { want = 1 }
+            }
+            if intarr_get_raw(g.cell_lines, i) != want {
+                intarr_set_raw(g.cell_lines, i, want)
+                aether_ui_text_set_lines(intarr_get_raw(g.cells, i), want)
+            }
+            j = j + 1
+        }
+        s = s + 1
+    }
+}
+
+// datagrid_set_row_height(g, r, h): model row r's height (the grid's when
+// h is 0). The grid stays its height and shows as many rows as fit; a row
+// is never taller than the whole grid. datagrid_row_height reads it.
+datagrid_set_row_height(gp: ptr, r: int, h: int) -> ptr {
+    g = gp as *DataGrid
+    if r < 0 || r >= g.rows { return gp }
+    if g.row_hs == null {
+        if h <= 0 { return gp }
+        g.row_hs = intarr_new_raw(g.rows + 1)
+        k = 0
+        while k < g.rows {
+            intarr_set_raw(g.row_hs, k, 0)
+            k = k + 1
+        }
+    }
+    nh = h
+    if nh > 0 && nh < 8 { nh = 8 }
+    if nh > g.vis_rows * g.row_h { nh = g.vis_rows * g.row_h }
+    if nh < 0 { nh = 0 }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    intarr_set_raw(g.row_hs, r, nh)
+    _d = datagrid_scroll_to(gp, g.first_row, g.first_col)
+    return gp
+}
+
+datagrid_row_height(gp: ptr, r: int) -> int {
+    return _datagrid_row_h(gp as *DataGrid, r)
+}
+
+// datagrid_fit_row(g, r): model row r as tall as its tallest cell's text
+// needs (wrapped at its column's width where its style wraps it), and never
+// shorter than the grid's row height. Each cell is measured in the font of
+// the cell showing it (the first row's, when r is not shown).
+datagrid_fit_row(gp: ptr, r: int) -> ptr {
+    g = gp as *DataGrid
+    if r < 0 || r >= g.rows || g.cell == null { return gp }
+    w = g.frozen + g.vis_cols
+    slot = _datagrid_slot_of_row(g, r)
+    if slot < 0 { slot = 0 }
+    cf = unbox_closure(g.cell)
+    best = 0
+    j = 0
+    while j < w {
+        c = _datagrid_col_at(g, j)
+        if intarr_get_raw(g.pos_off, j) == 0 && c >= 0 {
+            m = _datagrid_model(g, c)
+            t = _datagrid_invoke_cell(cf, r, m)
+            wraps = 0
+            if g.style != null {
+                st = _datagrid_invoke_cell(unbox_closure(g.style), r, m)
+                if string.contains(string.to_lower(st), "white-space: normal") == 1 { wraps = 1 }
+            }
+            width = 0
+            if wraps == 1 { width = intarr_get_raw(g.widths, m) - 4 }
+            th = aether_ui_text_measure_height_impl(intarr_get_raw(g.cells, slot * w + j), t, width)
+            if th > best { best = th }
+        }
+        j = j + 1
+    }
+    nh = best + 6
+    if nh < g.row_h { nh = g.row_h }
+    return datagrid_set_row_height(gp, r, nh)
 }
 
 // datagrid_freeze_rows(g, n): the leading n rows stay while the rest scroll,
@@ -7189,7 +7344,10 @@ _datagrid_remerge(g: *DataGrid) {
 _datagrid_layout(g: *DataGrid) {
     w = g.frozen + g.vis_cols
     // Rows: the frozen ones are themselves (none when hidden), the rest from
-    // the first row down, past the hidden ones.
+    // the first row down, past the hidden ones, as many as fit the grid's
+    // height (vis_rows rows of the grid's height: fewer when some are taller).
+    budget = g.vis_rows * g.row_h
+    used = 0
     m = g.first_row
     s = 0
     while s < g.vis_rows {
@@ -7198,7 +7356,24 @@ _datagrid_layout(g: *DataGrid) {
             if s < g.rows && _datagrid_row_hidden(g, s) == 0 { row = s }
         } else {
             while m < g.rows && _datagrid_row_hidden(g, m) == 1 { m = m + 1 }
-            if m < g.rows { row = m }
+            if m < g.rows {
+                hh = _datagrid_row_h(g, m)
+                // Always the first scrolling row, however tall.
+                if used + hh <= budget || s == g.frozen_rows { row = m }
+            }
+        }
+        if row >= 0 {
+            used = used + _datagrid_row_h(g, row)
+            rh = _datagrid_row_h(g, row)
+            if intarr_get_raw(g.slot_h, s) != rh {
+                intarr_set_raw(g.slot_h, s, rh)
+                j1 = 0
+                while j1 < w {
+                    _bh = height(intarr_get_raw(g.boxes, s * w + j1), rh)
+                    _lh = height(intarr_get_raw(g.cells, s * w + j1), rh)
+                    j1 = j1 + 1
+                }
+            }
         }
         intarr_set_raw(g.slot_row, s, row)
         off = 0
@@ -7306,6 +7481,7 @@ _datagrid_bind(g: *DataGrid) {
     _datagrid_size(g)
     _datagrid_spans(g)
     _datagrid_style(g)
+    _datagrid_wraps(g)
     _datagrid_tips(g)
     _datagrid_paint(g)
     _datagrid_a11y(g)
@@ -7800,6 +7976,7 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
         k0 = k0 + 1
     }
     fill = 0.0
+    wrap = 0
     fill_rgb = DATAGRID_FILL_COLOUR
     corner = 0 - 1
     parts = string.string_split(st, ";")
@@ -7869,6 +8046,9 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
                 if fc >= 0 { fill_rgb = fc }
             }
             if string.equals(name, "--corner") == 1 { corner = _datagrid_hex(val) }
+            if string.equals(name, "white-space") == 1 {
+                if string.equals(val, "normal") == 1 || string.equals(val, "pre-wrap") == 1 || string.equals(val, "break-spaces") == 1 { wrap = 1 }
+            }
         }
         k = k + 1
     }
@@ -7895,6 +8075,7 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
         sd2 = sd2 + 1
     }
     if hasdec == 1 { fx = fx + 8 }
+    if wrap == 1 { fx = fx + 16 }
     if italic == 1 || (was % 2) == 1 { aether_ui_set_font_italic(h, italic) }
     if fx / 2 % 2 == 1 || (was / 2) % 2 == 1 { aether_ui_set_text_decoration(h, under, strike) }
     // Size 0 is the platform's own.
@@ -8002,11 +8183,11 @@ _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     // (A frozen row is always in view.)
     fr = g.first_row
     if nr >= g.frozen_rows {
-        sv = g.vis_rows - g.frozen_rows
         ir = _datagrid_row_index(g, nr)
         i0 = _datagrid_row_index(g, g.first_row)
         if ir < i0 { fr = nr }
-        if ir > i0 + sv - 1 { fr = _datagrid_row_of_index(g, ir - sv + 1) }
+        // Below the last row that fits: the first row that lets it fit.
+        if ir > i0 && ir > _datagrid_row_index(g, _datagrid_last_shown(g)) { fr = _datagrid_start_for(g, nr) }
     }
     fc = g.first_col
     if nc >= g.frozen {
@@ -8484,7 +8665,7 @@ _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
     gp = g as ptr
     f = textfield(box, "") callback |_t: string| { }
     _fw = width(f, intarr_get_raw(g.cell_w, vr * w + pos))
-    _fh = height(f, g.row_h)
+    _fh = height(f, intarr_get_raw(g.slot_h, vr))
     _ft = set_text(f, initial)
     on_submit(f) callback |_t: string| {
         _datagrid_submitted(gp, f)
@@ -9014,6 +9195,20 @@ onfocuschange(_ctx: ptr, cb: fn) {
 // Android its Paint's measureText.
 text_measure(handle: int, text: string) -> int {
     return aether_ui_text_measure_impl(handle, text)
+}
+
+// text_measure_height(handle, text, width): the height text takes in this
+// label's font wrapped at `width` (0: one line).
+text_measure_height(handle: int, text: string, width: int) -> int {
+    return aether_ui_text_measure_height_impl(handle, text, width)
+}
+
+// text_lines(handle, n): a label's text wrapped at its width onto at most n
+// lines, the last one cut (1: one line, as a label is made). For a label of
+// a fixed height: say how many lines it holds, and it never asks for more.
+text_lines(handle: int, n: int) -> int {
+    aether_ui_text_set_lines(handle, n)
+    return handle
 }
 
 // key_text(name) -> the text a key name types: "a" for "a", "A" for "A", ","

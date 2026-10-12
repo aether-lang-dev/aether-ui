@@ -667,6 +667,7 @@ typedef struct {
     char* family;
     double font_size;          // 0 = theme default
     float orig_text_px;        // the theme's text size, kept the first time a size is set
+    int max_lines;             // text_set_lines: > 1 wraps onto at most that many
     int italic;                // italic, underline, line-through (text_style: bits 1/2/4, 8 once set)
     int text_style;
     // Cell decorations (aether_ui_text_set_decor): the bar is layered under
@@ -1728,6 +1729,7 @@ JCLASS(C_CellDecor, "dev/aether/ui/AetherCellDecor");
 JSTATIC(M_CD_under, C_CellDecor, "under", "(Landroid/graphics/drawable/Drawable;FI)Landroid/graphics/drawable/Drawable;");
 JSTATIC(M_CD_over, C_CellDecor, "over", "(Landroid/view/View;[IIF)V");
 JSTATIC(M_CD_decorate, C_CellDecor, "decorate", "(Landroid/widget/TextView;ZZ)V");
+JMETHOD(M_TV_setMaxLines, C_TextView, "setMaxLines", "(I)V");
 #define JSV(m, ...) do { jmethodID id_ = (jmethodID)jmem(env, &(m)); \
     if (id_) { (*env)->CallStaticVoidMethod(env, (m).c->cls, id_, ##__VA_ARGS__); aeui_check(env, (m).name); } } while (0)
 JMETHOD(M_TV_setTypeface, C_TextView, "setTypeface", "(Landroid/graphics/Typeface;)V");
@@ -1759,6 +1761,15 @@ static void aeui_apply_anchor(JNIEnv* env, AeuiWidget* w) {
 // UIKit, cannot put a head or middle ellipsis in wrapped text) and neither
 // (one line, clipped -- a desktop label does not wrap unless asked).
 static void aeui_apply_lines(JNIEnv* env, AeuiWidget* w) {
+    if (w->max_lines > 1) {
+        // Wrapped onto at most max_lines, the last cut at its end.
+        jobject at = JSFO(F_TA_END);
+        JV(w->view, M_TV_setSingleLine, JNI_FALSE);
+        JV(w->view, M_TV_setMaxLines, (jint)w->max_lines);
+        JV(w->view, M_TV_setEllipsize, at);
+        if (at) (*env)->DeleteLocalRef(env, at);
+        return;
+    }
     if (w->truncate) {
         AeuiJMember* f = w->truncate == 1 ? &F_TA_START : w->truncate == 2 ? &F_TA_MIDDLE : &F_TA_END;
         jobject at = JSFO(*f);
@@ -1824,7 +1835,17 @@ void aether_ui_text_set_truncate(int handle, int mode) {
 
 int aether_ui_text_get_wrap(int handle) {
     AeuiWidget* w = live_widget(handle);
-    return (w && w->type == AUI_TEXT) ? w->wrap : 0;
+    return (w && w->type == AUI_TEXT) ? (w->wrap || w->max_lines > 1) : 0;
+}
+
+void aether_ui_text_set_lines(int handle, int lines) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_TEXT) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    w->max_lines = lines > 1 ? lines : 0;
+    aeui_apply_lines(env, w);
+    aeui_unframe(env);
 }
 int aether_ui_text_get_anchor(int handle) {
     AeuiWidget* w = live_widget(handle);
@@ -1844,6 +1865,25 @@ static void aeui_set_edit_text(JNIEnv* env, AeuiWidget* w, const char* text);
 JMETHOD(M_TV_getPaint, C_TextView, "getPaint", "()Landroid/text/TextPaint;");
 JCLASS(C_Paint2, "android/graphics/Paint");
 JMETHOD(M_Paint2_measureText, C_Paint2, "measureText", "(Ljava/lang/String;)F");
+
+JSTATIC(M_CD_measureHeight, C_CellDecor, "measureHeight", "(Landroid/widget/TextView;Ljava/lang/String;I)I");
+
+int aether_ui_text_measure_height_impl(int handle, const char* text, int width) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->type != AUI_TEXT) return 0;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    jint px = 0;
+    jmethodID id = (jmethodID)jmem(env, &M_CD_measureHeight);
+    if (id) {
+        px = (*env)->CallStaticIntMethod(env, C_CellDecor.cls, id, w->view,
+                                         aeui_jstring(env, text ? text : ""),
+                                         (jint)(width > 0 ? width * g_density : 0));
+        aeui_check(env, "measureHeight");
+    }
+    aeui_unframe(env);
+    return (int)ceil(px / g_density);
+}
 
 int aether_ui_text_measure_impl(int handle, const char* text) {
     AeuiWidget* w = live_widget(handle);

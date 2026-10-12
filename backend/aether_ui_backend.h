@@ -60,6 +60,15 @@ int aether_ui_text_create(const char* text);
 int aether_ui_text_wrapped_create(const char* text, int wrap_width_px);
 void aether_ui_text_set_anchor(int handle, int anchor);
 int aether_ui_text_get_wrap(int handle);
+// A label's text wrapped at its width onto at most `lines` lines (the last
+// one cut as text_truncate says), or kept on one line (lines 1, as made).
+// For a cell of a fixed height: the caller says how many lines it holds,
+// so the label never asks for more room than it has. text_get_wrap is 1
+// while it wraps.
+void aether_ui_text_set_lines(int handle, int lines);
+// The height `text` takes in this label's font wrapped at `width` (the units
+// text_measure's width is in); 0 width is one line.
+int aether_ui_text_measure_height_impl(int handle, const char* text, int width);
 int aether_ui_text_get_anchor(int handle);
 // Ellipsis mode for a label too long for its box: 0 none, 1 head, 2 middle,
 // 3 tail. The getter reports what was actually APPLIED, not what was asked

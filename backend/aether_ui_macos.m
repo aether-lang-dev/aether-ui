@@ -1246,6 +1246,47 @@ int aether_ui_text_measure_impl(int handle, const char* text) {
     return (int)ceil([s sizeWithAttributes:@{NSFontAttributeName: f}].width);
 }
 
+int aether_ui_text_measure_height_impl(int handle, const char* text, int width) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[NSTextField class]]) return 0;
+    NSFont* f = [(NSTextField*)v font] ?: [NSFont systemFontOfSize:0];
+    NSString* s = [NSString stringWithUTF8String:text ? text : ""] ?: @"";
+    if ([s length] == 0) s = @" ";
+    CGFloat wmax = width > 0 ? (CGFloat)width : CGFLOAT_MAX;
+    NSRect r = [s boundingRectWithSize:NSMakeSize(wmax, CGFLOAT_MAX)
+                               options:NSStringDrawingUsesLineFragmentOrigin
+                            attributes:@{NSFontAttributeName: f}];
+    return (int)ceil(r.size.height);
+}
+
+// Wrapping onto at most `lines` lines, the last one cut with an ellipsis;
+// 1 is one line again, cut as text_truncate left it.
+void aether_ui_text_set_lines(int handle, int lines) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[NSTextField class]]) return;
+    NSTextField* tf = (NSTextField*)v;
+    if (lines <= 1) {
+        if (tf.tag == 0x57524150) tf.tag = 0;
+        [[tf cell] setWraps:NO];
+        [tf setUsesSingleLineMode:YES];
+        [tf setMaximumNumberOfLines:1];
+        NSNumber* lb = objc_getAssociatedObject(tf, "aeui_lb_before");
+        if (lb) [[tf cell] setLineBreakMode:(NSLineBreakMode)lb.integerValue];
+        objc_setAssociatedObject(tf, "aeui_lb_before", nil, OBJC_ASSOCIATION_RETAIN);
+    } else {
+        if (!objc_getAssociatedObject(tf, "aeui_lb_before"))
+            objc_setAssociatedObject(tf, "aeui_lb_before", @([[tf cell] lineBreakMode]), OBJC_ASSOCIATION_RETAIN);
+        tf.tag = 0x57524150;
+        [tf setUsesSingleLineMode:NO];
+        [[tf cell] setWraps:YES];
+        [[tf cell] setLineBreakMode:NSLineBreakByWordWrapping];
+        [[tf cell] setTruncatesLastVisibleLine:YES];
+        [tf setMaximumNumberOfLines:lines];
+    }
+    aeui_label_redecorate(tf);
+    [tf setNeedsDisplay:YES];
+}
+
 void aether_ui_text_set_string(int handle, const char* text) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSTextField class]]) {

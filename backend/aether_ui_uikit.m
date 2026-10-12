@@ -1394,8 +1394,17 @@ void aether_ui_set_enabled_ctx(void* ctx, int enabled) {
 int aether_ui_text_get_wrap(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[UILabel class]])
-        return ((UILabel*)v).numberOfLines == 0 ? 1 : 0;
+        return ((UILabel*)v).numberOfLines != 1 ? 1 : 0;
     return 0;
+}
+
+// Wrapping onto at most `lines` lines: UILabel wraps by word and cuts the
+// last line as its lineBreakMode says (the tail, for a grid cell).
+void aether_ui_text_set_lines(int handle, int lines) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UILabel class]]) return;
+    ((UILabel*)v).numberOfLines = lines <= 1 ? 1 : lines;
+    [v setNeedsLayout];
 }
 
 int aether_ui_text_get_anchor(int handle) {
@@ -3715,6 +3724,19 @@ int aether_ui_text_measure_impl(int handle, const char* text) {
     UIFont* f = ((UILabel*)v).font ?: [UIFont systemFontOfSize:[UIFont labelFontSize]];
     NSString* s = [NSString stringWithUTF8String:text ? text : ""] ?: @"";
     return (int)ceil([s sizeWithAttributes:@{NSFontAttributeName: f}].width);
+}
+
+int aether_ui_text_measure_height_impl(int handle, const char* text, int width) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UILabel class]]) return 0;
+    UIFont* f = ((UILabel*)v).font ?: [UIFont systemFontOfSize:[UIFont labelFontSize]];
+    NSString* s = [NSString stringWithUTF8String:text ? text : ""] ?: @"";
+    if ([s length] == 0) s = @" ";
+    CGFloat wmax = width > 0 ? (CGFloat)width : CGFLOAT_MAX;
+    CGRect r = [s boundingRectWithSize:CGSizeMake(wmax, CGFLOAT_MAX)
+                               options:NSStringDrawingUsesLineFragmentOrigin
+                            attributes:@{NSFontAttributeName: f} context:nil];
+    return (int)ceil(r.size.height);
 }
 
 void aether_ui_text_set_string(int handle, const char* text) {

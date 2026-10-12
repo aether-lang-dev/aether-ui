@@ -19,6 +19,7 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_merge, datagrid_unmerge, datagrid_merge_of,
+    datagrid_set_row_height, datagrid_row_height, datagrid_fit_row,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -73,6 +74,7 @@ main() {
                 column_width(36)
                 cells() callback |r: int, c: int| {
                     if c == 0 { return string.from_int(r + 1) }
+                    if c == 6 && r == 3 { return "a long note that wraps" }
                     v, _e = map.get(edits, "${r},${c}")
                     if v != null { return shown(v) }
                     return "R${r}C${c}"
@@ -102,6 +104,7 @@ main() {
                     if c == 4 && r == 15 { return "--fill: 0.5; --fill-color: #638ec6" }
                     if c == 4 && r == 16 { return "--fill: -0.25" }
                     if c == 4 && r == 17 { return "--corner: #d00" }
+                    if c == 6 && r == 3 { return "white-space: normal" }
                     v, _e = map.get(edits, "${r},${c}")
                     if v != null && string.starts_with(v, "=") == 1 { return "text-align: end" }
                     return ""
@@ -176,6 +179,15 @@ main() {
                 } else {
                     _u = datagrid_unmerge(g, 8, 3)
                 }
+            }
+            // Row 4 (model row 3) 60px tall and back, or as tall as its text.
+            _tall = btn("Tall row 4") callback {
+                th = 60
+                if datagrid_row_height(g, 3) != 24 { th = 0 }
+                _t = datagrid_set_row_height(g, 3, th)
+            }
+            _fit = btn("Fit row 4") callback {
+                _f = datagrid_fit_row(g, 3)
             }
             text_bound(rowmodel, "row 4 shown is model row ", "")
             text_bound(clicked, "clicked: ", "")

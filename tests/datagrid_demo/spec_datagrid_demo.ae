@@ -708,5 +708,42 @@ main() {
         }
     }
 
+    spec.describe(fw, "row heights and wrapped text") {
+        spec.it("a taller row: those under it move down, and fewer rows show") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            spec.assert_true(shows("R19C1") == 1, "twenty rows shown")
+            y3 = field_of_text("R3C1", "y")
+            press("Tall row 4")
+            spec.assert_eq(settled("R3C1", "h", 60), 60, "row 3 is 60 tall")
+            spec.assert_eq(settled("R4C1", "y", y3 + 60), y3 + 60, "row 4 under it")
+            spec.assert_true(gone("R18C1") == 1, "rows 18 and 19 no longer fit")
+            spec.assert_true(shows("R17C1") == 1, "row 17 does")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
+        }
+        spec.it("the last rows are still reached at the end") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=200000", "scroll to the end")
+            spec.assert_true(shows("R99999C1") == 1, "the last row")
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "and back")
+            spec.assert_true(shows("R3C1") == 1, "row 3 again")
+        }
+        spec.it("a cell styled white-space: normal wraps in a row that holds more than a line") callback {
+            id = uidriver.widget_id_by_text("a long note that wraps")
+            spec.assert_true(id > 0, "the long note is shown")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${id}", "\"wrap\":true", 20), "and wraps")
+        }
+        spec.it("fitting a row makes it as tall as its text") callback {
+            press("Tall row 4")
+            spec.assert_eq(settled("R3C1", "h", 24), 24, "back to 24")
+            id = uidriver.widget_id_by_text("a long note that wraps")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${id}", "\"wrap\":false", 20), "a row one line tall: one line")
+            press("Fit row 4")
+            fh = settled("R3C1", "h", 0)
+            spec.assert_true(fh > 48, "taller than two lines for the wrapped note: ${fh}")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${id}", "\"wrap\":true", 20), "and it wraps again")
+            press("Tall row 4")
+            spec.assert_eq(settled("R3C1", "h", 24), 24, "and back")
+        }
+    }
+
     return spec.run_summary(fw)
 }

@@ -8,6 +8,8 @@ import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.LayerDrawable;
+import android.text.Layout;
+import android.text.StaticLayout;
 import android.os.Build;
 import android.view.View;
 import android.widget.TextView;
@@ -61,6 +63,20 @@ public final class AetherCellDecor extends Drawable {
         if (underline) f |= Paint.UNDERLINE_TEXT_FLAG;
         if (strike) f |= Paint.STRIKE_THRU_TEXT_FLAG;
         tv.setPaintFlags(f);
+    }
+
+    /** The height, in px, that text takes in the label's paint wrapped at widthPx (one line for 0). */
+    public static int measureHeight(TextView tv, String text, int widthPx) {
+        String s = (text == null || text.isEmpty()) ? " " : text;
+        int w = widthPx > 0 ? widthPx : 1 << 20;
+        StaticLayout l;
+        if (Build.VERSION.SDK_INT >= 23) {
+            l = StaticLayout.Builder.obtain(s, 0, s.length(), tv.getPaint(), w)
+                    .setIncludePad(tv.getIncludeFontPadding()).build();
+        } else {
+            l = new StaticLayout(s, tv.getPaint(), w, Layout.Alignment.ALIGN_NORMAL, 1f, 0f, tv.getIncludeFontPadding());
+        }
+        return l.getHeight();
     }
 
     @Override

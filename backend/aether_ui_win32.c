@@ -3736,6 +3736,25 @@ void aether_ui_text_set_truncate(int handle, int mode) {
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
+// Wrapping onto the lines the label's height holds: a STATIC wraps by word
+// when no ellipsis bit is on, and clips at its bottom edge. 1 is one line
+// again, cut as text_truncate left it.
+void aether_ui_text_set_lines(int handle, int lines) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_TEXT || !w->hwnd) return;
+    LONG_PTR st = GetWindowLongPtrW(w->hwnd, GWL_STYLE);
+    st &= ~(SS_ENDELLIPSIS | SS_PATHELLIPSIS | SS_WORDELLIPSIS);
+    if (lines > 1) {
+        w->text_wrap = 1;
+    } else {
+        w->text_wrap = 0;
+        if (w->text_truncate == 2) st |= SS_PATHELLIPSIS;
+        else if (w->text_truncate == 3) st |= SS_ENDELLIPSIS;
+    }
+    SetWindowLongPtrW(w->hwnd, GWL_STYLE, st);
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
 int aether_ui_text_get_truncate(int handle) {
     Widget* w = widget_at(handle);
     return (w && w->kind == WK_TEXT) ? w->text_truncate : 0;
@@ -3782,6 +3801,21 @@ int aether_ui_text_measure_impl(int handle, const char* text) {
     if (old) SelectObject(dc, old);
     ReleaseDC(w->hwnd, dc);
     return (int)sz.cx;
+}
+
+int aether_ui_text_measure_height_impl(int handle, const char* text, int width) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd || w->kind != WK_TEXT) return 0;
+    HDC dc = GetDC(w->hwnd);
+    if (!dc) return 0;
+    HFONT f = (HFONT)SendMessageW(w->hwnd, WM_GETFONT, 0, 0);
+    HGDIOBJ old = f ? SelectObject(dc, f) : NULL;
+    const wchar_t* ws = utf8_to_wide((text && text[0]) ? text : " ");
+    RECT r = { 0, 0, width > 0 ? width : 100000, 0 };
+    DrawTextW(dc, ws, -1, &r, DT_CALCRECT | DT_NOPREFIX | (width > 0 ? DT_WORDBREAK : DT_SINGLELINE));
+    if (old) SelectObject(dc, old);
+    ReleaseDC(w->hwnd, dc);
+    return (int)(r.bottom - r.top);
 }
 
 void aether_ui_text_set_string(int handle, const char* text) {
