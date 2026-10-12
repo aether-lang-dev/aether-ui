@@ -999,8 +999,97 @@ void aether_ui_clear_children_impl(int handle) {
 // ---------------------------------------------------------------------------
 // Text — UILabel.
 // ---------------------------------------------------------------------------
+// A label that can carry cell decorations (aether_ui_text_set_decor): a bar
+// painted under its text, edge lines and a corner triangle over it. The
+// view's background colour is behind all of it, as before.
+typedef struct { int e[8]; double bar; int bar_rgb; int corner; int any; } AeuiLabelDecor;
+
+static UIColor* aeui_rgb_uicolor(int rgb) {
+    return [UIColor colorWithRed:((rgb >> 16) & 255) / 255.0 green:((rgb >> 8) & 255) / 255.0
+                            blue:(rgb & 255) / 255.0 alpha:1.0];
+}
+
+@interface AetherUILabel : UILabel
+- (AeuiLabelDecor*)aeuiDecor;
+@end
+
+@implementation AetherUILabel {
+    AeuiLabelDecor _decor;
+}
+- (AeuiLabelDecor*)aeuiDecor { return &_decor; }
+- (void)drawRect:(CGRect)rect {
+    CGRect b = self.bounds;
+    AeuiLabelDecor* d = &_decor;
+    BOOL rtl = self.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft;
+    if (d->any && d->bar != 0.0) {
+        CGFloat f = d->bar < 0 ? -d->bar : d->bar;
+        CGFloat w = b.size.width * f;
+        BOOL from_left = (d->bar > 0) != rtl;
+        [aeui_rgb_uicolor(d->bar_rgb) setFill];
+        UIRectFill(CGRectMake(from_left ? b.origin.x : CGRectGetMaxX(b) - w, b.origin.y, w, b.size.height));
+    }
+    [super drawRect:rect];
+    if (!d->any) return;
+    for (int k = 0; k < 4; k++) {
+        int wd = d->e[k * 2];
+        if (wd <= 0) continue;
+        CGRect r;
+        if (k == 0) r = CGRectMake(b.origin.x, b.origin.y, b.size.width, wd);
+        else if (k == 1) r = CGRectMake(CGRectGetMaxX(b) - wd, b.origin.y, wd, b.size.height);
+        else if (k == 2) r = CGRectMake(b.origin.x, CGRectGetMaxY(b) - wd, b.size.width, wd);
+        else r = CGRectMake(b.origin.x, b.origin.y, wd, b.size.height);
+        [aeui_rgb_uicolor(d->e[k * 2 + 1]) setFill];
+        UIRectFill(r);
+    }
+    if (d->corner >= 0) {
+        CGFloat x = rtl ? b.origin.x : CGRectGetMaxX(b);
+        CGFloat dx = rtl ? 6 : -6;
+        UIBezierPath* p = [UIBezierPath bezierPath];
+        [p moveToPoint:CGPointMake(x, b.origin.y)];
+        [p addLineToPoint:CGPointMake(x + dx, b.origin.y)];
+        [p addLineToPoint:CGPointMake(x, b.origin.y + 6)];
+        [p closePath];
+        [aeui_rgb_uicolor(d->corner) setFill];
+        [p fill];
+    }
+}
+@end
+
+// Underline and line-through, as the label's attributed text, made again
+// from its plain text, font, colour, alignment and line breaking whenever
+// any of them changes (setting .text drops attributes).
+static void aeui_uilabel_redecorate(UILabel* l) {
+    NSNumber* ts = objc_getAssociatedObject(l, "aeui_text_style");
+    int v = ts ? ts.intValue : 0;
+    if (!(v & 6)) {
+        NSNumber* had = objc_getAssociatedObject(l, "aeui_decorated");
+        if (had.boolValue) {
+            NSString* plain = l.text ?: @"";
+            l.attributedText = nil;
+            l.text = plain;
+            objc_setAssociatedObject(l, "aeui_decorated", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+    NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
+    ps.alignment = l.textAlignment;
+    ps.lineBreakMode = l.lineBreakMode;
+    NSMutableDictionary* at = [NSMutableDictionary dictionary];
+    if (l.font) at[NSFontAttributeName] = l.font;
+    if (l.textColor) at[NSForegroundColorAttributeName] = l.textColor;
+    at[NSParagraphStyleAttributeName] = ps;
+    if (v & 2) at[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+    if (v & 4) at[NSStrikethroughStyleAttributeName] = @(NSUnderlineStyleSingle);
+    l.attributedText = [[NSAttributedString alloc] initWithString:(l.text ?: @"") attributes:at];
+    objc_setAssociatedObject(l, "aeui_decorated", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void aeui_view_redecorate(UIView* v) {
+    if ([v isKindOfClass:[UILabel class]]) aeui_uilabel_redecorate((UILabel*)v);
+}
+
 int aether_ui_text_create(const char* text) {
-    UILabel* label = [[UILabel alloc] init];
+    UILabel* label = [[AetherUILabel alloc] init];
     label.translatesAutoresizingMaskIntoConstraints = NO;
     label.text = [NSString stringWithUTF8String:text ? text : ""];
     label.numberOfLines = 1;
@@ -1008,7 +1097,7 @@ int aether_ui_text_create(const char* text) {
 }
 
 int aether_ui_text_wrapped_create(const char* text, int wrap_width_px) {
-    UILabel* label = [[UILabel alloc] init];
+    UILabel* label = [[AetherUILabel alloc] init];
     label.translatesAutoresizingMaskIntoConstraints = NO;
     label.text = [NSString stringWithUTF8String:text ? text : ""];
     label.numberOfLines = 0;
@@ -1026,6 +1115,7 @@ void aether_ui_text_set_anchor(int handle, int anchor) {
                       : anchor == 2 ? NSTextAlignmentRight
                                     : NSTextAlignmentLeft;
     ((UILabel*)v).textAlignment = a;
+    aeui_uilabel_redecorate((UILabel*)v);
 }
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1420,7 @@ void aether_ui_text_set_truncate(int handle, int mode) {
                                      : NSLineBreakByClipping;
     l.lineBreakMode = lb;
     if (mode != 0 && l.numberOfLines != 0) l.numberOfLines = 1;
+    aeui_uilabel_redecorate(l);
 }
 
 int aether_ui_text_get_truncate(int handle) {
@@ -3510,6 +3601,7 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
     else if ([v isKindOfClass:[UIButton class]])    [(UIButton*)v setTitleColor:c forState:UIControlStateNormal];
     else if ([v isKindOfClass:[UITextField class]]) ((UITextField*)v).textColor = c;
     else if ([v isKindOfClass:[UITextView class]])  ((UITextView*)v).textColor = c;
+    aeui_view_redecorate(v);
     objc_setAssociatedObject(v, "aeui_styled_fg",
         @((((int)(r*255)&255)<<16) | (((int)(g*255)&255)<<8) | ((int)(b*255)&255)),
         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3520,7 +3612,10 @@ void aether_ui_set_text_color_ctx(void* ctx, double r, double g, double b) {
 void aether_ui_set_font_size(int handle, double size) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     UIFont* f = aeui_view_font(v);
+    // 0 is the platform's own size for the kind of view.
+    if (size <= 0) size = [v isKindOfClass:[UILabel class]] ? [UIFont labelFontSize] : [UIFont systemFontSize];
     if (f) aeui_set_view_font(v, [f fontWithSize:size]);
+    aeui_view_redecorate(v);
 }
 void aether_ui_set_font_size_ctx(void* ctx, double size) {
     aether_ui_set_font_size((int)(intptr_t)ctx, size);
@@ -3536,6 +3631,70 @@ void aether_ui_set_font_bold(int handle, int bold) {
     if (nd) aeui_set_view_font(v, [UIFont fontWithDescriptor:nd size:f.pointSize]);
     objc_setAssociatedObject(v, "aeui_styled_weight", @(bold ? 1 : 0),
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    aeui_view_redecorate(v);
+}
+
+void aether_ui_set_font_italic(int handle, int italic) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UILabel class]]) return;
+    UIFont* f = aeui_view_font(v);
+    if (!f) return;
+    UIFontDescriptor* d = f.fontDescriptor;
+    UIFontDescriptorSymbolicTraits tr = d.symbolicTraits;
+    if (italic) tr |= UIFontDescriptorTraitItalic; else tr &= ~UIFontDescriptorTraitItalic;
+    UIFontDescriptor* nd = [d fontDescriptorWithSymbolicTraits:tr];
+    if (nd) aeui_set_view_font(v, [UIFont fontWithDescriptor:nd size:f.pointSize]);
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    int t = ((ts ? ts.intValue : 0) & ~1) | (italic ? 1 : 0) | 8;
+    objc_setAssociatedObject(v, "aeui_text_style", @(t), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    aeui_view_redecorate(v);
+}
+
+void aether_ui_set_text_decoration(int handle, int underline, int strike) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[UILabel class]]) return;
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    int t = ((ts ? ts.intValue : 0) & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
+    objc_setAssociatedObject(v, "aeui_text_style", @(t), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    aeui_view_redecorate(v);
+}
+
+int aether_ui_styled_text_style_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    return ts ? ts.intValue : -1;
+}
+
+void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,
+                              int bottom, int bottom_rgb, int left, int left_rgb,
+                              double bar, int bar_rgb, int corner_rgb) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[AetherUILabel class]]) return;
+    AeuiLabelDecor* d = [(AetherUILabel*)v aeuiDecor];
+    int ev[8] = {top, top_rgb, right, right_rgb, bottom, bottom_rgb, left, left_rgb};
+    memcpy(d->e, ev, sizeof(ev));
+    if (bar > 1.0) bar = 1.0;
+    if (bar < -1.0) bar = -1.0;
+    d->bar = bar;
+    d->bar_rgb = bar_rgb;
+    d->corner = corner_rgb;
+    int any = bar != 0.0 || corner_rgb >= 0;
+    for (int k = 0; k < 4; k++) if (ev[k * 2] > 0) any = 1;
+    d->any = any;
+    [v setNeedsDisplay];
+}
+
+int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_rgb, int* corner_rgb) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[AetherUILabel class]]) return 0;
+    AeuiLabelDecor* d = [(AetherUILabel*)v aeuiDecor];
+    if (!d->any) return 0;
+    memcpy(edges, d->e, sizeof(d->e));
+    *bar = d->bar;
+    *bar_rgb = d->bar_rgb;
+    *corner_rgb = d->corner;
+    return 1;
 }
 void aether_ui_set_font_bold_ctx(void* ctx, int bold) {
     aether_ui_set_font_bold((int)(intptr_t)ctx, bold);
@@ -3561,7 +3720,10 @@ int aether_ui_text_measure_impl(int handle, const char* text) {
 void aether_ui_text_set_string(int handle, const char* text) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     NSString* s = [NSString stringWithUTF8String:text ? text : ""];
-    if ([v isKindOfClass:[UILabel class]])          ((UILabel*)v).text = s;
+    if ([v isKindOfClass:[UILabel class]]) {
+        ((UILabel*)v).text = s;
+        aeui_uilabel_redecorate((UILabel*)v);
+    }
     else if ([v isKindOfClass:[UIButton class]])    [(UIButton*)v setTitle:s forState:UIControlStateNormal];
     else if ([v isKindOfClass:[UITextField class]]) ((UITextField*)v).text = s;
     else if ([v isKindOfClass:[UITextView class]])  ((UITextView*)v).text = s;
@@ -3653,7 +3815,9 @@ void aether_ui_set_rtl(int handle, int on) {
 }
 void aether_ui_set_tooltip(int handle, const char* text) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
-    if (v) v.accessibilityHint = text ? [NSString stringWithUTF8String:text] : nil;
+    if (!v) return;
+    v.accessibilityHint = (text && text[0]) ? [NSString stringWithUTF8String:text] : nil;
+    aeui_tooltip_note(handle, text);
 }
 void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
     aether_ui_set_tooltip((int)(intptr_t)ctx, text);

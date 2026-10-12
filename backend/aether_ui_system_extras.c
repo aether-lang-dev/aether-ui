@@ -1180,3 +1180,93 @@ const char* aether_ui_frame_source_impl(void) { return g_frame_source; }
 int aether_ui_frame_count_impl(void) { return g_frame_count; }
 int aether_ui_frame_subscribers_impl(void) { return g_frame_live; }
 int aether_ui_frame_running_impl(void) { return (g_frame_native || g_frame_timer) ? 1 : 0; }
+
+// ---------------------------------------------------------------------------
+// Readback of italic, text decoration and cell decorations, for the driver.
+// Emitted only when set, so a widget that never had them reads as before.
+// ---------------------------------------------------------------------------
+#include "aether_ui_backend.h"
+
+// Each widget's tooltip, as its backend's set_tooltip last gave it to the
+// platform (aeui_tooltip_note), for the driver. Indexed by handle; a copy
+// is handed out under the lock, since the driver reads on its own thread.
+#ifdef _WIN32
+static SRWLOCK g_tip_lock = SRWLOCK_INIT;
+#define TIP_LOCK()   AcquireSRWLockExclusive(&g_tip_lock)
+#define TIP_UNLOCK() ReleaseSRWLockExclusive(&g_tip_lock)
+#else
+static pthread_mutex_t g_tip_lock = PTHREAD_MUTEX_INITIALIZER;
+#define TIP_LOCK()   pthread_mutex_lock(&g_tip_lock)
+#define TIP_UNLOCK() pthread_mutex_unlock(&g_tip_lock)
+#endif
+static char** g_tips = NULL;
+static int g_tips_cap = 0;
+
+void aeui_tooltip_note(int handle, const char* text) {
+    if (handle <= 0) return;
+    TIP_LOCK();
+    if (handle >= g_tips_cap) {
+        int cap = g_tips_cap ? g_tips_cap : 256;
+        while (cap <= handle) cap *= 2;
+        char** grown = (char**)realloc(g_tips, sizeof(char*) * cap);
+        if (!grown) { TIP_UNLOCK(); return; }
+        memset(grown + g_tips_cap, 0, sizeof(char*) * (cap - g_tips_cap));
+        g_tips = grown;
+        g_tips_cap = cap;
+    }
+    free(g_tips[handle]);
+    g_tips[handle] = (text && text[0]) ? strdup(text) : NULL;
+    TIP_UNLOCK();
+}
+
+const char* aether_ui_styled_tooltip_impl(int handle) {
+    static _Thread_local char out[1024];
+    out[0] = 0;
+    TIP_LOCK();
+    if (handle > 0 && handle < g_tips_cap && g_tips[handle]) {
+        snprintf(out, sizeof(out), "%s", g_tips[handle]);
+    }
+    TIP_UNLOCK();
+    return out;
+}
+
+int aeui_emit_text_style(char* buf, int n, int bufsize, int handle) {
+    if (n < 0 || n >= bufsize) return n;
+    const char* tip = aether_ui_styled_tooltip_impl(handle);
+    if (tip[0] && n < bufsize - 16) {
+        n += snprintf(buf + n, bufsize - n, ",\"tooltip\":\"");
+        for (const char* p = tip; *p && n < bufsize - 8; p++) {
+            unsigned char ch = (unsigned char)*p;
+            if (ch == '"' || ch == '\\') { buf[n++] = '\\'; buf[n++] = (char)ch; }
+            else if (ch == '\n') { buf[n++] = '\\'; buf[n++] = 'n'; }
+            else if (ch < 0x20) { buf[n++] = ' '; }
+            else buf[n++] = (char)ch;
+        }
+        buf[n++] = '"';
+        buf[n] = 0;
+    }
+    int ts = aether_ui_styled_text_style_impl(handle);
+    if (ts >= 0) {
+        n += snprintf(buf + n, bufsize - n, ",\"fontStyle\":\"%s\"", (ts & 1) ? "italic" : "normal");
+        const char* deco = "none";
+        if ((ts & 2) && (ts & 4)) deco = "underline line-through";
+        else if (ts & 2) deco = "underline";
+        else if (ts & 4) deco = "line-through";
+        if (n < bufsize) n += snprintf(buf + n, bufsize - n, ",\"textDecoration\":\"%s\"", deco);
+    }
+    int e[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    double bar = 0.0;
+    int bar_rgb = -1, corner = -1;
+    if (n < bufsize && aether_ui_text_decor_get_impl(handle, e, &bar, &bar_rgb, &corner)) {
+        static const char* names[4] = {"borderTop", "borderRight", "borderBottom", "borderLeft"};
+        for (int k = 0; k < 4 && n < bufsize; k++) {
+            if (e[k * 2] > 0)
+                n += snprintf(buf + n, bufsize - n, ",\"%s\":\"%d #%06x\"", names[k], e[k * 2], e[k * 2 + 1] & 0xFFFFFF);
+        }
+        if (bar != 0.0 && n < bufsize)
+            n += snprintf(buf + n, bufsize - n, ",\"bar\":\"%.2f\",\"barColor\":\"#%06x\"", bar, bar_rgb & 0xFFFFFF);
+        if (corner >= 0 && n < bufsize)
+            n += snprintf(buf + n, bufsize - n, ",\"corner\":\"#%06x\"", corner & 0xFFFFFF);
+    }
+    return n;
+}

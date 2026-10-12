@@ -238,6 +238,19 @@ typedef struct {
     double font_size;
     int font_bold;
     int font_weight_set;      // 1 = bold/normal was EXPLICITLY set (readback)
+    int font_italic;          // italic, underline, line-through: LOGFONT's own flags
+    int text_underline;
+    int text_strike;
+    int text_style_set;       // 1 once any of the three was set (readback)
+    // Cell decorations (aether_ui_text_set_decor): edge lines and a corner
+    // triangle painted over a label after its own paint, a bar painted with
+    // its ground under the text (WM_CTLCOLORSTATIC).
+    int dec_e[8];
+    double dec_bar;
+    int dec_bar_rgb;
+    int dec_corner;
+    int dec_any;
+    int dec_subclassed;
     wchar_t* font_family;     // face name for apply_font (owned; NULL default)
     char* font_family_u8;     // utf8 twin for driver readback (owned)
     char* placeholder_u8;     // hint text, for driver readback (owned)
@@ -367,6 +380,7 @@ typedef struct {
     // the stack's erase, aether_ui_overlay_open_impl).
     int overlay_card;
 } Widget;
+static int w32_paint_decor_ground(HWND child, Widget* cw, HDC hdc, COLORREF ground);
 
 static Widget** widgets = NULL;
 static int widget_count = 0;
@@ -2519,6 +2533,8 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 SetTextColor(hdc, (cw && cw->fg.has_value) ? cw->fg.color
                                                            : w32_legible_text(ground));
                 SetBkColor(hdc, ground);
+                if (w32_paint_decor_ground(child, cw, hdc, ground))
+                    return (LRESULT)GetStockObject(NULL_BRUSH);
                 return (LRESULT)w32_ground_brush(ground);
             }
             if (cw && cw->fg.has_value) SetTextColor(hdc, cw->fg.color);
@@ -2534,6 +2550,8 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 COLORREF sys = w32_system_ground();
                 if (!(cw && cw->fg.has_value)) SetTextColor(hdc, w32_legible_text(sys));
                 SetBkColor(hdc, sys);
+                if (w32_paint_decor_ground(child, cw, hdc, sys))
+                    return (LRESULT)GetStockObject(NULL_BRUSH);
                 return (LRESULT)w32_ground_brush(sys);
             }
         }
@@ -5576,6 +5594,9 @@ static void apply_font(Widget* w) {
         lf.lfHeight = -MulDiv((int)w->font_size, (int)w32_dpi_for(w->hwnd), 72);
     }
     lf.lfWeight = w->font_bold ? FW_BOLD : FW_NORMAL;
+    lf.lfItalic = w->font_italic ? TRUE : FALSE;
+    lf.lfUnderline = w->text_underline ? TRUE : FALSE;
+    lf.lfStrikeOut = w->text_strike ? TRUE : FALSE;
     if (w->font_family) {
         wcsncpy(lf.lfFaceName, w->font_family, LF_FACESIZE - 1);
         lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
@@ -5600,7 +5621,7 @@ static void w32_refont_tree(HWND top, UINT dpi) {
         Widget* w = widget_at(i);
         if (!w || w->dead || !IsWindow(w->hwnd)) continue;
         if (GetAncestor(w->hwnd, GA_ROOT) != top) continue;
-        if (w->font_size > 0 || w->font_bold || w->font_family) apply_font(w);
+        if (w->font_size > 0 || w->font_bold || w->font_family || w->text_style_set) apply_font(w);
         else SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)font, TRUE);
         if (w32_is_stack(w->kind))
             w32_request_layout(w->hwnd);
@@ -5612,6 +5633,130 @@ void aether_ui_set_font_size(int handle, double size) {
     if (!w) return;
     w->font_size = size;
     apply_font(w);
+}
+
+void aether_ui_set_font_italic(int handle, int italic) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_TEXT) return;
+    w->font_italic = italic ? 1 : 0;
+    w->text_style_set = 1;
+    apply_font(w);
+}
+
+void aether_ui_set_text_decoration(int handle, int underline, int strike) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_TEXT) return;
+    w->text_underline = underline ? 1 : 0;
+    w->text_strike = strike ? 1 : 0;
+    w->text_style_set = 1;
+    apply_font(w);
+}
+
+int aether_ui_styled_text_style_impl(int handle) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->text_style_set) return -1;
+    return (w->font_italic ? 1 : 0) | (w->text_underline ? 2 : 0) | (w->text_strike ? 4 : 0) | 8;
+}
+
+static COLORREF w32_rgb_int(int rgb) {
+    return RGB((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
+}
+
+// A decorated label's edge lines and corner triangle, into dc.
+static void w32_decor_draw(HWND hwnd, Widget* w, HDC dc) {
+    RECT r;
+    GetClientRect(hwnd, &r);
+    for (int k = 0; k < 4; k++) {
+        if (w->dec_e[k * 2] <= 0) continue;
+        int wd = w32_px(hwnd, w->dec_e[k * 2]);
+        if (wd < 1) wd = 1;
+        RECT e = r;
+        if (k == 0) e.bottom = r.top + wd;
+        else if (k == 1) e.left = r.right - wd;
+        else if (k == 2) e.top = r.bottom - wd;
+        else e.right = r.left + wd;
+        FillRect(dc, &e, w32_ground_brush(w32_rgb_int(w->dec_e[k * 2 + 1])));
+    }
+    if (w->dec_corner >= 0) {
+        int t = w32_px(hwnd, 6);
+        POINT tri[3] = { { r.right - t, r.top }, { r.right, r.top }, { r.right, r.top + t } };
+        HBRUSH br = w32_ground_brush(w32_rgb_int(w->dec_corner));
+        HPEN pen = CreatePen(PS_SOLID, 1, w32_rgb_int(w->dec_corner));
+        HGDIOBJ ob = SelectObject(dc, br), op = SelectObject(dc, pen);
+        Polygon(dc, tri, 3);
+        SelectObject(dc, ob);
+        SelectObject(dc, op);
+        DeleteObject(pen);
+    }
+}
+
+// Over a decorated label, after its own paint (and its own print, which is
+// how the driver's screenshot renders it): the lines and the corner.
+static LRESULT CALLBACK w32_decor_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                       UINT_PTR id, DWORD_PTR ref) {
+    (void)id; (void)ref;
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, w32_decor_proc, 7);
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    if (msg != WM_PAINT && msg != WM_PRINTCLIENT) return DefSubclassProc(hwnd, msg, wp, lp);
+    LRESULT res = DefSubclassProc(hwnd, msg, wp, lp);
+    Widget* w = widget_at(handle_for_hwnd(hwnd));
+    if (!w || !w->dec_any) return res;
+    if (msg == WM_PRINTCLIENT) {
+        w32_decor_draw(hwnd, w, (HDC)wp);
+    } else {
+        HDC dc = GetDC(hwnd);
+        w32_decor_draw(hwnd, w, dc);
+        ReleaseDC(hwnd, dc);
+    }
+    return res;
+}
+
+void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,
+                              int bottom, int bottom_rgb, int left, int left_rgb,
+                              double bar, int bar_rgb, int corner_rgb) {
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_TEXT) return;
+    int ev[8] = {top, top_rgb, right, right_rgb, bottom, bottom_rgb, left, left_rgb};
+    memcpy(w->dec_e, ev, sizeof(ev));
+    if (bar > 1.0) bar = 1.0;
+    if (bar < -1.0) bar = -1.0;
+    w->dec_bar = bar;
+    w->dec_bar_rgb = bar_rgb;
+    w->dec_corner = corner_rgb;
+    int any = bar != 0.0 || corner_rgb >= 0;
+    for (int k = 0; k < 4; k++) if (ev[k * 2] > 0) any = 1;
+    w->dec_any = any;
+    if (any && !w->dec_subclassed && SetWindowSubclass(w->hwnd, w32_decor_proc, 7, 0))
+        w->dec_subclassed = 1;
+    InvalidateRect(w->hwnd, NULL, TRUE);
+}
+
+int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_rgb, int* corner_rgb) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->dec_any) return 0;
+    memcpy(edges, w->dec_e, sizeof(w->dec_e));
+    *bar = w->dec_bar;
+    *bar_rgb = w->dec_bar_rgb;
+    *corner_rgb = w->dec_corner;
+    return 1;
+}
+
+// A label with a data bar: its ground and the bar painted into its DC, the
+// text then drawn over them (the caller returns NULL_BRUSH, transparent).
+static int w32_paint_decor_ground(HWND child, Widget* cw, HDC hdc, COLORREF ground) {
+    if (!cw || !cw->dec_any || cw->dec_bar == 0.0) return 0;
+    RECT r;
+    GetClientRect(child, &r);
+    FillRect(hdc, &r, w32_ground_brush(ground));
+    double f = cw->dec_bar < 0 ? -cw->dec_bar : cw->dec_bar;
+    int bw = (int)((r.right - r.left) * f + 0.5);
+    RECT b = r;
+    if (cw->dec_bar > 0) b.right = r.left + bw; else b.left = r.right - bw;
+    FillRect(hdc, &b, w32_ground_brush(w32_rgb_int(cw->dec_bar_rgb)));
+    SetBkMode(hdc, TRANSPARENT);
+    return 1;
 }
 
 void aether_ui_set_font_bold(int handle, int bold) {
@@ -6257,19 +6402,27 @@ void aether_ui_set_tooltip(int handle, const char* text) {
             CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
             NULL, NULL, GetModuleHandleW(NULL), NULL);
     }
-    if (w->tooltip) free(w->tooltip);
-    // The widget's own text stays cached: a tooltip is not the caption, and
-    // dropping the cache here left every button with a tooltip reporting
-    // "" to the driver (and to the a11y name fallback).
-    w->tooltip = _wcsdup(utf8_to_wide(text));
     TOOLINFOW ti;
     memset(&ti, 0, sizeof(ti));
     ti.cbSize = sizeof(ti);
     ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
     ti.hwnd = GetParent(w->hwnd);
     ti.uId = (UINT_PTR)w->hwnd;
-    ti.lpszText = w->tooltip;
-    SendMessageW(tooltip_hwnd, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    // One tool per widget: the old one goes before its text does (a widget
+    // whose tooltip changed, a grid cell as it scrolls, added a tool each
+    // time, each pointing at text already freed).
+    SendMessageW(tooltip_hwnd, TTM_DELTOOLW, 0, (LPARAM)&ti);
+    if (w->tooltip) free(w->tooltip);
+    w->tooltip = NULL;
+    // The widget's own text stays cached: a tooltip is not the caption, and
+    // dropping the cache here left every button with a tooltip reporting
+    // "" to the driver (and to the a11y name fallback).
+    if (text && text[0]) {
+        w->tooltip = _wcsdup(utf8_to_wide(text));
+        ti.lpszText = w->tooltip;
+        SendMessageW(tooltip_hwnd, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    }
+    aeui_tooltip_note(handle, text);
 }
 
 // ── Accessibility (semantics layer) ──────────────────────────────────

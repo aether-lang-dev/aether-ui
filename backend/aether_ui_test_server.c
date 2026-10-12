@@ -410,6 +410,7 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
         int ac = aether_ui_state_style_impl(handle, 1);
         if (hv >= 0) n += snprintf(buf + n, bufsize - n, ",\"hoverBg\":\"#%06x\"", hv);
         if (ac >= 0) n += snprintf(buf + n, bufsize - n, ",\"activeBg\":\"#%06x\"", ac);
+        n = aeui_emit_text_style(buf, n, bufsize, handle);
     }
 
     // Accessibility: the widget's effective role + accessible name (auto when

@@ -14,7 +14,7 @@
 import ui
 import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refresh,
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
-    edit_text, cell_style,
+    edit_text, cell_style, cell_tooltip,
     on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
@@ -95,8 +95,20 @@ main() {
                         if ui_get_i(swapped) == 1 { return "text-align: end; background: #e8f5e9" }
                         return "text-align: end; background: #ffebee"
                     }
+                    // Column D, rows 12 to 17: the rest of what a style draws.
+                    if c == 4 && r == 12 { return "font-style: italic; text-decoration: underline" }
+                    if c == 4 && r == 13 { return "text-decoration: line-through; font-size: 16px" }
+                    if c == 4 && r == 14 { return "border-top: 1px solid #000; border-bottom: 2px solid #c00000" }
+                    if c == 4 && r == 15 { return "--fill: 0.5; --fill-color: #638ec6" }
+                    if c == 4 && r == 16 { return "--fill: -0.25" }
+                    if c == 4 && r == 17 { return "--corner: #d00" }
                     v, _e = map.get(edits, "${r},${c}")
                     if v != null && string.starts_with(v, "=") == 1 { return "text-align: end" }
+                    return ""
+                }
+                // The marked cell's comment, on hover.
+                cell_tooltip() callback |r: int, c: int| {
+                    if c == 4 && r == 17 { return "a note on R17C4" }
                     return ""
                 }
                 headers() callback |c: int| {

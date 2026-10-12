@@ -1036,8 +1036,134 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 // Widget creation
 // ---------------------------------------------------------------------------
 
+// A text label that can carry cell decorations (aether_ui_text_set_decor):
+// a bar painted under the text, and edge lines and a corner triangle over
+// it. The layer's background colour is behind all of it, as before.
+typedef struct { int e[8]; double bar; int bar_rgb; int corner; int any; } AeuiLabelDecor;
+
+static NSColor* aeui_rgb_color(int rgb) {
+    return [NSColor colorWithSRGBRed:((rgb >> 16) & 255) / 255.0 green:((rgb >> 8) & 255) / 255.0
+                                blue:(rgb & 255) / 255.0 alpha:1.0];
+}
+
+@interface AetherLabel : NSTextField
+- (AeuiLabelDecor*)aeuiDecor;
+@end
+
+@implementation AetherLabel {
+    AeuiLabelDecor _decor;
+}
+- (AeuiLabelDecor*)aeuiDecor { return &_decor; }
+- (void)drawRect:(NSRect)dirty {
+    NSRect b = self.bounds;
+    AeuiLabelDecor* d = &_decor;
+    BOOL flipped = [self isFlipped];
+    BOOL rtl = self.userInterfaceLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft;
+    if (d->any && d->bar != 0.0) {
+        CGFloat f = d->bar < 0 ? -d->bar : d->bar;
+        CGFloat w = b.size.width * f;
+        // From the start edge, or from the end when the fraction is negative.
+        BOOL from_left = (d->bar > 0) != rtl;
+        NSRect r = NSMakeRect(from_left ? b.origin.x : NSMaxX(b) - w, b.origin.y, w, b.size.height);
+        [aeui_rgb_color(d->bar_rgb) setFill];
+        NSRectFill(r);
+    }
+    [super drawRect:dirty];
+    if (!d->any) return;
+    CGFloat top = flipped ? b.origin.y : NSMaxY(b);
+    for (int k = 0; k < 4; k++) {
+        int wd = d->e[k * 2];
+        if (wd <= 0) continue;
+        NSRect r;
+        if (k == 0) r = NSMakeRect(b.origin.x, flipped ? top : top - wd, b.size.width, wd);
+        else if (k == 1) r = NSMakeRect(NSMaxX(b) - wd, b.origin.y, wd, b.size.height);
+        else if (k == 2) r = NSMakeRect(b.origin.x, flipped ? NSMaxY(b) - wd : b.origin.y, b.size.width, wd);
+        else r = NSMakeRect(b.origin.x, b.origin.y, wd, b.size.height);
+        [aeui_rgb_color(d->e[k * 2 + 1]) setFill];
+        NSRectFill(r);
+    }
+    if (d->corner >= 0) {
+        // A triangle in the top end corner, 6px on its two sides.
+        CGFloat x = rtl ? b.origin.x : NSMaxX(b);
+        CGFloat dx = rtl ? 6 : -6, dy = flipped ? 6 : -6;
+        NSBezierPath* p = [NSBezierPath bezierPath];
+        [p moveToPoint:NSMakePoint(x, top)];
+        [p lineToPoint:NSMakePoint(x + dx, top)];
+        [p lineToPoint:NSMakePoint(x, top + dy)];
+        [p closePath];
+        [aeui_rgb_color(d->corner) setFill];
+        [p fill];
+    }
+}
+@end
+
+// A label's font, from everything set on it: its size (the system size when
+// none), weight, family and italic. Each setter changes its own part and
+// builds the font again, so none undoes another (bold used to put back the
+// system font, dropping a family; a size, dropping bold).
+static NSFont* aeui_label_font(NSView* v) {
+    NSNumber* sz = objc_getAssociatedObject(v, "aeui_font_size");
+    CGFloat size = sz ? sz.doubleValue : [NSFont systemFontSize];
+    NSNumber* wt = objc_getAssociatedObject(v, "aeui_styled_weight");
+    BOOL bold = wt && wt.intValue == 1;
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    BOOL italic = ts && (ts.intValue & 1);
+    NSString* fam = objc_getAssociatedObject(v, "aeui_styled_family");
+    NSFont* f = nil;
+    if (fam) {
+        if ([fam isEqualToString:@"monospace"]) f = [NSFont userFixedPitchFontOfSize:size];
+        else f = [NSFont fontWithName:fam size:size];
+    }
+    NSFontManager* fm = [NSFontManager sharedFontManager];
+    if (!f) f = bold ? [NSFont boldSystemFontOfSize:size] : [NSFont systemFontOfSize:size];
+    else if (bold) f = [fm convertFont:f toHaveTrait:NSBoldFontMask];
+    if (italic) {
+        NSFont* it = [fm convertFont:f toHaveTrait:NSItalicFontMask];
+        // The system font has no italic face of its own in every release;
+        // a slant of the same face is what AppKit does then.
+        if (!([fm traitsOfFont:it] & NSItalicFontMask)) {
+            NSAffineTransform* t = [NSAffineTransform transform];
+            [t scaleBy:size];
+            NSAffineTransformStruct m = t.transformStruct;
+            m.m21 = size * 0.2;
+            [t setTransformStruct:m];
+            it = [NSFont fontWithDescriptor:f.fontDescriptor textTransform:t] ?: f;
+        }
+        f = it;
+    }
+    return f;
+}
+
+// Underline and line-through, as the field's attributed string, made again
+// from its plain text, font, colour, alignment and line breaking whenever
+// any of them changes (setStringValue drops attributes).
+static void aeui_label_redecorate(NSTextField* tf) {
+    NSNumber* ts = objc_getAssociatedObject(tf, "aeui_text_style");
+    int v = ts ? ts.intValue : 0;
+    NSNumber* had = objc_getAssociatedObject(tf, "aeui_decorated");
+    if (!(v & 6)) {
+        if (had.boolValue) {
+            NSString* plain = [tf stringValue];
+            [tf setStringValue:plain];
+            objc_setAssociatedObject(tf, "aeui_decorated", nil, OBJC_ASSOCIATION_RETAIN);
+        }
+        return;
+    }
+    NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
+    ps.alignment = tf.alignment;
+    ps.lineBreakMode = [[tf cell] lineBreakMode];
+    NSMutableDictionary* at = [NSMutableDictionary dictionary];
+    if (tf.font) at[NSFontAttributeName] = tf.font;
+    if (tf.textColor) at[NSForegroundColorAttributeName] = tf.textColor;
+    at[NSParagraphStyleAttributeName] = ps;
+    if (v & 2) at[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+    if (v & 4) at[NSStrikethroughStyleAttributeName] = @(NSUnderlineStyleSingle);
+    [tf setAttributedStringValue:[[NSAttributedString alloc] initWithString:[tf stringValue] attributes:at]];
+    objc_setAssociatedObject(tf, "aeui_decorated", @YES, OBJC_ASSOCIATION_RETAIN);
+}
+
 int aether_ui_text_create(const char* text) {
-    NSTextField* label = [NSTextField labelWithString:
+    NSTextField* label = [AetherLabel labelWithString:
         [NSString stringWithUTF8String:text ? text : ""]];
     [label setEditable:NO];
     [label setBordered:NO];
@@ -1047,7 +1173,7 @@ int aether_ui_text_create(const char* text) {
 }
 
 int aether_ui_text_wrapped_create(const char* text, int wrap_width_px) {
-    NSTextField* label = [NSTextField wrappingLabelWithString:
+    NSTextField* label = [AetherLabel wrappingLabelWithString:
         [NSString stringWithUTF8String:text ? text : ""]];
     [label setEditable:NO];
     [label setSelectable:NO];
@@ -1068,6 +1194,7 @@ void aether_ui_text_set_anchor(int handle, int anchor) {
                       : anchor == 2 ? NSTextAlignmentRight
                                     : NSTextAlignmentLeft;
     [(NSTextField*)v setAlignment:a];
+    aeui_label_redecorate((NSTextField*)v);
 }
 
 int aether_ui_text_get_wrap(int handle) {
@@ -1089,6 +1216,7 @@ void aether_ui_text_set_truncate(int handle, int mode) {
     // AppKit only ellipsizes when the text is allowed to run past the box.
     // A wrapped label keeps its line budget; a single-line one gets 1.
     if (mode != 0 && !aether_ui_text_get_wrap(handle)) [tf setMaximumNumberOfLines:1];
+    aeui_label_redecorate(tf);
     [tf setNeedsDisplay:YES];
 }
 
@@ -1123,6 +1251,7 @@ void aether_ui_text_set_string(int handle, const char* text) {
     if (v && [v isKindOfClass:[NSTextField class]]) {
         [(NSTextField*)v setStringValue:
             [NSString stringWithUTF8String:text ? text : ""]];
+        aeui_label_redecorate((NSTextField*)v);
     }
 }
 
@@ -3273,6 +3402,7 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSTextField class]]) {
         [(NSTextField*)v setTextColor:[NSColor colorWithRed:r green:g blue:b alpha:1.0]];
+        aeui_label_redecorate((NSTextField*)v);
     }
     if (v) {
         int packed = (((int)(r * 255) & 255) << 16) | (((int)(g * 255) & 255) << 8)
@@ -3284,7 +3414,10 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
 void aether_ui_set_font_size(int handle, double size) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSTextField class]]) {
-        [(NSTextField*)v setFont:[NSFont systemFontOfSize:size]];
+        // 0 is the system size.
+        objc_setAssociatedObject(v, "aeui_font_size", size > 0 ? @(size) : nil, OBJC_ASSOCIATION_RETAIN);
+        [(NSTextField*)v setFont:aeui_label_font(v)];
+        aeui_label_redecorate((NSTextField*)v);
     }
 }
 
@@ -3295,12 +3428,8 @@ void aether_ui_set_font_bold(int handle, int bold) {
     objc_setAssociatedObject(v, "aeui_styled_weight",
         @(bold ? 1 : 2), OBJC_ASSOCIATION_RETAIN);
     if ([v isKindOfClass:[NSTextField class]]) {
-        NSFont* font = [(NSTextField*)v font];
-        CGFloat size = font ? [font pointSize] : 13.0;
-        if (bold)
-            [(NSTextField*)v setFont:[NSFont boldSystemFontOfSize:size]];
-        else
-            [(NSTextField*)v setFont:[NSFont systemFontOfSize:size]];
+        [(NSTextField*)v setFont:aeui_label_font(v)];
+        aeui_label_redecorate((NSTextField*)v);
     }
 }
 
@@ -3311,7 +3440,10 @@ void aether_ui_set_font_family(int handle, const char* family) {
     if (!v || !family || !family[0]) return;
     objc_setAssociatedObject(v, "aeui_styled_family",
         [NSString stringWithUTF8String:family], OBJC_ASSOCIATION_RETAIN);
-    if ([v respondsToSelector:@selector(setFont:)]) {
+    if ([v isKindOfClass:[NSTextField class]]) {
+        [(NSTextField*)v setFont:aeui_label_font(v)];
+        aeui_label_redecorate((NSTextField*)v);
+    } else if ([v respondsToSelector:@selector(setFont:)]) {
         NSFont* cur = [(id)v font];
         CGFloat size = cur ? [cur pointSize] : 13.0;
         NSFont* f = nil;
@@ -3337,6 +3469,63 @@ const char* aether_ui_styled_weight_impl(int handle) {
     NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_weight");
     if (!n) return "";
     return [n intValue] == 1 ? "bold" : "normal";
+}
+
+void aether_ui_set_font_italic(int handle, int italic) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSTextField class]]) return;
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    int t = ((ts ? ts.intValue : 0) & ~1) | (italic ? 1 : 0) | 8;
+    objc_setAssociatedObject(v, "aeui_text_style", @(t), OBJC_ASSOCIATION_RETAIN);
+    [(NSTextField*)v setFont:aeui_label_font(v)];
+    aeui_label_redecorate((NSTextField*)v);
+}
+
+void aether_ui_set_text_decoration(int handle, int underline, int strike) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[NSTextField class]]) return;
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    int t = ((ts ? ts.intValue : 0) & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
+    objc_setAssociatedObject(v, "aeui_text_style", @(t), OBJC_ASSOCIATION_RETAIN);
+    aeui_label_redecorate((NSTextField*)v);
+}
+
+int aether_ui_styled_text_style_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return -1;
+    NSNumber* ts = objc_getAssociatedObject(v, "aeui_text_style");
+    return ts ? ts.intValue : -1;
+}
+
+void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,
+                              int bottom, int bottom_rgb, int left, int left_rgb,
+                              double bar, int bar_rgb, int corner_rgb) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[AetherLabel class]]) return;
+    AeuiLabelDecor* d = [(AetherLabel*)v aeuiDecor];
+    int ev[8] = {top, top_rgb, right, right_rgb, bottom, bottom_rgb, left, left_rgb};
+    memcpy(d->e, ev, sizeof(ev));
+    if (bar > 1.0) bar = 1.0;
+    if (bar < -1.0) bar = -1.0;
+    d->bar = bar;
+    d->bar_rgb = bar_rgb;
+    d->corner = corner_rgb;
+    int any = bar != 0.0 || corner_rgb >= 0;
+    for (int k = 0; k < 4; k++) if (ev[k * 2] > 0) any = 1;
+    d->any = any;
+    [v setNeedsDisplay:YES];
+}
+
+int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_rgb, int* corner_rgb) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || ![v isKindOfClass:[AetherLabel class]]) return 0;
+    AeuiLabelDecor* d = [(AetherLabel*)v aeuiDecor];
+    if (!d->any) return 0;
+    memcpy(edges, d->e, sizeof(d->e));
+    *bar = d->bar;
+    *bar_rgb = d->bar_rgb;
+    *corner_rgb = d->corner;
+    return 1;
 }
 
 void aether_ui_set_corner_radius(int handle, double radius) {
@@ -3610,7 +3799,9 @@ void aether_ui_set_enabled(int handle, int enabled) {
 
 void aether_ui_set_tooltip(int handle, const char* text) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (v) [v setToolTip:[NSString stringWithUTF8String:text ? text : ""]];
+    if (!v) return;
+    [v setToolTip:(text && text[0]) ? [NSString stringWithUTF8String:text] : nil];
+    aeui_tooltip_note(handle, text);
 }
 
 // ── Accessibility (semantics layer) ──────────────────────────────────

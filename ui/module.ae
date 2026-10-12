@@ -35,7 +35,7 @@ exports (
     datagrid_on_col_move, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
-    datagrid_freeze_rows, datagrid_frozen_rows, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -53,7 +53,7 @@ exports (
     style_bg_color, style_text_color, style_font_size, style_font_bold,
     styled_bg, styled_fg,
     style_bg_gradient, style_corner_radius, style_flat, style_disclosure,
-    style_opacity, style_border,
+    style_opacity, style_border, style_italic, style_text_decoration, style_cell_decor,
     style_hover, style_active,
     style_enabled, style_tooltip,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
@@ -357,6 +357,9 @@ extern aether_ui_set_bg_gradient(handle: int,
 extern aether_ui_set_text_color(handle: int, r: float, g: float, b: float)
 extern aether_ui_set_font_size(handle: int, size: float)
 extern aether_ui_set_font_bold(handle: int, bold: int)
+extern aether_ui_set_font_italic(handle: int, italic: int)
+extern aether_ui_set_text_decoration(handle: int, underline: int, strike: int)
+extern aether_ui_text_set_decor(handle: int, top: int, top_rgb: int, right: int, right_rgb: int, bottom: int, bottom_rgb: int, left: int, left_rgb: int, bar: float, bar_rgb: int, corner_rgb: int)
 extern aether_ui_set_font_family(handle: int, family: string)
 extern aether_ui_set_corner_radius(handle: int, radius: float)
 extern aether_ui_button_set_flat(handle: int, on: int)
@@ -2391,6 +2394,30 @@ style_border(handle: int, width: float, r: float, g: float, b: float) -> int {
     aether_ui_set_border(handle, width, r, g, b)
     return 1
 }
+// style_italic(handle, on), style_text_decoration(handle, underline,
+// strike): a label's italic, and its underline and line-through. Each keeps
+// through later text changes, and combines with bold, size and colour.
+style_italic(handle: int, on: int) -> int {
+    aether_ui_set_font_italic(handle, on)
+    return handle
+}
+style_text_decoration(handle: int, underline: int, strike: int) -> int {
+    aether_ui_set_text_decoration(handle, underline, strike)
+    return handle
+}
+
+// style_cell_decor(handle, top, top_rgb, right, right_rgb, bottom,
+// bottom_rgb, left, left_rgb, bar, bar_rgb, corner_rgb): a label's cell
+// decorations, as a spreadsheet draws them: a line of the given width (0
+// for none) and 0xRRGGBB colour on each edge, inside the box; a bar behind
+// the text across `bar` of the width from the start edge (the end when
+// negative; 0 for none); a small triangle in the top end corner (-1 for
+// none). Each call replaces the last.
+style_cell_decor(handle: int, top: int, top_rgb: int, right: int, right_rgb: int, bottom: int, bottom_rgb: int, left: int, left_rgb: int, bar: float, bar_rgb: int, corner_rgb: int) -> int {
+    aether_ui_text_set_decor(handle, top, top_rgb, right, right_rgb, bottom, bottom_rgb, left, left_rgb, bar, bar_rgb, corner_rgb)
+    return handle
+}
+
 style_corner_radius(handle: int, radius: float) -> int {
     aether_ui_set_corner_radius(handle, radius)
     return handle
@@ -6445,7 +6472,15 @@ struct DataGrid {
     gap_on: ptr       // intarr: 1 where that strip is showing
     gap_boxes: ptr    // intarr: the coloured box in each strip
     frozen_rows: int  // the leading rows that stay while it scrolls (datagrid_freeze_rows)
+    style_fx: ptr     // intarr: what of a style each shown cell has besides colour, weight and
+                      // alignment (1 italic, 2 underline/line-through, 4 a font size, 8 decorations)
+    tip: ptr          // boxed |r, c| -> string, or null (datagrid_cell_tooltip)
+    tip_hash: ptr     // longarr: the key of the tooltip each shown cell last had
 }
+
+// A data bar's colour when a style gives --fill and no --fill-color (Excel's
+// blue).
+const DATAGRID_FILL_COLOUR = 6524614   // #638ec6
 
 // The strip that marks hidden rows above a row: as tall as Excel's double
 // line, in the frozen columns' width.
@@ -6624,6 +6659,9 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.boxes = intarr_new_raw(vr * (fz + vc) + 1)
     g.style_hash = longarr_new_raw(vr * (fz + vc) + 1)
     g.style_bg = intarr_new_raw(vr * (fz + vc) + 1)
+    g.style_fx = intarr_new_raw(vr * (fz + vc) + 1)
+    g.tip = null
+    g.tip_hash = longarr_new_raw(vr * (fz + vc) + 1)
     ri = 0
     g.row_boxes = intarr_new_raw(vr + 1)
     while ri < vr {
@@ -6669,6 +6707,8 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             intarr_set_raw(g.painted, ri * (fz + vc) + ci, -1)
             longarr_set_raw(g.style_hash, ri * (fz + vc) + ci, 0)
             intarr_set_raw(g.style_bg, ri * (fz + vc) + ci, 0 - 1)
+            intarr_set_raw(g.style_fx, ri * (fz + vc) + ci, 0)
+            longarr_set_raw(g.tip_hash, ri * (fz + vc) + ci, 0)
             vr2 = ri
             vc2 = ci
             _hc = on_click(ch) callback {
@@ -7064,8 +7104,34 @@ _datagrid_bind(g: *DataGrid) {
     }
     _datagrid_size(g)
     _datagrid_style(g)
+    _datagrid_tips(g)
     _datagrid_paint(g)
     _datagrid_a11y(g)
+}
+
+// Each shown cell's tooltip, from datagrid_cell_tooltip, where it changed.
+_datagrid_tips(g: *DataGrid) {
+    if g.tip == null { return }
+    tf = unbox_closure(g.tip)
+    w = g.frozen + g.vis_cols
+    r = 0
+    while r < g.vis_rows {
+        mr = _datagrid_row_at(g, r)
+        c = 0
+        while c < w && mr >= 0 {
+            i = r * w + c
+            if intarr_get_raw(g.pos_off, c) == 0 {
+                t = _datagrid_invoke_cell(tf, mr, _datagrid_model(g, _datagrid_col_at(g, c)))
+                hh = _datagrid_hash(t)
+                if longarr_get_raw(g.tip_hash, i) != hh {
+                    longarr_set_raw(g.tip_hash, i, hh)
+                    aether_ui_set_tooltip(intarr_get_raw(g.cells, i), t)
+                }
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
 }
 
 // Each shown header, row and cell names the row and column it shows now
@@ -7502,13 +7568,30 @@ _datagrid_hash(s: string) -> long {
     return key
 }
 
-// Parse "background: #hex; color: #hex; font-weight: bold; text-align: end"
-// and apply it to shown cell i; a property left out returns to the grid's.
+// Parse a cell's style and apply it to shown cell i; a property left out
+// returns to the grid's. Besides background, color, font-weight and
+// text-align: font-style (italic), text-decoration (underline,
+// line-through), font-size (px), border and border-top/right/bottom/left
+// ("1px solid #000"; the width and the colour are read, the line is solid),
+// --fill and --fill-color (a data bar), and --corner (a comment marker).
 _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     bg = 0 - 1
     fg = 0 - 1
     bold = 0
     align = 0
+    italic = 0
+    under = 0
+    strike = 0
+    size = 0.0
+    ew = intarr_new_raw(9)   // top, top colour, right, ..., left colour
+    k0 = 0
+    while k0 < 8 {
+        intarr_set_raw(ew, k0, 0)
+        k0 = k0 + 1
+    }
+    fill = 0.0
+    fill_rgb = DATAGRID_FILL_COLOUR
+    corner = 0 - 1
     parts = string.string_split(st, ";")
     np = string.string_array_size(parts)
     k = 0
@@ -7527,6 +7610,55 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
                 if string.equals(val, "center") == 1 || string.equals(val, "middle") == 1 { align = 1 }
                 if string.equals(val, "end") == 1 || string.equals(val, "right") == 1 { align = 2 }
             }
+            if string.equals(name, "font-style") == 1 {
+                if string.equals(val, "italic") == 1 || string.equals(val, "oblique") == 1 { italic = 1 }
+            }
+            if string.equals(name, "text-decoration") == 1 || string.equals(name, "text-decoration-line") == 1 {
+                if string.contains(val, "underline") == 1 { under = 1 }
+                if string.contains(val, "line-through") == 1 { strike = 1 }
+            }
+            if string.equals(name, "font-size") == 1 { size = _datagrid_px(val) }
+            side = 0 - 1
+            if string.equals(name, "border") == 1 { side = 4 }
+            if string.equals(name, "border-top") == 1 { side = 0 }
+            if string.equals(name, "border-right") == 1 { side = 1 }
+            if string.equals(name, "border-bottom") == 1 { side = 2 }
+            if string.equals(name, "border-left") == 1 { side = 3 }
+            if side >= 0 {
+                bw = 0
+                bc = 0
+                if string.contains(val, "none") == 0 {
+                    bw = (_datagrid_px(val) + 0.5) as int
+                    if bw <= 0 { bw = 1 }
+                    hpos = string.index_of(val, "#")
+                    if hpos >= 0 {
+                        hx = string.trim(string.substring(val, hpos, string.length(val)))
+                        sp = string.index_of(hx, " ")
+                        if sp > 0 { hx = string.substring(hx, 0, sp) }
+                        bc = _datagrid_hex(hx)
+                        if bc < 0 { bc = 0 }
+                    }
+                }
+                sd = 0
+                while sd < 4 {
+                    if side == 4 || side == sd {
+                        intarr_set_raw(ew, sd * 2, bw)
+                        intarr_set_raw(ew, sd * 2 + 1, bc)
+                    }
+                    sd = sd + 1
+                }
+            }
+            if string.equals(name, "--fill") == 1 {
+                fv, _fe = string.to_float(val)
+                fill = fv
+                if fill > 1.0 { fill = 1.0 }
+                if fill < -1.0 { fill = -1.0 }
+            }
+            if string.equals(name, "--fill-color") == 1 {
+                fc = _datagrid_hex(val)
+                if fc >= 0 { fill_rgb = fc }
+            }
+            if string.equals(name, "--corner") == 1 { corner = _datagrid_hex(val) }
         }
         k = k + 1
     }
@@ -7538,6 +7670,45 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     aether_ui_set_text_color(h, ((fg / 65536) % 256) / 255.0, ((fg / 256) % 256) / 255.0, (fg % 256) / 255.0)
     aether_ui_set_font_bold(h, bold)
     aether_ui_text_set_anchor(h, align)
+    // The rest only where this style has it or the last one had (so a plain
+    // grid sets none of them).
+    was = intarr_get_raw(g.style_fx, i)
+    fx = 0
+    if italic == 1 { fx = fx + 1 }
+    if under == 1 || strike == 1 { fx = fx + 2 }
+    if size > 0.0 { fx = fx + 4 }
+    hasdec = 0
+    if fill != 0.0 || corner >= 0 { hasdec = 1 }
+    sd2 = 0
+    while sd2 < 4 {
+        if intarr_get_raw(ew, sd2 * 2) > 0 { hasdec = 1 }
+        sd2 = sd2 + 1
+    }
+    if hasdec == 1 { fx = fx + 8 }
+    if italic == 1 || (was % 2) == 1 { aether_ui_set_font_italic(h, italic) }
+    if fx / 2 % 2 == 1 || (was / 2) % 2 == 1 { aether_ui_set_text_decoration(h, under, strike) }
+    // Size 0 is the platform's own.
+    if fx / 4 % 2 == 1 || (was / 4) % 2 == 1 { aether_ui_set_font_size(h, size) }
+    if hasdec == 1 || (was / 8) % 2 == 1 {
+        aether_ui_text_set_decor(h, intarr_get_raw(ew, 0), intarr_get_raw(ew, 1), intarr_get_raw(ew, 2), intarr_get_raw(ew, 3), intarr_get_raw(ew, 4), intarr_get_raw(ew, 5), intarr_get_raw(ew, 6), intarr_get_raw(ew, 7), fill, fill_rgb, corner)
+    }
+    intarr_set_raw(g.style_fx, i, fx)
+    intarr_free(ew)
+}
+
+// The number at the start of "14px", "1px solid #000" or "12pt", in px.
+_datagrid_px(v: string) -> float {
+    n = string.length(v)
+    e = 0
+    while e < n {
+        ch = string.char_at(v, e)
+        if (ch < 48 || ch > 57) && ch != 46 { break }
+        e = e + 1
+    }
+    if e == 0 { return 0.0 }
+    f, _err = string.to_float(string.substring(v, 0, e))
+    if string.contains(v, "pt") == 1 { return f * 4.0 / 3.0 }
+    return f
 }
 
 // "#rgb" or "#rrggbb" to 0xRRGGBB; -1 for anything else.
@@ -7753,6 +7924,16 @@ datagrid_cell_style(gp: ptr, fn_: fn) -> ptr {
     return gp
 }
 
+// datagrid_cell_tooltip(g) callback |r: int, c: int| -> string: what shows
+// when the pointer rests on a cell (a comment, say: --corner marks the
+// cell); "" for none. Asked as each cell is shown (c a model column).
+datagrid_cell_tooltip(gp: ptr, fn_: fn) -> ptr {
+    g = gp as *DataGrid
+    g.tip = box_closure(fn_)
+    _datagrid_bind(g)
+    return gp
+}
+
 // datagrid_fit_col(g, c): view column c as wide as its widest text: its
 // header and the cells on screen (the grid holds no others), each measured
 // in its own label's font, plus a little room; clamped to the limits. As a
@@ -7853,6 +8034,10 @@ edit_text(_ctx: ptr, fn_: fn) {
 cell_style(_ctx: ptr, fn_: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cell_style(g, fn_) }
+}
+cell_tooltip(_ctx: ptr, fn_: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_cell_tooltip(g, fn_) }
 }
 column_limits(_ctx: ptr, min: int, max: int) {
     g = _datagrid_ctx(_ctx)

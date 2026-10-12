@@ -628,5 +628,41 @@ main() {
         }
     }
 
+    spec.describe(fw, "more of a style") {
+        spec.it("italic, underline and line-through") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            spec.assert_true(shows("R12C4") == 1, "row 12 shown")
+            spec.assert_str_eq(fstr("R12C4", "fontStyle"), "italic", "R12C4 italic")
+            spec.assert_str_eq(fstr("R12C4", "textDecoration"), "underline", "and underlined")
+            spec.assert_str_eq(fstr("R13C4", "textDecoration"), "line-through", "R13C4 struck through")
+            spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "and not italic")
+        }
+        spec.it("borders on a cell's edges") callback {
+            spec.assert_str_eq(fstr("R14C4", "borderTop"), "1 #000000", "a 1px black line on top")
+            spec.assert_str_eq(fstr("R14C4", "borderBottom"), "2 #c00000", "a 2px red one underneath")
+            spec.assert_str_eq(fstr("R14C4", "borderLeft"), "", "none at the sides")
+        }
+        spec.it("a data bar, from either edge") callback {
+            spec.assert_str_eq(fstr("R15C4", "bar"), "0.50", "half the width from the start")
+            spec.assert_str_eq(fstr("R15C4", "barColor"), "#638ec6", "in the colour given")
+            spec.assert_str_eq(fstr("R16C4", "bar"), "-0.25", "a quarter from the end")
+            spec.assert_str_eq(fstr("R16C4", "barColor"), "#638ec6", "in Excel's blue when none is given")
+        }
+        spec.it("a comment's corner marker, and its tooltip") callback {
+            spec.assert_str_eq(fstr("R17C4", "corner"), "#dd0000", "a red corner")
+            spec.assert_str_eq(fstr("R17C4", "tooltip"), "a note on R17C4", "the comment on hover")
+            spec.assert_str_eq(fstr("R18C4", "tooltip"), "", "a cell without one has none")
+        }
+        spec.it("a widget that scrolls on to a plain cell loses them") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=1", "scroll down a row")
+            spec.assert_true(shows("R18C4") == 1, "row 18 shown")
+            spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "where R12C4 was italic, R13C4 is not")
+            spec.assert_str_eq(fstr("R17C4", "bar"), "", "where the bar was, none")
+            spec.assert_str_eq(fstr("R18C4", "corner"), "", "nor a corner where the marker was")
+            spec.assert_str_eq(fstr("R18C4", "tooltip"), "", "nor a tooltip")
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "and back")
+        }
+    }
+
     return spec.run_summary(fw)
 }

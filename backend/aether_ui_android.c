@@ -666,6 +666,17 @@ typedef struct {
     int bold;                  // -1 never set, else 0/1
     char* family;
     double font_size;          // 0 = theme default
+    float orig_text_px;        // the theme's text size, kept the first time a size is set
+    int italic;                // italic, underline, line-through (text_style: bits 1/2/4, 8 once set)
+    int text_style;
+    // Cell decorations (aether_ui_text_set_decor): the bar is layered under
+    // the text over the background; edge lines and the corner are the
+    // view's foreground (AetherCellDecor).
+    int dec_e[8];
+    double dec_bar;
+    int dec_bar_rgb;
+    int dec_corner;
+    int dec_any;
 
     // --- accessibility ---
     char* role; char* a11y_name; char* a11y_desc;
@@ -1711,6 +1722,14 @@ JMETHOD(M_TV_setInputType, C_TextView, "setInputType", "(I)V");
 JMETHOD(M_TV_setMinLines, C_TextView, "setMinLines", "(I)V");
 JMETHOD(M_TV_setTextColor, C_TextView, "setTextColor", "(I)V");
 JMETHOD(M_TV_setTextSize, C_TextView, "setTextSize", "(IF)V");
+JMETHOD(M_TV_getTextSize, C_TextView, "getTextSize", "()F");
+// An app class too, resolved in JNI_OnLoad with the others.
+JCLASS(C_CellDecor, "dev/aether/ui/AetherCellDecor");
+JSTATIC(M_CD_under, C_CellDecor, "under", "(Landroid/graphics/drawable/Drawable;FI)Landroid/graphics/drawable/Drawable;");
+JSTATIC(M_CD_over, C_CellDecor, "over", "(Landroid/view/View;[IIF)V");
+JSTATIC(M_CD_decorate, C_CellDecor, "decorate", "(Landroid/widget/TextView;ZZ)V");
+#define JSV(m, ...) do { jmethodID id_ = (jmethodID)jmem(env, &(m)); \
+    if (id_) { (*env)->CallStaticVoidMethod(env, (m).c->cls, id_, ##__VA_ARGS__); aeui_check(env, (m).name); } } while (0)
 JMETHOD(M_TV_setTypeface, C_TextView, "setTypeface", "(Landroid/graphics/Typeface;)V");
 JMETHOD(M_TV_getCurrentTextColor, C_TextView, "getCurrentTextColor", "()I");
 JMETHOD(M_TV_addTextChangedListener, C_TextView, "addTextChangedListener", "(Landroid/text/TextWatcher;)V");
@@ -2681,7 +2700,7 @@ static void aeui_apply_background(JNIEnv* env, int handle) {
         w->bg_captured = 1;
     }
     int owned = w->bg_set || w->grad_set || w->border_w > 0 || w->hover_bg >= 0 ||
-                w->active_bg >= 0 || w->flat || w->radius > 0;
+                w->active_bg >= 0 || w->flat || w->radius > 0 || w->dec_bar != 0.0;
     if (!owned) {
         JV(w->view, M_View_setBackground, w->orig_bg);
         JV(w->view, M_View_setClipToOutline, JNI_FALSE);
@@ -2699,6 +2718,11 @@ static void aeui_apply_background(JNIEnv* env, int handle) {
             if (base) JV(sld, M_SLD_addState, aeui_state_set(env, 0), base);
             bg = sld;
         }
+    }
+    // A data bar: layered over the background, under the text.
+    if (w->dec_bar != 0.0) {
+        jobject layered = JSO(M_CD_under, bg, (jfloat)w->dec_bar, (jint)(0xFF000000u | (unsigned)(w->dec_bar_rgb & 0xFFFFFF)));
+        if (layered) bg = layered;
     }
     JV(w->view, M_View_setBackground, bg);
     // Corners clip what is inside too, as UIKit's clipsToBounds does.
@@ -2938,7 +2962,8 @@ JSTATIC(M_TF_defaultFromStyle, C_Typeface, "defaultFromStyle", "(I)Landroid/grap
 // Android resolves the generic CSS families ("monospace", "serif",
 // "sans-serif") and its own named ones ("sans-serif-condensed", ...).
 static void aeui_apply_typeface(JNIEnv* env, AeuiWidget* w) {
-    int style = w->bold == 1 ? 1 : 0;   // Typeface.BOLD / NORMAL
+    // Typeface.NORMAL 0, BOLD 1, ITALIC 2, BOLD_ITALIC 3.
+    int style = (w->bold == 1 ? 1 : 0) | (w->italic ? 2 : 0);
     jobject tf = NULL;
     if (w->family) {
         jstring fam = aeui_jstring(env, w->family);
@@ -2972,11 +2997,14 @@ void aether_ui_set_text_color_ctx(void* ctx, double r, double g, double b) {
 // the app's layout units, as points are on AppKit and UIKit.)
 void aether_ui_set_font_size(int handle, double size) {
     AeuiWidget* w = live_widget(handle);
-    if (!w || !aeui_is_textview(w->type) || size <= 0) return;
+    if (!w || !aeui_is_textview(w->type)) return;
     JNIEnv* env = aeui_frame(4);
     if (!env) return;
-    w->font_size = size;
-    JV(w->view, M_TV_setTextSize, (jint)1 /* COMPLEX_UNIT_DIP */, (jfloat)size);
+    // The theme's size, before the first change, so 0 can put it back.
+    if (w->orig_text_px <= 0) w->orig_text_px = JF(w->view, M_TV_getTextSize);
+    w->font_size = size > 0 ? size : 0;
+    if (size > 0) JV(w->view, M_TV_setTextSize, (jint)1 /* COMPLEX_UNIT_DIP */, (jfloat)size);
+    else if (w->orig_text_px > 0) JV(w->view, M_TV_setTextSize, (jint)0 /* COMPLEX_UNIT_PX */, (jfloat)w->orig_text_px);
     aeui_unframe(env);
 }
 void aether_ui_set_font_size_ctx(void* ctx, double size) {
@@ -2994,6 +3022,77 @@ void aether_ui_set_font_bold(int handle, int bold) {
 }
 void aether_ui_set_font_bold_ctx(void* ctx, int bold) {
     aether_ui_set_font_bold((int)(intptr_t)ctx, bold);
+}
+
+void aether_ui_set_font_italic(int handle, int italic) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !aeui_is_textview(w->type)) return;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    w->italic = italic ? 1 : 0;
+    w->text_style = (w->text_style & ~1) | (italic ? 1 : 0) | 8;
+    aeui_apply_typeface(env, w);
+    aeui_unframe(env);
+}
+
+void aether_ui_set_text_decoration(int handle, int underline, int strike) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !aeui_is_textview(w->type)) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    w->text_style = (w->text_style & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
+    JSV(M_CD_decorate, w->view, underline ? JNI_TRUE : JNI_FALSE, strike ? JNI_TRUE : JNI_FALSE);
+    aeui_unframe(env);
+}
+
+int aether_ui_styled_text_style_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !(w->text_style & 8)) return -1;
+    return w->text_style;
+}
+
+void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,
+                              int bottom, int bottom_rgb, int left, int left_rgb,
+                              double bar, int bar_rgb, int corner_rgb) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !aeui_is_textview(w->type)) return;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    int ev[8] = {top, top_rgb, right, right_rgb, bottom, bottom_rgb, left, left_rgb};
+    memcpy(w->dec_e, ev, sizeof(ev));
+    if (bar > 1.0) bar = 1.0;
+    if (bar < -1.0) bar = -1.0;
+    double was_bar = w->dec_bar;
+    w->dec_bar = bar;
+    w->dec_bar_rgb = bar_rgb;
+    w->dec_corner = corner_rgb;
+    int any = bar != 0.0 || corner_rgb >= 0;
+    for (int k = 0; k < 4; k++) if (ev[k * 2] > 0) any = 1;
+    w->dec_any = any;
+    // Colours to ARGB for the Java side; a corner of 0 is none there.
+    jint jev[8];
+    for (int k = 0; k < 4; k++) {
+        jev[k * 2] = ev[k * 2];
+        jev[k * 2 + 1] = (jint)(0xFF000000u | (unsigned)(ev[k * 2 + 1] & 0xFFFFFF));
+    }
+    jintArray arr = (*env)->NewIntArray(env, 8);
+    if (arr) {
+        (*env)->SetIntArrayRegion(env, arr, 0, 8, jev);
+        jint cargb = corner_rgb >= 0 ? (jint)(0xFF000000u | (unsigned)(corner_rgb & 0xFFFFFF)) : 0;
+        JSV(M_CD_over, w->view, arr, cargb, (jfloat)g_density);
+    }
+    if (bar != was_bar || bar != 0.0) aeui_apply_background(env, handle);
+    aeui_unframe(env);
+}
+
+int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_rgb, int* corner_rgb) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !w->dec_any) return 0;
+    memcpy(edges, w->dec_e, sizeof(w->dec_e));
+    *bar = w->dec_bar;
+    *bar_rgb = w->dec_bar_rgb;
+    *corner_rgb = w->dec_corner;
+    return 1;
 }
 
 void aether_ui_set_font_family(int handle, const char* family) {
@@ -3236,6 +3335,7 @@ void aether_ui_set_tooltip(int handle, const char* text) {
     jstring s = (text && *text) ? aeui_jstring(env, text) : NULL;
     JV(w->view, M_View_setTooltipText, s);
     aeui_unframe(env);
+    aeui_tooltip_note(handle, text);
 }
 void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
     aether_ui_set_tooltip((int)(intptr_t)ctx, text);
@@ -3354,6 +3454,7 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
 // Resolved in JNI_OnLoad (C_A11y.cls = J.A11y): an app class, so only the
 // app's class loader finds it.
 JCLASS(C_A11y, "dev/aether/ui/AetherA11y");
+
 JMETHOD(M_A11y_setClassName, C_A11y, "setClassName", "(Ljava/lang/String;)V");
 JMETHOD(M_A11y_setHint, C_A11y, "setHint", "(Ljava/lang/String;)V");
 JMETHOD(M_A11y_setCollection, C_A11y, "setCollection", "(II)V");
@@ -9490,6 +9591,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
         !J.String || !J.CharSequence || !J.Listener || !J.A11y || !shim || !margin || !object)
         return JNI_ERR;
     C_A11y.cls = J.A11y;
+    C_CellDecor.cls = aeui_find_class(env, "dev/aether/ui/AetherCellDecor");
 
 #define M(cls, name, sig) (*env)->GetMethodID(env, cls, name, sig)
     J.View_init                = M(J.View, "<init>", "(Landroid/content/Context;)V");

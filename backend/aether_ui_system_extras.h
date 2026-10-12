@@ -191,6 +191,14 @@ int         aether_ui_prompt_queued(const char* kind_name);
 // delivery; macOS/Win32 → still park, pending native tray work).
 void aether_ui_park_until_killed(void);
 
+// The driver's readback of a text label's italic, underline/line-through
+// and cell decorations (aether_ui_backend.h), appended to a widget's JSON at
+// buf + n; returns the new length. Shared by both test servers.
+int aeui_emit_text_style(char* buf, int n, int bufsize, int handle);
+// A backend's set_tooltip records what it gave the platform here, and the
+// driver reads it back ("tooltip").
+void aeui_tooltip_note(int handle, const char* text);
+
 #ifdef __cplusplus
 }
 #endif

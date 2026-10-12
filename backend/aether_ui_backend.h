@@ -238,6 +238,31 @@ void aether_ui_set_bg_gradient(int handle,
 void aether_ui_set_text_color(int handle, double r, double g, double b);
 void aether_ui_set_font_size(int handle, double size);
 void aether_ui_set_font_bold(int handle, int bold);
+// Italic, and underline / line-through, on a text label. Each keeps through
+// later text changes and through set_font_bold / set_font_size, and each
+// combines with the others. styled_text_style reads back what is in effect:
+// bit 1 italic, 2 underline, 4 line-through, and 8 once any was set; -1
+// never set.
+void aether_ui_set_font_italic(int handle, int italic);
+void aether_ui_set_text_decoration(int handle, int underline, int strike);
+int aether_ui_styled_text_style_impl(int handle);
+// A text label's cell decorations, drawn inside its box: a line on any of
+// its four edges (width in px, 0 for none; rgb 0xRRGGBB), over the
+// background and the text; a bar behind the text across `bar` of the width
+// from the start edge (from the end when negative, 0 for none), in bar_rgb;
+// and a small triangle in the top end corner in corner_rgb (-1 for none).
+// A data bar and a comment marker, as a spreadsheet draws them. Each call
+// replaces the last. decor_get fills edges[8] (top, top rgb, right, right
+// rgb, bottom, bottom rgb, left, left rgb) and the rest, and returns 1 when
+// any decoration is in effect.
+void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,
+                              int bottom, int bottom_rgb, int left, int left_rgb,
+                              double bar, int bar_rgb, int corner_rgb);
+int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_rgb, int* corner_rgb);
+// A widget's tooltip as last set ("" none), for the driver. Shared: each
+// backend's set_tooltip records it (system extras), so it is what was given
+// to the platform.
+const char* aether_ui_styled_tooltip_impl(int handle);
 void aether_ui_set_corner_radius(int handle, double radius);
 // A flat button: no frame and no face of its own until the pointer is over
 // it -- a toolbar's icon buttons, a tree's disclosure chevron, an inline

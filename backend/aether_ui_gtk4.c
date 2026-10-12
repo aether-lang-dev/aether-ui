@@ -2649,8 +2649,30 @@ static void global_css_append(const char* rule) {
     global_css_buf[global_css_len] = '\0';
 }
 
+// Rules kept one per key (a widget's background, its cell decorations),
+// each replaced in place, so a grid repainted on every scroll does not grow
+// the sheet without end. Loaded after the appended rules.
+static GHashTable* keyed_css = NULL;
+static GString* keyed_css_text = NULL;
+
+static void keyed_css_collect(gpointer k, gpointer v, gpointer data) {
+    (void)k;
+    g_string_append((GString*)data, (const char*)v);
+    g_string_append_c((GString*)data, '\n');
+}
+
+static void global_css_reload(void);
+
+static void global_css_set_keyed(const char* key, const char* rule) {
+    if (!keyed_css) keyed_css = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    const char* was = g_hash_table_lookup(keyed_css, key);
+    if (was && strcmp(was, rule) == 0) return;
+    g_hash_table_replace(keyed_css, g_strdup(key), g_strdup(rule));
+    global_css_reload();
+}
+
 static void global_css_reload(void) {
-    if (!global_css_buf) return;
+    if (!global_css_buf && !keyed_css) return;
     ensure_gtk_init();
     GdkDisplay* display = gdk_display_get_default();
     if (!display) return;
@@ -2660,7 +2682,11 @@ static void global_css_reload(void) {
             display, GTK_STYLE_PROVIDER(global_css_provider),
             GTK_STYLE_PROVIDER_PRIORITY_USER);
     }
-    gtk_css_provider_load_from_data(global_css_provider, global_css_buf, -1);
+    if (!keyed_css_text) keyed_css_text = g_string_new(NULL);
+    g_string_truncate(keyed_css_text, 0);
+    if (global_css_buf) g_string_append(keyed_css_text, global_css_buf);
+    if (keyed_css) g_hash_table_foreach(keyed_css, keyed_css_collect, keyed_css_text);
+    gtk_css_provider_load_from_data(global_css_provider, keyed_css_text->str, -1);
 }
 
 static void aether_ui_apply_css(int handle, GtkWidget* widget, const char* property_css) {
@@ -2695,8 +2721,7 @@ void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) 
             ".%s { background: rgba(%d,%d,%d,%.2f); }",
             cls, ri, gi, bi, a);
     }
-    global_css_append(css);
-    global_css_reload();
+    global_css_set_keyed(cls, css);
     // Stash the packed color for driver readback (styled_bg_impl): a theme
     // swap must be provable from the backend, not just the DSL model.
     g_object_set_data(G_OBJECT(w), "aeui-styled-bg",
@@ -2723,10 +2748,13 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w) return;
     if (GTK_IS_LABEL(w)) {
-        PangoAttrList* attrs = pango_attr_list_new();
+        // A copy of what the label has, so a colour keeps its weight, size,
+        // italic and decoration (it started a new list, and dropped them).
+        PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+        attrs = attrs ? pango_attr_list_copy(attrs) : pango_attr_list_new();
         PangoAttribute* attr = pango_attr_foreground_new(
             (guint16)(r * 65535), (guint16)(g * 65535), (guint16)(b * 65535));
-        pango_attr_list_insert(attrs, attr);
+        pango_attr_list_change(attrs, attr);
         gtk_label_set_attributes(GTK_LABEL(w), attrs);
         pango_attr_list_unref(attrs);
     } else {
@@ -2743,14 +2771,28 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
                         ((int)(b * 255) & 255) | 0x1000000));
 }
 
+// pango_attr_list_filter takes out the attributes this says TRUE for.
+static gboolean aeui_not_size_attr(PangoAttribute* a, gpointer data) {
+    (void)data;
+    return a->klass->type == PANGO_ATTR_SIZE || a->klass->type == PANGO_ATTR_ABSOLUTE_SIZE;
+}
+
 void aether_ui_set_font_size(int handle, double size) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return;
     PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
     if (!attrs) attrs = pango_attr_list_new();
     else attrs = pango_attr_list_copy(attrs);
+    if (size <= 0.0) {
+        // 0 is the theme's own size: the size attribute goes.
+        PangoAttrList* kept = pango_attr_list_filter(attrs, aeui_not_size_attr, NULL);
+        if (kept) pango_attr_list_unref(kept);   // what was removed
+        gtk_label_set_attributes(GTK_LABEL(w), attrs);
+        pango_attr_list_unref(attrs);
+        return;
+    }
     PangoAttribute* attr = pango_attr_size_new((int)(size * PANGO_SCALE));
-    pango_attr_list_insert(attrs, attr);
+    pango_attr_list_change(attrs, attr);
     gtk_label_set_attributes(GTK_LABEL(w), attrs);
     pango_attr_list_unref(attrs);
 }
@@ -2775,6 +2817,120 @@ void aether_ui_set_font_bold(int handle, int bold) {
     pango_attr_list_insert(attrs, attr);
     gtk_label_set_attributes(GTK_LABEL(w), attrs);
     pango_attr_list_unref(attrs);
+}
+
+// Italic and underline / line-through on a label, as Pango attributes that
+// stay through set_text (gtk_label_set_text keeps a label's attributes).
+// The state is kept on the widget for the driver (styled_text_style_impl).
+static void aeui_label_attr(GtkWidget* w, PangoAttribute* attr) {
+    PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+    attrs = attrs ? pango_attr_list_copy(attrs) : pango_attr_list_new();
+    pango_attr_list_change(attrs, attr);
+    gtk_label_set_attributes(GTK_LABEL(w), attrs);
+    pango_attr_list_unref(attrs);
+}
+
+void aether_ui_set_font_italic(int handle, int italic) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return;
+    aeui_label_attr(w, pango_attr_style_new(italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL));
+    int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
+    ts = (ts & ~1) | (italic ? 1 : 0) | 8;
+    g_object_set_data(G_OBJECT(w), "aeui-text-style", GINT_TO_POINTER(ts));
+}
+
+void aether_ui_set_text_decoration(int handle, int underline, int strike) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return;
+    // As CSS (text-decoration-line), which GTK turns into the label's own
+    // attributes: a Pango underline attribute set directly is not drawn by
+    // GTK 4.6 (Ubuntu 22.04), though line-through is.
+    char cls[32], rule[160];
+    snprintf(cls, sizeof(cls), "aui-td-%d", handle);
+    gtk_widget_add_css_class(w, cls);
+    const char* line = "none";
+    if (underline && strike) line = "underline line-through";
+    else if (underline) line = "underline";
+    else if (strike) line = "line-through";
+    snprintf(rule, sizeof(rule), "label.%s { text-decoration-line: %s; }", cls, line);
+    global_css_set_keyed(cls, rule);
+    int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
+    ts = (ts & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
+    g_object_set_data(G_OBJECT(w), "aeui-text-style", GINT_TO_POINTER(ts));
+}
+
+int aether_ui_styled_text_style_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return -1;
+    int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
+    return (ts & 8) ? ts : -1;
+}
+
+// Cell decorations: edge lines as inset box shadows (inside the box, over
+// its background, never moving the text), the bar and the corner as
+// background images over the background colour. One keyed rule per label,
+// replaced on each call, on a selector (label + class) that outranks the
+// background colour's, and that sets only the image and the shadow.
+typedef struct { int e[8]; double bar; int bar_rgb; int corner; } AeuiDecor;
+
+void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,
+                              int bottom, int bottom_rgb, int left, int left_rgb,
+                              double bar, int bar_rgb, int corner_rgb) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return;
+    AeuiDecor* d = g_new0(AeuiDecor, 1);
+    int ev[8] = {top, top_rgb, right, right_rgb, bottom, bottom_rgb, left, left_rgb};
+    memcpy(d->e, ev, sizeof(ev));
+    if (bar > 1.0) bar = 1.0;
+    if (bar < -1.0) bar = -1.0;
+    d->bar = bar;
+    d->bar_rgb = bar_rgb;
+    d->corner = corner_rgb;
+    g_object_set_data_full(G_OBJECT(w), "aeui-decor", d, g_free);
+
+    char cls[32];
+    snprintf(cls, sizeof(cls), "aui-dec-%d", handle);
+    gtk_widget_add_css_class(w, cls);
+    char shadow[512] = "";
+    int sn = 0;
+    // Inset offsets: a top line is a shadow pushed down by its width, and so on.
+    int dx[4] = {0, -1, 0, 1}, dy[4] = {1, 0, -1, 0};
+    for (int k = 0; k < 4; k++) {
+        int wd = ev[k * 2], c = ev[k * 2 + 1] & 0xFFFFFF;
+        if (wd <= 0) continue;
+        sn += snprintf(shadow + sn, sizeof(shadow) - sn, "%sinset %dpx %dpx 0 0 #%06x",
+                       sn ? ", " : "", dx[k] * wd, dy[k] * wd, c);
+    }
+    char image[512] = "";
+    int in = 0;
+    if (corner_rgb >= 0) {
+        in += snprintf(image + in, sizeof(image) - in,
+            "linear-gradient(to bottom left, #%06x 5px, transparent 5px)", corner_rgb & 0xFFFFFF);
+    }
+    if (bar != 0.0) {
+        int pc = (int)((bar < 0 ? -bar : bar) * 100.0 + 0.5);
+        in += snprintf(image + in, sizeof(image) - in,
+            "%slinear-gradient(%s, #%06x %d%%, transparent %d%%)", in ? ", " : "",
+            bar < 0 ? "to left" : "to right", bar_rgb & 0xFFFFFF, pc, pc);
+    }
+    char rule[1200];
+    snprintf(rule, sizeof(rule), "label.%s { background-image: %s; box-shadow: %s; }",
+             cls, in ? image : "none", sn ? shadow : "none");
+    global_css_set_keyed(cls, rule);
+}
+
+int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_rgb, int* corner_rgb) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return 0;
+    AeuiDecor* d = g_object_get_data(G_OBJECT(w), "aeui-decor");
+    if (!d) return 0;
+    memcpy(edges, d->e, sizeof(d->e));
+    *bar = d->bar;
+    *bar_rgb = d->bar_rgb;
+    *corner_rgb = d->corner;
+    int any = d->bar != 0.0 || d->corner >= 0;
+    for (int k = 0; k < 4; k++) if (d->e[k * 2] > 0) any = 1;
+    return any;
 }
 
 // Widget-level font family (AeCS v1.1). Labels get a Pango family attribute
@@ -3010,7 +3166,10 @@ void aether_ui_set_enabled(int handle, int enabled) {
 
 void aether_ui_set_tooltip(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (w) gtk_widget_set_tooltip_text(w, text);
+    if (w) {
+        gtk_widget_set_tooltip_text(w, (text && text[0]) ? text : NULL);
+        aeui_tooltip_note(handle, text);
+    }
 }
 
 // ── Accessibility (semantics layer) ──────────────────────────────────
@@ -8194,6 +8353,7 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         int ac = aether_ui_state_style_impl(handle, 1);
         if (hv >= 0) n += snprintf(buf + n, bufsize - n, ",\"hoverBg\":\"#%06x\"", hv);
         if (ac >= 0) n += snprintf(buf + n, bufsize - n, ",\"activeBg\":\"#%06x\"", ac);
+        n = aeui_emit_text_style(buf, n, bufsize, handle);
     }
 
     // Accessibility: effective role + accessible name (emitted only when
