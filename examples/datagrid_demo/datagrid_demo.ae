@@ -16,7 +16,8 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
     edit_text, cell_style,
     on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
-    datagrid_anchor_row, datagrid_anchor_col,
+    datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
+    datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -59,6 +60,8 @@ main() {
     edits = map.map_new()
     notes = ui_state_s("")
     swapped = ui_state_i(0)
+    rowmodel = ui_state_s("")
+    hidc = ui_state_i(0)
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
@@ -133,6 +136,23 @@ main() {
                 _sw = ui_set_i(swapped, 1 - ui_get_i(swapped))
                 _rf = datagrid_refresh(g)
             }
+            // Rows 5 and 6 (model rows 4 and 5) out of the view and back,
+            // and the column headed C (wherever it has been moved to).
+            _hide = btn("Hide rows 5-6") callback {
+                h = 1 - datagrid_row_hidden(g, 4)
+                _h4 = datagrid_hide_row(g, 4, h)
+                _h5 = datagrid_hide_row(g, 5, h)
+                _rm = ui_set_s(rowmodel, "${datagrid_row_model(g, 4)}")
+            }
+            _hidec = btn("Hide C") callback {
+                vc = 0
+                while vc < 50 && datagrid_col_model(g, vc) != 3 { vc = vc + 1 }
+                hc = 0
+                if ui_get_i(hidc) == 0 { hc = 1 }
+                _hc = datagrid_hide_col(g, vc, hc)
+                _hs = ui_set_i(hidc, hc)
+            }
+            text_bound(rowmodel, "row 4 shown is model row ", "")
             text_bound(clicked, "clicked: ", "")
             text_bound(selected, "selection: ", "")
             text_bound(activated, "activated: ", "")

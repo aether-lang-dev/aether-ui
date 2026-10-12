@@ -33,7 +33,8 @@ exports (
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
     datagrid_on_col_move, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
-    datagrid_edit_cancel, datagrid_editor, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
+    datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -6363,6 +6364,11 @@ vlist_native(vp: ptr) -> int {
 // ones the cell and header functions and on_edit are given, which are MODEL
 // columns (what to show, what to store); datagrid_col_model converts.
 //
+// Rows and columns can be hidden (datagrid_hide_row, datagrid_hide_col):
+// a hidden one takes no room, scrolling, the keys and selections step over
+// it, and a strip in the frozen columns marks hidden rows. Rows are model
+// rows throughout; datagrid_row_model(g, v) is the v-th row shown.
+//
 // A grid with datagrid_on_edit is editable: F2, a double click or Return
 // (when the grid has no datagrid_on_activate) opens an editor (a text field over the cell) holding the cell's text, and
 // typing a character opens one holding that character. Return commits and
@@ -6421,7 +6427,28 @@ struct DataGrid {
     style: ptr        // boxed |r, c| -> string, or null: no cell styling
     style_hash: ptr   // longarr: the key (_datagrid_hash) of the style each shown cell last had
     style_bg: ptr     // intarr: that style's background, -1 for none
+    row_hid: ptr      // intarr: 1 for each hidden MODEL row, or null until one is hidden
+    hid_rows: ptr     // intarr: the hidden rows, in order (n_hid of them)
+    n_hid: int
+    hid_cap: int
+    col_hid: ptr      // intarr: 1 for each hidden MODEL column
+    vcols: ptr        // intarr: the view columns not hidden, in order (n_vcols)
+    n_vcols: int
+    scols: ptr        // intarr: those of them that scroll (>= frozen), in order (n_scols)
+    n_scols: int
+    slot_row: ptr     // intarr: the model row each shown row shows, -1 for none
+    slot_col: ptr     // intarr: the view column each shown position shows, -1 for none
+    slot_off: ptr     // intarr: 1 where a shown row is hidden (nothing left to show)
+    pos_off: ptr      // intarr: 1 where a shown position is hidden
+    gaps: ptr         // intarr: the strip above each shown row that marks hidden rows
+    gap_on: ptr       // intarr: 1 where that strip is showing
+    gap_boxes: ptr    // intarr: the coloured box in each strip
 }
+
+// The strip that marks hidden rows above a row: as tall as Excel's double
+// line, in the frozen columns' width.
+const DATAGRID_GAP = 3
+const DATAGRID_GAP_COLOUR = 9079451   // #8a8a9b
 
 // The cursor's border.
 const DATAGRID_CURSOR_BORDER = 3108816   // #2f6fd0
@@ -6497,11 +6524,40 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.drag_kind = 0
     g.widths = intarr_new_raw(cols + 1)
     g.order = intarr_new_raw(cols + 1)
+    g.col_hid = intarr_new_raw(cols + 1)
+    g.vcols = intarr_new_raw(cols + 1)
+    g.scols = intarr_new_raw(cols + 1)
     oi = 0
     while oi < cols {
         intarr_set_raw(g.widths, oi, g.col_w)
         intarr_set_raw(g.order, oi, oi)
+        intarr_set_raw(g.col_hid, oi, 0)
         oi = oi + 1
+    }
+    g.row_hid = null
+    g.hid_rows = null
+    g.n_hid = 0
+    g.hid_cap = 0
+    _datagrid_col_lists(g)
+    g.slot_row = intarr_new_raw(vr + 1)
+    g.slot_off = intarr_new_raw(vr + 1)
+    g.gap_on = intarr_new_raw(vr + 1)
+    g.gaps = intarr_new_raw(vr + 1)
+    g.gap_boxes = intarr_new_raw(vr + 1)
+    si = 0
+    while si < vr {
+        intarr_set_raw(g.slot_row, si, si)
+        intarr_set_raw(g.slot_off, si, 0)
+        intarr_set_raw(g.gap_on, si, 0)
+        si = si + 1
+    }
+    g.slot_col = intarr_new_raw(fz + vc + 1)
+    g.pos_off = intarr_new_raw(fz + vc + 1)
+    pi = 0
+    while pi < fz + vc {
+        if pi < fz { intarr_set_raw(g.slot_col, pi, pi) } else { intarr_set_raw(g.slot_col, pi, fz + (pi - fz)) }
+        intarr_set_raw(g.pos_off, pi, 0)
+        pi = pi + 1
     }
     g.shown_w = intarr_new_raw(fz + vc + 1)
     gp = g as ptr
@@ -6568,6 +6624,23 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     ri = 0
     g.row_boxes = intarr_new_raw(vr + 1)
     while ri < vr {
+        // The strip above the row that marks hidden rows (hidden itself
+        // until rows are): a coloured box in the frozen columns' width.
+        a11y_next_role("none")
+        gap = hstack(body, 0)
+        _gph = height(gap, DATAGRID_GAP)
+        _gpa = a11y_role(gap, "none")
+        a11y_next_role("none")
+        gbx = vstack(gap, 0)
+        _gbh = height(gbx, DATAGRID_GAP)
+        _gbw = width(gbx, g.col_w * fz)
+        _gba = a11y_role(gbx, "none")
+        add_css_class(gbx, "aui-grid-gap")
+        gc = DATAGRID_GAP_COLOUR
+        aether_ui_set_bg_color(gbx, ((gc / 65536) % 256) / 255.0, ((gc / 256) % 256) / 255.0, (gc % 256) / 255.0, 1.0)
+        _gph2 = set_hidden(gap, 1)
+        intarr_set_raw(g.gaps, ri, gap)
+        intarr_set_raw(g.gap_boxes, ri, gbx)
         a11y_next_role("row")
         row = hstack(body, 0)
         intarr_set_raw(g.row_boxes, ri, row)
@@ -6609,12 +6682,18 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     if maxr < 0 { maxr = 0 }
     maxc = cols - fz - vc
     if maxc < 0 { maxc = 0 }
+    // The sliders' ranges are fixed at what the whole grid needs. With rows
+    // or columns hidden there are fewer places to scroll to, and a slider's
+    // value is spread over them in proportion (the same number when none
+    // are hidden).
     g.vsl = vslider(mid, 0.0, maxr * 1.0, 0.0) callback |v: float| {
-        datagrid_scroll_to(gp, (v + 0.5) as int, g.first_col)
+        gv = gp as *DataGrid
+        _datagrid_scroll_index(gv, _datagrid_from_slider(v, gv.rows - gv.vis_rows, gv.rows - gv.n_hid - gv.vis_rows), 0 - 1)
     }
     _vh = height(g.vsl, vr * g.row_h)
     g.hsl = slider(root, 0.0, maxc * 1.0, 0.0) callback |v: float| {
-        datagrid_scroll_to(gp, g.first_row, g.frozen + ((v + 0.5) as int))
+        gh = gp as *DataGrid
+        _datagrid_scroll_index(gh, 0 - 1, _datagrid_from_slider(v, gh.cols - gh.frozen - gh.vis_cols, gh.n_scols - gh.vis_cols))
     }
     _hw2 = width(g.hsl, (fz + vc) * g.col_w)
     on_key(root) callback |k: string, m: int| {
@@ -6642,22 +6721,257 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     return gp
 }
 
-// The column a shown position holds: frozen ones are themselves, the rest
-// follow the scroll.
+// The view column a shown position holds (-1 for none): frozen ones are
+// themselves, the rest follow the scroll, past any hidden columns.
 _datagrid_col_at(g: *DataGrid, j: int) -> int {
-    if j < g.frozen { return j }
-    return g.first_col + (j - g.frozen)
+    return intarr_get_raw(g.slot_col, j)
+}
+
+// The model row shown row s shows, -1 for none.
+_datagrid_row_at(g: *DataGrid, s: int) -> int {
+    return intarr_get_raw(g.slot_row, s)
+}
+
+// The shown row showing model row r, -1 when it is not shown.
+_datagrid_slot_of_row(g: *DataGrid, r: int) -> int {
+    s = 0
+    while s < g.vis_rows {
+        if intarr_get_raw(g.slot_row, s) == r { return s }
+        s = s + 1
+    }
+    return 0 - 1
+}
+
+// The shown position showing view column c, -1 when it is not shown.
+_datagrid_pos_of_col(g: *DataGrid, c: int) -> int {
+    j = 0
+    while j < g.frozen + g.vis_cols {
+        if intarr_get_raw(g.slot_col, j) == c && intarr_get_raw(g.pos_off, j) == 0 { return j }
+        j = j + 1
+    }
+    return 0 - 1
+}
+
+// ── Hidden rows. Rows are always model rows; the shown ones are counted by
+// their index among the rows that are not hidden. hid_rows keeps the hidden
+// ones in order, so either way is a binary search, whatever the grid's size.
+
+_datagrid_row_hidden(g: *DataGrid, r: int) -> int {
+    if g.row_hid == null || r < 0 || r >= g.rows { return 0 }
+    return intarr_get_raw(g.row_hid, r)
+}
+
+// How many rows are not hidden.
+_datagrid_rows_shown(g: *DataGrid) -> int {
+    return g.rows - g.n_hid
+}
+
+// How many hidden rows come before row r.
+_datagrid_hid_before(g: *DataGrid, r: int) -> int {
+    lo = 0
+    hi = g.n_hid
+    while lo < hi {
+        mid = (lo + hi) / 2
+        if intarr_get_raw(g.hid_rows, mid) < r { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
+
+// Row r's index among the rows not hidden (for a hidden row, the index the
+// next one down has).
+_datagrid_row_index(g: *DataGrid, r: int) -> int {
+    return r - _datagrid_hid_before(g, r)
+}
+
+// The model row at index i among the rows not hidden, -1 past the end. The
+// j-th hidden row has (hid[j] - j) rows shown before it, which never falls
+// as j grows, so the hidden rows before the answer are found by bisection.
+_datagrid_row_of_index(g: *DataGrid, i: int) -> int {
+    if i < 0 || i >= _datagrid_rows_shown(g) { return 0 - 1 }
+    lo = 0
+    hi = g.n_hid
+    while lo < hi {
+        mid = (lo + hi) / 2
+        if intarr_get_raw(g.hid_rows, mid) - mid <= i { lo = mid + 1 } else { hi = mid }
+    }
+    return i + lo
+}
+
+// The nearest row to r that is not hidden: r itself, else the next one
+// down, else (at the end) the last; -1 when every row is hidden.
+_datagrid_row_fix(g: *DataGrid, r: int) -> int {
+    n = _datagrid_rows_shown(g)
+    if n <= 0 { return 0 - 1 }
+    rr = _datagrid_clamp(r, g.rows - 1)
+    if _datagrid_row_hidden(g, rr) == 0 { return rr }
+    i = _datagrid_row_index(g, rr)
+    if i >= n { i = n - 1 }
+    return _datagrid_row_of_index(g, i)
+}
+
+// Row r moved by d rows that are not hidden, clamped to the grid.
+_datagrid_row_step(g: *DataGrid, r: int, d: int) -> int {
+    n = _datagrid_rows_shown(g)
+    if n <= 0 { return 0 - 1 }
+    i = _datagrid_row_index(g, _datagrid_row_fix(g, r)) + d
+    return _datagrid_row_of_index(g, _datagrid_clamp(i, n - 1))
+}
+
+// ── Hidden columns. Column numbers stay view columns; hiding belongs to the
+// model column, so it goes with the column when it moves. vcols lists the
+// view columns not hidden, scols those of them that scroll.
+_datagrid_col_hidden(g: *DataGrid, c: int) -> int {
+    if c < 0 || c >= g.cols { return 0 }
+    return intarr_get_raw(g.col_hid, _datagrid_model(g, c))
+}
+
+_datagrid_col_lists(g: *DataGrid) {
+    nv = 0
+    ns = 0
+    c = 0
+    while c < g.cols {
+        if intarr_get_raw(g.col_hid, intarr_get_raw(g.order, c)) == 0 {
+            intarr_set_raw(g.vcols, nv, c)
+            nv = nv + 1
+            if c >= g.frozen {
+                intarr_set_raw(g.scols, ns, c)
+                ns = ns + 1
+            }
+        }
+        c = c + 1
+    }
+    g.n_vcols = nv
+    g.n_scols = ns
+}
+
+// The index of view column c in a list of n columns (in order): where c is,
+// else where it would go.
+_datagrid_index_in(lst: ptr, n: int, c: int) -> int {
+    i = 0
+    while i < n && intarr_get_raw(lst, i) < c { i = i + 1 }
+    return i
+}
+
+// The nearest view column to c that is not hidden (the next one right, else
+// the last); -1 when every column is hidden.
+_datagrid_col_fix(g: *DataGrid, c: int) -> int {
+    if g.n_vcols <= 0 { return 0 - 1 }
+    i = _datagrid_index_in(g.vcols, g.n_vcols, _datagrid_clamp(c, g.cols - 1))
+    if i >= g.n_vcols { i = g.n_vcols - 1 }
+    return intarr_get_raw(g.vcols, i)
+}
+
+// View column c moved by d columns that are not hidden, clamped.
+_datagrid_col_step(g: *DataGrid, c: int, d: int) -> int {
+    if g.n_vcols <= 0 { return 0 - 1 }
+    i = _datagrid_index_in(g.vcols, g.n_vcols, _datagrid_col_fix(g, c)) + d
+    return intarr_get_raw(g.vcols, _datagrid_clamp(i, g.n_vcols - 1))
+}
+
+// A slider's value over its range (0 to smax) as an index from 0 to n, in
+// proportion; the value itself when the two are the same.
+_datagrid_from_slider(v: float, smax: int, n: int) -> int {
+    if n <= 0 || smax <= 0 { return 0 }
+    if smax == n { return (v + 0.5) as int }
+    return ((v * n) / smax + 0.5) as int
+}
+
+_datagrid_to_slider(i: int, smax: int, n: int) -> float {
+    if n <= 0 || smax <= 0 { return 0.0 }
+    if smax == n { return i * 1.0 }
+    return (i * smax * 1.0) / n
+}
+
+// Scroll so that the row at index ri (among those not hidden) is at the top
+// and the scrolling column at index ci (among those not hidden) is the
+// first; -1 leaves that one where it is.
+_datagrid_scroll_index(g: *DataGrid, ri: int, ci: int) {
+    r = g.first_row
+    if ri >= 0 { r = _datagrid_row_of_index(g, _datagrid_clamp(ri, _datagrid_rows_shown(g) - 1)) }
+    c = g.first_col
+    if ci >= 0 && g.n_scols > 0 { c = intarr_get_raw(g.scols, _datagrid_clamp(ci, g.n_scols - 1)) }
+    _d = datagrid_scroll_to(g as ptr, r, c)
+}
+
+// Work out what each shown row and position shows, from the first row and
+// column, and hide the rows, positions and gap strips that show nothing.
+_datagrid_layout(g: *DataGrid) {
+    w = g.frozen + g.vis_cols
+    // Rows: from the first row down, past the hidden ones.
+    m = g.first_row
+    s = 0
+    while s < g.vis_rows {
+        while m < g.rows && _datagrid_row_hidden(g, m) == 1 { m = m + 1 }
+        row = 0 - 1
+        if m < g.rows { row = m }
+        intarr_set_raw(g.slot_row, s, row)
+        off = 0
+        if row < 0 { off = 1 }
+        if intarr_get_raw(g.slot_off, s) != off {
+            intarr_set_raw(g.slot_off, s, off)
+            _rh = set_hidden(intarr_get_raw(g.row_boxes, s), off)
+            // A row with nothing to show says nothing, to a test or a
+            // screen reader, rather than what it showed last.
+            if off == 1 {
+                j0 = 0
+                while j0 < w {
+                    aether_ui_text_set_string(intarr_get_raw(g.cells, s * w + j0), "")
+                    j0 = j0 + 1
+                }
+            }
+        }
+        // A strip above the row when the row before it is hidden.
+        gon = 0
+        if row > 0 && _datagrid_row_hidden(g, row - 1) == 1 { gon = 1 }
+        if intarr_get_raw(g.gap_on, s) != gon {
+            intarr_set_raw(g.gap_on, s, gon)
+            _gh = set_hidden(intarr_get_raw(g.gaps, s), 1 - gon)
+        }
+        m = m + 1
+        s = s + 1
+    }
+    // Positions: frozen ones are their own column (hidden with it), the
+    // rest the scrolling columns not hidden, from the first one shown.
+    si = _datagrid_index_in(g.scols, g.n_scols, g.first_col)
+    j = 0
+    while j < w {
+        col = 0 - 1
+        poff = 0
+        if j < g.frozen {
+            col = j
+            if _datagrid_col_hidden(g, j) == 1 { poff = 1 }
+        } else {
+            k = si + (j - g.frozen)
+            if k < g.n_scols { col = intarr_get_raw(g.scols, k) } else { poff = 1 }
+        }
+        intarr_set_raw(g.slot_col, j, col)
+        if intarr_get_raw(g.pos_off, j) != poff {
+            intarr_set_raw(g.pos_off, j, poff)
+            _hb = set_hidden(intarr_get_raw(g.hdr_boxes, j), poff)
+            if poff == 1 { aether_ui_text_set_string(intarr_get_raw(g.hdr_cells, j), "") }
+            r = 0
+            while r < g.vis_rows {
+                _cb = set_hidden(intarr_get_raw(g.boxes, r * w + j), poff)
+                if poff == 1 { aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + j), "") }
+                r = r + 1
+            }
+        }
+        j = j + 1
+    }
 }
 
 // Rewrite every shown cell (and header) from the model, for the current
 // first row and column. The widgets stay; only their text changes.
 _datagrid_bind(g: *DataGrid) {
+    _datagrid_layout(g)
     w = g.frozen + g.vis_cols
     if g.header != null {
         hf = unbox_closure(g.header)
         j = 0
         while j < w {
-            aether_ui_text_set_string(intarr_get_raw(g.hdr_cells, j), _datagrid_invoke_header(hf, _datagrid_model(g, _datagrid_col_at(g, j))))
+            if intarr_get_raw(g.pos_off, j) == 0 {
+                aether_ui_text_set_string(intarr_get_raw(g.hdr_cells, j), _datagrid_invoke_header(hf, _datagrid_model(g, _datagrid_col_at(g, j))))
+            }
             j = j + 1
         }
     }
@@ -6670,9 +6984,12 @@ _datagrid_bind(g: *DataGrid) {
     cf = unbox_closure(g.cell)
     r = 0
     while r < g.vis_rows {
+        mr = _datagrid_row_at(g, r)
         c = 0
-        while c < w {
-            aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + c), _datagrid_invoke_cell(cf, g.first_row + r, _datagrid_model(g, _datagrid_col_at(g, c))))
+        while c < w && mr >= 0 {
+            if intarr_get_raw(g.pos_off, c) == 0 {
+                aether_ui_text_set_string(intarr_get_raw(g.cells, r * w + c), _datagrid_invoke_cell(cf, mr, _datagrid_model(g, _datagrid_col_at(g, c))))
+            }
             c = c + 1
         }
         r = r + 1
@@ -6691,16 +7008,23 @@ _datagrid_a11y(g: *DataGrid) {
     w = g.frozen + g.vis_cols
     j = 0
     while j < w {
-        _h = a11y_grid_header(intarr_get_raw(g.hdr_cells, j), _datagrid_col_at(g, j))
+        if intarr_get_raw(g.pos_off, j) == 0 {
+            _h = a11y_grid_header(intarr_get_raw(g.hdr_cells, j), _datagrid_col_at(g, j))
+        }
         j = j + 1
     }
     r = 0
     while r < g.vis_rows {
-        _rr = a11y_grid_row(intarr_get_raw(g.row_boxes, r), g.first_row + r + 1)
-        c = 0
-        while c < w {
-            _c = a11y_grid_cell(intarr_get_raw(g.cells, r * w + c), g.first_row + r + 1, _datagrid_col_at(g, c), intarr_get_raw(g.hdr_cells, c))
-            c = c + 1
+        mr = _datagrid_row_at(g, r)
+        if mr >= 0 {
+            _rr = a11y_grid_row(intarr_get_raw(g.row_boxes, r), mr + 1)
+            c = 0
+            while c < w {
+                if intarr_get_raw(g.pos_off, c) == 0 {
+                    _c = a11y_grid_cell(intarr_get_raw(g.cells, r * w + c), mr + 1, _datagrid_col_at(g, c), intarr_get_raw(g.hdr_cells, c))
+                }
+                c = c + 1
+            }
         }
         r = r + 1
     }
@@ -6715,10 +7039,16 @@ _datagrid_model(g: *DataGrid, view: int) -> int {
 _datagrid_size(g: *DataGrid) {
     w = g.frozen + g.vis_cols
     total = 0
+    fzw = 0
     j = 0
     while j < w {
+        if intarr_get_raw(g.pos_off, j) == 1 {
+            j = j + 1
+            continue
+        }
         cw = intarr_get_raw(g.widths, _datagrid_model(g, _datagrid_col_at(g, j)))
         total = total + cw
+        if j < g.frozen { fzw = fzw + cw }
         if intarr_get_raw(g.shown_w, j) != cw {
             intarr_set_raw(g.shown_w, j, cw)
             _hbw = width(intarr_get_raw(g.hdr_boxes, j), cw)
@@ -6733,6 +7063,15 @@ _datagrid_size(g: *DataGrid) {
         j = j + 1
     }
     _sw2 = width(g.hsl, total)
+    // The gap strips are as wide as the frozen columns (the whole row when
+    // there are none), where they show.
+    gw = fzw
+    if gw <= 0 { gw = total }
+    s = 0
+    while s < g.vis_rows {
+        if intarr_get_raw(g.gap_on, s) == 1 { _gw = width(intarr_get_raw(g.gap_boxes, s), gw) }
+        s = s + 1
+    }
 }
 
 // A drag on the header cell at shown position `pos`: on its grip (grip = 1)
@@ -6770,28 +7109,30 @@ _datagrid_header_drag(gp: ptr, pos: int, grip: int, phase: int, x: float) {
     if g.drag_kind == 2 && phase == 2 {
         g.drag_kind = 0
         // Where the pointer was let go, across the shown scrolling columns.
+        // (Hidden positions take no room, so they are not counted.)
         left = 0
         j = 0
         while j < pos {
-            left = left + intarr_get_raw(g.shown_w, j)
+            if intarr_get_raw(g.pos_off, j) == 0 { left = left + intarr_get_raw(g.shown_w, j) }
             j = j + 1
         }
         at = left + ((g.drag_x0 + x) as int)
         w = g.frozen + g.vis_cols
-        to = w - 1
+        to = 0 - 1
         edge = 0
         k = 0
         found = 0
         while k < w && found == 0 {
-            edge = edge + intarr_get_raw(g.shown_w, k)
-            if at < edge {
+            if intarr_get_raw(g.pos_off, k) == 0 {
+                edge = edge + intarr_get_raw(g.shown_w, k)
                 to = k
-                found = 1
+                if at < edge { found = 1 }
             }
             k = k + 1
         }
         if to < g.frozen { to = g.frozen }
-        datagrid_move_col(gp, view, _datagrid_col_at(g, to))
+        tc = _datagrid_col_at(g, to)
+        if tc >= 0 { datagrid_move_col(gp, view, tc) }
     }
 }
 
@@ -6855,6 +7196,7 @@ datagrid_move_col(gp: ptr, from: int, to: int) -> ptr {
         }
     }
     intarr_set_raw(g.order, to, m)
+    _datagrid_col_lists(g)
     _datagrid_bind(g)
     if g.on_move != null {
         _datagrid_invoke_click(unbox_closure(g.on_move), from, to)
@@ -6867,6 +7209,107 @@ datagrid_col_model(gp: ptr, c: int) -> int {
     g = gp as *DataGrid
     if c < 0 || c >= g.cols { return 0 - 1 }
     return _datagrid_model(g, c)
+}
+
+// datagrid_hide_row(g, r, hidden): model row r out of the view (hidden = 1)
+// or back (0). A hidden row takes no height: scrolling, the cursor keys,
+// Shift-extended selections and datagrid_select_range step over it, and a
+// strip in the frozen columns marks where hidden rows are (Excel draws a
+// double line). Row numbers everywhere else stay model rows, so the cell
+// function, the callbacks and the cursor mean what they did.
+datagrid_hide_row(gp: ptr, r: int, hidden: int) -> ptr {
+    g = gp as *DataGrid
+    if r < 0 || r >= g.rows { return gp }
+    h = 0
+    if hidden != 0 { h = 1 }
+    if _datagrid_row_hidden(g, r) == h { return gp }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    if g.row_hid == null {
+        g.row_hid = intarr_new_raw(g.rows + 1)
+        i0 = 0
+        while i0 < g.rows {
+            intarr_set_raw(g.row_hid, i0, 0)
+            i0 = i0 + 1
+        }
+    }
+    intarr_set_raw(g.row_hid, r, h)
+    at = _datagrid_hid_before(g, r)
+    if h == 1 {
+        if g.n_hid >= g.hid_cap {
+            cap = g.hid_cap * 2
+            if cap < 16 { cap = 16 }
+            grown = intarr_new_raw(cap + 1)
+            k = 0
+            while k < g.n_hid {
+                intarr_set_raw(grown, k, intarr_get_raw(g.hid_rows, k))
+                k = k + 1
+            }
+            g.hid_rows = grown
+            g.hid_cap = cap
+        }
+        k = g.n_hid
+        while k > at {
+            intarr_set_raw(g.hid_rows, k, intarr_get_raw(g.hid_rows, k - 1))
+            k = k - 1
+        }
+        intarr_set_raw(g.hid_rows, at, r)
+        g.n_hid = g.n_hid + 1
+    } else {
+        k = at
+        while k < g.n_hid - 1 {
+            intarr_set_raw(g.hid_rows, k, intarr_get_raw(g.hid_rows, k + 1))
+            k = k + 1
+        }
+        g.n_hid = g.n_hid - 1
+    }
+    _datagrid_rehide(g)
+    return gp
+}
+
+// datagrid_hide_col(g, c, hidden): view column c out of the view or back.
+// Hiding belongs to the column, so it moves with it; the cursor keys and
+// selections step over it, and view column numbers do not change.
+datagrid_hide_col(gp: ptr, c: int, hidden: int) -> ptr {
+    g = gp as *DataGrid
+    if c < 0 || c >= g.cols { return gp }
+    h = 0
+    if hidden != 0 { h = 1 }
+    if _datagrid_col_hidden(g, c) == h { return gp }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    intarr_set_raw(g.col_hid, _datagrid_model(g, c), h)
+    _datagrid_col_lists(g)
+    _datagrid_rehide(g)
+    return gp
+}
+
+// After rows or columns are hidden or shown: the cursor and the anchor move
+// off any hidden one, and the window is put where it can be.
+_datagrid_rehide(g: *DataGrid) {
+    if g.cur_r >= 0 {
+        _datagrid_set(g, g.anc_r, g.anc_c, g.cur_r, g.cur_c)
+    }
+    _d = datagrid_scroll_to(g as ptr, g.first_row, g.first_col)
+}
+
+// datagrid_row_hidden(g, r) / datagrid_col_hidden(g, c): 1 when hidden.
+datagrid_row_hidden(gp: ptr, r: int) -> int {
+    return _datagrid_row_hidden(gp as *DataGrid, r)
+}
+datagrid_col_hidden(gp: ptr, c: int) -> int {
+    return _datagrid_col_hidden(gp as *DataGrid, c)
+}
+
+// datagrid_row_model(g, v): the model row that is the v-th row shown (from
+// the top of the grid, counting only rows not hidden), as datagrid_col_model
+// is for columns; -1 past the end. datagrid_row_view(g, r) is the other way:
+// model row r's place among the rows shown, -1 when it is hidden.
+datagrid_row_model(gp: ptr, v: int) -> int {
+    return _datagrid_row_of_index(gp as *DataGrid, v)
+}
+datagrid_row_view(gp: ptr, r: int) -> int {
+    g = gp as *DataGrid
+    if r < 0 || r >= g.rows || _datagrid_row_hidden(g, r) == 1 { return 0 - 1 }
+    return _datagrid_row_index(g, r)
 }
 
 // datagrid_on_col_resize(g) callback |c, w| { ... }: view column c was given
@@ -6891,8 +7334,8 @@ _datagrid_paint(g: *DataGrid) {
     r = 0
     while r < g.vis_rows {
         c = 0
-        while c < w {
-            mr = g.first_row + r
+        mr = _datagrid_row_at(g, r)
+        while c < w && mr >= 0 {
             mc = _datagrid_col_at(g, c)
             i = r * w + c
             base = intarr_get_raw(g.style_bg, i)
@@ -6949,9 +7392,14 @@ _datagrid_style(g: *DataGrid) {
     r = 0
     while r < g.vis_rows {
         c = 0
-        while c < w {
+        mr = _datagrid_row_at(g, r)
+        while c < w && mr >= 0 {
             i = r * w + c
-            st = _datagrid_invoke_cell(sf, g.first_row + r, _datagrid_model(g, _datagrid_col_at(g, c)))
+            if intarr_get_raw(g.pos_off, c) == 1 {
+                c = c + 1
+                continue
+            }
+            st = _datagrid_invoke_cell(sf, mr, _datagrid_model(g, _datagrid_col_at(g, c)))
             hh = _datagrid_hash(st)
             if longarr_get_raw(g.style_hash, i) != hh {
                 longarr_set_raw(g.style_hash, i, hh)
@@ -7080,23 +7528,31 @@ _datagrid_move(g: *DataGrid, r: int, c: int, extend: int) {
 // Select from the anchor (ar, ac) to the cursor (r, c), both clamped.
 _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     if g.rows <= 0 || g.cols <= 0 { return }
-    nr = _datagrid_clamp(r, g.rows - 1)
-    nc = _datagrid_clamp(c, g.cols - 1)
-    na_r = _datagrid_clamp(ar, g.rows - 1)
-    na_c = _datagrid_clamp(ac, g.cols - 1)
+    // A hidden row or column is never the cursor or the anchor: each moves
+    // to the nearest one shown.
+    nr = _datagrid_row_fix(g, r)
+    nc = _datagrid_col_fix(g, c)
+    na_r = _datagrid_row_fix(g, ar)
+    na_c = _datagrid_col_fix(g, ac)
+    if nr < 0 || nc < 0 { return }
     changed = 0
     if nr != g.cur_r || nc != g.cur_c || na_r != g.anc_r || na_c != g.anc_c { changed = 1 }
     g.cur_r = nr
     g.cur_c = nc
     g.anc_r = na_r
     g.anc_c = na_c
+    // Into view, counting only the rows and columns shown.
     fr = g.first_row
-    if nr < fr { fr = nr }
-    if nr > fr + g.vis_rows - 1 { fr = nr - g.vis_rows + 1 }
+    ir = _datagrid_row_index(g, nr)
+    i0 = _datagrid_row_index(g, g.first_row)
+    if ir < i0 { fr = nr }
+    if ir > i0 + g.vis_rows - 1 { fr = _datagrid_row_of_index(g, ir - g.vis_rows + 1) }
     fc = g.first_col
     if nc >= g.frozen {
-        if nc < fc { fc = nc }
-        if nc > fc + g.vis_cols - 1 { fc = nc - g.vis_cols + 1 }
+        ic = _datagrid_index_in(g.scols, g.n_scols, nc)
+        c0 = _datagrid_index_in(g.scols, g.n_scols, g.first_col)
+        if ic < c0 { fc = nc }
+        if ic > c0 + g.vis_cols - 1 { fc = intarr_get_raw(g.scols, ic - g.vis_cols + 1) }
     }
     if fr != g.first_row || fc != g.first_col {
         datagrid_scroll_to(g as ptr, fr, fc)
@@ -7156,14 +7612,15 @@ _datagrid_key(gp: ptr, k: string, m: int) {
         _datagrid_move(g, g.first_row, 0, 0)
         return
     }
+    // Moves count the rows and columns shown, so they step over hidden ones.
     if string.equals(k, "Down") == 1 {
-        r = r + 1
+        r = _datagrid_row_step(g, r, 1)
     } else if string.equals(k, "Up") == 1 {
-        r = r - 1
+        r = _datagrid_row_step(g, r, 0 - 1)
     } else if string.equals(k, "Right") == 1 {
-        c = c + 1
+        c = _datagrid_col_step(g, c, 1)
     } else if string.equals(k, "Left") == 1 {
-        c = c - 1
+        c = _datagrid_col_step(g, c, 0 - 1)
     } else if string.equals(k, "Home") == 1 {
         c = 0
         if ctrl == 1 { r = 0 }
@@ -7171,9 +7628,9 @@ _datagrid_key(gp: ptr, k: string, m: int) {
         c = g.cols - 1
         if ctrl == 1 { r = g.rows - 1 }
     } else if string.equals(k, "Page_Down") == 1 {
-        r = r + g.vis_rows
+        r = _datagrid_row_step(g, r, g.vis_rows)
     } else if string.equals(k, "Page_Up") == 1 {
-        r = r - g.vis_rows
+        r = _datagrid_row_step(g, r, 0 - g.vis_rows)
     } else if ctrl == 1 && (string.equals(k, "a") == 1 || string.equals(k, "A") == 1) {
         _datagrid_set(g, 0, 0, g.rows - 1, g.cols - 1)
         return
@@ -7236,9 +7693,8 @@ datagrid_fit_col(gp: ptr, c: int) -> ptr {
     w = g.frozen + g.vis_cols
     // Any shown position's widgets carry the same fonts; measure with the
     // ones at c's position if it is shown, else the first scrolling one.
-    pos = c
-    if c >= g.frozen { pos = g.frozen + (c - g.first_col) }
-    if pos < 0 || pos >= w { pos = g.frozen }
+    pos = _datagrid_pos_of_col(g, c)
+    if pos < 0 { pos = g.frozen }
     if pos >= w { pos = 0 }
     best = 0
     if g.header != null {
@@ -7249,8 +7705,11 @@ datagrid_fit_col(gp: ptr, c: int) -> ptr {
         cf = unbox_closure(g.cell)
         r = 0
         while r < g.vis_rows {
-            tw = text_measure(intarr_get_raw(g.cells, r * w + pos), _datagrid_invoke_cell(cf, g.first_row + r, m))
-            if tw > best { best = tw }
+            mr = _datagrid_row_at(g, r)
+            if mr >= 0 {
+                tw = text_measure(intarr_get_raw(g.cells, r * w + pos), _datagrid_invoke_cell(cf, mr, m))
+                if tw > best { best = tw }
+            }
             r = r + 1
         }
     }
@@ -7336,20 +7795,29 @@ datagrid_scroll_to(gp: ptr, row: int, col: int) -> ptr {
     g = gp as *DataGrid
     // An open editor sits on a widget that is about to show another cell.
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
-    maxr = g.rows - g.vis_rows
-    if maxr < 0 { maxr = 0 }
-    r = row
+    // Rows by their index among those shown: the window never runs past
+    // the last of them, and a hidden row reads as the next one shown.
+    nshown = _datagrid_rows_shown(g)
+    maxri = nshown - g.vis_rows
+    if maxri < 0 { maxri = 0 }
+    ri = 0
+    rf = _datagrid_row_fix(g, row)
+    if rf >= 0 { ri = _datagrid_row_index(g, rf) }
+    if ri > maxri { ri = maxri }
+    r = _datagrid_row_of_index(g, ri)
     if r < 0 { r = 0 }
-    if r > maxr { r = maxr }
-    maxc = g.cols - g.vis_cols
-    if maxc < g.frozen { maxc = g.frozen }
-    c = col
-    if c < g.frozen { c = g.frozen }
-    if c > maxc { c = maxc }
+    // Columns likewise, among the scrolling ones shown (a frozen column is
+    // always shown, so col below `frozen` reads as the first of them).
+    maxci = g.n_scols - g.vis_cols
+    if maxci < 0 { maxci = 0 }
+    ci = _datagrid_index_in(g.scols, g.n_scols, col)
+    if ci > maxci { ci = maxci }
+    c = g.frozen
+    if ci < g.n_scols { c = intarr_get_raw(g.scols, ci) }
     g.first_row = r
     g.first_col = c
-    aether_ui_slider_set_value(g.vsl, r * 1.0)
-    aether_ui_slider_set_value(g.hsl, (c - g.frozen) * 1.0)
+    aether_ui_slider_set_value(g.vsl, _datagrid_to_slider(ri, g.rows - g.vis_rows, nshown - g.vis_rows))
+    aether_ui_slider_set_value(g.hsl, _datagrid_to_slider(ci, g.cols - g.frozen - g.vis_cols, g.n_scols - g.vis_cols))
     _datagrid_bind(g)
     return gp
 }
@@ -7372,8 +7840,9 @@ datagrid_on_click(gp: ptr, cb: fn) -> ptr {
 
 _datagrid_clicked(gp: ptr, vr: int, vc: int) {
     g = gp as *DataGrid
-    r = g.first_row + vr
+    r = _datagrid_row_at(g, vr)
     c = _datagrid_col_at(g, vc)
+    if r < 0 || c < 0 { return }
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
     focus(g.root)
     _datagrid_move(g, r, c, modifiers() % 2)
@@ -7485,14 +7954,15 @@ _datagrid_edit_tab(gp: ptr, dir: int) {
     ec = g.edit_c
     _datagrid_edit_finish(g, 1)
     focus(g.root)
-    _datagrid_move(g, er, ec + dir, 0)
+    _datagrid_move(g, er, _datagrid_col_step(g, ec, dir), 0)
 }
 
 _datagrid_double_clicked(gp: ptr, vr: int, vc: int) {
     g = gp as *DataGrid
     if g.on_edit == null { return }
-    r = g.first_row + vr
+    r = _datagrid_row_at(g, vr)
     c = _datagrid_col_at(g, vc)
+    if r < 0 || c < 0 { return }
     _datagrid_edit_begin(g, r, c, _datagrid_edit_start(g, r, c))
 }
 
@@ -7515,11 +7985,10 @@ _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
     r2 = g.cur_r
     c2 = g.cur_c
     if r2 < 0 { return }
-    pos = c2
-    if c2 >= g.frozen { pos = g.frozen + (c2 - g.first_col) }
+    pos = _datagrid_pos_of_col(g, c2)
     w = g.frozen + g.vis_cols
-    vr = r2 - g.first_row
-    if vr < 0 || vr >= g.vis_rows || pos < 0 || pos >= w { return }
+    vr = _datagrid_slot_of_row(g, r2)
+    if vr < 0 || pos < 0 { return }
     box = intarr_get_raw(g.boxes, vr * w + pos)
     gp = g as ptr
     f = textfield(box, "") callback |_t: string| { }
@@ -7550,7 +8019,7 @@ _datagrid_submitted(gp: ptr, f: int) {
     ec = g.edit_c
     _datagrid_edit_finish(g, 1)
     focus(g.root)
-    _datagrid_move(g, er + 1, ec, 0)
+    _datagrid_move(g, _datagrid_row_step(g, er, 1), ec, 0)
 }
 
 // Close the editor; with keep = 1 hand its text to on_edit first. The cell

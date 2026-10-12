@@ -181,6 +181,21 @@ shows(t: string) -> int {
     return uidriver.wait_body_contains("/widgets", "\"text\":\"${t}\"", 20)
 }
 
+// No widget shows text t (waiting ~3s for it to go).
+gone(t: string) -> int {
+    i = 0
+    while i < 20 {
+        if string.contains(uidriver.get_body("/widgets"), "\"text\":\"${t}\"") == 0 { return 1 }
+        sleep(150)
+        i = i + 1
+    }
+    return 0
+}
+
+press(label: string) {
+    uidriver.post_ok("/widget/${uidriver.widget_id_of("button", label)}/click", label)
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -193,10 +208,10 @@ main() {
             spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
             spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
         }
-        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and seven labels)") callback {
+        spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and eight labels)") callback {
             // 1 caption + 7 header + 140 cells + the clicked, selection,
             // activated, resized, moved and edited lines.
-            spec.assert_eq(count_of("text"), 154, "texts")
+            spec.assert_eq(count_of("text"), 155, "texts")
         }
         spec.it("the vertical scrollbar stands up") callback {
             v = nth_of("slider", 0)
@@ -215,7 +230,7 @@ main() {
             spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
             spec.assert_true(shows("A") == 1, "the header still reads A")
             spec.assert_eq(field_of_text("A", "y"), hdr_y, "and has not moved")
-            spec.assert_eq(count_of("text"), 154, "no widgets added")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
         }
         spec.it("scrolling across keeps the frozen column and moves the rest") callback {
             hs = nth_of("slider", 1)
@@ -223,7 +238,7 @@ main() {
             spec.assert_true(shows("R90000C40") == 1, "column 40 first")
             spec.assert_true(shows("AN") == 1, "its header letter, AN")
             spec.assert_true(shows("90001") == 1, "the row number stayed")
-            spec.assert_eq(count_of("text"), 154, "still no widgets added")
+            spec.assert_eq(count_of("text"), 155, "still no widgets added")
         }
         spec.it("and after scrolling, the cell's new row and column") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R90003C41")}/click", "click R90003C41")
@@ -301,7 +316,7 @@ main() {
             key("Ctrl%2Ba")
             spec.assert_true(shows("selection: 99999,49 from 0,0") == 1, "the whole grid")
             spec.assert_str_eq(bg_of("R99990C45"), "#cce0ff", "a shown cell is in it")
-            spec.assert_eq(count_of("text"), 154, "no widgets added")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
         }
     }
 
@@ -343,7 +358,7 @@ main() {
             spec.assert_true(field_of_text("C", "x") < field_of_text("D", "x"), "C, D and E slid left")
             spec.assert_eq(settled("R99980C2", "x", field_of_text("B", "x")), field_of_text("B", "x"), "B's cells moved with it")
             spec.assert_eq(header_w("C", 24), 24, "and C kept its width")
-            spec.assert_eq(count_of("text"), 154, "no widgets added")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
         }
         spec.it("a frozen column does not move") callback {
             drag("#", 18, 150)
@@ -409,7 +424,7 @@ main() {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99990C1")}/click", "click elsewhere")
             spec.assert_true(editor_open(0) == 1, "the editor closed")
             spec.assert_true(shows("edited: 99983,3 = q") == 1, "and committed q (model column 3)")
-            spec.assert_eq(count_of("text"), 154, "no widgets left behind")
+            spec.assert_eq(count_of("text"), 155, "no widgets left behind")
         }
         spec.it("a key named by a word opens an editor holding its character") callback {
             key("comma")
@@ -514,6 +529,58 @@ main() {
             uidriver.post_ok("/widget/${grip_of("C")}/double_click", "double-click C's grip")
             spec.assert_true(uidriver.wait_body_contains("/widgets", "resized: 2 to ", 20), "on_col_resize heard view column 2")
             spec.assert_true(header_w("C", 0) > 36, "C grew")
+        }
+    }
+
+    spec.describe(fw, "hidden rows and columns") {
+        spec.it("hidden rows take no room, and a strip marks where they were") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            spec.assert_true(shows("R4C1") == 1, "row 4 is shown")
+            y3 = field_of_text("R3C1", "y")
+            spec.assert_eq(settled("R4C1", "y", y3 + 24), y3 + 24, "straight under row 3")
+            press("Hide rows 5-6")
+            spec.assert_true(gone("R4C1") == 1, "row 4 is not shown")
+            spec.assert_true(gone("R5C1") == 1, "nor row 5")
+            spec.assert_true(shows("R6C1") == 1, "row 6 is")
+            spec.assert_eq(settled("R6C1", "y", y3 + 24 + 3), y3 + 27, "under row 3, below a 3px strip")
+            spec.assert_true(shows("row 4 shown is model row 6") == 1, "datagrid_row_model: the fifth row shown is model row 6")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
+        }
+        spec.it("the keys and a Shift range step over them; callbacks keep model rows") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R3C1")}/click", "click R3C1")
+            spec.assert_true(shows("clicked: 3,1") == 1, "the click is model row 3")
+            key("Down")
+            spec.assert_true(shows("selection: 6,1 from 6,1") == 1, "Down from row 3 is row 6")
+            spec.assert_str_eq(bg_of("R6C1"), "#cce0ff", "the cursor is on it")
+            key("Shift%2BUp")
+            spec.assert_true(shows("selection: 3,1 from 6,1") == 1, "Shift+Up extends back to row 3")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R7C1")}/click", "click R7C1")
+            spec.assert_true(shows("clicked: 7,1") == 1, "a click below the hidden rows is its model row")
+        }
+        spec.it("a hidden column: the next one takes its place, and the keys step over it") callback {
+            ax = field_of_text("A", "x")
+            aw = header_w("A", 0)
+            spec.assert_true(shows("C") == 1, "C is shown")
+            press("Hide C")
+            spec.assert_true(gone("C") == 1, "C is not")
+            spec.assert_eq(settled("D", "x", ax + aw), ax + aw, "D straight after A")
+            spec.assert_true(gone("R3C3") == 1, "nor its cells")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R3C1")}/click", "click R3C1")
+            key("Right")
+            spec.assert_true(shows("selection: 3,3 from 3,3") == 1, "Right from A lands on view column 3, D")
+            spec.assert_str_eq(bg_of("R3C4"), "#cce0ff", "the cursor is on D's cell")
+            key("Left")
+            spec.assert_true(shows("selection: 3,1 from 3,1") == 1, "and Left back on A")
+        }
+        spec.it("shown again, all is as it was") callback {
+            press("Hide C")
+            press("Hide rows 5-6")
+            spec.assert_true(shows("C") == 1, "C is back")
+            spec.assert_true(shows("R4C1") == 1, "and row 4")
+            y3 = field_of_text("R3C1", "y")
+            spec.assert_eq(settled("R4C1", "y", y3 + 24), y3 + 24, "straight under row 3, no strip")
+            spec.assert_true(shows("row 4 shown is model row 4") == 1, "the fifth row shown is model row 4 again")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
         }
     }
 
