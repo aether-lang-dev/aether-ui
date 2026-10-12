@@ -271,15 +271,41 @@ static int state_truthy(StateCell* c) {
     return c->num != 0.0;
 }
 
+// Set while a binding writes a textarea: gtk_text_buffer_set_text deletes
+// then inserts, and the empty buffer between the two was written back to
+// the state, which then emptied the textarea.
+static int aeui_tv_seeding = 0;
+
+// The text view of the textarea whose handle this is (textarea_create
+// returns its scroll view and registers the view next), or NULL.
+static GtkWidget* aeui_textarea_view(int handle) {
+    GtkWidget* outer = aether_ui_get_widget(handle);
+    GtkWidget* tv = aether_ui_get_widget(handle + 1);
+    if (!outer || !tv || !GTK_IS_TEXT_VIEW(tv)) return NULL;
+    for (GtkWidget* p = gtk_widget_get_parent(tv); p; p = gtk_widget_get_parent(p))
+        if (p == outer) return tv;
+    return NULL;
+}
+
 static void apply_prop_binding(PropBinding* b) {
     StateCell* c = state_cell(b->state_handle);
     if (!c) return;
     if (b->kind == AEUI_BIND_VALUE) {
         // state → editable widget. Only set if different, so the widget's own
         // "changed" write-back (which set the state that got us here) doesn't
-        // re-enter forever.
-        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
+        // re-enter forever. A textarea through its own getter and setter.
         const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (aeui_textarea_view(b->widget_handle)) {
+            char* cur = aether_ui_textarea_get_text(b->widget_handle);
+            if (!cur || strcmp(cur, want) != 0) {
+                aeui_tv_seeding++;
+                aether_ui_textarea_set_text(b->widget_handle, want);
+                aeui_tv_seeding--;
+            }
+            g_free(cur);
+            return;
+        }
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
         if (!cur || strcmp(cur, want) != 0) {
             aether_ui_textfield_set_text(b->widget_handle, want);
         }
@@ -1841,6 +1867,20 @@ static void on_value_binding_changed(GtkEditable* editable, gpointer data) {
     aether_ui_state_set_s(state_handle, text);
 }
 
+// A bound textarea's buffer changed: its text into the state.
+static void on_value_buffer_changed(GtkTextBuffer* buf, gpointer data) {
+    if (aeui_tv_seeding) return;
+    int state_handle = (int)(intptr_t)data;
+    StateCell* c = state_cell(state_handle);
+    if (!c || c->type != AEUI_STATE_STRING) return;
+    GtkTextIter a, z;
+    gtk_text_buffer_get_start_iter(buf, &a);
+    gtk_text_buffer_get_end_iter(buf, &z);
+    char* text = gtk_text_buffer_get_text(buf, &a, &z, FALSE);
+    if (!(c->str && strcmp(c->str, text ? text : "") == 0)) aether_ui_state_set_s(state_handle, text ? text : "");
+    g_free(text);
+}
+
 // bind_value(widget, string_state): typing updates the state; setting the
 // state updates the field. One verb, both directions, no callback.
 void aether_ui_bind_value(int state_handle, int widget_handle) {
@@ -1849,6 +1889,12 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
     if (w && GTK_IS_EDITABLE(w)) {
         g_signal_connect(w, "changed", G_CALLBACK(on_value_binding_changed),
                          (gpointer)(intptr_t)state_handle);
+    }
+    // A textarea: its text view is the handle after the one it returned.
+    GtkWidget* tv = aeui_textarea_view(widget_handle);
+    if (tv) {
+        g_signal_connect(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)), "changed",
+                         G_CALLBACK(on_value_buffer_changed), (gpointer)(intptr_t)state_handle);
     }
     apply_prop_binding(b);  // seed the field from the state's initial value
 }
@@ -8241,6 +8287,17 @@ static const char* widget_text_content(GtkWidget* w) {
     }
     if (GTK_IS_CHECK_BUTTON(w)) return gtk_check_button_get_label(GTK_CHECK_BUTTON(w));
     if (GTK_IS_BUTTON(w)) return gtk_button_get_label(GTK_BUTTON(w));
+    // A textarea's text view: its buffer's text, kept on the widget so the
+    // pointer outlives this call (the buffer hands out a copy).
+    if (GTK_IS_TEXT_VIEW(w)) {
+        GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(w));
+        GtkTextIter a, z;
+        gtk_text_buffer_get_start_iter(buf, &a);
+        gtk_text_buffer_get_end_iter(buf, &z);
+        char* t = gtk_text_buffer_get_text(buf, &a, &z, FALSE);
+        g_object_set_data_full(G_OBJECT(w), "aeui-tv-text", t, g_free);
+        return t ? t : "";
+    }
     // Native picker: report the selected item's string, so "text" tracks the
     // selection identically to the drawn picker (whose button label does).
     if (GTK_IS_DROP_DOWN(w)) {
@@ -8553,6 +8610,10 @@ static gboolean test_action_idle(gpointer data) {
                 // A securefield (a GtkEditable, not a GtkEntry): typed into
                 // as a person would, so its on_change runs. It was skipped.
                 gtk_editable_set_text(GTK_EDITABLE(w), ta->sval);
+            } else if (GTK_IS_TEXT_VIEW(w)) {
+                // A textarea: its buffer, whose "changed" runs on_change and
+                // a two-way binding's write-back. It was skipped.
+                gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(w)), ta->sval, -1);
             }
             break;
         case 2: // toggle

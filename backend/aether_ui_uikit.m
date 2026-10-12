@@ -1749,13 +1749,15 @@ void aether_ui_progressbar_set_fraction(int handle, double fraction) {
 // --- Text area — UITextView -------------------------------------------------
 @interface AeuiTextViewDelegate : NSObject <UITextViewDelegate, AeuiClosureHolder>
 @property (nonatomic, assign) AeClosure* closure;
+@property (nonatomic, assign) int stateHandle;   // two-way bind_value (0 = none)
 @end
 @implementation AeuiTextViewDelegate
 - (void)textViewDidChange:(UITextView*)tv {
+    const char* cs = tv.text ? tv.text.UTF8String : "";
     if (self.closure && self.closure->fn) {
-        const char* cs = tv.text ? tv.text.UTF8String : "";
         ((void(*)(void*, const char*))self.closure->fn)(self.closure->env, cs);
     }
+    if (self.stateHandle > 0) aether_ui_state_set_s(self.stateHandle, cs);
 }
 @end
 
@@ -4080,8 +4082,14 @@ static void apply_prop_binding(PropBinding* b) {
     StateCell* c = state_cell(b->state_handle);
     if (!c) return;
     if (b->kind == AEUI_BIND_VALUE) {
-        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
         const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (strcmp(aether_ui_widget_kind_impl(b->widget_handle), "textarea") == 0) {
+            char* tcur = aether_ui_textarea_get_text(b->widget_handle);
+            if (!tcur || strcmp(tcur, want) != 0) aether_ui_textarea_set_text(b->widget_handle, want);
+            free(tcur);
+            return;
+        }
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
         if (!cur || strcmp(cur, want) != 0)
             aether_ui_textfield_set_text(b->widget_handle, want);
         return;
@@ -4202,6 +4210,17 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
         [(UITextField*)v addTarget:t action:@selector(changed:)
             forControlEvents:UIControlEventEditingChanged];
         aeui_own_helper(v, t);
+    }
+    if (v && [v isKindOfClass:[UITextView class]]) {
+        id existing = ((UITextView*)v).delegate;
+        if (existing && [existing isKindOfClass:[AeuiTextViewDelegate class]]) {
+            ((AeuiTextViewDelegate*)existing).stateHandle = state_handle;
+        } else {
+            AeuiTextViewDelegate* d = [[AeuiTextViewDelegate alloc] init];
+            d.stateHandle = state_handle;
+            ((UITextView*)v).delegate = d;
+            aeui_own_helper(v, d);
+        }
     }
     apply_prop_binding(b);  // seed the field from the state's initial value
 }

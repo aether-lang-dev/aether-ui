@@ -39,7 +39,7 @@ exports (
     datagrid_merge, datagrid_unmerge, datagrid_merge_of, datagrid_set_row_height,
     datagrid_row_height, datagrid_fit_row, datagrid_on_edit_change, datagrid_edit_insert,
     on_cell_edit_change, toggle, toggle_group, slider, picker, picker_add,
-    textarea, textarea_set_text, textarea_get_text, progressbar,
+    textarea, textarea_bound, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
     ui_state_b, ui_get_b, ui_set_b,
@@ -1652,6 +1652,19 @@ textarea(_ctx: ptr, placeholder: string, on_change: fn) {
 // already hands back live edits, so these are for the OTHER direction:
 // loading a preset/file into the box, or reading its content outside a
 // change event (e.g. a "Run" button reading the current script).
+// textarea_bound(placeholder, string_state): a multi-line field two-way
+// bound to a string state, as textfield_bound is: typing updates the state;
+// ui_set_s(state, …) fills it. No callback.
+textarea_bound(_ctx: ptr, placeholder: string, state_handle: int) {
+    handle = aether_ui_textarea_create(placeholder, 0)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    _style_on_create(handle)   // use_styles: arrive themed
+    aether_ui_bind_value(state_handle, handle)
+    return handle
+}
+
 textarea_set_text(handle: int, text: string) {
     aether_ui_textarea_set_text(handle, text)
 }

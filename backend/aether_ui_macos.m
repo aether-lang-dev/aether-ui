@@ -390,8 +390,18 @@ static void apply_prop_binding(PropBinding* b) {
     if (b->kind == AEUI_BIND_VALUE) {
         // state → editable widget, compare-first to avoid re-setting the
         // field mid-edit (which would also jump the caret).
-        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
         const char* want = (c->type == AEUI_STATE_STRING && c->str) ? c->str : "";
+        if (strcmp(aether_ui_widget_kind_impl(b->widget_handle), "textarea") == 0) {
+            char* tcur = aether_ui_textarea_get_text(b->widget_handle);
+            if (!tcur || strcmp(tcur, want) != 0) {
+                g_seeding_bound_field = 1;
+                aether_ui_textarea_set_text(b->widget_handle, want);
+                g_seeding_bound_field = 0;
+            }
+            free(tcur);
+            return;
+        }
+        const char* cur = aether_ui_textfield_get_text(b->widget_handle);
         if (!cur || strcmp(cur, want) != 0) {
             g_seeding_bound_field = 1;
             aether_ui_textfield_set_text(b->widget_handle, want);
@@ -2867,6 +2877,11 @@ const char* aether_ui_textfield_get_text(int handle) {
 // keyed on stateHandle. Reuses the field's existing change-delegate if it has
 // one, else attaches a fresh delegate carrying just the state handle. (Defined
 // here, after the delegate class + aeui_own_helper, which it needs.)
+@interface AetherTextViewDelegate : NSObject <NSTextViewDelegate>
+@property (assign) AeClosure* closure;
+@property (assign) int stateHandle;   // two-way bind_value (0 = none)
+@end
+
 void aether_ui_bind_value(int state_handle, int widget_handle) {
     PropBinding* b = prop_binding_new(AEUI_BIND_VALUE, state_handle, widget_handle);
     NSView* v = (__bridge NSView*)aether_ui_get_widget(widget_handle);
@@ -2880,6 +2895,20 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
             d.stateHandle = state_handle;
             [field setDelegate:d];
             aeui_own_helper(field, "aeui_delegate", d);
+        }
+    }
+    // A textarea: the text view in its scroll view takes the binding.
+    if (v && [v isKindOfClass:[NSScrollView class]]
+        && [[(NSScrollView*)v documentView] isKindOfClass:[NSTextView class]]) {
+        NSTextView* tv = (NSTextView*)[(NSScrollView*)v documentView];
+        id existing = [tv delegate];
+        if (existing && [existing isKindOfClass:[AetherTextViewDelegate class]]) {
+            ((AetherTextViewDelegate*)existing).stateHandle = state_handle;
+        } else {
+            AetherTextViewDelegate* d = [[AetherTextViewDelegate alloc] init];
+            d.stateHandle = state_handle;
+            [tv setDelegate:d];
+            aeui_own_helper(tv, "aeui_delegate", d);
         }
     }
     apply_prop_binding(b);  // seed the field from the state's initial value
@@ -3146,9 +3175,6 @@ int aether_ui_picker_get_selected(int handle) {
 }
 
 // Textarea — NSTextView in NSScrollView. Delegate fires closure on text change.
-@interface AetherTextViewDelegate : NSObject <NSTextViewDelegate>
-@property (assign) AeClosure* closure;
-@end
 
 @implementation AetherTextViewDelegate
 - (void)dealloc {
@@ -3159,10 +3185,11 @@ int aether_ui_picker_get_selected(int handle) {
 }
 - (void)textDidChange:(NSNotification*)n {
     NSTextView* tv = [n object];
+    const char* cs = [[tv string] UTF8String];
     if (self.closure && self.closure->fn) {
-        const char* cs = [[tv string] UTF8String];
         ((void(*)(void*, const char*))self.closure->fn)(self.closure->env, cs ? cs : "");
     }
+    if (self.stateHandle > 0 && !g_seeding_bound_field) aether_ui_state_set_s(self.stateHandle, cs ? cs : "");
 }
 @end
 
@@ -8464,6 +8491,10 @@ static void hook_widget_text_into(int handle, char* buf, int bufsize) {
         s = [(NSTextField*)v stringValue];
     } else if ([v isKindOfClass:[NSTextView class]]) {
         s = [(NSTextView*)v string];
+    } else if (get_widget_type(handle) == AUI_TEXTAREA
+               && [[(NSScrollView*)v documentView] isKindOfClass:[NSTextView class]]) {
+        // A textarea is its scroll view; its text is the text view's.
+        s = [(NSTextView*)[(NSScrollView*)v documentView] string];
     }
     if (s) snprintf(buf, bufsize, "%s", [s UTF8String]);
 }
@@ -9035,6 +9066,10 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         }
         case AETHER_DRV_SET_TEXT: {
             NSString* s = [NSString stringWithUTF8String:ctx->sval];
+            // A textarea's handle is its scroll view: type into its text view.
+            if (get_widget_type(ctx->handle) == AUI_TEXTAREA
+                && [[(NSScrollView*)v documentView] isKindOfClass:[NSTextView class]])
+                v = [(NSScrollView*)v documentView];
             if ([v isKindOfClass:[NSTextField class]]) {
                 // Route through the toolkit setter so a two-way bind_value
                 // field mirrors driver input into its state (setStringValue
@@ -9070,11 +9105,12 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 id d = [(NSTextView*)v delegate];
                 if (d && [d isKindOfClass:[AetherTextViewDelegate class]]) {
                     AetherTextViewDelegate* td = (AetherTextViewDelegate*)d;
+                    const char* cs = [[(NSTextView*)v string] UTF8String];
                     if (td.closure && td.closure->fn) {
-                        const char* cs = [[(NSTextView*)v string] UTF8String];
                         ((void(*)(void*, const char*))td.closure->fn)(
                             td.closure->env, cs ? cs : "");
                     }
+                    if (td.stateHandle > 0) aether_ui_state_set_s(td.stateHandle, cs ? cs : "");
                 }
             }
             break;

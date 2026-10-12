@@ -1348,9 +1348,23 @@ static void handle_request_inner(aether_sock_t client_fd,
                 snprintf(body, sizeof(body), "{\"id\":%d,\"type\":\"bool\",\"value\":%s}",
                          id, aether_ui_state_get_b(id) ? "true" : "false");
             } else if (st == 3) {
+                // Escaped: a string state may hold a newline or a quote (a
+                // textarea's text), and was written raw, which is not JSON.
                 const char* sv = aether_ui_state_get_s(id);
+                char esc[400];
+                int ei = 0;
+                for (const char* p = sv ? sv : ""; *p && ei < (int)sizeof(esc) - 7; p++) {
+                    unsigned char ch = (unsigned char)*p;
+                    if (ch == '"' || ch == '\\') { esc[ei++] = '\\'; esc[ei++] = (char)ch; }
+                    else if (ch == '\n') { esc[ei++] = '\\'; esc[ei++] = 'n'; }
+                    else if (ch == '\r') { esc[ei++] = '\\'; esc[ei++] = 'r'; }
+                    else if (ch == '\t') { esc[ei++] = '\\'; esc[ei++] = 't'; }
+                    else if (ch < 0x20) ei += snprintf(esc + ei, sizeof(esc) - ei, "\\u%04x", ch);
+                    else esc[ei++] = (char)ch;
+                }
+                esc[ei] = 0;
                 snprintf(body, sizeof(body), "{\"id\":%d,\"type\":\"string\",\"value\":\"%s\"}",
-                         id, sv);
+                         id, esc);
                 free((void*)sv);
             } else if (st == 4) {
                 snprintf(body, sizeof(body), "{\"id\":%d,\"type\":\"list\",\"rev\":%d}",

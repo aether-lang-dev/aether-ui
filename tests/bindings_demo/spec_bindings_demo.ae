@@ -102,6 +102,17 @@ main() {
             spec.assert_true(okl, "the label bound to the same state also followed")
         }
 
+        spec.it("a textarea bound two-way: state → textarea, and textarea → state") callback {
+            ta = uidriver.widget_id_of("textarea", "")
+            spec.assert_gt(ta, 0, "the bound textarea exists")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${ta}", "first line", 20), "it starts with the state's text")
+            uidriver.post_ok("/state/5/set?v=one%0Atwo", "set the note to two lines")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${ta}", "one\\ntwo", 20), "the textarea follows the state")
+            uidriver.post_ok("/widget/${ta}/set_text?v=typed%0Ahere", "type into the textarea")
+            spec.assert_true(uidriver.wait_body_contains("/state/5", "typed\\nhere", 20), "the state follows the textarea")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "\"text\":\"typed\\nhere\"", 20), "and so does the label bound to it")
+        }
+
         spec.it("Stop restores every bound property") callback {
             s = uidriver.widget_id_by_text("Stop")
             uidriver.post_ok("/widget/${s}/click", "click Stop")

@@ -3,10 +3,12 @@
 // Four states — float, int, bool, string — each BOUND to widget
 // properties once; every later ui_set_* propagates with no imperative
 // set_text/set_enabled at the write sites. State handles are creation-
-// ordered: 1=float 2=int 3=bool 4=string (the driver spec uses these).
+// ordered: 1=float 2=int 3=bool 4=string 5=string (the driver spec uses
+// these).
 
 import ui
 import ui (content_inset, window, vstack, hstack, text, btn, divider, textfield_bound,
+    textarea_bound,
     ui_state, ui_set, ui_get, ui_state_i, ui_set_i, ui_get_i,
     ui_state_b, ui_set_b, ui_get_b, ui_state_s, ui_set_s,
     bind_text, bind_text_fmt, bind_enabled, bind_hidden,
@@ -19,6 +21,7 @@ main() {
     count = ui_state_i(0)        // state 2: int
     busy = ui_state_b(0)         // state 3: bool
     status = ui_state_s("idle")  // state 4: string
+    note = ui_state_s("first line")  // state 5: string, a textarea's
 
     window("bindings demo", 480, 360) {
         root = vstack(8) {
@@ -32,6 +35,11 @@ main() {
             // status (so t3 above follows); ui_set_s(status, …) fills the
             // field. No callback — the SwiftUI TextField(text: $state) idiom.
             _sf = textfield_bound("status…", status)
+            // The multi-line twin: a textarea bound to `note`, and a label
+            // that follows it.
+            _ta = textarea_bound("note…", note)
+            t5 = text("")
+            bind_text(t5, note)
             divider()
             run_btn = btn("Run") callback {
                 _b1 = ui_set_b(busy, 1)
