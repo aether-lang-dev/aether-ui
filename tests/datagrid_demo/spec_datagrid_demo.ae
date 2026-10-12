@@ -192,6 +192,10 @@ gone(t: string) -> int {
     return 0
 }
 
+y_of_row1() -> int {
+    return field_of_text("R1C1", "y")
+}
+
 press(label: string) {
     uidriver.post_ok("/widget/${uidriver.widget_id_of("button", label)}/click", label)
 }
@@ -581,6 +585,46 @@ main() {
             spec.assert_eq(settled("R4C1", "y", y3 + 24), y3 + 24, "straight under row 3, no strip")
             spec.assert_true(shows("row 4 shown is model row 4") == 1, "the fifth row shown is model row 4 again")
             spec.assert_eq(count_of("text"), 155, "no widgets added")
+        }
+    }
+
+    spec.describe(fw, "frozen rows") {
+        spec.it("frozen rows stay at the top while the rest scroll") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            y0 = field_of_text("R0C1", "y")
+            press("Freeze 2 rows")
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=1000", "scroll down")
+            spec.assert_true(shows("R1002C1") == 1, "the scrolling rows start at row 1,002")
+            spec.assert_true(shows("R0C1") == 1, "row 0 stays")
+            spec.assert_true(shows("R1C1") == 1, "and row 1")
+            spec.assert_true(gone("R2C1") == 1, "row 2 has scrolled away")
+            spec.assert_eq(settled("R0C1", "y", y0), y0, "row 0 where it was")
+            spec.assert_eq(settled("R1002C1", "y", y0 + 48), y0 + 48, "row 1,002 under row 1")
+            spec.assert_eq(count_of("text"), 155, "no widgets added")
+        }
+        spec.it("they are drawn as the frozen columns are") callback {
+            spec.assert_str_eq(bg_of("R1C3"), "#f2f2f5", "#f2f2f5")
+            spec.assert_true(string.contains(str_of_text("R1C3", "classes"), "aui-grid-frozen") == 1, "aui-grid-frozen")
+            spec.assert_str_eq(bg_of("R1002C3"), "#ffffff", "a scrolling row is white")
+        }
+        spec.it("Down from a frozen row goes to the next row, scrolled to") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R1C1")}/click", "click R1C1")
+            spec.assert_true(shows("selection: 1,1 from 1,1") == 1, "row 1 selected")
+            key("Down")
+            spec.assert_true(shows("selection: 2,1 from 2,1") == 1, "Down is row 2")
+            spec.assert_true(shows("R2C1") == 1, "scrolled back to show it")
+            spec.assert_eq(settled("R2C1", "y", y_of_row1() + 24), y_of_row1() + 24, "under the frozen rows")
+        }
+        spec.it("unfrozen, row 0 scrolls again") callback {
+            press("Freeze 2 rows")
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            spec.assert_true(shows("R1C3") == 1, "row 1 shown, in the scrolling rows")
+            spec.assert_true(uidriver.wait_body_contains("/widget/${uidriver.widget_id_by_text("R1C3")}", "aui-grid-cell", 20), "R1C3 is a plain cell again")
+            spec.assert_str_eq(bg_of("R1C3"), "#ffffff", "white")
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=500", "scroll down")
+            spec.assert_true(shows("R500C1") == 1, "row 500 at the top")
+            spec.assert_true(gone("R0C1") == 1, "row 0 has scrolled away")
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "and back")
         }
     }
 

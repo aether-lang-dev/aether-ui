@@ -18,6 +18,7 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
+    datagrid_freeze_rows, datagrid_frozen_rows,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -151,6 +152,10 @@ main() {
                 if ui_get_i(hidc) == 0 { hc = 1 }
                 _hc = datagrid_hide_col(g, vc, hc)
                 _hs = ui_set_i(hidc, hc)
+            }
+            // The top two rows stay while the rest scroll (Freeze Panes).
+            _freeze = btn("Freeze 2 rows") callback {
+                _fr = datagrid_freeze_rows(g, 2 - datagrid_frozen_rows(g))
             }
             text_bound(rowmodel, "row 4 shown is model row ", "")
             text_bound(clicked, "clicked: ", "")

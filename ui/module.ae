@@ -34,7 +34,8 @@ exports (
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
     datagrid_on_col_move, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
-    datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view, toggle, toggle_group, slider, picker, picker_add,
+    datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
+    datagrid_freeze_rows, datagrid_frozen_rows, toggle, toggle_group, slider, picker, picker_add,
     textarea, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -6443,6 +6444,7 @@ struct DataGrid {
     gaps: ptr         // intarr: the strip above each shown row that marks hidden rows
     gap_on: ptr       // intarr: 1 where that strip is showing
     gap_boxes: ptr    // intarr: the coloured box in each strip
+    frozen_rows: int  // the leading rows that stay while it scrolls (datagrid_freeze_rows)
 }
 
 // The strip that marks hidden rows above a row: as tall as Excel's double
@@ -6522,6 +6524,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.edit_text = null
     g.style = null
     g.drag_kind = 0
+    g.frozen_rows = 0
     g.widths = intarr_new_raw(cols + 1)
     g.order = intarr_new_raw(cols + 1)
     g.col_hid = intarr_new_raw(cols + 1)
@@ -6688,7 +6691,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     // are hidden).
     g.vsl = vslider(mid, 0.0, maxr * 1.0, 0.0) callback |v: float| {
         gv = gp as *DataGrid
-        _datagrid_scroll_index(gv, _datagrid_from_slider(v, gv.rows - gv.vis_rows, gv.rows - gv.n_hid - gv.vis_rows), 0 - 1)
+        _datagrid_scroll_index(gv, _datagrid_vbase(gv) + _datagrid_from_slider(v, gv.rows - gv.vis_rows, _datagrid_vplaces(gv)), 0 - 1)
     }
     _vh = height(g.vsl, vr * g.row_h)
     g.hsl = slider(root, 0.0, maxc * 1.0, 0.0) callback |v: float| {
@@ -6893,17 +6896,82 @@ _datagrid_scroll_index(g: *DataGrid, ri: int, ci: int) {
     _d = datagrid_scroll_to(g as ptr, r, c)
 }
 
+// The index (among rows shown) of the first row that scrolls, and how many
+// places the scrolling rows can start at beyond it.
+_datagrid_vbase(g: *DataGrid) -> int {
+    return _datagrid_row_index(g, g.frozen_rows)
+}
+_datagrid_vplaces(g: *DataGrid) -> int {
+    n = _datagrid_rows_shown(g) - _datagrid_vbase(g) - (g.vis_rows - g.frozen_rows)
+    if n < 0 { return 0 }
+    return n
+}
+
+// datagrid_freeze_rows(g, n): the leading n rows stay while the rest scroll,
+// as the frozen columns do (not in what scrolls, aui-grid-frozen, drawn
+// #f2f2f5); 0 unfreezes. At most one row fewer than are shown, so something
+// still scrolls. Freeze Top Row is 1; Freeze Panes is this and the columns.
+datagrid_freeze_rows(gp: ptr, n: int) -> ptr {
+    g = gp as *DataGrid
+    k = n
+    if k > g.vis_rows - 1 { k = g.vis_rows - 1 }
+    if k > g.rows { k = g.rows }
+    if k < 0 { k = 0 }
+    if k == g.frozen_rows { return gp }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    w = g.frozen + g.vis_cols
+    s = 0
+    while s < g.vis_rows {
+        was = 0
+        if s < g.frozen_rows { was = 1 }
+        now = 0
+        if s < k { now = 1 }
+        if was != now {
+            j = 0
+            while j < w {
+                h = intarr_get_raw(g.cells, s * w + j)
+                if j >= g.frozen {
+                    if now == 1 {
+                        remove_css_class(h, "aui-grid-cell")
+                        add_css_class(h, "aui-grid-frozen")
+                    } else {
+                        remove_css_class(h, "aui-grid-frozen")
+                        add_css_class(h, "aui-grid-cell")
+                    }
+                }
+                intarr_set_raw(g.painted, s * w + j, 0 - 1)
+                j = j + 1
+            }
+        }
+        s = s + 1
+    }
+    g.frozen_rows = k
+    _d = datagrid_scroll_to(gp, g.first_row, g.first_col)
+    return gp
+}
+
+// datagrid_frozen_rows(g): how many rows are frozen.
+datagrid_frozen_rows(gp: ptr) -> int {
+    g = gp as *DataGrid
+    return g.frozen_rows
+}
+
 // Work out what each shown row and position shows, from the first row and
 // column, and hide the rows, positions and gap strips that show nothing.
 _datagrid_layout(g: *DataGrid) {
     w = g.frozen + g.vis_cols
-    // Rows: from the first row down, past the hidden ones.
+    // Rows: the frozen ones are themselves (none when hidden), the rest from
+    // the first row down, past the hidden ones.
     m = g.first_row
     s = 0
     while s < g.vis_rows {
-        while m < g.rows && _datagrid_row_hidden(g, m) == 1 { m = m + 1 }
         row = 0 - 1
-        if m < g.rows { row = m }
+        if s < g.frozen_rows {
+            if s < g.rows && _datagrid_row_hidden(g, s) == 0 { row = s }
+        } else {
+            while m < g.rows && _datagrid_row_hidden(g, m) == 1 { m = m + 1 }
+            if m < g.rows { row = m }
+        }
         intarr_set_raw(g.slot_row, s, row)
         off = 0
         if row < 0 { off = 1 }
@@ -6927,7 +6995,7 @@ _datagrid_layout(g: *DataGrid) {
             intarr_set_raw(g.gap_on, s, gon)
             _gh = set_hidden(intarr_get_raw(g.gaps, s), 1 - gon)
         }
-        m = m + 1
+        if s >= g.frozen_rows { m = m + 1 }
         s = s + 1
     }
     // Positions: frozen ones are their own column (hidden with it), the
@@ -7342,7 +7410,7 @@ _datagrid_paint(g: *DataGrid) {
             col = base
             if base < 0 {
                 col = 0xffffff
-                if c < g.frozen { col = 0xf2f2f5 }
+                if c < g.frozen || r < g.frozen_rows { col = 0xf2f2f5 }
             }
             cur = 0
             if mr == g.cur_r && mc == g.cur_c { cur = 1 }
@@ -7542,11 +7610,15 @@ _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     g.anc_r = na_r
     g.anc_c = na_c
     // Into view, counting only the rows and columns shown.
+    // (A frozen row is always in view.)
     fr = g.first_row
-    ir = _datagrid_row_index(g, nr)
-    i0 = _datagrid_row_index(g, g.first_row)
-    if ir < i0 { fr = nr }
-    if ir > i0 + g.vis_rows - 1 { fr = _datagrid_row_of_index(g, ir - g.vis_rows + 1) }
+    if nr >= g.frozen_rows {
+        sv = g.vis_rows - g.frozen_rows
+        ir = _datagrid_row_index(g, nr)
+        i0 = _datagrid_row_index(g, g.first_row)
+        if ir < i0 { fr = nr }
+        if ir > i0 + sv - 1 { fr = _datagrid_row_of_index(g, ir - sv + 1) }
+    }
     fc = g.first_col
     if nc >= g.frozen {
         ic = _datagrid_index_in(g.scols, g.n_scols, nc)
@@ -7797,15 +7869,19 @@ datagrid_scroll_to(gp: ptr, row: int, col: int) -> ptr {
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
     // Rows by their index among those shown: the window never runs past
     // the last of them, and a hidden row reads as the next one shown.
-    nshown = _datagrid_rows_shown(g)
-    maxri = nshown - g.vis_rows
-    if maxri < 0 { maxri = 0 }
-    ri = 0
-    rf = _datagrid_row_fix(g, row)
+    // Frozen rows are not in what scrolls: the first row is the first of
+    // the rest at the least.
+    base = _datagrid_vbase(g)
+    maxri = base + _datagrid_vplaces(g)
+    ri = base
+    rq = row
+    if rq < g.frozen_rows { rq = g.frozen_rows }
+    rf = _datagrid_row_fix(g, rq)
     if rf >= 0 { ri = _datagrid_row_index(g, rf) }
     if ri > maxri { ri = maxri }
+    if ri < base { ri = base }
     r = _datagrid_row_of_index(g, ri)
-    if r < 0 { r = 0 }
+    if r < 0 { r = g.frozen_rows }
     // Columns likewise, among the scrolling ones shown (a frozen column is
     // always shown, so col below `frozen` reads as the first of them).
     maxci = g.n_scols - g.vis_cols
@@ -7816,7 +7892,7 @@ datagrid_scroll_to(gp: ptr, row: int, col: int) -> ptr {
     if ci < g.n_scols { c = intarr_get_raw(g.scols, ci) }
     g.first_row = r
     g.first_col = c
-    aether_ui_slider_set_value(g.vsl, _datagrid_to_slider(ri, g.rows - g.vis_rows, nshown - g.vis_rows))
+    aether_ui_slider_set_value(g.vsl, _datagrid_to_slider(ri - base, g.rows - g.vis_rows, _datagrid_vplaces(g)))
     aether_ui_slider_set_value(g.hsl, _datagrid_to_slider(ci, g.cols - g.frozen - g.vis_cols, g.n_scols - g.vis_cols))
     _datagrid_bind(g)
     return gp
