@@ -106,7 +106,8 @@ store); everything else speaks view columns.
    live widgets (counted over the driver), and the header still at the top
    after scrolling to row 90,000 and column 40.
 2. **Selection and keys.** DONE: one rectangle from an anchor to a cursor;
-   a click selects, Shift+click extends; arrows, Shift+arrows, Home/End
+   a click selects, Shift+click extends; arrows, Shift+arrows, Ctrl+arrows
+   (to the edge of the data; Ctrl+Shift extends), Home/End
    (Ctrl: the grid's corners), Page_Up/Page_Down, Ctrl/Cmd+A and Return
    (`datagrid_on_activate`); the cursor scrolls into view; `datagrid_select`,
    `datagrid_select_range`, `datagrid_on_select` and the cursor/anchor

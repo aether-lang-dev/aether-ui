@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Ctrl+arrows in `datagrid`: to the edge of the data**, as a
+  spreadsheet's: from a cell showing something whose neighbour does too,
+  to the last such cell of the run; otherwise to the next cell that shows
+  something, or the grid's edge. Ctrl+Shift extends the selection. Hidden
+  rows and columns are stepped over, and going left the frozen leading
+  columns are not data (the first column that scrolls is the edge). Shared
+  Aether code, so every backend has it.
+
 - **`datagrid_fit_col(g, c)`**, and a double click on a header's grip: a
   column as wide as its header and the cells on screen, each measured in
   its own label's font, plus room; clamped, and told to `on_col_resize`.

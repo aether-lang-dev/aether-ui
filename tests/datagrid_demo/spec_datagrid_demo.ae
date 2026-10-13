@@ -305,6 +305,16 @@ main() {
             spec.assert_true(shows("selection: 99999,49 from 99999,49") == 1, "Ctrl+End")
             spec.assert_true(shows("R99999C49") == 1, "scrolled to the bottom")
         }
+        spec.it("Ctrl+arrows go to the edge of the data (every cell here shows something); Ctrl+Shift extends") callback {
+            key("Ctrl%2BUp")
+            spec.assert_true(shows("selection: 0,49 from 0,49") == 1, "Ctrl+Up: the top of the run")
+            key("Ctrl%2BLeft")
+            spec.assert_true(shows("selection: 0,1 from 0,1") == 1, "Ctrl+Left stops before the frozen row numbers")
+            key("Ctrl%2BShift%2BRight")
+            spec.assert_true(shows("selection: 0,49 from 0,1") == 1, "Ctrl+Shift+Right extends")
+            key("Ctrl%2BEnd")
+            spec.assert_true(shows("selection: 99999,49 from 99999,49") == 1, "back at the end")
+        }
         spec.it("Page_Up and Page_Down move a screenful") callback {
             key("Page_Up")
             spec.assert_true(shows("selection: 99979,49 from 99979,49") == 1, "twenty rows up")

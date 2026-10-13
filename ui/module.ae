@@ -6402,7 +6402,10 @@ vlist_native(vp: ptr) -> int {
 // Selection is one rectangle, from an anchor cell to the cursor cell (the
 // one the keys move). A click selects a cell, Shift+click extends to it; the
 // grid is one tab stop, and while focus is in it the arrows move the cursor,
-// Shift+arrows extend, Home/End go to the row's ends (Ctrl: the grid's),
+// Shift+arrows extend, Ctrl+arrows go to the edge of the data (the last
+// cell of a run of cells showing something, or the next one that does, or
+// the grid's edge; Ctrl+Shift extends), Home/End go to the row's ends
+// (Ctrl: the grid's),
 // Page_Up/Page_Down move a screenful, Ctrl/Cmd+A selects everything and
 // Return activates the cursor cell. Tab leaves the grid, as the ARIA grid
 // pattern has it; Tab along a row is an editor's key (phase 4). The cursor
@@ -8239,6 +8242,61 @@ _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     }
 }
 
+// Whether a cell (r, view column c) shows anything: Ctrl+arrow's data.
+_datagrid_filled(g: *DataGrid, r: int, c: int) -> int {
+    if g.cell == null { return 0 }
+    if string.length(_datagrid_invoke_cell(unbox_closure(g.cell), r, _datagrid_model(g, c))) > 0 { return 1 }
+    return 0
+}
+
+// Ctrl+Down or Ctrl+Up from row r in column c: from a filled cell whose
+// neighbour is filled, to the last filled cell of that run; otherwise to the
+// next filled cell, or the grid's edge. Hidden rows are stepped over.
+_datagrid_edge_row(g: *DataGrid, r: int, c: int, d: int) -> int {
+    nr = _datagrid_row_step(g, r, d)
+    if nr == r || nr < 0 { return r }
+    run = 0
+    if _datagrid_filled(g, r, c) == 1 && _datagrid_filled(g, nr, c) == 1 { run = 1 }
+    going = 1
+    while going == 1 {
+        if run == 0 && _datagrid_filled(g, nr, c) == 1 {
+            going = 0
+        } else {
+            nx = _datagrid_row_step(g, nr, d)
+            if nx == nr || (run == 1 && _datagrid_filled(g, nx, c) == 0) {
+                going = 0
+            } else {
+                nr = nx
+            }
+        }
+    }
+    return nr
+}
+
+// Ctrl+Right or Ctrl+Left, the same along row r. The frozen leading columns
+// (row numbers) are not data: going left, the first column that scrolls is
+// the edge.
+_datagrid_edge_col(g: *DataGrid, r: int, c: int, d: int) -> int {
+    nc = _datagrid_col_step(g, c, d)
+    if nc == c || nc < 0 || (nc < g.frozen && c >= g.frozen) { return c }
+    run = 0
+    if _datagrid_filled(g, r, c) == 1 && _datagrid_filled(g, r, nc) == 1 { run = 1 }
+    going = 1
+    while going == 1 {
+        if run == 0 && _datagrid_filled(g, r, nc) == 1 {
+            going = 0
+        } else {
+            nx = _datagrid_col_step(g, nc, d)
+            if nx == nc || (nx < g.frozen && nc >= g.frozen) || (run == 1 && _datagrid_filled(g, r, nx) == 0) {
+                going = 0
+            } else {
+                nc = nx
+            }
+        }
+    }
+    return nc
+}
+
 _datagrid_clamp(v: int, hi: int) -> int {
     if v < 0 { return 0 }
     if v > hi { return hi }
@@ -8294,7 +8352,16 @@ _datagrid_key(gp: ptr, k: string, m: int) {
         if string.equals(k, "Right") == 1 { c = intarr_get_raw(g.merges, cmi * 4 + 1) + intarr_get_raw(g.merges, cmi * 4 + 3) - 1 }
     }
     // Moves count the rows and columns shown, so they step over hidden ones.
-    if string.equals(k, "Down") == 1 {
+    // Ctrl+arrow goes to the edge of the data, as a spreadsheet's does.
+    if ctrl == 1 && string.equals(k, "Down") == 1 {
+        r = _datagrid_edge_row(g, r, c, 1)
+    } else if ctrl == 1 && string.equals(k, "Up") == 1 {
+        r = _datagrid_edge_row(g, r, c, 0 - 1)
+    } else if ctrl == 1 && string.equals(k, "Right") == 1 {
+        c = _datagrid_edge_col(g, r, c, 1)
+    } else if ctrl == 1 && string.equals(k, "Left") == 1 {
+        c = _datagrid_edge_col(g, r, c, 0 - 1)
+    } else if string.equals(k, "Down") == 1 {
         r = _datagrid_row_step(g, r, 1)
     } else if string.equals(k, "Up") == 1 {
         r = _datagrid_row_step(g, r, 0 - 1)
