@@ -1572,13 +1572,14 @@ static void handle_request_inner(aether_sock_t client_fd,
     // --- /clipboard ---
     // GET /clipboard → the headless clipboard's text (text/plain);
     // POST /clipboard?text=T → set it (URL-decoded, as /prompts/answer's
-    // value). Under AETHER_UI_HEADLESS clipboard_write and clipboard_read
-    // use this buffer, never the system's, so a spec can check what an app
-    // copied, or give it something to paste, without touching the
-    // clipboard of the machine it runs on. Not headless: 409.
+    // value). Under AETHER_UI_HEADLESS or AETHER_UI_TEST_CLIPBOARD
+    // clipboard_write and clipboard_read use this buffer, never the
+    // system's, so a spec can check what an app copied, or give it something
+    // to paste, without touching the clipboard of the machine it runs on.
+    // Otherwise: 409.
     } else if (strcmp(path, "/clipboard") == 0 || strncmp(path, "/clipboard?", 11) == 0) {
         if (!aether_ui_clipboard_is_headless()) {
-            send_http(client_fd, 409, "Conflict", "text/plain", "the clipboard is the system's unless AETHER_UI_HEADLESS is set");
+            send_http(client_fd, 409, "Conflict", "text/plain", "the clipboard is the system's unless AETHER_UI_HEADLESS or AETHER_UI_TEST_CLIPBOARD is set");
         } else if (method == 0) {
             char* t = aether_ui_clipboard_headless_read();
             send_http(client_fd, 200, "OK", "text/plain", t);

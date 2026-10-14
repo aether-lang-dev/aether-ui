@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   system's, and the driver reads and sets it: `GET /clipboard`, `POST
   /clipboard?text=T` (uidriver's `clipboard()` and `set_clipboard(text)`).
   A spec that copies no longer overwrites the clipboard of the machine it
-  runs on. `tests/clipboard/spec_clipboard.ae`, run headless by ci.sh.
+  runs on. `AETHER_UI_TEST_CLIPBOARD=1` does the same with real windows (for
+  a spec that also measures them: GTK lays nothing out headless).
+  `tests/clipboard/spec_clipboard.ae`, run headless by ci.sh.
 
 - **Ctrl+arrows in `datagrid`: to the edge of the data**, as a
   spreadsheet's: from a cell showing something whose neighbour does too,

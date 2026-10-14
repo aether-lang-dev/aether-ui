@@ -479,7 +479,8 @@ static char* g_headless_clip = NULL;
 
 int aether_ui_clipboard_is_headless(void) {
     const char* v = getenv("AETHER_UI_HEADLESS");
-    return v && v[0] && v[0] != '0';
+    const char* t = getenv("AETHER_UI_TEST_CLIPBOARD");
+    return (v && v[0] && v[0] != '0') || (t && t[0] && t[0] != '0');
 }
 
 void aether_ui_clipboard_headless_write(const char* text) {
