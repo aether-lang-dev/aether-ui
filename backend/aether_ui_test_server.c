@@ -1569,6 +1569,28 @@ static void handle_request_inner(aether_sock_t client_fd,
                  aether_ui_frame_subscribers_impl(), aether_ui_frame_running_impl());
         send_http(client_fd, 200, "OK", "application/json", body);
 
+    // --- /clipboard ---
+    // GET /clipboard → the headless clipboard's text (text/plain);
+    // POST /clipboard?text=T → set it (URL-decoded, as /prompts/answer's
+    // value). Under AETHER_UI_HEADLESS clipboard_write and clipboard_read
+    // use this buffer, never the system's, so a spec can check what an app
+    // copied, or give it something to paste, without touching the
+    // clipboard of the machine it runs on. Not headless: 409.
+    } else if (strcmp(path, "/clipboard") == 0 || strncmp(path, "/clipboard?", 11) == 0) {
+        if (!aether_ui_clipboard_is_headless()) {
+            send_http(client_fd, 409, "Conflict", "text/plain", "the clipboard is the system's unless AETHER_UI_HEADLESS is set");
+        } else if (method == 0) {
+            char* t = aether_ui_clipboard_headless_read();
+            send_http(client_fd, 200, "OK", "text/plain", t);
+            free(t);
+        } else {
+            char* text = (char*)calloc(1, 65536);
+            query_param_decoded(path, "text", text, 65536, 1);
+            aether_ui_clipboard_headless_write(text);
+            free(text);
+            send_http(client_fd, 200, "OK", "text/plain", "set");
+        }
+
     // --- /opened_urls ---
     // GET /opened_urls → every URL the app passed to open_url while headless,
     // in order. Headless open_url records instead of launching a browser

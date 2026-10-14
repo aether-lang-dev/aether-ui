@@ -3978,10 +3978,12 @@ int aether_ui_dark_mode_check(void) {
     return 0;
 }
 char* aether_ui_clipboard_read_impl(void) {
+    if (aether_ui_clipboard_is_headless()) return aether_ui_clipboard_headless_read();
     NSString* s = UIPasteboard.generalPasteboard.string;
     return strdup(s ? s.UTF8String : "");
 }
 void aether_ui_clipboard_write_impl(const char* text) {
+    if (aether_ui_clipboard_is_headless()) { aether_ui_clipboard_headless_write(text); return; }
     UIPasteboard.generalPasteboard.string =
         [NSString stringWithUTF8String:text ? text : ""];
 }

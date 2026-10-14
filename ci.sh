@@ -1862,6 +1862,12 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=undo_demo/spec_undo_demo \
     run_server_test "$(EX_BIN undo_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" undo_demo || FAIL=$((FAIL + 1))
+    # The clipboard, HEADLESS: every backend's clipboard is the driver's
+    # buffer (GET and POST /clipboard), so the spec checks both halves without
+    # touching the clipboard of the machine it runs on.
+    AETHER_UI_HEADLESS=1 UI_SPEC=clipboard/spec_clipboard \
+    run_server_test "$(EX_BIN clipboard)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" clipboard || FAIL=$((FAIL + 1))
     # open_url, HEADLESS: every backend records the URL instead of handing it
     # to the OS, and GET /opened_urls lists it (toolkit-envy G6). Headless is
     # the point of the spec, so this one app is launched with it set.

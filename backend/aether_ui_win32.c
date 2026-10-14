@@ -7390,6 +7390,7 @@ char* aether_ui_file_save(const char* title, const char* default_name) {
 }
 
 void aether_ui_clipboard_write_impl(const char* text) {
+    if (aether_ui_clipboard_is_headless()) { aether_ui_clipboard_headless_write(text); return; }
     if (!text) return;
     if (!OpenClipboard(NULL)) return;
     EmptyClipboard();
@@ -7406,6 +7407,7 @@ void aether_ui_clipboard_write_impl(const char* text) {
 }
 
 char* aether_ui_clipboard_read_impl(void) {
+    if (aether_ui_clipboard_is_headless()) return aether_ui_clipboard_headless_read();
     if (!OpenClipboard(NULL)) return _strdup("");
     char* out = NULL;
     HANDLE mem = GetClipboardData(CF_UNICODETEXT);

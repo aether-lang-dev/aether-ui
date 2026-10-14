@@ -473,6 +473,31 @@ int aether_ui_prompt_queue_answer(const char* kind_name, const char* value) {
     return 0;
 }
 
+// --- headless clipboard (see the header) ---
+
+static char* g_headless_clip = NULL;
+
+int aether_ui_clipboard_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
+}
+
+void aether_ui_clipboard_headless_write(const char* text) {
+    char* copy = prompt_dup(text ? text : "");
+    PROMPT_LOCK();
+    char* old = g_headless_clip;
+    g_headless_clip = copy;
+    PROMPT_UNLOCK();
+    free(old);
+}
+
+char* aether_ui_clipboard_headless_read(void) {
+    PROMPT_LOCK();
+    char* out = prompt_dup(g_headless_clip ? g_headless_clip : "");
+    PROMPT_UNLOCK();
+    return out;
+}
+
 char* aether_ui_prompt_headless(int kind, const char* title, const char* detail) {
     if (kind < 0 || kind >= PROMPT_KINDS) return prompt_dup("");
     char* queued = NULL;

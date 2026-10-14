@@ -1,0 +1,30 @@
+// spec_clipboard.ae — the clipboard example under AETHER_UI_HEADLESS: the
+// app's clipboard is the driver's buffer (GET and POST /clipboard), not the
+// system's, so a spec can check both halves without touching the clipboard
+// of the machine it runs on. Run HEADLESS: ci.sh launches it so.
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "the headless clipboard over AetherUIDriver") {
+        spec.it("what the app writes, the driver reads") callback {
+            uidriver.click_widget(uidriver.widget_id_by_text("Write 'aether'"))
+            spec.assert_true(uidriver.wait_body_contains("/clipboard", "aether", 20), "copied")
+            spec.assert_str_eq(uidriver.clipboard(), "aether", "exactly")
+        }
+        spec.it("what the driver sets, the app reads") callback {
+            uidriver.set_clipboard("from the spec, with spaces & a +")
+            uidriver.click_widget(uidriver.widget_id_by_text("Read"))
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "read: [from the spec, with spaces & a +]", 20), "pasted")
+        }
+        spec.it("a round trip inside the app") callback {
+            uidriver.click_widget(uidriver.widget_id_by_text("Round-trip"))
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "round-trip: OK [round-trip-ok]", 20), "both halves")
+        }
+    }
+    return spec.run_summary(fw)
+}

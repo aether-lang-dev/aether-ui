@@ -182,6 +182,22 @@ int         aether_ui_prompt_scripted_at(int index);   // 1 a queued answer was 
 int         aether_ui_prompt_queued(const char* kind_name);
 
 // ---------------------------------------------------------------------------
+// Headless clipboard
+//
+// A spec that copies must not overwrite the clipboard of the person whose
+// machine it runs on, and a headless run on CI may have no clipboard at all.
+// So under AETHER_UI_HEADLESS every backend's clipboard_write and
+// clipboard_read use this buffer instead of the system's (one branch each),
+// and the driver reads and sets it: GET /clipboard, POST /clipboard?text=T.
+// Outside headless none of this runs.
+// ---------------------------------------------------------------------------
+// 1 when the clipboard is the headless buffer (AETHER_UI_HEADLESS is set).
+int   aether_ui_clipboard_is_headless(void);
+void  aether_ui_clipboard_headless_write(const char* text);
+// A malloc'd copy the caller owns (the clipboard ABI's contract).
+char* aether_ui_clipboard_headless_read(void);
+
+// ---------------------------------------------------------------------------
 // Headless
 // ---------------------------------------------------------------------------
 

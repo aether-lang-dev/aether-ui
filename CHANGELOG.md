@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A headless clipboard.** Under `AETHER_UI_HEADLESS` every backend's
+  `clipboard_write` and `clipboard_read` use an in-process buffer, never the
+  system's, and the driver reads and sets it: `GET /clipboard`, `POST
+  /clipboard?text=T` (uidriver's `clipboard()` and `set_clipboard(text)`).
+  A spec that copies no longer overwrites the clipboard of the machine it
+  runs on. `tests/clipboard/spec_clipboard.ae`, run headless by ci.sh.
+
 - **Ctrl+arrows in `datagrid`: to the edge of the data**, as a
   spreadsheet's: from a cell showing something whose neighbour does too,
   to the last such cell of the run; otherwise to the next cell that shows

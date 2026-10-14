@@ -28,7 +28,7 @@ exports(
     wait_root_height_change,
     menus_body, menu_handle_with, menu_activate, menu_activate_item,
     menu_native_activate,
-    answer_prompt, answer_prompt_status, prompts, opened_urls,
+    answer_prompt, answer_prompt_status, prompts, opened_urls, clipboard, set_clipboard,
     frame_clock_source, frame_clock_frames, frame_clock_subscribers,
     frame_clock_running
 )
@@ -594,6 +594,17 @@ prompts() -> string { return get_body("/prompts") }
 
 // The raw GET /opened_urls body: ["url", …] in the order open_url was called.
 opened_urls() -> string { return get_body("/opened_urls") }
+
+// The headless clipboard (GET /clipboard): what the app last copied. Under
+// AETHER_UI_HEADLESS the app's clipboard is a buffer the driver reads and
+// sets, never the system's.
+clipboard() -> string { return get_body("/clipboard") }
+
+// Put `text` on the headless clipboard, for the app to paste.
+set_clipboard(text: string) {
+    t = url.encode(text)
+    post_ok("/clipboard?text=${t}", "set the clipboard")
+}
 
 // ─── The frame clock (GET /frame_clock) ──────────────────────────
 // {"source":S,"frames":N,"subscribers":K,"running":R}: the clock that

@@ -3627,6 +3627,7 @@ char* aether_ui_file_pick_folder(const char* title, const char* start_dir) {
 
 // Clipboard read/write
 void aether_ui_clipboard_write_impl(const char* text) {
+    if (aether_ui_clipboard_is_headless()) { aether_ui_clipboard_headless_write(text); return; }
     ensure_gtk_init();
     GdkDisplay* display = gdk_display_get_default();
     if (!display) return;
@@ -3676,6 +3677,7 @@ static gboolean aeui_clip_read_timeout(gpointer data) {
 }
 
 char* aether_ui_clipboard_read_impl(void) {
+    if (aether_ui_clipboard_is_headless()) return aether_ui_clipboard_headless_read();
     ensure_gtk_init();
     GdkDisplay* display = gdk_display_get_default();
     if (!display) return strdup("");

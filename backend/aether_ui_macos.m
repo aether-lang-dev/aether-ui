@@ -4284,6 +4284,7 @@ char* aether_ui_file_save(const char* title, const char* default_name) {
 }
 
 void aether_ui_clipboard_write_impl(const char* text) {
+    if (aether_ui_clipboard_is_headless()) { aether_ui_clipboard_headless_write(text); return; }
     NSPasteboard* pb = [NSPasteboard generalPasteboard];
     [pb clearContents];
     [pb setString:[NSString stringWithUTF8String:text ? text : ""]
@@ -4291,6 +4292,7 @@ void aether_ui_clipboard_write_impl(const char* text) {
 }
 
 char* aether_ui_clipboard_read_impl(void) {
+    if (aether_ui_clipboard_is_headless()) return aether_ui_clipboard_headless_read();
     NSPasteboard* pb = [NSPasteboard generalPasteboard];
     NSString* s = [pb stringForType:NSPasteboardTypeString];
     if (!s) return strdup("");

@@ -5516,10 +5516,12 @@ static void aeui_clip_read_run(void* arg) {
 
 // ClipboardManager, on the UI thread (the service is the app's own).
 void aether_ui_clipboard_write_impl(const char* text) {
+    if (aether_ui_clipboard_is_headless()) { aether_ui_clipboard_headless_write(text); return; }
     AeuiClip c = { text, NULL };
     aeui_android_run_sync(aeui_clip_write_run, &c);
 }
 char* aether_ui_clipboard_read_impl(void) {
+    if (aether_ui_clipboard_is_headless()) return aether_ui_clipboard_headless_read();
     AeuiClip c = { NULL, NULL };
     aeui_android_run_sync(aeui_clip_read_run, &c);
     return c.out ? c.out : strdup("");
