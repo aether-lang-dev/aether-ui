@@ -85,6 +85,30 @@ int aether_ui_fire_double_click(int handle);
 void aether_ui_row_drag_reorder_impl(int row_handle, int index, void* on_drop);
 int  aether_ui_fire_row_drop(int row_handle, int src_index);
 
+/* reorderable(stack, cb): the children of an hstack/vstack can be dragged
+ * among themselves, in the app, with the platform's own drag and drop
+ * (GtkDragSource/GtkDropTargetAsync over a private mime type; an
+ * NSDraggingSession over a private pasteboard type; a thread mouse hook and
+ * mouse capture on Win32; UIDragInteraction/UIDropInteraction; Android's
+ * View.startDragAndDrop). The drag starts on a move with the button held,
+ * not on the press, so a child can still be clicked. While one is dragged a
+ * bar shows the gap it would land in. The gap rule is the same everywhere:
+ * gap = the number of children whose midpoint along the stack's axis lies
+ * before the pointer (0 = before the first, n = after the last).
+ *
+ * The closure is cb(from, gap, n): the dragged child's index, the gap it was
+ * dropped in and the child count. The DSL turns the gap into the index the
+ * child would have after the move and drops the no-ops; the toolkit never
+ * moves the children itself. stack_reorder_deliver is the one entry every
+ * drop goes through, native or driven; widget_reorderable reports whether a
+ * stack is armed (the driver's "reorderable"); fire_reorder_drag plays the
+ * driver's /widget/{child}/drag through the stack's own gap rule: 1 when
+ * the widget sits in a reorderable stack, else 0. All on the UI thread. */
+void aether_ui_stack_reorderable_impl(int stack_handle, void* boxed_closure);
+int  aether_ui_widget_reorderable_impl(int handle);
+int  aether_ui_stack_reorder_deliver(int stack_handle, int from, int gap);
+int  aether_ui_fire_reorder_drag(int handle, double x, double y, int dx, int dy);
+
 // vlist native scroll: attach an on_scroll(dy) closure to a container's native
 // scroll (wheel/drag) — dy>0 scrolls toward the end. fire_scroll drives it
 // headlessly (a real wheel can't be synthesised off-thread), mirroring the

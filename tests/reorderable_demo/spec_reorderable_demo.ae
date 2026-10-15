@@ -1,0 +1,118 @@
+// spec_reorderable_demo.ae -- a row's children dragged among themselves,
+// over the AetherUIDriver, with the row's REAL geometry.
+//
+//   * the row reports "reorderable": true, and a plain row does not;
+//   * POST /widget/{child}/drag plays a press in a child and a release at an
+//     offset through the stack's gap rule: the release point is taken from
+//     the children's measured x/w, so a drag "two tabs to the right" lands
+//     A past B and C, and cb(from, to) is what the app saw (its moved
+//     label) and did (its order label, rebuilt with each_update);
+//   * a short drag that ends in the gap beside the child moves nothing;
+//   * the children rebuilt after a move are still reorderable (the stack
+//     carries the gesture, not the children);
+//   * a child that was not dragged still clicks.
+//
+// Run via ci.sh, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/reorderable_demo/bin/reorderable_demo &
+//   UI_SPEC=reorderable_demo/spec_reorderable_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+// The tab button with label `txt`.
+tab(txt: string) -> int {
+    return uidriver.widget_id_of("button", txt)
+}
+
+// The row: the parent of tab A (whatever is first).
+row_of(txt: string) -> int {
+    t = tab(txt)
+    if t == 0 { return 0 }
+    return uidriver.widget_int_field_by_id(t, "parent")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "reorderable row over AetherUIDriver") {
+        spec.it("the row is reported reorderable; a plain row is not") callback {
+            row = row_of("A")
+            spec.assert_gt(row, 0, "row of A found")
+            body = uidriver.get_body("/widget/${row}")
+            spec.assert_true(string.contains(body, "\"reorderable\":true"), "row JSON says reorderable")
+            plain = uidriver.widget_int_field_by_id(uidriver.widget_id_of("button", "Move A to end"), "parent")
+            spec.assert_gt(plain, 0, "the button row found")
+            pbody = uidriver.get_body("/widget/${plain}")
+            spec.assert_true(string.contains(pbody, "reorderable") == 0, "the button row is not")
+        }
+
+        spec.it("dragging A past C by its measured geometry lands it at 2") callback {
+            a = tab("A")
+            c = tab("C")
+            spec.assert_gt(a, 0, "tab A found")
+            spec.assert_gt(c, 0, "tab C found")
+            ax = uidriver.widget_int_field_by_id(a, "x")
+            aw = uidriver.widget_int_field_by_id(a, "w")
+            ah = uidriver.widget_int_field_by_id(a, "h")
+            cx = uidriver.widget_int_field_by_id(c, "x")
+            cw = uidriver.widget_int_field_by_id(c, "w")
+            spec.assert_gt(aw, 0, "A has a width (laid out)")
+            spec.assert_gt(cx, ax, "C is to the right of A")
+            // Press in A's middle, release just past C's midpoint: the gap
+            // rule counts A, B and C before the pointer -> gap 3 -> A at 2.
+            px = aw / 2
+            py = ah / 2
+            dx = (cx + cw / 2 + 2) - (ax + px)
+            uidriver.post_ok("/widget/${a}/drag?x=${px}&y=${py}&dx=${dx}&dy=0", "drag A past C")
+            ok = uidriver.wait_body_contains("/widgets", "order: B > C > A > D", 20)
+            spec.assert_true(ok, "the app rebuilt the row as B > C > A > D")
+            ok2 = uidriver.wait_body_contains("/widgets", "moved: 0 > 2", 20)
+            spec.assert_true(ok2, "cb got (0, 2)")
+        }
+
+        spec.it("a short drag that stays beside the child moves nothing") callback {
+            // Order is B,C,A,D. Nudge C a few pixels: it ends in the gap
+            // beside itself, which is not a move, so no callback.
+            c = tab("C")
+            cw = uidriver.widget_int_field_by_id(c, "w")
+            ch = uidriver.widget_int_field_by_id(c, "h")
+            uidriver.post_ok("/widget/${c}/drag?x=${cw / 2}&y=${ch / 2}&dx=3&dy=0", "nudge C")
+            body = uidriver.get_body("/widgets")
+            spec.assert_true(string.contains(body, "order: B > C > A > D"), "order unchanged")
+            spec.assert_true(string.contains(body, "moved: 0 > 2"), "no second callback")
+        }
+
+        spec.it("the rebuilt children are still reorderable: D dragged to the front") callback {
+            // Order is B,C,A,D. Drag D left of B's midpoint -> gap 0 -> D at 0.
+            d = tab("D")
+            b = tab("B")
+            spec.assert_gt(d, 0, "tab D found (rebuilt)")
+            dx0 = uidriver.widget_int_field_by_id(d, "x")
+            dw = uidriver.widget_int_field_by_id(d, "w")
+            dh = uidriver.widget_int_field_by_id(d, "h")
+            bx = uidriver.widget_int_field_by_id(b, "x")
+            px = dw / 2
+            dx = (bx + 1) - (dx0 + px)
+            uidriver.post_ok("/widget/${d}/drag?x=${px}&y=${dh / 2}&dx=${dx}&dy=0", "drag D to the front")
+            ok = uidriver.wait_body_contains("/widgets", "order: D > B > C > A", 20)
+            spec.assert_true(ok, "order is D > B > C > A")
+            ok2 = uidriver.wait_body_contains("/widgets", "moved: 3 > 0", 20)
+            spec.assert_true(ok2, "cb got (3, 0)")
+        }
+
+        spec.it("a tab still clicks") callback {
+            b = tab("B")
+            uidriver.click_widget(b)
+            ok = uidriver.wait_body_contains("/widgets", "clicked: B", 20)
+            spec.assert_true(ok, "B's own callback ran")
+        }
+
+        spec.it("a widget outside any reorderable stack still answers 404 to drag") callback {
+            m = uidriver.widget_id_of("button", "Move A to end")
+            st = uidriver.post_status("/widget/${m}/drag?x=1&y=1&dx=5&dy=0")
+            spec.assert_eq(st, 404, "no on_drag and no reorderable stack: 404")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -1770,6 +1770,11 @@ void aether_ui_shortcut_chord_impl(const char* first_combo,
    as before, and set_focusable is what turns it on. */
 @interface AetherStackView : NSStackView
 @property (assign) BOOL aeuiFocusable;
+// reorderable(): the drop closure cb(from, gap, n), and the bar that shows
+// the gap a dragged child would land in (see aether_ui_stack_reorderable_impl).
+@property (assign) AeClosure* aeuiReorder;
+@property (strong) NSView* aeuiReorderBar;
+- (void)aeuiReorderShowGap:(int)gap;
 // Box packing (vstack/hstack only; see aeui_stack_enable_packing).
 @property (strong) NSView* aeuiSlack;
 @property (weak) NSView* aeuiSlackCut;
@@ -2009,8 +2014,131 @@ static void aeui_stack_enable_packing(AetherStackView* sv) {
     [sv aeuiRepack];
 }
 
+// ── reorderable(): the stack as the drop target of its own children ──
+// The children are the stack's real arranged subviews: not the packing slack,
+// not a hidden one. Positions are taken along the stack's axis in LAYOUT
+// order, so a vertical stack (first child at the top, which in an unflipped
+// NSView is the greatest y) reads the same as a horizontal one.
+static NSString* const kAeuiReorderType = @"org.aether-lang.aether-ui.reorder";
+static int aeui_reorder_src_stack = 0;   // the stack a reorder drag began in
+static int aeui_reorder_src_from = -1;   // ... and the child's index there
+
+static int aeui_reorder_kids(AetherStackView* s, NSView* __unsafe_unretained* out, int max) {
+    int n = 0;
+    for (NSView* c in [s arrangedSubviews]) {
+        if (c == s.aeuiSlack || [c isHidden]) continue;
+        if (n < max) out[n] = c;
+        n++;
+    }
+    return n < max ? n : max;
+}
+static BOOL aeui_reorder_horiz(AetherStackView* s) {
+    return [s orientation] == NSUserInterfaceLayoutOrientationHorizontal;
+}
+// A point of the stack's coordinates along the axis, in layout order.
+static double aeui_reorder_axis(AetherStackView* s, NSPoint p) {
+    if (aeui_reorder_horiz(s)) return p.x;
+    return [s isFlipped] ? p.y : NSHeight([s bounds]) - p.y;
+}
+// A child's span [a, b] along the axis, in layout order.
+static void aeui_reorder_span(AetherStackView* s, NSView* c, double* a, double* b) {
+    NSRect f = [c frame];
+    if (aeui_reorder_horiz(s)) { *a = NSMinX(f); *b = NSMaxX(f); return; }
+    if ([s isFlipped]) { *a = NSMinY(f); *b = NSMaxY(f); return; }
+    double h = NSHeight([s bounds]);
+    *a = h - NSMaxY(f); *b = h - NSMinY(f);
+}
+static int aeui_reorder_child_at(AetherStackView* s, NSPoint p) {
+    __unsafe_unretained NSView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    for (int i = 0; i < n; i++) if (NSPointInRect(p, [kids[i] frame])) return i;
+    return -1;
+}
+// The gap rule: children whose midpoint along the axis lies before the point.
+static int aeui_reorder_gap_at(AetherStackView* s, NSPoint p) {
+    __unsafe_unretained NSView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    double at = aeui_reorder_axis(s, p);
+    int gap = 0;
+    for (int i = 0; i < n; i++) {
+        double a, b; aeui_reorder_span(s, kids[i], &a, &b);
+        if ((a + b) / 2 < at) gap++;
+    }
+    return gap;
+}
+
 @implementation AetherStackView
 - (BOOL)acceptsFirstResponder { return self.aeuiFocusable; }
+// The bar at gap `gap` (-1: none): 3pt across the axis, the full depth of
+// the stack, in the accent colour.
+- (void)aeuiReorderShowGap:(int)gap {
+    __unsafe_unretained NSView* kids[256];
+    int n = aeui_reorder_kids(self, kids, 256);
+    if (gap < 0 || n == 0) {
+        if (self.aeuiReorderBar) [self.aeuiReorderBar setHidden:YES];
+        return;
+    }
+    if (gap > n) gap = n;
+    double pos;
+    if (gap == 0) { double a, b; aeui_reorder_span(self, kids[0], &a, &b); pos = a; }
+    else if (gap == n) { double a, b; aeui_reorder_span(self, kids[n - 1], &a, &b); pos = b; }
+    else {
+        double a0, b0, a1, b1;
+        aeui_reorder_span(self, kids[gap - 1], &a0, &b0);
+        aeui_reorder_span(self, kids[gap], &a1, &b1);
+        pos = (b0 + a1) / 2;
+    }
+    if (!self.aeuiReorderBar) {
+        NSView* bar = [[NSView alloc] initWithFrame:NSZeroRect];
+        [bar setWantsLayer:YES];
+        bar.layer.backgroundColor = [[NSColor controlAccentColor] CGColor];
+        [bar setTranslatesAutoresizingMaskIntoConstraints:YES];
+        self.aeuiReorderBar = bar;
+    }
+    if ([self.aeuiReorderBar superview] != self) [self addSubview:self.aeuiReorderBar];
+    NSRect b = [self bounds];
+    NSRect f;
+    if (aeui_reorder_horiz(self)) {
+        f = NSMakeRect(pos - 1.5, NSMinY(b), 3, NSHeight(b));
+    } else {
+        double y = [self isFlipped] ? pos : NSHeight(b) - pos;
+        f = NSMakeRect(NSMinX(b), y - 1.5, NSWidth(b), 3);
+    }
+    [self.aeuiReorderBar setFrame:f];
+    [self.aeuiReorderBar setHidden:NO];
+}
+- (NSDragOperation)aeuiReorderUpdate:(id<NSDraggingInfo>)sender {
+    if (!self.aeuiReorder || aeui_reorder_src_stack <= 0
+        || aeui_reorder_src_stack != aether_ui_handle_for_widget((__bridge void*)self)) {
+        return NSDragOperationNone;
+    }
+    NSPoint p = [self convertPoint:[sender draggingLocation] fromView:nil];
+    [self aeuiReorderShowGap:aeui_reorder_gap_at(self, p)];
+    return NSDragOperationMove;
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return [self aeuiReorderUpdate:sender];
+}
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self aeuiReorderUpdate:sender];
+}
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    [self aeuiReorderShowGap:-1];
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    [self aeuiReorderShowGap:-1];
+    if ([self aeuiReorderUpdate:sender] == NSDragOperationNone) return NO;
+    [self aeuiReorderShowGap:-1];
+    int from = aeui_reorder_src_from;
+    aeui_reorder_src_stack = 0;
+    aeui_reorder_src_from = -1;
+    NSPoint p = [self convertPoint:[sender draggingLocation] fromView:nil];
+    int gap = aeui_reorder_gap_at(self, p);
+    // The closure may rebuild the children: nothing touches them after it.
+    aether_ui_stack_reorder_deliver(aether_ui_handle_for_widget((__bridge void*)self), from, gap);
+    return YES;
+}
 // Real children go before the slack, at their index among real children.
 - (void)addArrangedSubview:(NSView*)view {
     NSView* slack = self.aeuiSlack;
@@ -7828,6 +7956,157 @@ int aether_ui_fire_double_click(int handle) {
     return 1;
 }
 
+// ── reorderable(stack): the drag half ────────────────────────────────
+// A pan recogniser on the STACK, delaying the press to the children until it
+// knows whether this is a drag: a press and release still clicks a child
+// button (the delayed events are delivered when the recogniser fails), and
+// a move past the threshold starts an NSDraggingSession carrying the child's
+// index under a private pasteboard type, which no other app accepts. The
+// stack is its own drop target (AetherStackView above).
+@interface AetherReorderSource : NSObject <NSDraggingSource>
+@end
+@implementation AetherReorderSource
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    (void)session;
+    return context == NSDraggingContextWithinApplication ? NSDragOperationMove
+                                                         : NSDragOperationNone;
+}
+- (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession*)session {
+    (void)session;
+    return YES;
+}
+- (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)p
+              operation:(NSDragOperation)op {
+    (void)session; (void)p; (void)op;
+    // Let go outside the stack, or cancelled: nothing moves, the bar goes.
+    AetherStackView* src = (AetherStackView*)(__bridge NSView*)
+        aether_ui_get_widget(aeui_reorder_src_stack);
+    if ([src isKindOfClass:[AetherStackView class]]) [src aeuiReorderShowGap:-1];
+    aeui_reorder_src_stack = 0;
+    aeui_reorder_src_from = -1;
+}
+@end
+static AetherReorderSource* aeui_reorder_source = nil;
+
+@interface AetherReorderRecognizer : NSPanGestureRecognizer
+@end
+@implementation AetherReorderRecognizer
+@end
+
+@interface AetherReorderStarter : NSObject
++ (void)begin:(AetherReorderRecognizer*)g;
+@end
+@implementation AetherReorderStarter
++ (void)begin:(AetherReorderRecognizer*)g {
+    if ([g state] != NSGestureRecognizerStateBegan) return;
+    AetherStackView* s = (AetherStackView*)[g view];
+    if (![s isKindOfClass:[AetherStackView class]] || !s.aeuiReorder) return;
+    // Where the press landed: the pan's location less its translation.
+    NSPoint at = [g locationInView:s];
+    NSPoint t = [g translationInView:s];
+    NSPoint pressed = NSMakePoint(at.x - t.x, at.y - t.y);
+    int from = aeui_reorder_child_at(s, pressed);
+    if (from < 0) return;   // a press in the spacing drags nothing
+    __unsafe_unretained NSView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    if (from >= n) return;
+    NSView* child = kids[from];
+    aeui_reorder_src_stack = aether_ui_handle_for_widget((__bridge void*)s);
+    aeui_reorder_src_from = from;
+    NSPasteboardItem* pi = [[NSPasteboardItem alloc] init];
+    [pi setString:[NSString stringWithFormat:@"%d", from] forType:kAeuiReorderType];
+    NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:pi];
+    // The child itself as the drag image, held where it was pressed.
+    NSImage* img = nil;
+    NSRect cb = [child bounds];
+    if (NSWidth(cb) > 0 && NSHeight(cb) > 0) {
+        NSBitmapImageRep* rep = [child bitmapImageRepForCachingDisplayInRect:cb];
+        if (rep) {
+            [child cacheDisplayInRect:cb toBitmapImageRep:rep];
+            img = [[NSImage alloc] initWithSize:cb.size];
+            [img addRepresentation:rep];
+        }
+    }
+    [item setDraggingFrame:[child frame] contents:img];
+    if (!aeui_reorder_source) aeui_reorder_source = [[AetherReorderSource alloc] init];
+    NSEvent* ev = [[NSApplication sharedApplication] currentEvent];
+    if (!ev) return;
+    NSDraggingSession* session = [s beginDraggingSessionWithItems:@[item]
+                                                            event:ev
+                                                           source:aeui_reorder_source];
+    session.animatesToStartingPositionsOnCancelOrFail = YES;
+}
+@end
+
+void aether_ui_stack_reorderable_impl(int stack_handle, void* boxed_closure) {
+    AetherStackView* s = (AetherStackView*)(__bridge NSView*)aether_ui_get_widget(stack_handle);
+    if (![s isKindOfClass:[AetherStackView class]] || !boxed_closure) return;
+    BOOL armed = s.aeuiReorder != NULL;
+    s.aeuiReorder = (AeClosure*)boxed_closure;
+    if (armed) return;   // closure replaced only
+    [s registerForDraggedTypes:@[kAeuiReorderType]];
+    AetherReorderRecognizer* rec = [[AetherReorderRecognizer alloc]
+        initWithTarget:[AetherReorderStarter class] action:@selector(begin:)];
+    rec.delaysPrimaryMouseButtonEvents = YES;
+    [s addGestureRecognizer:rec];
+}
+
+int aether_ui_widget_reorderable_impl(int handle) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    return [v isKindOfClass:[AetherStackView class]]
+        && ((AetherStackView*)v).aeuiReorder ? 1 : 0;
+}
+
+int aether_ui_stack_reorder_deliver(int stack_handle, int from, int gap) {
+    AetherStackView* s = (AetherStackView*)(__bridge NSView*)aether_ui_get_widget(stack_handle);
+    if (![s isKindOfClass:[AetherStackView class]]) return 0;
+    AeClosure* c = s.aeuiReorder;
+    if (!c || !c->fn) return 0;
+    __unsafe_unretained NSView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    if (from < 0 || from >= n) return 1;
+    if (gap < 0) gap = 0;
+    if (gap > n) gap = n;
+    // The closure rebuilds views: on the main thread, as every drop is.
+    void (^fire)(void) = ^{
+        ((void(*)(void*, intptr_t, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)from,
+                                                              (intptr_t)gap, (intptr_t)n);
+    };
+    if ([NSThread isMainThread]) fire();
+    else dispatch_sync(dispatch_get_main_queue(), fire);
+    return 1;
+}
+
+// The driver's drag on a widget inside a reorderable stack: the press at
+// (x, y) in the widget (top-left based, as on_drag reports) names the child;
+// the release at the offset, taken to the stack's coordinates, names the gap
+// by the same rule a real drop uses.
+int aether_ui_fire_reorder_drag(int handle, double x, double y, int dx, int dy) {
+    NSView* w = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!w) return 0;
+    NSView* child = w;
+    NSView* up = [w superview];
+    while (up && !([up isKindOfClass:[AetherStackView class]]
+                   && ((AetherStackView*)up).aeuiReorder)) {
+        child = up;
+        up = [up superview];
+    }
+    if (!up) return 0;
+    AetherStackView* s = (AetherStackView*)up;
+    __unsafe_unretained NSView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    int from = -1;
+    for (int i = 0; i < n; i++) if (kids[i] == child) from = i;
+    if (from < 0) return 0;
+    double px = x + dx;
+    double py = [w isFlipped] ? y + dy : NSHeight([w bounds]) - y - dy;
+    NSPoint p = [w convertPoint:NSMakePoint(px, py) toView:s];
+    int gap = aeui_reorder_gap_at(s, p);
+    aether_ui_stack_reorder_deliver(aether_ui_handle_for_widget((__bridge void*)s), from, gap);
+    return 1;
+}
+
 // Row drag-reorder. Native AppKit drag is a follow-up; store the drop closure
 // so the reorder works via the driver's /widget/{id}/drop (model reorder is
 // shared). (void)index — the row's index rides in the Aether closure.
@@ -9045,7 +9324,15 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             // A press, two moves and a release through on_drag's closure.
             NSValue* nv = v ? objc_getAssociatedObject(v, "aeui_wdrag") : nil;
             AeClosure* c = nv ? (AeClosure*)[nv pointerValue] : NULL;
-            if (!c) { ctx->result = 3; return; }
+            if (!c) {
+                // No on_drag of its own: a child of a reorderable stack is
+                // dragged through the stack's gap rule instead.
+                if (aether_ui_fire_reorder_drag(ctx->handle, ctx->dval, ctx->dval2,
+                                                ctx->ival, ctx->ival2)) {
+                    ctx->result = 0; return;
+                }
+                ctx->result = 3; return;
+            }
             aeui_drag_call(c, 0, ctx->dval, ctx->dval2);
             aeui_drag_call(c, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
             aeui_drag_call(c, 1, (double)ctx->ival, (double)ctx->ival2);

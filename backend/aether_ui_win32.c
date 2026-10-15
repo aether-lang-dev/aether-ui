@@ -280,6 +280,7 @@ typedef struct {
     AeClosure* on_submit; // Return in a text/secure field: on_submit(text)
     int bound_state;      // two-way bind_value target (0 = none)
     AeClosure* on_drop;   // row drag-reorder: on_drop(src_index)
+    AeClosure* reorder;   // reorderable(): a stack's cb(from, gap, n)
     AeClosure* on_scroll; // vlist native scroll: on_scroll(dy rows)
     int text_wrap;        // WK_TEXT: multi-line wrapping label
     int text_anchor;      // WK_TEXT: 0=start 1=middle 2=end
@@ -872,6 +873,11 @@ static HWND g_drag_hwnd = NULL;
 static POINT g_drag_origin;
 static void w32_focus_poll(void);
 static int w32_drag_begin(HWND hwnd, LPARAM lp);
+// reorderable(): the bar showing the gap a dragged child would land in (a
+// child of the stack being dragged in, for the drag's duration only, and
+// skipped by the stack's layout), and the capture-lost end of a drag.
+static HWND g_reorder_bar = NULL;
+static void w32_reorder_capture_lost(HWND hwnd, HWND to);
 static int w32_set_cursor_under(HWND hwnd);
 static int w32_drag_track(HWND hwnd, POINT screen, int phase);
 
@@ -1466,6 +1472,7 @@ static void stack_do_layout(HWND stack_hwnd) {
     int nchildren = 0, cap = 0;
     for (HWND c = GetWindow(stack_hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
         if (!w32_own_visible(c)) continue;
+        if (c == g_reorder_bar) continue;   // the gap bar is not a child
         if (nchildren >= cap) {
             cap = cap == 0 ? 16 : cap * 2;
             children = (HWND*)realloc(children, sizeof(HWND) * cap);
@@ -2271,6 +2278,7 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 POINT s; GetCursorPos(&s);
                 w32_drag_track(hwnd, s, 2);
             }
+            w32_reorder_capture_lost(hwnd, (HWND)lp);
             return DefWindowProcW(hwnd, msg, wp, lp);
         case WM_LBUTTONUP:
             if (g_drag_target && hwnd == g_drag_hwnd) {
@@ -7275,6 +7283,282 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     Widget* w = widget_at(row_handle);
     if (!w || !w->on_drop || !w->on_drop->fn) return 0;
     ((void(*)(void*, intptr_t))w->on_drop->fn)(w->on_drop->env, (intptr_t)src_index);
+    return 1;
+}
+
+// ── reorderable(stack): a stack's children dragged among themselves ──
+// The children take their own mouse (a BUTTON captures it on its press), so
+// the stack never sees a press on one. A WH_MOUSE hook on the UI thread sees
+// every mouse message before its window does: the press records which child
+// of which reorderable stack it landed in; a move past the system drag
+// threshold takes the capture from the child (which drops its press, so it
+// does not click) and gives it to the stack; the release lands the drop in
+// the gap under the pointer and is swallowed, so nothing clicks. A press
+// and release without that move is left alone, and the child clicks as it
+// always did. The gap bar is a small window of the stack's own, drawn in the
+// highlight colour, that exists for the drag only.
+typedef struct {
+    int stack;        // the reorderable stack the press landed in; 0 = none
+    int from;         // the child pressed
+    POINT origin;     // the press, in screen px
+    int dragging;     // past the threshold: the stack holds the capture
+} W32Reorder;
+static W32Reorder g_reorder = { 0, -1, { 0, 0 }, 0 };
+static HHOOK g_reorder_hook = NULL;
+static const wchar_t* REORDER_BAR_CLASS = L"AetherUIReorderBar";
+
+// The stack's real children in layout order: visible, registered widgets.
+static int w32_reorder_kids(Widget* sw, HWND* out, int max) {
+    int n = 0;
+    for (HWND c = GetWindow(sw->hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (c == g_reorder_bar) continue;
+        if (!(GetWindowLongPtrW(c, GWL_STYLE) & WS_VISIBLE)) continue;
+        if (handle_for_hwnd(c) == 0) continue;
+        if (n < max) out[n] = c;
+        n++;
+    }
+    return n < max ? n : max;
+}
+
+// A child's rect in the stack's client coordinates.
+static RECT w32_reorder_rect(HWND stack, HWND c) {
+    RECT r;
+    GetWindowRect(c, &r);
+    MapWindowPoints(NULL, stack, (POINT*)&r, 2);
+    return r;
+}
+
+// The child containing p (stack client coordinates), or -1.
+static int w32_reorder_child_at(Widget* sw, POINT p) {
+    HWND kids[256];
+    int n = w32_reorder_kids(sw, kids, 256);
+    for (int i = 0; i < n; i++) {
+        RECT r = w32_reorder_rect(sw->hwnd, kids[i]);
+        if (PtInRect(&r, p)) return i;
+    }
+    return -1;
+}
+
+// The gap rule: children whose midpoint along the axis lies before the point.
+static int w32_reorder_gap_at(Widget* sw, POINT p) {
+    HWND kids[256];
+    int n = w32_reorder_kids(sw, kids, 256);
+    int horiz = sw->stack.orientation == 0;
+    int at = horiz ? p.x : p.y;
+    int gap = 0;
+    for (int i = 0; i < n; i++) {
+        RECT r = w32_reorder_rect(sw->hwnd, kids[i]);
+        int mid = horiz ? (r.left + r.right) / 2 : (r.top + r.bottom) / 2;
+        if (mid < at) gap++;
+    }
+    return gap;
+}
+
+static LRESULT CALLBACK reorder_bar_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        FillRect(hdc, &ps.rcPaint, GetSysColorBrush(COLOR_HIGHLIGHT));
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    if (msg == WM_ERASEBKGND) return 1;
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// The bar at gap `gap` (-1: none): 3px across the axis, the stack's depth.
+static void w32_reorder_show_gap(Widget* sw, int gap) {
+    if (gap < 0 || !sw || !sw->hwnd) {
+        if (g_reorder_bar) { DestroyWindow(g_reorder_bar); g_reorder_bar = NULL; }
+        return;
+    }
+    HWND kids[256];
+    int n = w32_reorder_kids(sw, kids, 256);
+    if (n == 0) return;
+    if (gap > n) gap = n;
+    int horiz = sw->stack.orientation == 0;
+    int pos;
+    if (gap == 0) {
+        RECT r = w32_reorder_rect(sw->hwnd, kids[0]);
+        pos = horiz ? r.left : r.top;
+    } else if (gap == n) {
+        RECT r = w32_reorder_rect(sw->hwnd, kids[n - 1]);
+        pos = horiz ? r.right : r.bottom;
+    } else {
+        RECT a = w32_reorder_rect(sw->hwnd, kids[gap - 1]);
+        RECT b = w32_reorder_rect(sw->hwnd, kids[gap]);
+        pos = horiz ? (a.right + b.left) / 2 : (a.bottom + b.top) / 2;
+    }
+    RECT client;
+    GetClientRect(sw->hwnd, &client);
+    int x = horiz ? pos - 1 : 0, y = horiz ? 0 : pos - 1;
+    int w = horiz ? 3 : client.right, h = horiz ? client.bottom : 3;
+    if (!g_reorder_bar) {
+        static int registered = 0;
+        if (!registered) {
+            WNDCLASSEXW wc;
+            memset(&wc, 0, sizeof(wc));
+            wc.cbSize = sizeof(WNDCLASSEXW);
+            wc.lpfnWndProc = reorder_bar_wnd_proc;
+            wc.hInstance = GetModuleHandleW(NULL);
+            wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+            wc.lpszClassName = REORDER_BAR_CLASS;
+            RegisterClassExW(&wc);
+            registered = 1;
+        }
+        g_reorder_bar = CreateWindowExW(WS_EX_TRANSPARENT, REORDER_BAR_CLASS, L"",
+            WS_CHILD | WS_VISIBLE, x, y, w, h, sw->hwnd, NULL,
+            GetModuleHandleW(NULL), NULL);
+        if (!g_reorder_bar) return;
+    } else if (GetParent(g_reorder_bar) != sw->hwnd) {
+        SetParent(g_reorder_bar, sw->hwnd);
+    }
+    SetWindowPos(g_reorder_bar, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+}
+
+// The drag ends: the bar goes, the capture is given back, and if the pointer
+// was let go (deliver) the drop lands in the gap under it. The state is
+// cleared BEFORE the capture goes, so the WM_CAPTURECHANGED that sends does
+// not end it a second time, and before the closure runs, since the closure
+// rebuilds the children.
+static void w32_reorder_end(int deliver) {
+    int stack = g_reorder.stack, from = g_reorder.from, dragging = g_reorder.dragging;
+    Widget* sw = widget_at(stack);
+    g_reorder.stack = 0;
+    g_reorder.from = -1;
+    g_reorder.dragging = 0;
+    w32_reorder_show_gap(sw, -1);
+    if (!sw || sw->dead || !sw->hwnd) return;
+    if (dragging && GetCapture() == sw->hwnd) ReleaseCapture();
+    if (!deliver || !dragging) return;
+    POINT p;
+    GetCursorPos(&p);
+    ScreenToClient(sw->hwnd, &p);
+    aether_ui_stack_reorder_deliver(stack, from, w32_reorder_gap_at(sw, p));
+}
+
+static void w32_reorder_capture_lost(HWND hwnd, HWND to) {
+    Widget* sw = widget_at(g_reorder.stack);
+    if (g_reorder.dragging && sw && sw->hwnd == hwnd && to != hwnd) w32_reorder_end(0);
+}
+
+static LRESULT CALLBACK w32_reorder_hook(int code, WPARAM wp, LPARAM lp) {
+    if (code != HC_ACTION) return CallNextHookEx(NULL, code, wp, lp);
+    MOUSEHOOKSTRUCT* m = (MOUSEHOOKSTRUCT*)lp;
+    if (wp == WM_LBUTTONDOWN) {
+        g_reorder.stack = 0;
+        g_reorder.from = -1;
+        g_reorder.dragging = 0;
+        // The innermost reorderable stack the press landed in, and the
+        // child it landed on (a press in the spacing drags nothing).
+        for (HWND h = m->hwnd; h; h = GetAncestor(h, GA_PARENT)) {
+            int handle = handle_for_hwnd(h);
+            Widget* w = widget_at(handle);
+            if (!w) continue;   // a control's inner window: keep climbing
+            if (w->reorder && w32_is_stack(w->kind)) {
+                POINT p = m->pt;
+                ScreenToClient(h, &p);
+                int from = w32_reorder_child_at(w, p);
+                if (from >= 0) {
+                    g_reorder.stack = handle;
+                    g_reorder.from = from;
+                    g_reorder.origin = m->pt;
+                }
+                break;
+            }
+        }
+    } else if (wp == WM_MOUSEMOVE && g_reorder.stack) {
+        Widget* sw = widget_at(g_reorder.stack);
+        if (!sw || sw->dead || !sw->hwnd || !sw->reorder
+            || !(GetKeyState(VK_LBUTTON) & 0x8000)) {
+            // Gone, disarmed, or the release never came this way.
+            w32_reorder_end(0);
+        } else {
+            if (!g_reorder.dragging) {
+                int dx = m->pt.x - g_reorder.origin.x, dy = m->pt.y - g_reorder.origin.y;
+                if (dx < 0) dx = -dx;
+                if (dy < 0) dy = -dy;
+                if (dx < GetSystemMetrics(SM_CXDRAG) && dy < GetSystemMetrics(SM_CYDRAG))
+                    return CallNextHookEx(NULL, code, wp, lp);
+                // The child lets go of its press; the stack takes the mouse.
+                ReleaseCapture();
+                g_reorder.dragging = 1;
+                SetCapture(sw->hwnd);
+            }
+            POINT p = m->pt;
+            ScreenToClient(sw->hwnd, &p);
+            w32_reorder_show_gap(sw, w32_reorder_gap_at(sw, p));
+        }
+    } else if (wp == WM_LBUTTONUP && g_reorder.stack) {
+        if (g_reorder.dragging) {
+            // The drop. Swallowed: a release that ends a drag clicks nothing.
+            w32_reorder_end(1);
+            CallNextHookEx(NULL, code, wp, lp);
+            return 1;
+        }
+        g_reorder.stack = 0;   // a click: the child gets its release
+        g_reorder.from = -1;
+    }
+    return CallNextHookEx(NULL, code, wp, lp);
+}
+
+void aether_ui_stack_reorderable_impl(int stack_handle, void* boxed_closure) {
+    Widget* w = widget_at(stack_handle);
+    if (!w || !boxed_closure || !w32_is_stack(w->kind)) return;
+    w->reorder = (AeClosure*)boxed_closure;
+    // One hook for the thread, for every reorderable stack, installed on the
+    // UI thread (where the DSL runs) the first time one is armed.
+    if (!g_reorder_hook) {
+        g_reorder_hook = SetWindowsHookExW(WH_MOUSE, w32_reorder_hook, NULL,
+                                           GetCurrentThreadId());
+    }
+}
+
+int aether_ui_widget_reorderable_impl(int handle) {
+    Widget* w = widget_at(handle);
+    return w && w->reorder ? 1 : 0;
+}
+
+int aether_ui_stack_reorder_deliver(int stack_handle, int from, int gap) {
+    Widget* sw = widget_at(stack_handle);
+    AeClosure* c = sw ? sw->reorder : NULL;
+    if (!c || !c->fn || !sw->hwnd) return 0;
+    HWND kids[256];
+    int n = w32_reorder_kids(sw, kids, 256);
+    if (from < 0 || from >= n) return 1;
+    if (gap < 0) gap = 0;
+    if (gap > n) gap = n;
+    ((void(*)(void*, intptr_t, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)from,
+                                                          (intptr_t)gap, (intptr_t)n);
+    return 1;
+}
+
+// The driver's drag on a widget inside a reorderable stack: the press at
+// (x, y) in the widget names the child; the release at (x + dx, y + dy),
+// taken to the stack's client coordinates, names the gap by the same rule a
+// real drop uses. 1 if the widget sits in a reorderable stack.
+int aether_ui_fire_reorder_drag(int handle, double x, double y, int dx, int dy) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return 0;
+    HWND child = w->hwnd;
+    HWND up = GetAncestor(child, GA_PARENT);
+    Widget* sw = NULL;
+    while (up) {
+        sw = widget_at(handle_for_hwnd(up));
+        if (sw && sw->reorder && w32_is_stack(sw->kind)) break;
+        sw = NULL;
+        child = up;
+        up = GetAncestor(up, GA_PARENT);
+    }
+    if (!sw) return 0;
+    HWND kids[256];
+    int n = w32_reorder_kids(sw, kids, 256);
+    int from = -1;
+    for (int i = 0; i < n; i++) if (kids[i] == child) from = i;
+    if (from < 0) return 0;
+    POINT p = { (int)(x + dx), (int)(y + dy) };
+    MapWindowPoints(w->hwnd, sw->hwnd, &p, 1);
+    aether_ui_stack_reorder_deliver(handle_for_hwnd(sw->hwnd), from, w32_reorder_gap_at(sw, p));
     return 1;
 }
 
@@ -13866,7 +14150,13 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 break;
             case AETHER_DRV_DRAG:
                 // A press, two moves and a release through on_drag's closure.
-                if (!w->on_drag) { ctx->result = 3; ctx->done = 1; return 0; }
+                if (!w->on_drag) {
+                    // No on_drag of its own: a child of a reorderable stack
+                    // is dragged through the stack's gap rule instead.
+                    if (aether_ui_fire_reorder_drag(ctx->handle, ctx->dval, ctx->dval2,
+                                                    ctx->ival, ctx->ival2)) break;
+                    ctx->result = 3; ctx->done = 1; return 0;
+                }
                 w32_drag_call(w->on_drag, 0, ctx->dval, ctx->dval2);
                 w32_drag_call(w->on_drag, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
                 w32_drag_call(w->on_drag, 1, (double)ctx->ival, (double)ctx->ival2);

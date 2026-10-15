@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`reorderable(stack, cb)`: a stack's children dragged among themselves.**
+  The children of an hstack or vstack can be dragged to reorder (a
+  spreadsheet's sheet tabs); a bar shows the gap a dragged child would land
+  in, and `cb(from, to)` runs with the child's index and the index it would
+  have after the move. The toolkit moves nothing: the app rebuilds the row
+  from its own state. Real on every backend: GTK4 `GtkDragSource` +
+  `GtkDropTargetAsync` on the stack over a private mime type; AppKit an
+  `NSDraggingSession` from a pan recogniser that delays the press (a click
+  still clicks); Win32 a `WH_MOUSE` thread hook that takes the capture from
+  the child past the drag threshold; UIKit `UIDragInteraction` +
+  `UIDropInteraction`; Android `startDragAndDrop` from a long press. The
+  driver's `POST /widget/{child}/drag` plays the gesture through the stack's
+  gap rule, `/widget/{stack}` reports `"reorderable": true`.
+  `tests/reorderable` (headless: the gap-to-index rule),
+  `examples/reorderable_demo` + `tests/reorderable_demo` (over the driver,
+  with the row's real geometry). Answers the spreadsheet's
+  `asks/aether-ui-drag-to-reorder.md`.
+
 - **A headless clipboard.** Under `AETHER_UI_HEADLESS` every backend's
   `clipboard_write` and `clipboard_read` use an in-process buffer, never the
   system's, and the driver reads and sets it: `GET /clipboard`, `POST

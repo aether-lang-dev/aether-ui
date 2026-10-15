@@ -1,0 +1,115 @@
+// reorderable: a stack's children dragged among themselves -- the shared
+// half, headless. Each backend's gesture ends in the same entry,
+// stack_reorder_deliver(stack, from, gap), with the gap already found by the
+// one rule (children whose midpoint lies before the pointer). What is
+// pinned here is everything after that, which is pure Aether in
+// ui/module.ae: the gap becomes the index the child has after the move
+// (gap g is before child g; g == n is after the last), a drop in either gap
+// beside the child moves nothing and does not call back, out-of-range gaps
+// clamp, a stack that was never armed delivers nothing, and arming again
+// replaces the callback rather than stacking a second one.
+//
+// Falsify: deliver the gap as `to` and "A dropped two gaps right lands at
+// 1" fails (it would say 2); drop the no-op check and "a drop beside itself
+// is not a move" fails.
+
+import ui
+import ui (root_vstack, hstack, btn, reorderable, reorder_deliver)
+
+extern exit(code: int)
+
+var bad = 0
+var calls = 0
+var last_from = 0 - 1
+var last_to = 0 - 1
+var second_calls = 0
+
+check(label: string, got: int, want: int) {
+    if got != want { println("  MISMATCH: ${label} got=${got} want=${want}")  bad = bad + 1 }
+}
+
+reset() {
+    calls = 0
+    last_from = 0 - 1
+    last_to = 0 - 1
+}
+
+main() {
+    row = 0
+    other = 0
+    _r = root_vstack(4) {
+        row = hstack(6) {
+            _a = btn("A") callback { }
+            _b = btn("B") callback { }
+            _c = btn("C") callback { }
+            _d = btn("D") callback { }
+        }
+        other = hstack(6) {
+            _x = btn("X") callback { }
+            _y = btn("Y") callback { }
+        }
+    }
+
+    // --- not armed: nothing is delivered ---------------------------------
+    check("an unarmed stack delivers nothing", reorder_deliver(row, 0, 2), 0)
+
+    reorderable(row) callback |from: int, to: int| {
+        calls = calls + 1
+        last_from = from
+        last_to = to
+    }
+
+    // --- the gap becomes the index after the move -------------------------
+    reset()
+    check("delivered to an armed stack", reorder_deliver(row, 0, 3), 1)
+    check("A dropped in gap 3 (between C and D): cb ran", calls, 1)
+    check("  from is A", last_from, 0)
+    check("  A dropped two gaps right lands at 1 (gap 3 is before D, A leaves 0)", last_to, 2)
+
+    reset()
+    _d1 = reorder_deliver(row, 3, 0)
+    check("D dropped in gap 0 lands at 0", last_to, 0)
+    check("  from is D", last_from, 3)
+
+    reset()
+    _d2 = reorder_deliver(row, 0, 4)
+    check("A dropped past the last (gap n) lands at n-1", last_to, 3)
+
+    reset()
+    _d3 = reorder_deliver(row, 2, 1)
+    check("C dropped in gap 1 (before B) lands at 1", last_to, 1)
+
+    // --- the gaps on either side of the child are not a move --------------
+    reset()
+    check("still delivered", reorder_deliver(row, 1, 1), 1)
+    check("B dropped in the gap before itself: no callback", calls, 0)
+    _d4 = reorder_deliver(row, 1, 2)
+    check("B dropped in the gap after itself: no callback", calls, 0)
+
+    // --- out of range clamps rather than reaching the callback oddly ------
+    reset()
+    _d5 = reorder_deliver(row, 0, 9)
+    check("a gap past the end clamps to the last index", last_to, 3)
+    reset()
+    _d6 = reorder_deliver(row, 3, 0 - 5)
+    check("a negative gap clamps to the first index", last_to, 0)
+    reset()
+    _d7 = reorder_deliver(row, 7, 0)
+    check("a from past the children is not a move", calls, 0)
+
+    // --- arming again replaces the callback ------------------------------
+    reset()
+    reorderable(row) callback |from: int, to: int| {
+        second_calls = second_calls + 1
+    }
+    _d8 = reorder_deliver(row, 0, 2)
+    check("the second callback ran", second_calls, 1)
+    check("the first did not", calls, 0)
+
+    // --- another stack is its own ----------------------------------------
+    check("the other stack is not armed", reorder_deliver(other, 0, 2), 0)
+
+    if bad > 0 { println("reorderable: ${bad} mismatch(es)")  exit(1) }
+    println("reorderable: the gap becomes the index after the move; no-ops and strays are dropped")
+    exit(0)
+}

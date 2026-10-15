@@ -356,6 +356,7 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 | `window_on_key(cb)` / `on_key(widget, cb)` | BUBBLE-phase key controller | `NSEvent` local monitor | `WM_KEYDOWN` translated ahead of `IsDialogMessageW` |
 | `on_file_drop(cb)` | `GtkDropTarget` over `GDK_TYPE_FILE_LIST` | `NSPasteboardTypeFileURL` | `DragAcceptFiles` + `WM_DROPFILES` |
 | `draggable(h, path)` | `GtkDragSource` over a `GFile` | `NSDraggingSession` over an `NSURL` | OLE `DoDragDrop` offering `CF_HDROP` |
+| `reorderable(stack, cb)` | `GtkDragSource` + `GtkDropTargetAsync` on the stack, a private mime type | `NSDraggingSession` from a pan recogniser on the stack, a private pasteboard type | a `WH_MOUSE` thread hook and mouse capture on the stack |
 
 `open_file(title, start_dir)`, `save_file(title, name)` and `pick_folder` are
 native modals, so under `AETHER_UI_HEADLESS` none of them opens: each takes
@@ -400,7 +401,21 @@ ui.on_file_drop(|paths: ptr, n: int| {               // files from another app
     first = string.string_array_get(paths, 0)
 })
 ui.draggable(row, "/home/me/notes.md")               // drag a file OUT
+ui.reorderable(ui.each_parent(tabs)) callback |from: int, to: int| {
+    move_sheet(from, to)                             // then each_update(tabs, ...)
+}
 ```
+
+`reorderable(stack, cb)` lets the children of an hstack or vstack be
+dragged among themselves, in the app: press on a child (a press and release
+still clicks it), move with the button held and it lifts; a bar shows the
+gap it would land in; let go and `cb(from, to)` runs with the child's index
+and the index it would have after the move. The toolkit moves nothing: the
+app runs its own command and rebuilds the row, so undo and scripts stay the
+one path. UIKit uses `UIDragInteraction`/`UIDropInteraction`, Android its
+own drag and drop from a long press. The driver's `POST /widget/{child}/drag`
+plays the gesture through the stack's own gap rule, and `/widget/{stack}`
+reports `"reorderable": true`.
 
 ### SVG assets
 

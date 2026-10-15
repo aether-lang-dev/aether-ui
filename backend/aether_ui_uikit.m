@@ -5527,6 +5527,241 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     return 1;
 }
 
+// --- reorderable(stack): a stack's children dragged among themselves ---------
+// A UIDragInteraction and a UIDropInteraction on the STACK, not on each
+// child (each_update rebuilds the children after every move, and the DSL
+// assembles top-down, so the children are not there when the stack is
+// armed). The interaction's own long-press-then-move lift starts the drag,
+// so a tap still goes to the child; the item carries the child's index as a
+// localObject, which only this process sees, and the drop is refused unless
+// the drag began in this very stack. Positions are top-left based, as all
+// of UIKit's are.
+static int aeui_reorder_src_stack = 0;   // the stack a reorder drag began in
+static int aeui_reorder_src_from = -1;   // ... and the child's index there
+
+static int aeui_reorder_kids(UIStackView* s, UIView* __unsafe_unretained* out, int max) {
+    UIView* slack = [s isKindOfClass:[AeuiStackView class]] ? ((AeuiStackView*)s).aeuiSlack : nil;
+    int n = 0;
+    for (UIView* c in s.arrangedSubviews) {
+        if (c == slack || c.hidden) continue;
+        if (n < max) out[n] = c;
+        n++;
+    }
+    return n < max ? n : max;
+}
+static BOOL aeui_reorder_horiz(UIStackView* s) {
+    return s.axis == UILayoutConstraintAxisHorizontal;
+}
+static int aeui_reorder_child_at(UIStackView* s, CGPoint p) {
+    __unsafe_unretained UIView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    for (int i = 0; i < n; i++) if (CGRectContainsPoint(kids[i].frame, p)) return i;
+    return -1;
+}
+// The gap rule: children whose midpoint along the axis lies before the point.
+static int aeui_reorder_gap_at(UIStackView* s, CGPoint p) {
+    __unsafe_unretained UIView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    BOOL horiz = aeui_reorder_horiz(s);
+    CGFloat at = horiz ? p.x : p.y;
+    int gap = 0;
+    for (int i = 0; i < n; i++) {
+        CGRect f = kids[i].frame;
+        CGFloat mid = horiz ? CGRectGetMidX(f) : CGRectGetMidY(f);
+        if (mid < at) gap++;
+    }
+    return gap;
+}
+static AeClosure* aeui_reorder_closure(UIView* v) {
+    NSValue* nv = v ? objc_getAssociatedObject(v, "aeui_reorder") : nil;
+    return nv ? (AeClosure*)nv.pointerValue : NULL;
+}
+// The bar at gap `gap` (-1: none): 3pt across the axis, the stack's depth,
+// in the tint colour. A plain subview, not an arranged one.
+static void aeui_reorder_show_gap(UIStackView* s, int gap) {
+    UIView* bar = objc_getAssociatedObject(s, "aeui_reorder_bar");
+    __unsafe_unretained UIView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    if (gap < 0 || n == 0) { if (bar) bar.hidden = YES; return; }
+    if (gap > n) gap = n;
+    BOOL horiz = aeui_reorder_horiz(s);
+    CGFloat pos;
+    if (gap == 0) {
+        CGRect f = kids[0].frame;
+        pos = horiz ? CGRectGetMinX(f) : CGRectGetMinY(f);
+    } else if (gap == n) {
+        CGRect f = kids[n - 1].frame;
+        pos = horiz ? CGRectGetMaxX(f) : CGRectGetMaxY(f);
+    } else {
+        CGRect a = kids[gap - 1].frame, b = kids[gap].frame;
+        pos = horiz ? (CGRectGetMaxX(a) + CGRectGetMinX(b)) / 2
+                    : (CGRectGetMaxY(a) + CGRectGetMinY(b)) / 2;
+    }
+    if (!bar) {
+        bar = [[UIView alloc] initWithFrame:CGRectZero];
+        bar.translatesAutoresizingMaskIntoConstraints = YES;
+        bar.userInteractionEnabled = NO;
+        bar.backgroundColor = s.tintColor ?: [UIColor systemBlueColor];
+        objc_setAssociatedObject(s, "aeui_reorder_bar", bar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (bar.superview != s) [s addSubview:bar];
+    CGRect b = s.bounds;
+    bar.frame = horiz ? CGRectMake(pos - 1.5, CGRectGetMinY(b), 3, CGRectGetHeight(b))
+                      : CGRectMake(CGRectGetMinX(b), pos - 1.5, CGRectGetWidth(b), 3);
+    bar.hidden = NO;
+    [s bringSubviewToFront:bar];
+}
+
+@interface AeuiReorderDelegate : NSObject <UIDragInteractionDelegate, UIDropInteractionDelegate>
+@property (nonatomic, assign) int stackHandle;
+@end
+@implementation AeuiReorderDelegate
+- (UIStackView*)stack {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(self.stackHandle);
+    return [v isKindOfClass:[UIStackView class]] ? (UIStackView*)v : nil;
+}
+// Drag side.
+- (NSArray<UIDragItem*>*)dragInteraction:(UIDragInteraction*)interaction
+                   itemsForBeginningSession:(id<UIDragSession>)session {
+    (void)interaction;
+    UIStackView* s = [self stack];
+    if (!s || !aeui_reorder_closure(s)) return @[];
+    int from = aeui_reorder_child_at(s, [session locationInView:s]);
+    if (from < 0) return @[];   // a press in the spacing drags nothing
+    aeui_reorder_src_stack = self.stackHandle;
+    aeui_reorder_src_from = from;
+    NSItemProvider* ip = [[NSItemProvider alloc]
+        initWithObject:[NSString stringWithFormat:@"%d", from]];
+    UIDragItem* item = [[UIDragItem alloc] initWithItemProvider:ip];
+    item.localObject = @(from);
+    return @[item];
+}
+- (UITargetedDragPreview*)dragInteraction:(UIDragInteraction*)interaction
+                    previewForLiftingItem:(UIDragItem*)item
+                                  session:(id<UIDragSession>)session {
+    (void)interaction; (void)session;
+    // The child lifts, not the whole stack the interaction sits on.
+    UIStackView* s = [self stack];
+    __unsafe_unretained UIView* kids[256];
+    int n = s ? aeui_reorder_kids(s, kids, 256) : 0;
+    int from = [item.localObject isKindOfClass:[NSNumber class]] ? [item.localObject intValue] : -1;
+    if (from < 0 || from >= n) return nil;
+    return [[UITargetedDragPreview alloc] initWithView:kids[from]];
+}
+- (void)dragInteraction:(UIDragInteraction*)interaction
+                session:(id<UIDragSession>)session
+    didEndWithOperation:(UIDropOperation)operation {
+    (void)interaction; (void)session; (void)operation;
+    UIStackView* s = [self stack];
+    if (s) aeui_reorder_show_gap(s, -1);
+    aeui_reorder_src_stack = 0;
+    aeui_reorder_src_from = -1;
+}
+// Drop side.
+- (BOOL)dropInteraction:(UIDropInteraction*)interaction canHandleSession:(id<UIDropSession>)session {
+    (void)interaction;
+    return session.localDragSession != nil && aeui_reorder_src_stack == self.stackHandle
+        && aeui_reorder_closure([self stack]) != NULL;
+}
+- (UIDropProposal*)dropInteraction:(UIDropInteraction*)interaction
+                  sessionDidUpdate:(id<UIDropSession>)session {
+    (void)interaction;
+    UIStackView* s = [self stack];
+    if (!s || aeui_reorder_src_stack != self.stackHandle)
+        return [[UIDropProposal alloc] initWithDropOperation:UIDropOperationCancel];
+    aeui_reorder_show_gap(s, aeui_reorder_gap_at(s, [session locationInView:s]));
+    return [[UIDropProposal alloc] initWithDropOperation:UIDropOperationMove];
+}
+- (void)dropInteraction:(UIDropInteraction*)interaction sessionDidExit:(id<UIDropSession>)session {
+    (void)interaction; (void)session;
+    UIStackView* s = [self stack];
+    if (s) aeui_reorder_show_gap(s, -1);
+}
+- (void)dropInteraction:(UIDropInteraction*)interaction sessionDidEnd:(id<UIDropSession>)session {
+    (void)interaction; (void)session;
+    UIStackView* s = [self stack];
+    if (s) aeui_reorder_show_gap(s, -1);
+}
+- (void)dropInteraction:(UIDropInteraction*)interaction performDrop:(id<UIDropSession>)session {
+    (void)interaction;
+    UIStackView* s = [self stack];
+    if (!s || aeui_reorder_src_stack != self.stackHandle) return;
+    int from = aeui_reorder_src_from;
+    int gap = aeui_reorder_gap_at(s, [session locationInView:s]);
+    aeui_reorder_show_gap(s, -1);
+    aeui_reorder_src_stack = 0;
+    aeui_reorder_src_from = -1;
+    // The closure may rebuild the children: nothing touches them after it.
+    aether_ui_stack_reorder_deliver(self.stackHandle, from, gap);
+}
+@end
+
+void aether_ui_stack_reorderable_impl(int stack_handle, void* boxed_closure) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(stack_handle);
+    if (![v isKindOfClass:[UIStackView class]] || !boxed_closure) return;
+    BOOL armed = aeui_reorder_closure(v) != NULL;
+    objc_setAssociatedObject(v, "aeui_reorder", [NSValue valueWithPointer:boxed_closure],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (armed) return;   // closure replaced only
+    AeuiReorderDelegate* d = [[AeuiReorderDelegate alloc] init];
+    d.stackHandle = stack_handle;
+    objc_setAssociatedObject(v, "aeui_reorder_delegate", d, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIDragInteraction* drag = [[UIDragInteraction alloc] initWithDelegate:d];
+    drag.enabled = YES;   // off by default on a phone; a tab row wants it there too
+    [v addInteraction:drag];
+    [v addInteraction:[[UIDropInteraction alloc] initWithDelegate:d]];
+}
+
+int aether_ui_widget_reorderable_impl(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    return aeui_reorder_closure(v) ? 1 : 0;
+}
+
+int aether_ui_stack_reorder_deliver(int stack_handle, int from, int gap) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(stack_handle);
+    if (![v isKindOfClass:[UIStackView class]]) return 0;
+    AeClosure* c = aeui_reorder_closure(v);
+    if (!c || !c->fn) return 0;
+    __unsafe_unretained UIView* kids[256];
+    int n = aeui_reorder_kids((UIStackView*)v, kids, 256);
+    if (from < 0 || from >= n) return 1;
+    if (gap < 0) gap = 0;
+    if (gap > n) gap = n;
+    void (^fire)(void) = ^{
+        ((void(*)(void*, intptr_t, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)from,
+                                                              (intptr_t)gap, (intptr_t)n);
+    };
+    if ([NSThread isMainThread]) fire();
+    else dispatch_sync(dispatch_get_main_queue(), fire);
+    return 1;
+}
+
+// The driver's drag on a widget inside a reorderable stack: the press at
+// (x, y) in the widget names the child; the release at (x + dx, y + dy),
+// taken to the stack's coordinates, names the gap by the same rule a real
+// drop uses. 1 if the widget sits in a reorderable stack.
+int aether_ui_fire_reorder_drag(int handle, double x, double y, int dx, int dy) {
+    UIView* w = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!w) return 0;
+    UIView* child = w;
+    UIView* up = w.superview;
+    while (up && !([up isKindOfClass:[UIStackView class]] && aeui_reorder_closure(up))) {
+        child = up;
+        up = up.superview;
+    }
+    if (!up) return 0;
+    UIStackView* s = (UIStackView*)up;
+    __unsafe_unretained UIView* kids[256];
+    int n = aeui_reorder_kids(s, kids, 256);
+    int from = -1;
+    for (int i = 0; i < n; i++) if (kids[i] == child) from = i;
+    if (from < 0) return 0;
+    CGPoint p = [w convertPoint:CGPointMake(x + dx, y + dy) toView:s];
+    aether_ui_stack_reorder_deliver(aether_ui_handle_for_widget((__bridge void*)s), from,
+                                    aeui_reorder_gap_at(s, p));
+    return 1;
+}
+
 // --- Draggable file / drag payload (stored; a live UIDragInteraction later) --
 void aether_ui_widget_draggable_file_impl(int handle, const char* path) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
@@ -6380,7 +6615,15 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             // A press, two moves and a release through on_drag's closure.
             NSValue* nv = v ? objc_getAssociatedObject(v, "aeui_wdrag") : nil;
             AeClosure* c = nv ? (AeClosure*)nv.pointerValue : NULL;
-            if (!c) { ctx->result = 3; return; }
+            if (!c) {
+                // No on_drag of its own: a child of a reorderable stack is
+                // dragged through the stack's gap rule instead.
+                if (aether_ui_fire_reorder_drag(ctx->handle, ctx->dval, ctx->dval2,
+                                                ctx->ival, ctx->ival2)) {
+                    ctx->result = 0; return;
+                }
+                ctx->result = 3; return;
+            }
             aeui_drag_call(c, 0, ctx->dval, ctx->dval2);
             aeui_drag_call(c, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
             aeui_drag_call(c, 1, (double)ctx->ival, (double)ctx->ival2);

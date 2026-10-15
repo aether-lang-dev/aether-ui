@@ -706,6 +706,7 @@ typedef struct {
     int weight;                // widget_weight: a share of the stack's slack, 0 none
     AeClosure* scroll_cb;      // vlist_attach_scroll: on_scroll(dy)
     AeClosure* row_drop;       // row_drag_reorder: on_drop(src)
+    AeClosure* reorder;        // reorderable(): a stack's cb(from, gap, n)
     AeClosure* wdrag;          // on_drag(phase, x, y)
     char* cursor;              // pointer_cursor's name, or NULL
     int row_index;             //   ... and this row's index
@@ -1445,6 +1446,7 @@ static void aeui_grid_next_cell(int grid, int* out_row, int* out_col) {
     *out_row = 0; *out_col = 0;
 }
 
+static void aeui_reorder_arm(JNIEnv* env, int child_handle);   // reorderable(): below
 static void aeui_attach(JNIEnv* env, int parent_handle, int child_handle, int index) {
     AeuiWidget* p = live_widget(parent_handle);
     AeuiWidget* c = live_widget(child_handle);
@@ -1475,6 +1477,7 @@ static void aeui_attach(JNIEnv* env, int parent_handle, int child_handle, int in
     aeui_update_expand(env, child_handle);
     aeui_update_expand(env, parent_handle);
     if (p->disabled || !aeui_parent_enabled(parent_handle)) aeui_apply_enabled(env, child_handle, 0);
+    if (p->reorder) aeui_reorder_arm(env, child_handle);   // a child of a reorderable stack
 }
 
 void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
@@ -1671,7 +1674,8 @@ enum { AEUI_EV_CLICK = 1, AEUI_EV_TEXT = 2, AEUI_EV_CHECK = 3, AEUI_EV_SEEK = 4,
        AEUI_EV_DISMISS = 13, AEUI_EV_DRAG = 14, AEUI_EV_WHEEL = 15, AEUI_EV_MENU_CLOSED = 16,
        AEUI_EV_SURFACE = 17, AEUI_EV_MENU_OPEN = 18, AEUI_EV_ROW_DRAG = 19, AEUI_EV_ROW_DROP = 20,
        AEUI_EV_FILE_DRAG = 21, AEUI_EV_FILE_DROP = 22, AEUI_EV_SUBMIT = 23,
-       AEUI_EV_WDRAG = 24, AEUI_EV_FOCUS = 25 };
+       AEUI_EV_WDRAG = 24, AEUI_EV_FOCUS = 25,
+       AEUI_EV_STACK_DRAG = 26, AEUI_EV_STACK_DROP = 27 };
 
 static jobject aeui_listener(JNIEnv* env, int handle, int kind) {
     jobject l = (*env)->NewObject(env, J.Listener, J.Listener_init, (jint)handle, (jint)kind);
@@ -6607,6 +6611,229 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     return 1;
 }
 
+// ── reorderable(stack): a stack's children dragged among themselves ──
+// Android's own drag and drop, inside the app: a long press on a child
+// lifts it (its index travels as the drag's text under the label
+// "aeui-stack", with DRAG_FLAG_GLOBAL off so no other app sees it), and the
+// STACK is the drop target, which lands the drop in the gap under the
+// pointer. The children are armed as they attach (aeui_attach), since
+// each_update rebuilds them after every move. While one is dragged the
+// stack's foreground draws a bar in the gap it would land in.
+static int g_reorder_src_stack = 0;   // the stack a reorder drag began in
+static int g_reorder_src_from = -1;   // ... and the child's index there
+
+JCLASS(C_ColorDrawable, "android/graphics/drawable/ColorDrawable");
+JMETHOD(M_ColorDrawable_init, C_ColorDrawable, "<init>", "(I)V");
+JCLASS(C_InsetDrawable, "android/graphics/drawable/InsetDrawable");
+JMETHOD(M_InsetDrawable_init, C_InsetDrawable, "<init>",
+        "(Landroid/graphics/drawable/Drawable;IIII)V");
+JMETHOD(M_View_setForeground, C_View, "setForeground", "(Landroid/graphics/drawable/Drawable;)V");
+
+// The stack's real children in layout order: the ViewGroup's visible
+// children that are registered widgets, as handles.
+static int aeui_reorder_kids(JNIEnv* env, int stack_handle, int* out, int max) {
+    AeuiWidget* sw = live_widget(stack_handle);
+    if (!sw) return 0;
+    jobject vg = aeui_content_of(sw);
+    int n = JI(vg, M_VG_getChildCount);
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        jobject c = JO(vg, M_VG_getChildAt, (jint)i);
+        if (!c) continue;
+        int h = (JI(c, M_View_getVisibility) == 0) ? aether_ui_handle_for_widget(c) : 0;
+        (*env)->DeleteLocalRef(env, c);
+        if (h <= 0) continue;
+        if (k < max) out[k] = h;
+        k++;
+    }
+    return k < max ? k : max;
+}
+
+// A child's edges in the stack's pixels.
+static void aeui_reorder_edges(JNIEnv* env, int child, int* l, int* t, int* r, int* b) {
+    AeuiWidget* w = live_widget(child);
+    *l = *t = *r = *b = 0;
+    if (!w) return;
+    *l = JI(w->view, M_View_getLeft);  *t = JI(w->view, M_View_getTop);
+    *r = JI(w->view, M_View_getRight); *b = JI(w->view, M_View_getBottom);
+}
+
+// The gap rule: children whose midpoint along the axis lies before the point.
+static int aeui_reorder_gap_at(JNIEnv* env, int stack, int x, int y) {
+    AeuiWidget* sw = live_widget(stack);
+    int kids[256];
+    int n = aeui_reorder_kids(env, stack, kids, 256);
+    int vert = sw && aeui_is_vertical(sw->type);
+    int at = vert ? y : x;
+    int gap = 0;
+    for (int i = 0; i < n; i++) {
+        int l, t, r, b;
+        aeui_reorder_edges(env, kids[i], &l, &t, &r, &b);
+        int mid = vert ? (t + b) / 2 : (l + r) / 2;
+        if (mid < at) gap++;
+    }
+    return gap;
+}
+
+// The bar at gap `gap` (-1: none): 3dp across the axis, the stack's depth,
+// as the stack's foreground (drawn over its children).
+static void aeui_reorder_show_gap(JNIEnv* env, int stack, int gap) {
+    AeuiWidget* sw = live_widget(stack);
+    if (!sw) return;
+    if (gap < 0) { JV(sw->view, M_View_setForeground, (jobject)NULL); return; }
+    int kids[256];
+    int n = aeui_reorder_kids(env, stack, kids, 256);
+    if (n == 0) return;
+    if (gap > n) gap = n;
+    int vert = aeui_is_vertical(sw->type);
+    int pos;
+    if (gap == 0) {
+        int l, t, r, b; aeui_reorder_edges(env, kids[0], &l, &t, &r, &b);
+        pos = vert ? t : l;
+    } else if (gap == n) {
+        int l, t, r, b; aeui_reorder_edges(env, kids[n - 1], &l, &t, &r, &b);
+        pos = vert ? b : r;
+    } else {
+        int l0, t0, r0, b0, l1, t1, r1, b1;
+        aeui_reorder_edges(env, kids[gap - 1], &l0, &t0, &r0, &b0);
+        aeui_reorder_edges(env, kids[gap], &l1, &t1, &r1, &b1);
+        pos = vert ? (b0 + t1) / 2 : (r0 + l1) / 2;
+    }
+    int bar = aeui_dp(3), half = bar / 2;
+    int w = JI(sw->view, M_View_getWidth), h = JI(sw->view, M_View_getHeight);
+    int left = vert ? 0 : pos - half, top = vert ? pos - half : 0;
+    int right = vert ? 0 : w - (pos - half + bar), bottom = vert ? h - (pos - half + bar) : 0;
+    if (right < 0) right = 0;
+    if (bottom < 0) bottom = 0;
+    jobject colour = JNEW(M_ColorDrawable_init, (jint)0xFF1A73E8);   // the accent blue
+    jobject inset = colour ? JNEW(M_InsetDrawable_init, colour, (jint)left, (jint)top,
+                                  (jint)right, (jint)bottom) : NULL;
+    if (inset) JV(sw->view, M_View_setForeground, inset);
+}
+
+// A child of a reorderable stack: its long press starts the drag.
+static void aeui_reorder_arm(JNIEnv* env, int child_handle) {
+    AeuiWidget* w = live_widget(child_handle);
+    if (!w) return;
+    jobject l = aeui_listener(env, child_handle, AEUI_EV_STACK_DRAG);
+    if (l) JV(w->view, M_View_setOnLongClickListener, l);
+}
+
+void aether_ui_stack_reorderable_impl(int stack_handle, void* boxed_closure) {
+    AeuiWidget* w = live_widget(stack_handle);
+    if (!w || !boxed_closure || !aeui_is_linear(w->type)) return;
+    int armed = w->reorder != NULL;
+    w->reorder = (AeClosure*)boxed_closure;
+    if (armed) return;   // closure replaced only
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    jobject drop = aeui_listener(env, stack_handle, AEUI_EV_STACK_DROP);
+    if (drop) JV(w->view, M_View_setOnDragListener, drop);
+    // The children already there; later ones are armed as they attach.
+    for (int i = 0; i < widget_count; i++)
+        if (widgets[i].parent == stack_handle && widgets[i].view) aeui_reorder_arm(env, i + 1);
+    aeui_unframe(env);
+}
+
+int aether_ui_widget_reorderable_impl(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    return w && w->reorder ? 1 : 0;
+}
+
+int aether_ui_stack_reorder_deliver(int stack_handle, int from, int gap) {
+    AeuiWidget* sw = live_widget(stack_handle);
+    AeClosure* c = sw ? sw->reorder : NULL;
+    if (!c || !c->fn) return 0;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return 0;
+    int kids[256];
+    int n = aeui_reorder_kids(env, stack_handle, kids, 256);
+    aeui_unframe(env);
+    if (from < 0 || from >= n) return 1;
+    if (gap < 0) gap = 0;
+    if (gap > n) gap = n;
+    ((void (*)(void*, intptr_t, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)from,
+                                                           (intptr_t)gap, (intptr_t)n);
+    return 1;
+}
+
+// The drag's two events. STACK_DRAG arrives on the child long-pressed;
+// STACK_DROP on the stack, with a = -1 for the pointer moving over it (b =
+// packed x/y px), -2 for the pointer leaving or the drag ending, else the
+// source index of the drop.
+static void aeui_reorder_event(JNIEnv* env, int handle, int kind, int a, int b) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    if (kind == AEUI_EV_STACK_DRAG) {
+        int stack = w->parent;
+        AeuiWidget* sw = live_widget(stack);
+        if (!sw || !sw->reorder) return;
+        int kids[256];
+        int n = aeui_reorder_kids(env, stack, kids, 256);
+        int from = -1;
+        for (int i = 0; i < n; i++) if (kids[i] == handle) from = i;
+        if (from < 0) return;
+        g_reorder_src_stack = stack;
+        g_reorder_src_from = from;
+        char idx[16];
+        snprintf(idx, sizeof(idx), "%d", from);
+        aeui_start_drag(env, handle, "aeui-stack", idx, 0);
+        return;
+    }
+    if (!w->reorder) return;
+    int x = (int)(short)((unsigned)b >> 16), y = (int)(short)(b & 0xFFFF);
+    if (a == -2) { aeui_reorder_show_gap(env, handle, -1); return; }
+    if (g_reorder_src_stack != handle) { aeui_reorder_show_gap(env, handle, -1); return; }
+    if (a == -1) { aeui_reorder_show_gap(env, handle, aeui_reorder_gap_at(env, handle, x, y)); return; }
+    int from = g_reorder_src_from;
+    int gap = aeui_reorder_gap_at(env, handle, x, y);
+    aeui_reorder_show_gap(env, handle, -1);
+    g_reorder_src_stack = 0;
+    g_reorder_src_from = -1;
+    // The closure may rebuild the children: nothing touches them after it.
+    aether_ui_stack_reorder_deliver(handle, from, gap);
+}
+
+// The driver's drag on a widget inside a reorderable stack: the press at
+// (x, y) in the widget (dp) names the child; the release at (x + dx, y + dy),
+// taken to the stack's pixels, names the gap by the same rule a real drop
+// uses. 1 if the widget sits in a reorderable stack.
+int aether_ui_fire_reorder_drag(int handle, double x, double y, int dx, int dy) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return 0;
+    int child = handle, up = w->parent;
+    AeuiWidget* sw = NULL;
+    while (up) {
+        sw = live_widget(up);
+        if (!sw) return 0;
+        if (sw->reorder) break;
+        child = up;
+        up = sw->parent;
+        sw = NULL;
+    }
+    if (!sw) return 0;
+    JNIEnv* env = aeui_frame(32);
+    if (!env) return 0;
+    int kids[256];
+    int n = aeui_reorder_kids(env, up, kids, 256);
+    int from = -1;
+    for (int i = 0; i < n; i++) if (kids[i] == child) from = i;
+    if (from < 0) { aeui_unframe(env); return 0; }
+    // From the widget's pixels to the stack's: each view's offset in its parent.
+    int px = aeui_dp((int)(x + dx)), py = aeui_dp((int)(y + dy));
+    for (int h = handle; h && h != up; ) {
+        AeuiWidget* v = live_widget(h);
+        if (!v) break;
+        px += JI(v->view, M_View_getLeft);
+        py += JI(v->view, M_View_getTop);
+        h = v->parent;
+    }
+    int gap = aeui_reorder_gap_at(env, up, px, py);
+    aeui_unframe(env);
+    aether_ui_stack_reorder_deliver(up, from, gap);
+    return 1;
+}
+
 // A drag SOURCE carrying a file path: a long press drags the path out (to
 // another app in split screen), as plain text -- Android shares files
 // between apps as content URIs through a provider, which an app without one
@@ -9114,7 +9341,13 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             break;
         case AETHER_DRV_DRAG:
             // A press, two moves and a release through on_drag's closure.
-            if (!w->wdrag) { ctx->result = 3; aeui_unframe(env); return; }
+            if (!w->wdrag) {
+                // No on_drag of its own: a child of a reorderable stack is
+                // dragged through the stack's gap rule instead.
+                if (aether_ui_fire_reorder_drag(ctx->handle, ctx->dval, ctx->dval2,
+                                                ctx->ival, ctx->ival2)) break;
+                ctx->result = 3; aeui_unframe(env); return;
+            }
             aeui_drag_call(w->wdrag, 0, ctx->dval, ctx->dval2);
             aeui_drag_call(w->wdrag, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
             aeui_drag_call(w->wdrag, 1, (double)ctx->ival, (double)ctx->ival2);
@@ -9606,6 +9839,12 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
         }
         case AEUI_EV_ROW_DROP:
             aether_ui_fire_row_drop(handle, a);
+            break;
+        case AEUI_EV_STACK_DRAG:
+        case AEUI_EV_STACK_DROP:
+            if ((*env)->PushLocalFrame(env, 32) != 0) break;
+            aeui_reorder_event(env, handle, kind, a, b);
+            (*env)->PopLocalFrame(env, NULL);
             break;
         case AEUI_EV_FILE_DRAG:
             if (!w->drag_path || (*env)->PushLocalFrame(env, 16) != 0) break;

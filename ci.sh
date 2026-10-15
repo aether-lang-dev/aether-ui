@@ -75,7 +75,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo frametick_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
+EXAMPLES=(disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo frametick_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo reorderable_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -586,7 +586,7 @@ echo "=== Phase 1c3: headless UI-logic tests (tests/<name>/) ==="
 #
 # Built by the .all.ae fan-out (it scans tests/**/.build.ae), so a compile
 # failure has already been reported by Phase 1. This phase RUNS them.
-UI_TESTS=(derived_views selection_survives tree_selection list_invariants platform_claims sort_keeps_model headless_canvas string_ownership undo_stack undo_group style_release ctxmenu_rebuild no_echo roundtrip keymap docs_snippets min_size state_batch background_for style_churn)
+UI_TESTS=(derived_views selection_survives tree_selection list_invariants platform_claims sort_keeps_model headless_canvas string_ownership undo_stack undo_group style_release ctxmenu_rebuild no_echo roundtrip keymap docs_snippets min_size state_batch background_for style_churn reorderable)
 UT_BIN() { echo "$ROOT/target/build/tests/$1/bin/$1"; }
 for ut in "${UI_TESTS[@]}"; do
     bin="$(UT_BIN "$ut")"
@@ -1818,6 +1818,11 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=reorder_demo/spec_reorder_demo \
     run_server_test "$(EX_BIN reorder_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" reorder_demo || FAIL=$((FAIL + 1))
+    # reorderable(): a row's children dragged among themselves, with the
+    # row's real geometry through the driver's /drag (the stack's gap rule).
+    UI_SPEC=reorderable_demo/spec_reorderable_demo \
+    run_server_test "$(EX_BIN reorderable_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" reorderable_demo || FAIL=$((FAIL + 1))
     # Overlay entry transitions — the deterministic contract (animation OFF):
     # dismiss removes the entry at once. The exit-tween-observable case runs in
     # its own animation-ON phase below.

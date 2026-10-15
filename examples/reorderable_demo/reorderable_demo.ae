@@ -1,0 +1,128 @@
+// Aether UI reorderable example -- a row of tabs (buttons) that can be
+// dragged among themselves, as a spreadsheet's sheet tabs are.
+//
+// reorderable(stack, cb) arms an hstack (or vstack): press on a child, move
+// with the button held and a drag starts, carrying the child; let go and
+// cb(from, to) runs with the child's index and the index it would have after
+// the move. The toolkit moves nothing: this app moves the name in its own
+// list and rebuilds the row with each_update, which is the one path a
+// scripted or undone move takes too. The order label reflects the list so a
+// spec can read it.
+//
+// The driver plays the gesture with POST /widget/{child}/drag?x=&y=&dx=&dy=:
+// a press at (x, y) in the child, released at the offset, taken to the
+// stack's own gap rule (the same one a real drop uses), and
+// GET /widget/{stack} reports "reorderable": true.
+//
+//   AetherUIDriver: AETHER_UI_TEST_PORT arms the server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, divider, each, each_update,
+    each_parent, reorderable, enable_test_server)
+import std.os (os_getenv)
+import std.string
+import std.list
+
+extern aether_ui_text_set_string(handle: int, text: string)
+extern malloc(size: int) -> ptr
+
+struct Tab { name: string }
+
+mk_tab(s: string) -> ptr {
+    t = malloc(sizeof(Tab)) as *Tab
+    t.name = s
+    return t as ptr
+}
+
+// "A > B > C > D" from the list, for the order label.
+order_string(items: ptr) -> string {
+    n = list.size(items)
+    out = ""
+    i = 0
+    while i < n {
+        it, _e = list.get(items, i)
+        t = it as *Tab
+        if i > 0 { out = string.concat(out, " > ") }
+        out = string.concat(out, t.name)
+        i = i + 1
+    }
+    return out
+}
+
+// Move the item at `from` so it sits at `to` (the indexes before the move).
+move_item(items: ptr, from: int, to: int) {
+    n = list.size(items)
+    if from < 0 { return }
+    if from >= n { return }
+    if to < 0 { to = 0 }
+    if to >= n { to = n - 1 }
+    if from == to { return }
+    moved, _m = list.get(items, from)
+    if from < to {
+        i = from
+        while i < to {
+            nxt, _n = list.get(items, i + 1)
+            list.set(items, i, nxt)
+            i = i + 1
+        }
+    } else {
+        i = from
+        while i > to {
+            prv, _p = list.get(items, i - 1)
+            list.set(items, i, prv)
+            i = i - 1
+        }
+    }
+    list.set(items, to, moved)
+}
+
+main() {
+    tabs = list.new()
+    _ = list.add(tabs, mk_tab("A"))
+    _ = list.add(tabs, mk_tab("B"))
+    _ = list.add(tabs, mk_tab("C"))
+    _ = list.add(tabs, mk_tab("D"))
+
+    window("reorderable demo", 520, 240) {
+        vstack(8) {
+            order = text("order: A > B > C > D")
+            moved = text("moved: none")
+            clicked = text("clicked: none")
+            divider()
+
+            row = each("h", 6) callback |item: ptr, i: int, parent: int| {
+                t = item as *Tab
+                nm = t.name
+                _b = btn(parent, nm) callback {
+                    aether_ui_text_set_string(clicked, string.concat("clicked: ", nm))
+                }
+            }
+            each_update(row, tabs)
+
+            reorderable(each_parent(row)) callback |from: int, to: int| {
+                move_item(tabs, from, to)
+                each_update(row, tabs)
+                aether_ui_text_set_string(order,
+                    string.concat("order: ", order_string(tabs)))
+                aether_ui_text_set_string(moved,
+                    string.concat(string.concat(string.concat("moved: ",
+                        string.from_int(from)), " > "), string.from_int(to)))
+            }
+
+            divider()
+            hstack(10) {
+                _m = btn("Move A to end") callback {
+                    move_item(tabs, 0, list.size(tabs) - 1)
+                    each_update(row, tabs)
+                    aether_ui_text_set_string(order,
+                        string.concat("order: ", order_string(tabs)))
+                }
+            }
+        }
+        port = os_getenv("AETHER_UI_TEST_PORT")
+        if string.length(port) > 0 {
+            pnum, _pe = string.to_int(port)
+            enable_test_server(pnum)
+        }
+    }
+}

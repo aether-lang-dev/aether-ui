@@ -4084,7 +4084,13 @@ static void aeui_overlay_css_once(void) {
         ".aui-row-selected {"
         "  background-color: alpha(@theme_selected_bg_color, 0.85);"
         "  border-radius: 4px;"
-        "}", -1);
+        "}"
+        // reorderable(): the gap a dragged child would land in, as a bar on
+        // the edge of the child the gap lies before (-after: past the last).
+        ".aui-reorder-before-h { box-shadow: inset 3px 0 0 @theme_selected_bg_color; }"
+        ".aui-reorder-after-h  { box-shadow: inset -3px 0 0 @theme_selected_bg_color; }"
+        ".aui-reorder-before-v { box-shadow: inset 0 3px 0 @theme_selected_bg_color; }"
+        ".aui-reorder-after-v  { box-shadow: inset 0 -3px 0 @theme_selected_bg_color; }", -1);
     gtk_style_context_add_provider_for_display(
         display, GTK_STYLE_PROVIDER(prov),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 10);
@@ -7595,6 +7601,220 @@ int aether_ui_fire_row_drop(int row_handle, int src_index) {
     return 1;
 }
 
+// ── reorderable(stack): a stack's children dragged among themselves ──
+// One GtkDragSource and one GtkDropTargetAsync on the STACK, not on each
+// child: the children are rebuilt by each_update after every move, so a
+// controller per child would have to be re-armed on every rebuild, and the
+// DSL assembles top-down (the children are not there when the stack is
+// armed). The source is in the CAPTURE phase so it sees the press before a
+// child button's own click gesture does; it claims the sequence only once
+// the drag threshold is passed, so a press and release still clicks the
+// child. The payload is a private mime type, so no other app accepts it;
+// which child is being dragged lives in process state set at drag-begin
+// (a drop from another aether-ui app carries the mime type but not that
+// state, and is refused).
+#define AEUI_REORDER_MIME "application/x-aether-ui-reorder"
+static int handle_for_widget(GtkWidget* w);   // registry lookup, defined with the driver
+static int aeui_reorder_src_stack = 0;   // the stack a reorder drag began in
+static int aeui_reorder_src_from = -1;   // ... and the child's index there
+
+// The stack's real children in layout order: visible, registered widgets.
+static int aeui_reorder_children(GtkWidget* stack, GtkWidget** out, int max) {
+    int n = 0;
+    for (GtkWidget* c = gtk_widget_get_first_child(stack); c;
+         c = gtk_widget_get_next_sibling(c)) {
+        if (!gtk_widget_get_visible(c)) continue;
+        if (n < max) out[n] = c;
+        n++;
+    }
+    return n < max ? n : max;
+}
+
+static int aeui_reorder_horizontal(GtkWidget* stack) {
+    return GTK_IS_ORIENTABLE(stack)
+        && gtk_orientable_get_orientation(GTK_ORIENTABLE(stack)) == GTK_ORIENTATION_HORIZONTAL;
+}
+
+// The child containing (x, y) in the stack's coordinates, or -1.
+static int aeui_reorder_child_at(GtkWidget* stack, double x, double y) {
+    GtkWidget* kids[256];
+    int n = aeui_reorder_children(stack, kids, 256);
+    for (int i = 0; i < n; i++) {
+        graphene_rect_t r;
+        if (!gtk_widget_compute_bounds(kids[i], stack, &r)) continue;
+        if (x >= r.origin.x && x < r.origin.x + r.size.width
+            && y >= r.origin.y && y < r.origin.y + r.size.height) return i;
+    }
+    return -1;
+}
+
+// The gap rule: children whose midpoint along the axis lies before the point.
+static int aeui_reorder_gap_at(GtkWidget* stack, double x, double y) {
+    GtkWidget* kids[256];
+    int n = aeui_reorder_children(stack, kids, 256);
+    int horiz = aeui_reorder_horizontal(stack);
+    double p = horiz ? x : y;
+    int gap = 0;
+    for (int i = 0; i < n; i++) {
+        graphene_rect_t r;
+        if (!gtk_widget_compute_bounds(kids[i], stack, &r)) continue;
+        double mid = horiz ? r.origin.x + r.size.width / 2 : r.origin.y + r.size.height / 2;
+        if (mid < p) gap++;
+    }
+    return gap;
+}
+
+static void aeui_reorder_mark(GtkWidget* stack, int gap) {
+    GtkWidget* kids[256];
+    int n = aeui_reorder_children(stack, kids, 256);
+    int horiz = aeui_reorder_horizontal(stack);
+    const char* before = horiz ? "aui-reorder-before-h" : "aui-reorder-before-v";
+    const char* after  = horiz ? "aui-reorder-after-h"  : "aui-reorder-after-v";
+    for (int i = 0; i < n; i++) {
+        gtk_widget_remove_css_class(kids[i], before);
+        gtk_widget_remove_css_class(kids[i], after);
+    }
+    if (gap < 0 || n == 0) return;
+    if (gap < n) gtk_widget_add_css_class(kids[gap], before);
+    else gtk_widget_add_css_class(kids[n - 1], after);
+}
+
+static GdkContentProvider* on_reorder_prepare(GtkDragSource* src, double x,
+                                              double y, gpointer data) {
+    (void)data;
+    GtkWidget* stack = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(src));
+    int from = stack ? aeui_reorder_child_at(stack, x, y) : -1;
+    if (from < 0) return NULL;   // a press in the spacing drags nothing
+    aeui_reorder_src_stack = handle_for_widget(stack);
+    aeui_reorder_src_from = from;
+    // The dragged child as the icon, held where it was pressed.
+    GtkWidget* kids[256];
+    int n = aeui_reorder_children(stack, kids, 256);
+    graphene_rect_t r;
+    if (from < n && gtk_widget_compute_bounds(kids[from], stack, &r)) {
+        GdkPaintable* pic = gtk_widget_paintable_new(kids[from]);
+        gtk_drag_source_set_icon(src, pic, (int)(x - r.origin.x), (int)(y - r.origin.y));
+        g_object_unref(pic);
+    }
+    char payload[32];
+    snprintf(payload, sizeof(payload), "%d", from);
+    GBytes* b = g_bytes_new(payload, strlen(payload));
+    GdkContentProvider* p = gdk_content_provider_new_for_bytes(AEUI_REORDER_MIME, b);
+    g_bytes_unref(b);
+    return p;
+}
+
+static void on_reorder_drag_end(GtkDragSource* src, GdkDrag* drag,
+                                gboolean delete_data, gpointer data) {
+    (void)src; (void)drag; (void)delete_data; (void)data;
+    aeui_reorder_src_stack = 0;
+    aeui_reorder_src_from = -1;
+}
+
+static int aeui_reorder_accepts(GtkWidget* stack) {
+    return aeui_reorder_src_stack > 0
+        && aeui_reorder_src_stack == handle_for_widget(stack);
+}
+
+static GdkDragAction on_reorder_enter(GtkDropTargetAsync* t, GdkDrop* drop,
+                                      double x, double y, gpointer data) {
+    (void)drop; (void)data;
+    GtkWidget* stack = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(t));
+    if (!stack || !aeui_reorder_accepts(stack)) return 0;
+    aeui_reorder_mark(stack, aeui_reorder_gap_at(stack, x, y));
+    return GDK_ACTION_MOVE;
+}
+
+static void on_reorder_leave(GtkDropTargetAsync* t, GdkDrop* drop, gpointer data) {
+    (void)drop; (void)data;
+    GtkWidget* stack = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(t));
+    if (stack) aeui_reorder_mark(stack, -1);
+}
+
+static gboolean on_reorder_drop(GtkDropTargetAsync* t, GdkDrop* drop,
+                                double x, double y, gpointer data) {
+    (void)data;
+    GtkWidget* stack = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(t));
+    if (!stack) return FALSE;
+    aeui_reorder_mark(stack, -1);
+    if (!aeui_reorder_accepts(stack)) { gdk_drop_finish(drop, 0); return FALSE; }
+    int from = aeui_reorder_src_from;
+    int gap = aeui_reorder_gap_at(stack, x, y);
+    gdk_drop_finish(drop, GDK_ACTION_MOVE);
+    aeui_reorder_src_stack = 0;
+    aeui_reorder_src_from = -1;
+    // The closure may rebuild the children: nothing touches them after it.
+    aether_ui_stack_reorder_deliver(handle_for_widget(stack), from, gap);
+    return TRUE;
+}
+
+void aether_ui_stack_reorderable_impl(int stack_handle, void* boxed_closure) {
+    GtkWidget* stack = aether_ui_get_widget(stack_handle);
+    if (!stack || !boxed_closure) return;
+    g_object_set_data(G_OBJECT(stack), "aeui-reorder", boxed_closure);
+    if (g_object_get_data(G_OBJECT(stack), "aeui-reorder-armed")) return;  // closure replaced only
+    aeui_overlay_css_once();   // the gap bar's classes
+    GtkDragSource* src = gtk_drag_source_new();
+    gtk_drag_source_set_actions(src, GDK_ACTION_MOVE);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(src), GTK_PHASE_CAPTURE);
+    g_signal_connect(src, "prepare", G_CALLBACK(on_reorder_prepare), NULL);
+    g_signal_connect(src, "drag-end", G_CALLBACK(on_reorder_drag_end), NULL);
+    gtk_widget_add_controller(stack, GTK_EVENT_CONTROLLER(src));
+    GdkContentFormats* fmts = gdk_content_formats_new((const char*[]){ AEUI_REORDER_MIME }, 1);
+    GtkDropTargetAsync* tgt = gtk_drop_target_async_new(fmts, GDK_ACTION_MOVE);
+    g_signal_connect(tgt, "drag-enter",  G_CALLBACK(on_reorder_enter), NULL);
+    g_signal_connect(tgt, "drag-motion", G_CALLBACK(on_reorder_enter), NULL);
+    g_signal_connect(tgt, "drag-leave",  G_CALLBACK(on_reorder_leave), NULL);
+    g_signal_connect(tgt, "drop",        G_CALLBACK(on_reorder_drop), NULL);
+    gtk_widget_add_controller(stack, GTK_EVENT_CONTROLLER(tgt));
+    g_object_set_data(G_OBJECT(stack), "aeui-reorder-armed", GINT_TO_POINTER(1));
+}
+
+int aether_ui_widget_reorderable_impl(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    return w && g_object_get_data(G_OBJECT(w), "aeui-reorder") ? 1 : 0;
+}
+
+int aether_ui_stack_reorder_deliver(int stack_handle, int from, int gap) {
+    GtkWidget* stack = aether_ui_get_widget(stack_handle);
+    AeClosure* c = stack ? (AeClosure*)g_object_get_data(G_OBJECT(stack), "aeui-reorder") : NULL;
+    if (!c || !c->fn) return 0;
+    GtkWidget* kids[256];
+    int n = aeui_reorder_children(stack, kids, 256);
+    if (from < 0 || from >= n) return 1;
+    if (gap < 0) gap = 0;
+    if (gap > n) gap = n;
+    ((void(*)(void*, intptr_t, intptr_t, intptr_t))c->fn)(c->env, (intptr_t)from,
+                                                          (intptr_t)gap, (intptr_t)n);
+    return 1;
+}
+
+// The driver's drag on a widget inside a reorderable stack: the press at
+// (x, y) in the widget names the child; the release at (x + dx, y + dy),
+// taken to the stack's coordinates, names the gap by the same rule a real
+// drop uses. 1 if the widget sits in a reorderable stack.
+int aether_ui_fire_reorder_drag(int handle, double x, double y, int dx, int dy) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return 0;
+    GtkWidget* child = w;
+    GtkWidget* stack = gtk_widget_get_parent(w);
+    while (stack && !g_object_get_data(G_OBJECT(stack), "aeui-reorder")) {
+        child = stack;
+        stack = gtk_widget_get_parent(stack);
+    }
+    if (!stack) return 0;
+    GtkWidget* kids[256];
+    int n = aeui_reorder_children(stack, kids, 256);
+    int from = -1;
+    for (int i = 0; i < n; i++) if (kids[i] == child) from = i;
+    if (from < 0) return 0;
+    graphene_point_t in = GRAPHENE_POINT_INIT((float)(x + dx), (float)(y + dy)), out;
+    if (!gtk_widget_compute_point(w, stack, &in, &out)) return 0;
+    int gap = aeui_reorder_gap_at(stack, out.x, out.y);
+    aether_ui_stack_reorder_deliver(handle_for_widget(stack), from, gap);
+    return 1;
+}
+
 // ── vlist native scroll ─────────────────────────────────────────────
 // A GtkEventControllerScroll on the vlist container turns wheel/two-finger
 // scroll into on_scroll(dy) — dy = the rounded delta_y (down = +1 = toward the
@@ -9465,7 +9685,15 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             /* A press, two moves and a release through on_drag's closure. */
             GtkWidget* w = aether_ui_get_widget(ctx->handle);
             AeClosure* c = w ? (AeClosure*)g_object_get_data(G_OBJECT(w), "aeui-wdrag") : NULL;
-            if (!c) { ctx->result = 3; ctx->done = 1; return; }
+            if (!c) {
+                /* No on_drag of its own: a child of a reorderable stack is
+                   dragged through the stack's gap rule instead. */
+                if (aether_ui_fire_reorder_drag(ctx->handle, ctx->dval, ctx->dval2,
+                                                ctx->ival, ctx->ival2)) {
+                    ctx->result = 0; ctx->done = 1; return;
+                }
+                ctx->result = 3; ctx->done = 1; return;
+            }
             aeui_drag_call(c, 0, ctx->dval, ctx->dval2);
             aeui_drag_call(c, 1, ctx->ival / 2.0, ctx->ival2 / 2.0);
             aeui_drag_call(c, 1, (double)ctx->ival, (double)ctx->ival2);

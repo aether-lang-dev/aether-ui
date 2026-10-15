@@ -518,6 +518,11 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
             n += snprintf(buf + n, bufsize - n, ",\"drag\":\"%s\"", dragp);
         }
     }
+    // A stack whose children can be dragged among themselves (reorderable).
+    // Absent means not, the default, as with "drag" above.
+    if (aether_ui_widget_reorderable_impl(handle)) {
+        n += snprintf(buf + n, bufsize - n, ",\"reorderable\":true");
+    }
     n += snprintf(buf + n, bufsize - n, "}");
     return n;
 }

@@ -63,7 +63,10 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
                      FILE_DROP = 22, // files dropped on the window: s = paths, newline-separated
                      SUBMIT = 23,    // Return / the keyboard's Done in a field: s = its text
                      WDRAG = 24,     // on_drag: a = phase, b = packed x/y px (see onTouch)
-                     FOCUS = 25;     // focus moved somewhere in the window (on_focus_change)
+                     FOCUS = 25,     // focus moved somewhere in the window (on_focus_change)
+                     STACK_DRAG = 26, // a reorderable stack's child long-pressed: start its drag
+                     STACK_DROP = 27; // a reorder drag over the stack: a = -1 moving (b = packed
+                                      // x/y px), -2 left or ended, else the source index dropped
 
     private final int handle;
     private final int kind;
@@ -203,7 +206,8 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
     // shows the menu; consumed so the press does not also click.
     // (A reorderable row's or a draggable file's long press starts its drag.)
     @Override public boolean onLongClick(View v) {
-        AetherActivity.nativeEvent(handle, kind == ROW_DRAG || kind == FILE_DRAG ? kind : CONTEXT,
+        AetherActivity.nativeEvent(handle, kind == ROW_DRAG || kind == FILE_DRAG || kind == STACK_DRAG
+                                           ? kind : CONTEXT,
                                    0, 0, null);
         return true;
     }
@@ -262,6 +266,38 @@ final class AetherListener implements View.OnClickListener, TextWatcher,
     // which is the ABI's file-drop shape.
     @Override public boolean onDrag(View v, DragEvent e) {
         ClipDescription d = e.getClipDescription();
+        if (kind == STACK_DROP) {
+            // A reorderable stack's own children (label "aeui-stack"); the
+            // index travels as the text, where the pointer is as packed px.
+            if (e.getAction() == DragEvent.ACTION_DRAG_ENDED) {
+                AetherActivity.nativeEvent(handle, STACK_DROP, -2, 0, null);
+                return true;
+            }
+            if (d == null || !"aeui-stack".contentEquals(d.getLabel())) return false;
+            switch (e.getAction()) {
+                case DragEvent.ACTION_DRAG_STARTED:
+                    return true;
+                case DragEvent.ACTION_DRAG_LOCATION:
+                    AetherActivity.nativeEvent(handle, STACK_DROP, -1, pack(e.getX(), e.getY()), null);
+                    return true;
+                case DragEvent.ACTION_DRAG_EXITED:
+                    AetherActivity.nativeEvent(handle, STACK_DROP, -2, 0, null);
+                    return true;
+                case DragEvent.ACTION_DROP: {
+                    ClipData c = e.getClipData();
+                    if (c == null || c.getItemCount() < 1) return false;
+                    try {
+                        int src = Integer.parseInt(String.valueOf(c.getItemAt(0).getText()));
+                        AetherActivity.nativeEvent(handle, STACK_DROP, src, pack(e.getX(), e.getY()), null);
+                    } catch (NumberFormatException ignored) {
+                        return false;
+                    }
+                    return true;
+                }
+                default:
+                    return true;
+            }
+        }
         boolean row = d != null && "aeui-row".contentEquals(d.getLabel());
         if (kind == ROW_DROP) {
             if (!row) return false;
