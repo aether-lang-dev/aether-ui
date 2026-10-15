@@ -74,6 +74,27 @@ into `to` (`_reorder_target`) and drops the no-ops.
   nudge beside the child moves nothing, the rebuilt children are still
   reorderable (D to the front), a tab still clicks.
 
+### Verified where (2026-10-15)
+
+- macOS (AppKit), GTK4 (the aether-linux-2604 lane) and Windows 11 (Win32):
+  ci.sh / the spec + headless test, at the landing commit.
+- iOS: `examples/reorderable_demo` built as ci.sh Phase 1e2 builds its
+  examples (aetherc + the simulator runtime archive + the UIKit backend +
+  the driver), installed in the iPhone simulator (iOS 27.1) and
+  `spec_reorderable_demo` run against it over the driver: 6/6. Then a REAL
+  gesture through the simulator's touch injection: a finger down on D
+  (order D > B > C > A), held 0.9 s for `UIDragInteraction`'s lift, moved
+  across to past A's midpoint, released: the row became B > C > A > D and
+  the app read `moved: 0 > 3`; a plain tap on a tab afterwards still ran
+  its own callback (`clicked: A`).
+- Android: the same demo as an APK on the headless emulator (AVD aether36,
+  API 36, `aelane android`), `spec_reorderable_demo` over the driver: 6/6.
+  Then a REAL gesture with `adb shell input draganddrop` (a long press,
+  then the drag) from D to past A: B > C > A > D, `moved: 0 > 3`, and a
+  tap on a tab still clicked (`clicked: C`).
+
+Nothing in either backend needed changing.
+
 The spreadsheet's `it` in `spec_sheet` (drag a tab two places right, the
 sheet moved, a formula naming it still reading it, Undo taking it back) can
 be written against `/widget/{tab}/drag` with the tabs' `x`/`w` from
