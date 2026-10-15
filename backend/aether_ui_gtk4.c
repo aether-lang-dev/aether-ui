@@ -123,10 +123,13 @@ static GtkWidget** widgets = NULL;
 static int widget_count = 0;
 static int widget_capacity = 0;
 
+static void css_forget_handle(int handle);
+
 static void on_widget_finalized(gpointer data, GObject* where_the_object_was) {
     (void)where_the_object_was;
     int idx = GPOINTER_TO_INT(data);          // index, not pointer: realloc-safe
     if (idx >= 0 && idx < widget_count) widgets[idx] = NULL;
+    css_forget_handle(idx + 1);               // its rules go with it
 }
 
 int aether_ui_register_widget(void* widget) {
@@ -2729,37 +2732,122 @@ void aether_ui_navstack_pop(int handle) {
 // Apply CSS scoped to a single widget via a unique class name.
 // Each widget gets "aui-{handle}" as a CSS class, and the CSS rule
 // targets that class specifically — no global side effects.
-// Single global CSS provider — accumulates all styling rules.
-static char* global_css_buf = NULL;
-static int global_css_len = 0;
-static int global_css_cap = 0;
+// Single global CSS provider — every styling rule, in one sheet.
 static GtkCssProvider* global_css_provider = NULL;
 
-static void global_css_append(const char* rule) {
-    int rlen = (int)strlen(rule);
-    if (global_css_len + rlen + 2 > global_css_cap) {
-        global_css_cap = (global_css_cap == 0) ? 4096 : global_css_cap * 2;
-        global_css_buf = realloc(global_css_buf, global_css_cap);
+// A widget's own rules (aether_ui_apply_css: one property each; its hover
+// and pressed looks), one per key, each replaced where it stands and kept in
+// the order first set. They used to be appended on every call, so a widget
+// restyled every frame (ae3d's editor inspector) grew the sheet without end
+// and every reload parsed all of it: slower each frame, and on GTK 4.6
+// (Ubuntu 22.04), whose parser recurses through it, a stack overflow inside
+// gtk_css_provider_load_from_data. Loaded before the keyed rules below, as
+// the appended rules were, so which of two rules wins is as it was.
+//
+// Handles are never reused, so a widget made afresh (an inspector rebuilt
+// on every selection) brings a new class each time: rules keyed by handle
+// alone still grow, one class per widget ever made. GTK 4.6 builds its
+// selector tree recursively over those classes and overflows its stack at
+// about 900 (ae3d's editor, after a few hundred frames). So a widget's rules
+// go when it is finalized (css_forget_handle), leaving a hole that the next
+// compaction closes.
+static GHashTable* widget_css_index = NULL;   // key -> position + 1
+static GPtrArray* widget_css_rules = NULL;    // rule text in order; NULL a hole
+static GHashTable* widget_css_keys = NULL;    // handle -> GPtrArray of its keys
+static guint widget_css_holes = 0;
+static GString* css_sheet_text = NULL;
+
+static void global_css_reload(void);
+
+static void widget_css_set(int handle, const char* key, const char* rule) {
+    if (!widget_css_index) {
+        widget_css_index = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+        widget_css_rules = g_ptr_array_new_with_free_func(g_free);
+        widget_css_keys = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, (GDestroyNotify)g_ptr_array_unref);
     }
-    memcpy(global_css_buf + global_css_len, rule, rlen);
-    global_css_len += rlen;
-    global_css_buf[global_css_len++] = '\n';
-    global_css_buf[global_css_len] = '\0';
+    gpointer at = g_hash_table_lookup(widget_css_index, key);
+    if (at) {
+        guint i = GPOINTER_TO_UINT(at) - 1;
+        if (strcmp(g_ptr_array_index(widget_css_rules, i), rule) == 0) return;
+        g_free(g_ptr_array_index(widget_css_rules, i));
+        g_ptr_array_index(widget_css_rules, i) = g_strdup(rule);
+    } else {
+        g_ptr_array_add(widget_css_rules, g_strdup(rule));
+        g_hash_table_insert(widget_css_index, g_strdup(key), GUINT_TO_POINTER(widget_css_rules->len));
+        GPtrArray* keys = g_hash_table_lookup(widget_css_keys, GINT_TO_POINTER(handle));
+        if (!keys) {
+            keys = g_ptr_array_new_with_free_func(g_free);
+            g_hash_table_insert(widget_css_keys, GINT_TO_POINTER(handle), keys);
+        }
+        g_ptr_array_add(keys, g_strdup(key));
+    }
+    global_css_reload();
+}
+
+// The holes closed up, the rules kept in their order and re-indexed.
+static void widget_css_compact(void) {
+    GPtrArray* kept = g_ptr_array_new_with_free_func(g_free);
+    GHashTableIter it;
+    gpointer key, at;
+    // Old position -> new: walk the rules once, then move each key along.
+    guint* moved = g_new0(guint, widget_css_rules->len + 1);
+    for (guint i = 0; i < widget_css_rules->len; i++) {
+        gchar* rule = g_ptr_array_index(widget_css_rules, i);
+        if (!rule) continue;
+        g_ptr_array_index(widget_css_rules, i) = NULL;   // ownership moves
+        g_ptr_array_add(kept, rule);
+        moved[i + 1] = kept->len;
+    }
+    g_hash_table_iter_init(&it, widget_css_index);
+    while (g_hash_table_iter_next(&it, &key, &at)) {
+        g_hash_table_iter_replace(&it, GUINT_TO_POINTER(moved[GPOINTER_TO_UINT(at)]));
+    }
+    g_free(moved);
+    g_ptr_array_unref(widget_css_rules);
+    widget_css_rules = kept;
+    widget_css_holes = 0;
+}
+
+static GHashTable* keyed_css;
+
+// Everything styled on a handle's widget, gone with it. The sheet is not
+// reloaded for it: a finalized widget's rules match nothing, and the next
+// rule set reloads without them.
+static void css_forget_handle(int handle) {
+    if (widget_css_keys) {
+        GPtrArray* keys = g_hash_table_lookup(widget_css_keys, GINT_TO_POINTER(handle));
+        for (guint k = 0; keys && k < keys->len; k++) {
+            gpointer at = g_hash_table_lookup(widget_css_index, g_ptr_array_index(keys, k));
+            if (!at) continue;
+            guint i = GPOINTER_TO_UINT(at) - 1;
+            g_free(g_ptr_array_index(widget_css_rules, i));
+            g_ptr_array_index(widget_css_rules, i) = NULL;
+            g_hash_table_remove(widget_css_index, g_ptr_array_index(keys, k));
+            widget_css_holes++;
+        }
+        if (keys) g_hash_table_remove(widget_css_keys, GINT_TO_POINTER(handle));
+        if (widget_css_holes > 256 && widget_css_holes * 2 > widget_css_rules->len) widget_css_compact();
+    }
+    if (keyed_css) {
+        static const char* const prefixes[] = { "aui-bg-%d", "aui-td-%d", "aui-dec-%d" };
+        char cls[32];
+        for (size_t p = 0; p < sizeof(prefixes) / sizeof(prefixes[0]); p++) {
+            snprintf(cls, sizeof(cls), prefixes[p], handle);
+            g_hash_table_remove(keyed_css, cls);
+        }
+    }
 }
 
 // Rules kept one per key (a widget's background, its cell decorations),
 // each replaced in place, so a grid repainted on every scroll does not grow
-// the sheet without end. Loaded after the appended rules.
-static GHashTable* keyed_css = NULL;
-static GString* keyed_css_text = NULL;
+// the sheet without end. Loaded after the widget rules above.
+static GHashTable* keyed_css = NULL;   // declared above, for css_forget_handle
 
 static void keyed_css_collect(gpointer k, gpointer v, gpointer data) {
     (void)k;
     g_string_append((GString*)data, (const char*)v);
     g_string_append_c((GString*)data, '\n');
 }
-
-static void global_css_reload(void);
 
 static void global_css_set_keyed(const char* key, const char* rule) {
     if (!keyed_css) keyed_css = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
@@ -2770,7 +2858,7 @@ static void global_css_set_keyed(const char* key, const char* rule) {
 }
 
 static void global_css_reload(void) {
-    if (!global_css_buf && !keyed_css) return;
+    if (!widget_css_rules && !keyed_css) return;
     ensure_gtk_init();
     GdkDisplay* display = gdk_display_get_default();
     if (!display) return;
@@ -2780,11 +2868,16 @@ static void global_css_reload(void) {
             display, GTK_STYLE_PROVIDER(global_css_provider),
             GTK_STYLE_PROVIDER_PRIORITY_USER);
     }
-    if (!keyed_css_text) keyed_css_text = g_string_new(NULL);
-    g_string_truncate(keyed_css_text, 0);
-    if (global_css_buf) g_string_append(keyed_css_text, global_css_buf);
-    if (keyed_css) g_hash_table_foreach(keyed_css, keyed_css_collect, keyed_css_text);
-    gtk_css_provider_load_from_data(global_css_provider, keyed_css_text->str, -1);
+    if (!css_sheet_text) css_sheet_text = g_string_new(NULL);
+    g_string_truncate(css_sheet_text, 0);
+    for (guint i = 0; widget_css_rules && i < widget_css_rules->len; i++) {
+        const gchar* rule = g_ptr_array_index(widget_css_rules, i);
+        if (!rule) continue;
+        g_string_append(css_sheet_text, rule);
+        g_string_append_c(css_sheet_text, '\n');
+    }
+    if (keyed_css) g_hash_table_foreach(keyed_css, keyed_css_collect, css_sheet_text);
+    gtk_css_provider_load_from_data(global_css_provider, css_sheet_text->str, -1);
 }
 
 static void aether_ui_apply_css(int handle, GtkWidget* widget, const char* property_css) {
@@ -2794,8 +2887,13 @@ static void aether_ui_apply_css(int handle, GtkWidget* widget, const char* prope
 
     char css[512];
     snprintf(css, sizeof(css), ".%s { %s }", class_name, property_css);
-    global_css_append(css);
-    global_css_reload();
+    // Each caller sets one property ("padding: ...;"): the widget and that
+    // property are the key, so setting it again replaces it.
+    const char* colon = strchr(property_css, ':');
+    int name_len = colon ? (int)(colon - property_css) : (int)strlen(property_css);
+    char key[96];
+    snprintf(key, sizeof(key), "%s/%.*s", class_name, name_len, property_css);
+    widget_css_set(handle, key, css);
 }
 
 void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) {
@@ -3162,8 +3260,9 @@ void aether_ui_set_state_style(int handle, int state,
     } else {
         snprintf(css, sizeof(css), ".%s:%s { %s }", cls, pseudo, decl);
     }
-    global_css_append(css);
-    global_css_reload();
+    char key[64];
+    snprintf(key, sizeof(key), "%s:%s", cls, pseudo);
+    widget_css_set(handle, key, css);
     // Driver readback: prove the state style reached the backend.
     g_object_set_data(G_OBJECT(w),
                       state == 1 ? "aeui-active-style" : "aeui-hover-style",

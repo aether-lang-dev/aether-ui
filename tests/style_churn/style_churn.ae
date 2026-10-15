@@ -1,0 +1,40 @@
+// A widget made and let go of, over and over, each styled on its own
+// (padding, a hover look, a corner radius), as an inspector rebuilt on every
+// selection is (ae3d's editor). On GTK4 each such style is a rule in one
+// stylesheet, scoped by the widget's own class, and handles are never
+// reused. The rules used to be appended on every call and kept after the
+// widget went: the sheet grew by every rule ever set, every reload parsed
+// all of it, and GTK 4.6 (Ubuntu 22.04), building its selector tree
+// recursively over a class per widget ever made, overflowed its stack at
+// about 900 of them. A widget's rules now go with it, and setting a
+// property again replaces it.
+//
+// Passes by finishing: 2000 widgets made and let go of, each styled, then
+// one more styled widget, all with a display.
+
+import ui
+import ui (root_vstack, text, edge_insets, style_hover, remove_child)
+
+extern aether_ui_set_corner_radius(handle: int, radius: float)
+extern exit(code: int)
+
+main() {
+    root = root_vstack(4) {
+    }
+    i = 0
+    while i < 2000 {
+        w = text(root, "churn")
+        edge_insets(w, 1.0, 2.0, 3.0, 4.0)
+        // Set again: replaced, not added.
+        edge_insets(w, 2.0, 2.0, 2.0, 2.0)
+        style_hover(w, 0.2, 0.3, 0.4)
+        aether_ui_set_corner_radius(w, 4.0)
+        remove_child(root, w)
+        i = i + 1
+    }
+    kept = text(root, "kept")
+    edge_insets(kept, 6.0, 6.0, 6.0, 6.0)
+    style_hover(kept, 0.5, 0.5, 0.5)
+    println("style_churn: 2000 widgets styled and let go of, the sheet kept to the living")
+    exit(0)
+}
