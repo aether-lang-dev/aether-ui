@@ -638,7 +638,8 @@ background_for(owner: int, work: fn, done: fn, dropped: fn) -> int {
     job = aether_ui_bg_job_begin()
     if job == 0 { return 0 }
     ok = worker.run(|| {
-        return call(work, job)
+        let r: ptr = call(work, job)
+        return r
     }, |result: ptr| {
         keep = 1
         if aether_ui_bg_job_cancelled(job) == 1 { keep = 0 }
@@ -7227,7 +7228,6 @@ _datagrid_merge_role(g: *DataGrid, s: int, j: int) -> int {
     mi = _datagrid_merge_at(g, mr, mc)
     if mi < 0 { return 0 }
     // The piece in this row is the first shown position inside the merge.
-    w = g.frozen + g.vis_cols
     k = 0
     while k < j {
         kc = _datagrid_col_at(g, k)
