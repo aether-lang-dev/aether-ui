@@ -25,14 +25,14 @@ exports (
     textfield, textfield_bound, textfield_select, textfield_insert, textfield_caret, securefield, on_submit, onsubmit, vslider,
     datagrid, datagrid_cells, datagrid_header, datagrid_scroll_to, datagrid_refresh,
     datagrid_set_col_widths, cells, headers, on_cell_click, on_cell_select, on_cell_activate,
-    on_cell_edit, on_col_resize, on_col_move, column_width, column_limits,
+    on_cell_edit, on_col_resize, on_col_move, on_header_click, column_width, column_limits,
     datagrid_edit_text, datagrid_cell_style, edit_text, cell_style, datagrid_fit_col,
     datagrid_first_row, datagrid_first_col, datagrid_widget, datagrid_vscroll, datagrid_hscroll,
     datagrid_on_click, datagrid_select, datagrid_select_range, datagrid_cursor_row,
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6542,6 +6542,8 @@ struct DataGrid {
     drag_x0: float    // where in its header the press was (moving)
     on_resize: ptr    // boxed |c, w|, or null (datagrid_on_col_resize)
     on_move: ptr      // boxed |from, to|, or null (datagrid_on_col_move)
+    on_hdr: ptr       // boxed |c|, or null (datagrid_on_header_click)
+    drag_far: float   // how far the press has moved (a click moves under 4 px)
     boxes: ptr        // intarr of zstack handles holding each body cell
     on_edit: ptr      // boxed |r, c, text|, or null: the grid is not editable
     edit_field: int   // the open editor's text field, 0 when none
@@ -6659,6 +6661,8 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.on_act = null
     g.on_resize = null
     g.on_move = null
+    g.on_hdr = null
+    g.drag_far = 0.0
     g.min_w = 24
     g.max_w = 1000
     g.on_edit = null
@@ -7694,6 +7698,7 @@ _datagrid_header_drag(gp: ptr, pos: int, grip: int, phase: int, x: float) {
         if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
         g.drag_pos = pos
         g.drag_kind = 0
+        g.drag_far = 0.0
         cw = intarr_get_raw(g.shown_w, pos)
         if grip == 1 {
             g.drag_kind = 1
@@ -7702,6 +7707,16 @@ _datagrid_header_drag(gp: ptr, pos: int, grip: int, phase: int, x: float) {
             g.drag_kind = 2
             g.drag_x0 = x
         }
+        return
+    }
+    ax = x
+    if ax < 0.0 { ax = 0.0 - ax }
+    if ax > g.drag_far { g.drag_far = ax }
+    // A press on a label let go where it was (under 4 px of travel): a
+    // click, told to on_header_click with the model column, and no move.
+    if phase == 2 && grip == 0 && g.drag_far < 4.0 {
+        g.drag_kind = 0
+        if g.on_hdr != null { _datagrid_invoke_hdr(unbox_closure(g.on_hdr), _datagrid_model(g, view)) }
         return
     }
     if g.drag_kind == 1 {
@@ -7935,6 +7950,20 @@ datagrid_on_col_move(gp: ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_move = box_closure(cb)
     return gp
+}
+
+// datagrid_on_header_click(g) callback |c| { ... }: a column's header
+// label pressed and let go without a drag; c the model column (a frozen
+// column's too, as the corner over the row numbers is). A drag on it still
+// moves the column, one on its grip resizes it.
+datagrid_on_header_click(gp: ptr, cb: fn) -> ptr {
+    g = gp as *DataGrid
+    g.on_hdr = box_closure(cb)
+    return gp
+}
+
+_datagrid_invoke_hdr(cb: fn, c: int) {
+    cb(c)
 }
 
 // Colour every shown cell for the selection. A widget is only touched when
@@ -8588,6 +8617,10 @@ on_col_resize(_ctx: ptr, cb: fn) {
 on_col_move(_ctx: ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_col_move(g, cb) }
+}
+on_header_click(_ctx: ptr, cb: fn) {
+    g = _datagrid_ctx(_ctx)
+    if g != null { _d = datagrid_on_header_click(g, cb) }
 }
 column_width(_ctx: ptr, w: int) {
     g = _datagrid_ctx(_ctx)

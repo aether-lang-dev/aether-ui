@@ -15,7 +15,7 @@ import ui
 import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refresh,
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
     edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, shortcut,
-    on_cell_activate, on_col_resize, on_col_move, on_cell_edit,
+    on_cell_activate, on_col_resize, on_col_move, on_header_click, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_merge, datagrid_unmerge, datagrid_merge_of,
@@ -58,6 +58,7 @@ main() {
     activated = ui_state_s("none")
     resized = ui_state_s("none")
     moved = ui_state_s("none")
+    hclicked = ui_state_s("none")
     edited = ui_state_s("none")
     edits = map.map_new()
     notes = ui_state_s("")
@@ -130,6 +131,10 @@ main() {
                 }
                 on_col_move() callback |from: int, to: int| {
                     _s5 = ui_set_s(moved, "${from} to ${to}")
+                }
+                // A header clicked (pressed and let go without a drag).
+                on_header_click() callback |c: int| {
+                    _s7 = ui_set_s(hclicked, "${c}")
                 }
                 // The open editor's text and caret as it is typed.
                 on_cell_edit_change() callback |et: string, caret: int| {
@@ -205,6 +210,7 @@ main() {
             text_bound(activated, "activated: ", "")
             text_bound(resized, "resized: ", "")
             text_bound(moved, "moved: ", "")
+            text_bound(hclicked, "header clicked: ", "")
             text_bound(edited, "edited: ", "")
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
