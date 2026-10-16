@@ -830,5 +830,21 @@ main() {
         }
     }
 
+    spec.describe(fw, "columns frozen at run time") {
+        spec.it("datagrid_freeze_cols keeps A beside the row numbers as the rest scroll") callback {
+            hs = nth_of("slider", 1)
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll to the left")
+            press("Freeze A")
+            uidriver.post_ok("/widget/${hs}/set_value?v=20", "scroll right")
+            spec.assert_true(shows("V") == 1, "the scrolling columns moved on (V)")
+            spec.assert_true(shows("A") == 1, "A stayed")
+            spec.assert_true(gone("B") == 1, "B scrolled away")
+            spec.assert_true(field_of_text("A", "x") < field_of_text("V", "x"), "A left of them")
+            press("Free A")
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll back")
+            spec.assert_true(shows("B") == 1, "free again: B back beside A")
+        }
+    }
+
     return spec.run_summary(fw)
 }

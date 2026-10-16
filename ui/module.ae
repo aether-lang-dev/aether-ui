@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6547,6 +6547,8 @@ struct DataGrid {
     n_areas: int
     keep_areas: int   // 1 while a Ctrl/Cmd click adds an area
     height_px: int    // the rows' height the grid shows (0: all vis_rows of row_h)
+    npos: int         // the column positions each row has: frozen + vis_cols, fixed at creation
+    frozen0: int      // the frozen columns it was made with (its own: row numbers)
     drag_far: float   // how far the press has moved (a click moves under 4 px)
     boxes: ptr        // intarr of zstack handles holding each body cell
     on_edit: ptr      // boxed |r, c, text|, or null: the grid is not editable
@@ -6644,9 +6646,11 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     if fz < 0 { fz = 0 }
     if fz > cols { fz = cols }
     g.frozen = fz
+    g.frozen0 = fz
     vc = vis_cols
     if vc > cols - fz { vc = cols - fz }
     if vc < 0 { vc = 0 }
+    g.npos = fz + vc
     vr = vis_rows
     if vr > rows { vr = rows }
     if vr < 0 { vr = 0 }
@@ -6924,7 +6928,7 @@ _datagrid_slot_of_row(g: *DataGrid, r: int) -> int {
 // The shown position showing view column c, -1 when it is not shown.
 _datagrid_pos_of_col(g: *DataGrid, c: int) -> int {
     j = 0
-    while j < g.frozen + g.vis_cols {
+    while j < g.npos {
         if intarr_get_raw(g.slot_col, j) == c && intarr_get_raw(g.pos_off, j) == 0 { return j }
         j = j + 1
     }
@@ -7101,6 +7105,32 @@ _datagrid_full_h(g: *DataGrid) -> int {
     return full
 }
 
+// datagrid_freeze_cols(g, n): the n columns after the grid's own frozen
+// ones (its row numbers) stay put as the rest scroll across, set and
+// changed at any time, as datagrid_freeze_rows; 0 frees them. At most all
+// but one of the positions the grid was made with. datagrid_frozen_cols(g).
+datagrid_freeze_cols(gp: ptr, n: int) -> ptr {
+    g = gp as *DataGrid
+    nf = g.frozen0 + n
+    if nf < g.frozen0 { nf = g.frozen0 }
+    if nf > g.npos - 1 { nf = g.npos - 1 }
+    if nf > g.cols - 1 { nf = g.cols - 1 }
+    if nf == g.frozen { return gp }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    g.frozen = nf
+    g.vis_cols = g.npos - nf
+    _datagrid_col_lists(g)
+    fc = g.first_col
+    if fc < nf { fc = nf }
+    _d = datagrid_scroll_to(gp, g.first_row, fc)
+    return gp
+}
+
+datagrid_frozen_cols(gp: ptr) -> int {
+    g = gp as *DataGrid
+    return g.frozen - g.frozen0
+}
+
 // datagrid_set_height(g, px): the grid shows the rows that fit in px (the
 // first scrolling one however tall), at most the vis_rows it was made with,
 // so a page can let it grow into room it is given and shrink back; 0 is all
@@ -7165,7 +7195,7 @@ _datagrid_last_shown(g: *DataGrid) -> int {
 // Each shown cell's lines: as many as its row holds where its style wraps
 // it (white-space: normal), one where it does not.
 _datagrid_wraps(g: *DataGrid) {
-    w = g.frozen + g.vis_cols
+    w = g.npos
     s = 0
     while s < g.vis_rows {
         j = 0
@@ -7227,7 +7257,7 @@ datagrid_row_height(gp: ptr, r: int) -> int {
 datagrid_fit_row(gp: ptr, r: int) -> ptr {
     g = gp as *DataGrid
     if r < 0 || r >= g.rows || g.cell == null { return gp }
-    w = g.frozen + g.vis_cols
+    w = g.npos
     slot = _datagrid_slot_of_row(g, r)
     if slot < 0 { slot = 0 }
     cf = unbox_closure(g.cell)
@@ -7267,7 +7297,7 @@ datagrid_freeze_rows(gp: ptr, n: int) -> ptr {
     if k < 0 { k = 0 }
     if k == g.frozen_rows { return gp }
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
-    w = g.frozen + g.vis_cols
+    w = g.npos
     s = 0
     while s < g.vis_rows {
         was = 0
@@ -7350,7 +7380,7 @@ _datagrid_merge_role(g: *DataGrid, s: int, j: int) -> int {
 // Widen each merge's pieces across the shown cells they cover, hide those,
 // and put every other cell back to its column's width.
 _datagrid_spans(g: *DataGrid) {
-    w = g.frozen + g.vis_cols
+    w = g.npos
     s = 0
     while s < g.vis_rows {
         mr = _datagrid_row_at(g, s)
@@ -7468,7 +7498,7 @@ _datagrid_merge_drop(g: *DataGrid, k: int) {
 // After merges change: every shown cell is styled again (a merge's pieces
 // take its style), the cursor reselects what it is on, and it is all shown.
 _datagrid_remerge(g: *DataGrid) {
-    n = g.vis_rows * (g.frozen + g.vis_cols)
+    n = g.vis_rows * (g.npos)
     i = 0
     while i < n {
         longarr_set_raw(g.style_hash, i, 0)
@@ -7481,7 +7511,7 @@ _datagrid_remerge(g: *DataGrid) {
 // Work out what each shown row and position shows, from the first row and
 // column, and hide the rows, positions and gap strips that show nothing.
 _datagrid_layout(g: *DataGrid) {
-    w = g.frozen + g.vis_cols
+    w = g.npos
     // Rows: the frozen ones are themselves (none when hidden), the rest from
     // the first row down, past the hidden ones, as many as fit the grid's
     // height (vis_rows rows of the grid's height: fewer when some are taller).
@@ -7577,7 +7607,7 @@ _datagrid_layout(g: *DataGrid) {
 // first row and column. The widgets stay; only their text changes.
 _datagrid_bind(g: *DataGrid) {
     _datagrid_layout(g)
-    w = g.frozen + g.vis_cols
+    w = g.npos
     if g.header != null {
         hf = unbox_closure(g.header)
         j = 0
@@ -7630,7 +7660,7 @@ _datagrid_bind(g: *DataGrid) {
 _datagrid_tips(g: *DataGrid) {
     if g.tip == null { return }
     tf = unbox_closure(g.tip)
-    w = g.frozen + g.vis_cols
+    w = g.npos
     r = 0
     while r < g.vis_rows {
         mr = _datagrid_row_at(g, r)
@@ -7656,7 +7686,7 @@ _datagrid_tips(g: *DataGrid) {
 // columns), and each cell its column's header, so a screen reader reads the
 // position of what is on screen, not of the widget.
 _datagrid_a11y(g: *DataGrid) {
-    w = g.frozen + g.vis_cols
+    w = g.npos
     j = 0
     while j < w {
         if intarr_get_raw(g.pos_off, j) == 0 {
@@ -7688,7 +7718,7 @@ _datagrid_model(g: *DataGrid, view: int) -> int {
 // Give each shown position its column's width (header and every row), where
 // it changed, and the horizontal scrollbar the width of what is shown.
 _datagrid_size(g: *DataGrid) {
-    w = g.frozen + g.vis_cols
+    w = g.npos
     total = 0
     fzw = 0
     j = 0
@@ -7780,7 +7810,7 @@ _datagrid_header_drag(gp: ptr, pos: int, grip: int, phase: int, x: float) {
             j = j + 1
         }
         at = left + ((g.drag_x0 + x) as int)
-        w = g.frozen + g.vis_cols
+        w = g.npos
         to = 0 - 1
         edge = 0
         k = 0
@@ -8007,7 +8037,7 @@ _datagrid_invoke_hdr(cb: fn, c: int) {
 // Colour every shown cell for the selection. A widget is only touched when
 // its colour changes, so scrolling a plain grid sets no colours at all.
 _datagrid_paint(g: *DataGrid) {
-    w = g.frozen + g.vis_cols
+    w = g.npos
     r = 0
     while r < g.vis_rows {
         c = 0
@@ -8019,7 +8049,7 @@ _datagrid_paint(g: *DataGrid) {
             col = base
             if base < 0 {
                 col = 0xffffff
-                if c < g.frozen || r < g.frozen_rows { col = 0xf2f2f5 }
+                if c < g.frozen0 || r < g.frozen_rows { col = 0xf2f2f5 }
             }
             cur = 0
             if mr == g.cur_r && mc == g.cur_c { cur = 1 }
@@ -8065,7 +8095,7 @@ _datagrid_mix(a: int, b: int) -> int {
 _datagrid_style(g: *DataGrid) {
     if g.style == null { return }
     sf = unbox_closure(g.style)
-    w = g.frozen + g.vis_cols
+    w = g.npos
     r = 0
     while r < g.vis_rows {
         c = 0
@@ -8644,7 +8674,7 @@ datagrid_fit_col(gp: ptr, c: int) -> ptr {
     g = gp as *DataGrid
     if c < 0 || c >= g.cols { return gp }
     m = _datagrid_model(g, c)
-    w = g.frozen + g.vis_cols
+    w = g.npos
     // Any shown position's widgets carry the same fonts; measure with the
     // ones at c's position if it is shown, else the first scrolling one.
     pos = _datagrid_pos_of_col(g, c)
@@ -8972,7 +9002,7 @@ _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
     c2 = g.cur_c
     if r2 < 0 { return }
     pos = _datagrid_pos_of_col(g, c2)
-    w = g.frozen + g.vis_cols
+    w = g.npos
     vr = _datagrid_slot_of_row(g, r2)
     if vr < 0 || pos < 0 { return }
     box = intarr_get_raw(g.boxes, vr * w + pos)

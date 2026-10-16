@@ -1,4 +1,4 @@
-<!-- STATUS 2026-10-16: NEW. Raised by the spreadsheet (aether-lang-dev/spraedsheet,
+<!-- STATUS 2026-10-16: RESOLVED (REPLY-datagrid-freeze-cols-and-split.md). Raised by the spreadsheet (aether-lang-dev/spraedsheet,
      TODO.md 3.8) through sae's ui.datagrid. -->
 
 # A datagrid's frozen columns set at run time, and split panes
