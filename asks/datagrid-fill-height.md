@@ -1,4 +1,4 @@
-<!-- STATUS 2026-10-16: NEW. Raised by the spreadsheet (aether-lang-dev/spraedsheet,
+<!-- STATUS 2026-10-16: RESOLVED (REPLY-datagrid-fill-height.md). Raised by the spreadsheet (aether-lang-dev/spraedsheet,
      TODO.md 3.0.4) through sae's ui.datagrid. -->
 
 # A datagrid that takes the height it is given

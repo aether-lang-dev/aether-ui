@@ -35,6 +35,22 @@ count_of(type: string) -> int {
 
 // The id of the first or last widget of a type (the grid's two scrollbars:
 // the vertical slider is made first).
+// How many cells show their R<r>C<c> text now (a row out of the grid's
+// height says nothing).
+cell_texts() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 - 1 }
+    n = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        t = uidriver.field_str(json.json_array_get_raw(v, i), "text")
+        if string.starts_with(t, "R") == 1 && string.contains(t, "C") == 1 && string.length(t) > 3 { n = n + 1 }
+        i = i + 1
+    }
+    json.json_free(v)
+    return n
+}
+
 nth_of(type: string, last: int) -> int {
     if last == 1 { return uidriver.widget_id_last_of(type, "") }
     return uidriver.widget_id_of(type, "")
@@ -795,6 +811,22 @@ main() {
             spec.assert_true(uidriver.wait_body_contains("/widgets", "typing: =SUM(A1 @", 20), "heard =SUM(A1")
             key("Escape")
             spec.assert_true(editor_open(0) == 1, "Escape closed it")
+        }
+    }
+    spec.describe(fw, "a grid given less or more height") {
+        spec.it("datagrid_set_height shows the rows that fit, and all of them again") callback {
+            v = nth_of("slider", 0)
+            h0 = uidriver.widget_int_field_by_id(v, "h")
+            press("Ten rows high")
+            i = 0
+            while i < 30 && uidriver.widget_int_field_by_id(v, "h") == h0 { sleep(100); i = i + 1 }
+            spec.assert_eq(uidriver.widget_int_field_by_id(v, "h"), 240, "the scrollbar ten rows high")
+            spec.assert_true(cell_texts() <= 60, "at most ten rows of six cells say anything (${cell_texts()})")
+            press("All rows high")
+            i = 0
+            while i < 30 && uidriver.widget_int_field_by_id(v, "h") != h0 { sleep(100); i = i + 1 }
+            spec.assert_eq(uidriver.widget_int_field_by_id(v, "h"), h0, "and back to all twenty")
+            spec.assert_true(cell_texts() > 60, "more rows of cells again (${cell_texts()})")
         }
     }
 

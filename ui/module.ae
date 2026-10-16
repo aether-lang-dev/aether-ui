@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6546,6 +6546,7 @@ struct DataGrid {
     areas: ptr        // intarr: the selection's other areas, 4 ints each (anchor row, col, cursor row, col)
     n_areas: int
     keep_areas: int   // 1 while a Ctrl/Cmd click adds an area
+    height_px: int    // the rows' height the grid shows (0: all vis_rows of row_h)
     drag_far: float   // how far the press has moved (a click moves under 4 px)
     boxes: ptr        // intarr of zstack handles holding each body cell
     on_edit: ptr      // boxed |r, c, text|, or null: the grid is not editable
@@ -6670,6 +6671,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.areas = intarr_new_raw(DATAGRID_AREAS * 4)
     g.n_areas = 0
     g.keep_areas = 0
+    g.height_px = 0
     g.drag_far = 0.0
     g.min_w = 24
     g.max_w = 1000
@@ -7091,9 +7093,37 @@ _datagrid_row_h(g: *DataGrid, r: int) -> int {
     return h
 }
 
+// The height the grid's rows take: what datagrid_set_height gave, or all
+// vis_rows of the grid's row height (never more: no more rows are made).
+_datagrid_full_h(g: *DataGrid) -> int {
+    full = g.vis_rows * g.row_h
+    if g.height_px > 0 && g.height_px < full { return g.height_px }
+    return full
+}
+
+// datagrid_set_height(g, px): the grid shows the rows that fit in px (the
+// first scrolling one however tall), at most the vis_rows it was made with,
+// so a page can let it grow into room it is given and shrink back; 0 is all
+// of them. datagrid_height(g): that height now.
+datagrid_set_height(gp: ptr, px: int) -> ptr {
+    g = gp as *DataGrid
+    h = px
+    if h < 0 { h = 0 }
+    if h > 0 && h < g.row_h { h = g.row_h }
+    g.height_px = h
+    _vh = height(g.vsl, _datagrid_full_h(g))
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    _d = datagrid_scroll_to(gp, g.first_row, g.first_col)
+    return gp
+}
+
+datagrid_height(gp: ptr) -> int {
+    return _datagrid_full_h(gp as *DataGrid)
+}
+
 // The height the scrolling rows have: the grid's, less the frozen rows'.
 _datagrid_scroll_budget(g: *DataGrid) -> int {
-    b = g.vis_rows * g.row_h
+    b = _datagrid_full_h(g)
     k = 0
     while k < g.frozen_rows {
         if _datagrid_row_hidden(g, k) == 0 { b = b - _datagrid_row_h(g, k) }
@@ -7455,7 +7485,7 @@ _datagrid_layout(g: *DataGrid) {
     // Rows: the frozen ones are themselves (none when hidden), the rest from
     // the first row down, past the hidden ones, as many as fit the grid's
     // height (vis_rows rows of the grid's height: fewer when some are taller).
-    budget = g.vis_rows * g.row_h
+    budget = _datagrid_full_h(g)
     used = 0
     m = g.first_row
     s = 0

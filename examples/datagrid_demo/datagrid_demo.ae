@@ -19,7 +19,7 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_merge, datagrid_unmerge, datagrid_merge_of,
-    datagrid_set_row_height, datagrid_row_height, datagrid_fit_row,
+    datagrid_set_row_height, datagrid_row_height, datagrid_fit_row, datagrid_set_height,
     ui_state_s, ui_set_s, text_bound, enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -172,6 +172,13 @@ main() {
                 _h4 = datagrid_hide_row(g, 4, h)
                 _h5 = datagrid_hide_row(g, 5, h)
                 _rm = ui_set_s(rowmodel, "${datagrid_row_model(g, 4)}")
+            }
+            // The rows' height: ten rows' worth, then all twenty again.
+            _ten = btn("Ten rows high") callback {
+                _sh = datagrid_set_height(g, 240)
+            }
+            _all = btn("All rows high") callback {
+                _sh2 = datagrid_set_height(g, 0)
             }
             _hidec = btn("Hide C") callback {
                 vc = 0
