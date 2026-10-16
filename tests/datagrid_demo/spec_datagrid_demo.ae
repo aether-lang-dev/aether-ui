@@ -263,6 +263,18 @@ main() {
             spec.assert_eq(field_of_text("R99990C41", "borderWidth"), 2, "and its 2px border")
             spec.assert_str_eq(bg_of("R99990C42"), "#ffffff", "its neighbour plain")
         }
+        spec.it("a Cmd/Ctrl click adds an area; a plain click is one area again") callback {
+            uidriver.click_widget_mods(uidriver.widget_id_by_text("R99992C43"), 8)
+            spec.assert_true(shows("selection: 99992,43 from 99992,43 and 99990,41,99990,41") == 1, "Cmd: the first cell kept as an area")
+            spec.assert_str_eq(bg_of("R99990C41"), "#cce0ff", "it is still painted")
+            spec.assert_str_eq(bg_of("R99992C43"), "#cce0ff", "and so is the new one")
+            spec.assert_str_eq(bg_of("R99991C42"), "#ffffff", "what lies between is not")
+            uidriver.click_widget_mods(uidriver.widget_id_by_text("R99993C44"), 2)
+            spec.assert_true(shows("selection: 99993,44 from 99993,44 and 99990,41,99990,41;99992,43,99992,43") == 1, "Ctrl too: a third")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99990C41")}/click", "click R99990C41")
+            spec.assert_true(shows("selection: 99990,41 from 99990,41") == 1, "a plain click: one area")
+            spec.assert_str_eq(bg_of("R99992C43"), "#ffffff", "the others repainted plain")
+        }
         spec.it("arrows move the cursor") callback {
             key("Down")
             spec.assert_true(shows("selection: 99991,41 from 99991,41") == 1, "Down")

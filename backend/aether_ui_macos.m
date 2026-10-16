@@ -1634,6 +1634,8 @@ void aether_ui_window_on_key_impl(void* boxed_closure) {
 }
 
 int aether_ui_modifiers_impl(void) {
+    int o = aether_ui_modifiers_override();
+    if (o >= 0) return o;  /* the driver's, for one action */
     /* +modifierFlags is the CURRENT keyboard state, not a snapshot from some
      * event object, so this answers correctly inside a click callback without
      * the event having to be threaded through. */

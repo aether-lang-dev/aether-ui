@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6543,6 +6543,9 @@ struct DataGrid {
     on_resize: ptr    // boxed |c, w|, or null (datagrid_on_col_resize)
     on_move: ptr      // boxed |from, to|, or null (datagrid_on_col_move)
     on_hdr: ptr       // boxed |c|, or null (datagrid_on_header_click)
+    areas: ptr        // intarr: the selection's other areas, 4 ints each (anchor row, col, cursor row, col)
+    n_areas: int
+    keep_areas: int   // 1 while a Ctrl/Cmd click adds an area
     drag_far: float   // how far the press has moved (a click moves under 4 px)
     boxes: ptr        // intarr of zstack handles holding each body cell
     on_edit: ptr      // boxed |r, c, text|, or null: the grid is not editable
@@ -6605,6 +6608,8 @@ const DATAGRID_FIT_ROOM = 12
 
 // A header cell's grip: the strip at its right edge that resizes the column.
 const DATAGRID_GRIP = 6
+// The most areas a selection holds besides its current one.
+const DATAGRID_AREAS = 64
 const DATAGRID_MAGIC = 1597463007
 
 // The grid an ambient verb's _ctx is, or null: inside a datagrid block _ctx
@@ -6662,6 +6667,9 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.on_resize = null
     g.on_move = null
     g.on_hdr = null
+    g.areas = intarr_new_raw(DATAGRID_AREAS * 4)
+    g.n_areas = 0
+    g.keep_areas = 0
     g.drag_far = 0.0
     g.min_w = 24
     g.max_w = 1000
@@ -8260,6 +8268,7 @@ _datagrid_hexd(ch: int) -> int {
 
 _datagrid_in_range(g: *DataGrid, r: int, c: int) -> int {
     if g.cur_r < 0 { return 0 }
+    if _datagrid_in_areas(g, r, c) == 1 { return 1 }
     r0 = g.anc_r
     r1 = g.cur_r
     if r0 > r1 { r0 = g.cur_r; r1 = g.anc_r }
@@ -8268,6 +8277,68 @@ _datagrid_in_range(g: *DataGrid, r: int, c: int) -> int {
     if c0 > c1 { c0 = g.cur_c; c1 = g.anc_c }
     if r < r0 || r > r1 || c < c0 || c > c1 { return 0 }
     return 1
+}
+
+// Whether (r, c) is in one of the selection's other areas.
+_datagrid_in_areas(g: *DataGrid, r: int, c: int) -> int {
+    i = 0
+    while i < g.n_areas {
+        r0 = intarr_get_raw(g.areas, i * 4)
+        c0 = intarr_get_raw(g.areas, i * 4 + 1)
+        r1 = intarr_get_raw(g.areas, i * 4 + 2)
+        c1 = intarr_get_raw(g.areas, i * 4 + 3)
+        if r0 > r1 { t = r0; r0 = r1; r1 = t }
+        if c0 > c1 { t2 = c0; c0 = c1; c1 = t2 }
+        if r >= r0 && r <= r1 && c >= c0 && c <= c1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// datagrid_add_area(g, ar, ac, r, c): keep the selection as it is as one of
+// its areas and add another, from (ar, ac) to (r, c), as a Ctrl/Cmd click
+// does (rows model rows, columns on screen); at most DATAGRID_AREAS areas.
+// datagrid_clear_areas(g): the selection one area again. datagrid_areas(g):
+// the areas before the current one, "ar,ac,r,c;..." ("" for none).
+datagrid_add_area(gp: ptr, ar: int, ac: int, r: int, c: int) -> ptr {
+    g = gp as *DataGrid
+    _datagrid_push_area(g)
+    g.keep_areas = 1
+    _datagrid_set(g, ar, ac, r, c)
+    g.keep_areas = 0
+    _datagrid_paint(g)
+    return gp
+}
+
+datagrid_clear_areas(gp: ptr) -> ptr {
+    g = gp as *DataGrid
+    g.n_areas = 0
+    _datagrid_paint(g)
+    return gp
+}
+
+datagrid_areas(gp: ptr) -> string {
+    g = gp as *DataGrid
+    out = ""
+    i = 0
+    while i < g.n_areas {
+        sep = ""
+        if i > 0 { sep = ";" }
+        out = "${out}${sep}${intarr_get_raw(g.areas, i * 4)},${intarr_get_raw(g.areas, i * 4 + 1)},${intarr_get_raw(g.areas, i * 4 + 2)},${intarr_get_raw(g.areas, i * 4 + 3)}"
+        i = i + 1
+    }
+    return out
+}
+
+// The current area kept as one of the others (when there is one, and room).
+_datagrid_push_area(g: *DataGrid) {
+    if g.cur_r < 0 || g.n_areas >= DATAGRID_AREAS { return }
+    i = g.n_areas
+    intarr_set_raw(g.areas, i * 4, g.anc_r)
+    intarr_set_raw(g.areas, i * 4 + 1, g.anc_c)
+    intarr_set_raw(g.areas, i * 4 + 2, g.cur_r)
+    intarr_set_raw(g.areas, i * 4 + 3, g.cur_c)
+    g.n_areas = i + 1
 }
 
 // Move the cursor to (r, c), clamped to the grid; extend = 1 keeps the
@@ -8301,6 +8372,11 @@ _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     if nr < 0 || nc < 0 { return }
     changed = 0
     if nr != g.cur_r || nc != g.cur_c || na_r != g.anc_r || na_c != g.anc_c { changed = 1 }
+    // Any other move makes the selection one area again.
+    if g.keep_areas == 0 && g.n_areas > 0 {
+        g.n_areas = 0
+        changed = 1
+    }
     g.cur_r = nr
     g.cur_c = nc
     g.anc_r = na_r
@@ -8709,7 +8785,17 @@ _datagrid_clicked(gp: ptr, vr: int, vc: int) {
     if r < 0 || c < 0 { return }
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
     focus(g.root)
-    _datagrid_move(g, r, c, modifiers() % 2)
+    // Ctrl or Cmd held: the selection so far kept, this cell an area more.
+    mods = modifiers()
+    if (mods / 2) % 2 == 1 || (mods / 8) % 2 == 1 {
+        _datagrid_push_area(g)
+        g.keep_areas = 1
+        _datagrid_move(g, r, c, 0)
+        g.keep_areas = 0
+        _datagrid_paint(g)
+    } else {
+        _datagrid_move(g, r, c, mods % 2)
+    }
     if g.click == null { return }
     // A click anywhere in a merge is a click on it: its top-left cell.
     cmi = _datagrid_merge_at(g, r, c)

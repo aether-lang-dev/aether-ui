@@ -1302,3 +1302,8 @@ int aether_ui_textfield_caret_impl(int handle) {
     if (!aether_ui_textfield_selection_impl(handle, &a, &b)) return -1;
     return b;
 }
+
+/* The driver's modifier keys for one action (see the header): -1 unset. */
+static volatile int g_mod_override = -1;
+void aether_ui_modifiers_override_set(int mods) { g_mod_override = mods; }
+int aether_ui_modifiers_override(void) { return g_mod_override; }

@@ -3831,6 +3831,8 @@ void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
 // question from "what is held now". A cross-platform app reading modifiers
 // in a click handler sees an unmodified click.
 int aether_ui_modifiers_impl(void) {
+    int o = aether_ui_modifiers_override();
+    if (o >= 0) return o;  /* the driver's, for one action */
     return 0;
 }
 // ===========================================================================

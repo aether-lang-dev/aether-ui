@@ -153,7 +153,10 @@ main() {
             // was mangled wrongly (aether #2715), and aether-ui's floor is
             // older than that.)
             g.datagrid_col_limits(24, 1000).datagrid_on_select() callback |r: int, c: int| {
-                _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}")
+                // Its other areas, after a Ctrl/Cmd click, said after it.
+                more = datagrid_areas(g)
+                if string.length(more) > 0 { more = " and ${more}" }
+                _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}${more}")
             }
             // A field outside the grid: focus moving to it commits an open
             // editor (a field, since a button takes no focus on iOS).

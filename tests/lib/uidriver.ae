@@ -16,7 +16,7 @@
 exports(
     url_of, get_body, get_status, post_ok, post_status, post_body,
     text_width, font_ascent,
-    click, click_widget, toggle_widget, key, move_to, resize_window, wait_int_field_change,
+    click, click_widget, click_widget_mods, toggle_widget, key, move_to, resize_window, wait_int_field_change,
     hover_widget, unhover, press_widget, release_widget,
     window_key, focus_widget, focused_widget,
     set_state, state_value_int,
@@ -127,6 +127,9 @@ click(x: float, y: float) {
 }
 
 click_widget(id: int) { post_ok("/widget/${id}/click", "POST widget click") }
+// A click with modifier keys held (1 shift, 2 ctrl, 4 alt, 8 super/command),
+// as modifiers() reads them in its handler.
+click_widget_mods(id: int, mods: int) { post_ok("/widget/${id}/click?mods=${mods}", "POST widget click with mods ${mods}") }
 toggle_widget(id: int) { post_ok("/widget/${id}/toggle", "POST widget toggle") }
 
 // Put the pointer over a widget — for asserting :hover styling, tooltips

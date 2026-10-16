@@ -3144,6 +3144,8 @@ int aether_ui_get_height_impl(int handle) {
  * handler still links and behaves as an unmodified click, rather than failing
  * to build for iOS. */
 int aether_ui_modifiers_impl(void) {
+    int o = aether_ui_modifiers_override();
+    if (o >= 0) return o;  /* the driver's, for one action */
     return 0;
 }
 

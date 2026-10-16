@@ -1002,10 +1002,15 @@ static void handle_request_inner(aether_sock_t client_fd,
         send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/click")) {
+        // ?mods=N (1 shift, 2 ctrl, 4 alt, 8 super/command): the modifier
+        // keys the click's handler reads (modifiers()), for this click only.
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_CLICK;
         ctx.handle = extract_id_from_path(path, "/widget/");
+        const char* mq = extract_query_param(path, "mods");
+        if (mq) aether_ui_modifiers_override_set(atoi(mq));
         dispatch_and_reply(client_fd, h, &ctx, "clicked");
+        if (mq) aether_ui_modifiers_override_set(-1);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/hover")) {
         // POST /widget/{id}/hover — put the pointer over a widget, so a spec

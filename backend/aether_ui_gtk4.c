@@ -4622,6 +4622,8 @@ void aether_ui_window_on_file_drop_impl(void* boxed_closure) {
 }
 
 int aether_ui_modifiers_impl(void) {
+    int o = aether_ui_modifiers_override();
+    if (o >= 0) return o;  /* the driver's, for one action */
     /* The seat's keyboard state is the live one, which is what a click
      * callback needs; a GdkEvent is not available at that point. */
     GdkDisplay* dpy = gdk_display_get_default();

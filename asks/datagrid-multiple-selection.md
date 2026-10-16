@@ -1,4 +1,4 @@
-<!-- STATUS 2026-10-16: NEW. Raised by the spreadsheet (aether-lang-dev/spraedsheet,
+<!-- STATUS 2026-10-16: RESOLVED (REPLY-datagrid-multiple-selection.md). Raised by the spreadsheet (aether-lang-dev/spraedsheet,
      TODO.md 1.2). -->
 
 # A datagrid selection of several areas

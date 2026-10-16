@@ -4268,6 +4268,8 @@ int aether_ui_window_file_drop_deliver(const char* paths) {
 }
 
 int aether_ui_modifiers_impl(void) {
+    int o = aether_ui_modifiers_override();
+    if (o >= 0) return o;  /* the driver's, for one action */
     /* GetKeyState reports the state as of the message being processed, which
      * inside a click handler is the click itself. */
     int mods = 0;

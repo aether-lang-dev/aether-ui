@@ -221,4 +221,10 @@ void aeui_tooltip_note(int handle, const char* text);
 }
 #endif
 
+/* The driver's modifier keys for one action (POST /widget/{id}/click?mods=N):
+ * while it is set (>= 0) every backend's aether_ui_modifiers_impl answers it
+ * instead of the keyboard's, so a spec can Cmd- or Ctrl-click. -1 is unset. */
+void aether_ui_modifiers_override_set(int mods);
+int aether_ui_modifiers_override(void);
+
 #endif
