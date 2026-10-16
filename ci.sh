@@ -1077,9 +1077,35 @@ echo "=== Phase 1f: AppKit label retention across list rebuilds (#139) ==="
 # for the record and not asserted: the loop saturated by a period shorter
 # than a rebuild, the shape #139 was measured in; and headless, where no
 # window is ever laid out.
+# heap(1) and leaks(1) attach to the probe as a debugger does, and on a box
+# where that attach wedges (seen on a macOS beta, 2026-10-16: `heap` hung on
+# ANY pid, even a shell) they never return: one call held this phase, and
+# the family's shared test lock, for over an hour. So every call is bounded
+# (bounded SECS CMD..., no timeout(1) on macOS; the command's stderr is
+# dropped, the bound's own note is not), and after the first one
+# that times out the rest are skipped, so a wedged attach costs one bound,
+# not one per run. The marker is a file because retention_run runs in $(...).
+HEAP_HUNG="/tmp/ci_heap_hung.$$"
+rm -f "$HEAP_HUNG"
+bounded() {
+    local secs="$1" p w rc; shift
+    [ -e "$HEAP_HUNG" ] && return 124
+    "$@" 2> /dev/null &
+    p=$!
+    # The watcher's output goes nowhere, so it never holds a pipe open.
+    ( sleep "$secs"; touch "$HEAP_HUNG"; kill_tree "$p" ) > /dev/null 2>&1 &
+    w=$!
+    wait "$p"; rc=$?
+    kill_tree "$w" > /dev/null 2>&1
+    if [ -e "$HEAP_HUNG" ]; then
+        echo "  NOTE $1 did not return in ${secs}s (debugger attach wedged?); skipping the rest" >&2
+        return 124
+    fi
+    return "$rc"
+}
 retention_count() {
     # The live NSTextField line of `heap`: COUNT BYTES AVG CLASS_NAME ...
-    heap "$1" 2>/dev/null | awk '$4 == "NSTextField" { print $1; exit }'
+    bounded 120 heap "$1" | awk '$4 == "NSTextField" { print $1; exit }'
 }
 retention_run() {
     # $1 = rebuild period (ms), $2 = rebuilds, $3 = label for the log,
@@ -1111,17 +1137,17 @@ retention_run() {
     if [ "$tag" = "idle40" ] && command -v leaks > /dev/null 2>&1; then
         {
             echo "  -- $tag: live view classes"
-            heap "$pid" 2>/dev/null | awk '$4 ~ /^(NSTextField|AetherStackView|NSTextFieldCell|_NSViewLayoutAux)$/ { print "     " $1, $4 }'
+            bounded 120 heap "$pid" | awk '$4 ~ /^(NSTextField|AetherStackView|NSTextFieldCell|_NSViewLayoutAux)$/ { print "     " $1, $4 }'
             echo "  -- $tag: root paths to a sample of live NSTextField"
             local addrs
-            addrs="$(heap "$pid" --addresses=NSTextField 2>/dev/null | awk '/^ *0x/ { a=$1; sub(/:$/, "", a); print a }')"
+            addrs="$(bounded 120 heap "$pid" --addresses=NSTextField | awk '/^ *0x/ { a=$1; sub(/:$/, "", a); print a }')"
             local total
             total="$(printf '%s\n' "$addrs" | grep -c . || true)"
             if [ "$total" -gt 0 ]; then
                 local step=$(( total / 6 + 1 )) k=0
                 printf '%s\n' "$addrs" | awk -v s="$step" 'NR % s == 1' | head -6 | while read -r a; do
                     echo "     -- $a"
-                    leaks "$pid" --trace="$a" 2>/dev/null | grep -vE '^(Process|Load Address|Identifier|Version|Code Type|Platform|Parent Process|Date/Time|Launch Time|OS Version|Report Version|Analysis Tool|Physical footprint|----|$)' | head -30 | sed 's/^/       /'
+                    bounded 120 leaks "$pid" --trace="$a" | grep -vE '^(Process|Load Address|Identifier|Version|Code Type|Platform|Parent Process|Date/Time|Launch Time|OS Version|Report Version|Analysis Tool|Physical footprint|----|$)' | head -30 | sed 's/^/       /'
                 done
             fi
         } >&2
