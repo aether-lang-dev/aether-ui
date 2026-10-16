@@ -1306,11 +1306,14 @@ void aether_ui_text_set_string(int handle, const char* text) {
     }
 }
 
+static void aeui_button_retitle(NSButton* btn);   // below, beside configure_button
+
 void aether_ui_button_set_label(int handle, const char* label) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (v && [v isKindOfClass:[NSButton class]]) {
         [(NSButton*)v setTitle:
             [NSString stringWithUTF8String:label ? label : ""]];
+        aeui_button_retitle((NSButton*)v);
     }
 }
 
@@ -1870,6 +1873,24 @@ static void aeui_own_helper(id owner, const char* key, id helper) {
 // keeps its natural width, as in GTK. NSBezelStyleRegularSquare also makes the button render edge-to-edge inside
 // its frame — AppKit's default rounded bezel has a fixed intrinsic height and
 // refuses to stretch, leaving wasted space in tall cells (calculator grid).
+// A button's title in its AeCS colour (aether_ui_set_text_color): an
+// attributed title made again from the plain title, the button's font and a
+// centred paragraph, whenever the title, the font or the colour changes
+// (setTitle: drops the attributes). A button never coloured keeps its plain
+// title, so the system's own colour (and its dark-mode switch) stays.
+static void aeui_button_retitle(NSButton* btn) {
+    NSColor* c = objc_getAssociatedObject(btn, "aeui_button_fg");
+    if (!c) return;
+    NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
+    ps.alignment = NSTextAlignmentCenter;
+    NSMutableDictionary* at = [NSMutableDictionary dictionary];
+    if (btn.font) at[NSFontAttributeName] = btn.font;
+    at[NSForegroundColorAttributeName] = c;
+    at[NSParagraphStyleAttributeName] = ps;
+    [btn setAttributedTitle:[[NSAttributedString alloc]
+        initWithString:[btn title] ?: @"" attributes:at]];
+}
+
 static void configure_button(NSButton* btn) {
     [btn setContentHuggingPriority:200
                     forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -2875,9 +2896,65 @@ void aether_ui_textfield_on_submit_impl(int handle, void* boxed_closure) {
 // focus (the grid's cell editor) lost its caret that way, and a user typing
 // in a field that grew would have had their text selected under them. Keep
 // the field editor's selection across the resize.
+// A field whose AeCS background replaced the system bezel
+// (aether_ui_set_bg_color, "aeui-own-bezel") draws its own ground edge to
+// edge, so its text gets the inset the bezel used to give it: the cell draws
+// and edits in a rect AEUI_FIELD_PAD_X/Y in from its bounds, and the field
+// asks for that much more room, so restyling a field does not shrink it. A
+// field still on the system bezel is untouched.
+#define AEUI_FIELD_PAD_X 4.0
+#define AEUI_FIELD_PAD_Y 4.0
+static int aeui_field_owns_bezel(NSView* cv) {
+    return cv && objc_getAssociatedObject(cv, "aeui-own-bezel") != nil;
+}
+static NSRect aeui_field_inset(NSView* cv, NSRect r) {
+    return aeui_field_owns_bezel(cv) ? NSInsetRect(r, AEUI_FIELD_PAD_X, AEUI_FIELD_PAD_Y) : r;
+}
+#define AEUI_FIELD_CELL_BODY \
+- (NSRect)drawingRectForBounds:(NSRect)r { \
+    return [super drawingRectForBounds:aeui_field_inset([self controlView], r)]; \
+} \
+- (void)editWithFrame:(NSRect)r inView:(NSView*)v editor:(NSText*)t \
+             delegate:(id)d event:(NSEvent*)e { \
+    [super editWithFrame:aeui_field_inset(v, r) inView:v editor:t delegate:d event:e]; \
+} \
+- (void)selectWithFrame:(NSRect)r inView:(NSView*)v editor:(NSText*)t \
+               delegate:(id)d start:(NSInteger)st length:(NSInteger)n { \
+    [super selectWithFrame:aeui_field_inset(v, r) inView:v editor:t delegate:d \
+                     start:st length:n]; \
+}
+#define AEUI_FIELD_VIEW_BODY \
+- (NSSize)intrinsicContentSize { \
+    NSSize sz = [super intrinsicContentSize]; \
+    if (aeui_field_owns_bezel(self)) { \
+        if (sz.width != NSViewNoIntrinsicMetric) sz.width += 2 * AEUI_FIELD_PAD_X; \
+        if (sz.height != NSViewNoIntrinsicMetric) sz.height += 2 * AEUI_FIELD_PAD_Y; \
+    } \
+    return sz; \
+}
+
+@interface AetherTextFieldCell : NSTextFieldCell
+@end
+@implementation AetherTextFieldCell
+AEUI_FIELD_CELL_BODY
+@end
+@interface AetherSecureTextFieldCell : NSSecureTextFieldCell
+@end
+@implementation AetherSecureTextFieldCell
+AEUI_FIELD_CELL_BODY
+@end
+@interface AetherSecureTextField : NSSecureTextField
+@end
+@implementation AetherSecureTextField
++ (Class)cellClass { return [AetherSecureTextFieldCell class]; }
+AEUI_FIELD_VIEW_BODY
+@end
+
 @interface AetherTextField : NSTextField
 @end
 @implementation AetherTextField
++ (Class)cellClass { return [AetherTextFieldCell class]; }
+AEUI_FIELD_VIEW_BODY
 - (void)setFrameSize:(NSSize)size {
     NSText* ed = [self currentEditor];
     NSRange keep = ed ? [ed selectedRange] : NSMakeRange(NSNotFound, 0);
@@ -3043,7 +3120,7 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
 }
 
 int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
-    NSSecureTextField* field = [[NSSecureTextField alloc] init];
+    NSSecureTextField* field = [[AetherSecureTextField alloc] init];
     [field setTranslatesAutoresizingMaskIntoConstraints:NO];
     if (placeholder && *placeholder) {
         [field setPlaceholderString:[NSString stringWithUTF8String:placeholder]];
@@ -3589,6 +3666,43 @@ void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) 
         NSScrollView* sv = (NSScrollView*)v;
         [sv setBackgroundColor:[NSColor colorWithRed:r green:g blue:b alpha:a]];
         [sv setDrawsBackground:YES];
+        // A text area is a scroll view around an NSTextView, which paints its
+        // own (white) background over both: the colour goes there too.
+        if ([[sv documentView] isKindOfClass:[NSTextView class]]) {
+            NSTextView* tv = (NSTextView*)[sv documentView];
+            [tv setBackgroundColor:[NSColor colorWithRed:r green:g blue:b alpha:a]];
+            [tv setDrawsBackground:YES];
+        }
+    }
+    if ([v isKindOfClass:[NSTextField class]] && [(NSTextField*)v isEditable]) {
+        // An editable field's system bezel paints its own ground (white in
+        // the light appearance) over the layer AND over the cell's
+        // backgroundColor, rounded or square: a colour the sheet asks for is
+        // never seen. So a styled field drops the system bezel, as a CSS
+        // background replaces GTK's entry frame, and draws its own: the
+        // cell's background in the colour, and a bezel-like rounded 1pt
+        // edge on the layer (a shade off the ground) unless the sheet gave
+        // it a border or radius of its own. A label keeps the layer only: its
+        // cell draws nothing.
+        NSTextField* tf = (NSTextField*)v;
+        objc_setAssociatedObject(tf, "aeui-own-bezel", @YES, OBJC_ASSOCIATION_RETAIN);
+        [tf setBezeled:NO];
+        [tf setBordered:NO];
+        [tf setBackgroundColor:[NSColor colorWithRed:r green:g blue:b alpha:a]];
+        [tf setDrawsBackground:YES];
+        if (!objc_getAssociatedObject(tf, "aeui-styled-border")) {
+            double lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            double k = lum < 0.5 ? 1.0 : 0.0, t = 0.22;
+            tf.layer.borderWidth = 1.0;
+            tf.layer.borderColor = [[NSColor colorWithRed:r + (k - r) * t
+                green:g + (k - g) * t blue:b + (k - b) * t alpha:1.0] CGColor];
+        }
+        if (tf.layer.cornerRadius == 0) {
+            tf.layer.cornerRadius = 5.0;
+            tf.layer.masksToBounds = YES;
+        }
+        [tf invalidateIntrinsicContentSize];
+        [tf setNeedsDisplay:YES];
     }
     // Stash packed 0xRRGGBB (+ marker bit) for driver readback (styled_bg_impl).
     int packed = (((int)(r * 255) & 255) << 16) | (((int)(g * 255) & 255) << 8)
@@ -3621,14 +3735,32 @@ void aether_ui_set_bg_gradient(int handle,
 
 void aether_ui_set_text_color(int handle, double r, double g, double b) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    NSColor* c = [NSColor colorWithRed:r green:g blue:b alpha:1.0];
     if (v && [v isKindOfClass:[NSTextField class]]) {
-        [(NSTextField*)v setTextColor:[NSColor colorWithRed:r green:g blue:b alpha:1.0]];
+        [(NSTextField*)v setTextColor:c];
         aeui_label_redecorate((NSTextField*)v);
     }
     if (v) {
         int packed = (((int)(r * 255) & 255) << 16) | (((int)(g * 255) & 255) << 8)
                    | ((int)(b * 255) & 255) | 0x1000000;
         objc_setAssociatedObject(v, "aeui_styled_fg", @(packed), OBJC_ASSOCIATION_RETAIN);
+    }
+    if (v && [v isKindOfClass:[NSButton class]]) {
+        // NSButton has no text colour of its own: its title is drawn in the
+        // control text colour unless it is an attributed title. The colour is
+        // kept (aeui_button_fg) so a later label or font change keeps it.
+        objc_setAssociatedObject(v, "aeui_button_fg", c, OBJC_ASSOCIATION_RETAIN);
+        aeui_button_retitle((NSButton*)v);
+    }
+    if (v && [v isKindOfClass:[NSScrollView class]]
+          && [[(NSScrollView*)v documentView] isKindOfClass:[NSTextView class]]) {
+        // A text area's text is the text view's, not the scroll view's.
+        NSTextView* tv = (NSTextView*)[(NSScrollView*)v documentView];
+        [tv setTextColor:c];
+        NSMutableDictionary* ta = [[tv typingAttributes] mutableCopy];
+        ta[NSForegroundColorAttributeName] = c;
+        [tv setTypingAttributes:ta];
+        [tv setInsertionPointColor:c];
     }
 }
 
@@ -3674,6 +3806,7 @@ void aether_ui_set_font_family(int handle, const char* family) {
             f = [NSFont fontWithName:[NSString stringWithUTF8String:family]
                                 size:size];
         if (f) [(id)v setFont:f];
+        if ([v isKindOfClass:[NSButton class]]) aeui_button_retitle((NSButton*)v);
     }
 }
 

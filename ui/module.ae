@@ -2810,6 +2810,12 @@ _style_is_container(kind: string) -> int {
 // Apply the sheet to ONE widget: resolve each property down the cascade and
 // call the imperative setter it lands on.
 _style_apply_one(sp: ptr, h: int, kind: string) {
+    // The half of a widget a backend registers for itself (AppKit's text
+    // area is a scroll view AND its text view) is styled through the widget,
+    // never on its own: as a kind no sheet names it fell through to "root",
+    // and the root's colours would land on the very view that draws the
+    // text area's ground and text, over the textarea rule.
+    if string.equals(kind, "textarea_inner") == 1 { return }
     cls = aether_ui_widget_classes_impl(h)
     alias = ""
     if _style_is_container(kind) == 1 { alias = "container" }

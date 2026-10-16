@@ -1,0 +1,51 @@
+// Aether UI AeCS dark-theme example: a button's colour and a text field's
+// background are DRAWN, not just reported (asks/aecs-button-fg-and-field-bg-
+// not-drawn.md, from the chess app's dark look).
+//
+// One sheet, the chess app's: a dark ground, light text, a dark button and a
+// darker field. Before the fix every backend's driver reported the button's
+// fg and the field's bg as asked while the window drew the button's label in
+// the default dark colour and the text field and text area white. The test
+// (tests/aecs_dark_demo/test_aecs_dark_drawn.sh) reads the PIXELS of the
+// driver's /screenshot inside each widget's rectangle.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server.
+
+import ui
+import ui (root_vstack, text, btn, textfield, textarea, textarea_set_text,
+    set_text, create_styles, st_color, st_bg, apply_styles,
+    enable_test_server_root)
+import std.os (os_getenv)
+
+main() {
+    field = 0
+    area = 0
+    main_root = root_vstack(10) {
+        text("Dark theme")
+        _b = btn("MMMM WWWW") callback { }
+        field = textfield("") callback |_s: string| { }
+        area = textarea("") callback |_s: string| { }
+    }
+    // Text in both fields, so their colour has something to be drawn on.
+    _ = set_text(field, "MMMM WWWW")
+    textarea_set_text(area, "MMMM WWWW")
+
+    s = create_styles()
+    st_bg(s, "root", 0x1b1d20)
+    st_color(s, "root", 0xe4e4e4)
+    st_bg(s, "container", 0x1b1d20)
+    st_color(s, "text", 0xe4e4e4)
+    st_color(s, "button", 0xe4e4e4)
+    st_bg(s, "button", 0x33373c)
+    st_color(s, "textfield", 0xe4e4e4)
+    st_bg(s, "textfield", 0x2a2d31)
+    st_color(s, "textarea", 0xe4e4e4)
+    st_bg(s, "textarea", 0x2a2d31)
+    apply_styles(0, s)
+
+    app = ui.app_create("AeCS dark", 360, 300)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}
