@@ -6,6 +6,7 @@
 
 #include "aether_ui_backend.h"
 #include "aether_ui_a11y_grid.h"
+#include "aether_ui_a11y_announce.h"   // the last announcement each widget made (a11y_announce)
 #include "aether_ui_focus_watch.h"   // on_focus_change
 #include "aether_ui_system_extras.h"
 #include "aether_ui_sni.h"
@@ -3514,6 +3515,25 @@ void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
         GTK_ACCESSIBLE_PROPERTY_DESCRIPTION, desc, -1);
     g_object_set_data_full(G_OBJECT(w), "aeui-a11y-desc",
                            g_strdup(desc), g_free);
+}
+
+void aether_ui_a11y_announce_impl(int handle, const char* text) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !text) return;
+#if GTK_CHECK_VERSION(4, 14, 0)
+    gtk_accessible_announce(GTK_ACCESSIBLE(w), text, GTK_ACCESSIBLE_ANNOUNCEMENT_PRIORITY_MEDIUM);
+#else
+    // GTK before 4.14 has no announcement: the description changes to the
+    // text, which AT-SPI tells the screen reader (Orca speaks the focused
+    // widget's description when it changes).
+    gtk_accessible_update_property(GTK_ACCESSIBLE(w),
+        GTK_ACCESSIBLE_PROPERTY_DESCRIPTION, text, -1);
+#endif
+    aeui_an_store(handle, text);
+}
+
+int aether_ui_a11y_announced_get_impl(int handle, char* buf, int bufsz) {
+    return aeui_an_get(handle, buf, bufsz);
 }
 
 // Driver readback: report the EFFECTIVE role/name/description. Role prefers an

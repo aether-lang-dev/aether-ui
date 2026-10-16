@@ -724,14 +724,16 @@ static void handle_request_inner(aether_sock_t client_fd,
             send_http(client_fd, 501, "Not Implemented", "text/plain",
                       "/a11y not supported by this backend");
         } else {
-            char role[64] = "", name[512] = "", desc[512] = "";
+            char role[64] = "", name[512] = "", desc[512] = "", said[512] = "";
             h->widget_a11y(id, role, sizeof(role), name, sizeof(name),
                            desc, sizeof(desc));
+            // The last announcement it made (a11y_announce), and how many.
+            int nsaid = aether_ui_a11y_announced_get_impl(id, said, sizeof(said));
             // Escape name/desc minimally (quotes/backslash/control).
-            char ne[1040], de[1040];
-            for (int p = 0; p < 2; p++) {
-                const char* src = p == 0 ? name : desc;
-                char* out = p == 0 ? ne : de;
+            char ne[1040], de[1040], se[1040];
+            for (int p = 0; p < 3; p++) {
+                const char* src = p == 0 ? name : p == 1 ? desc : said;
+                char* out = p == 0 ? ne : p == 1 ? de : se;
                 int j = 0;
                 for (int i = 0; src[i] && j < (int)sizeof(ne) - 8; i++) {
                     unsigned char ch = (unsigned char)src[i];
@@ -741,10 +743,10 @@ static void handle_request_inner(aether_sock_t client_fd,
                 }
                 out[j] = '\0';
             }
-            char body[2200];
+            char body[3400];
             snprintf(body, sizeof(body),
-                     "{\"role\":\"%s\",\"name\":\"%s\",\"description\":\"%s\"}",
-                     role, ne, de);
+                     "{\"role\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"announced\":\"%s\",\"announcements\":%d}",
+                     role, ne, de, se, nsaid);
             send_http(client_fd, 200, "OK", "application/json", body);
         }
     } else if (method == 0 && strcmp(path, "/screenshot") == 0) {

@@ -226,6 +226,7 @@
 
 #include "aether_ui_backend.h"
 #include "aether_ui_a11y_grid.h"   // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_a11y_announce.h"   // the last announcement each widget made (a11y_announce)
 #include "aether_ui_keynames.h"    // a typed character -> its GDK key name
 #include "aether_ui_focus_watch.h" // on_focus_change
 #include "aether_ui_test_server.h"    // AetherDriverHooks + aether_ui_test_server_start
@@ -2653,6 +2654,7 @@ JMETHOD(M_View_requestFocus, C_View, "requestFocus", "()Z");
 JMETHOD(M_View_requestFocusFromTouch, C_View, "requestFocusFromTouch", "()Z");
 JMETHOD(M_View_requestLayout, C_View, "requestLayout", "()V");
 JMETHOD(M_View_setContentDescription, C_View, "setContentDescription", "(Ljava/lang/CharSequence;)V");
+JMETHOD(M_View_announceForAccessibility, C_View, "announceForAccessibility", "(Ljava/lang/CharSequence;)V");
 JMETHOD(M_View_setAccessibilityDelegate, C_View, "setAccessibilityDelegate",
         "(Landroid/view/View$AccessibilityDelegate;)V");
 JMETHOD(M_View_setAccessibilityHeading, C_View, "setAccessibilityHeading", "(Z)V");
@@ -3640,6 +3642,22 @@ void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
     jobject d = aeui_a11y_delegate(env, w);
     if (d) JV(d, M_A11y_setHint, aeui_jstring(env, desc));
     aeui_unframe(env);
+}
+
+void aether_ui_a11y_announce_impl(int handle, const char* text) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !text) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    // TalkBack speaks it at once (View.announceForAccessibility: an
+    // AccessibilityEvent of TYPE_ANNOUNCEMENT from this view).
+    JV(w->view, M_View_announceForAccessibility, aeui_jstring(env, text));
+    aeui_unframe(env);
+    aeui_an_store(handle, text);
+}
+
+int aether_ui_a11y_announced_get_impl(int handle, char* buf, int bufsz) {
+    return aeui_an_get(handle, buf, bufsz);
 }
 
 static const char* aeui_auto_role(int type) {

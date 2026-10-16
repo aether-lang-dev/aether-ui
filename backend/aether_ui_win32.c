@@ -15,6 +15,7 @@
 #include "aether_ui_backend.h"
 #include "aether_ui_system_extras.h"
 #include "aether_ui_a11y_grid.h"   // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_a11y_announce.h"   // the last announcement each widget made (a11y_announce)
 #include "aether_ui_keynames.h"    // a typed character -> its GDK key name
 #include "aether_ui_focus_watch.h" // on_focus_change
 
@@ -6918,6 +6919,57 @@ void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
     if (!w) return;
     free(w->a11y_desc);
     w->a11y_desc = a11y_dup(desc);
+}
+
+// UiaRaiseNotificationEvent (Windows 10 1709), loaded where it is.
+typedef HRESULT (WINAPI *AeuiUiaNotify)(IRawElementProviderSimple*, int, int, BSTR, BSTR);
+static AeuiUiaNotify aeui_uia_notify_fn(void) {
+    static int tried = 0;
+    static AeuiUiaNotify fn = NULL;
+    if (!tried) {
+        tried = 1;
+        HMODULE m = LoadLibraryW(L"uiautomationcore.dll");
+        if (m) fn = (AeuiUiaNotify)(void*)GetProcAddress(m, "UiaRaiseNotificationEvent");
+    }
+    return fn;
+}
+
+void aether_ui_a11y_announce_impl(int handle, const char* text) {
+    Widget* w = widget_at(handle);
+    if (!w || !text) return;
+    int said = 0;
+    AeuiUiaNotify notify = aeui_uia_notify_fn();
+    aeui_uia_load();
+    if (notify && aeui_UiaHost && w->hwnd) {
+        // A UI Automation notification from the widget's window: Narrator
+        // speaks it (NotificationKind_ActionCompleted, NotificationProcessing_MostRecent).
+        IRawElementProviderSimple* host = NULL;
+        if (SUCCEEDED(aeui_UiaHost(w->hwnd, &host)) && host) {
+            BSTR say = SysAllocString(utf8_to_wide(text));
+            BSTR id = SysAllocString(L"aether-ui-announce");
+            if (say && id && SUCCEEDED(notify(host, 2, 3, say, id))) said = 1;
+            SysFreeString(say);
+            SysFreeString(id);
+            host->lpVtbl->Release(host);
+        }
+    }
+    if (!said && w->hwnd) {
+        // Before Windows 10 1709: the description, and MSAA's event for it.
+        IAccPropServices* svc = NULL;
+        if (SUCCEEDED(CoCreateInstance(&CLSID_AccPropServices, NULL, CLSCTX_INPROC_SERVER,
+                                       &IID_IAccPropServices, (void**)&svc)) && svc) {
+            wchar_t* wd = _wcsdup(utf8_to_wide(text));
+            svc->lpVtbl->SetHwndPropStr(svc, w->hwnd, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_DESCRIPTION, wd);
+            free(wd);
+            svc->lpVtbl->Release(svc);
+        }
+        NotifyWinEvent(EVENT_OBJECT_DESCRIPTIONCHANGE, w->hwnd, OBJID_CLIENT, CHILDID_SELF);
+    }
+    aeui_an_store(handle, text);
+}
+
+int aether_ui_a11y_announced_get_impl(int handle, char* buf, int bufsz) {
+    return aeui_an_get(handle, buf, bufsz);
 }
 
 // Map a widget kind to its default (auto) accessible role — what MSAA already

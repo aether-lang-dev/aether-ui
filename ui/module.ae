@@ -85,7 +85,7 @@ exports (
     keymap_count, keymap_key_at, keymap_name_at,
     enable_undo_shortcuts,
     style_font_weight, style_font_family,
-    a11y_role, a11y_next_role, a11y_grid, a11y_grid_row, a11y_grid_cell, a11y_grid_header, a11y_label, a11y_description,
+    a11y_role, a11y_next_role, a11y_grid, a11y_grid_row, a11y_grid_cell, a11y_grid_header, a11y_label, a11y_description, a11y_announce,
     edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
     alert, clipboard_write, clipboard_read, open_url, open_file, save_file,
@@ -404,6 +404,7 @@ extern aether_ui_watch_appearance_impl()
 extern aether_ui_a11y_set_role_impl(handle: int, role: string)
 extern aether_ui_a11y_set_label_impl(handle: int, name: string)
 extern aether_ui_a11y_set_description_impl(handle: int, desc: string)
+extern aether_ui_a11y_announce_impl(handle: int, text: string)
 extern aether_ui_a11y_grid_impl(handle: int, kind: int, row: int, col: int, rows: int, cols: int, header: int)
 extern aether_ui_a11y_next_role_impl(role: string)
 extern aether_ui_set_distribution(handle: int, distribution: int)
@@ -4212,6 +4213,18 @@ a11y_label(handle: int, name: string) -> int {
 // A longer accessible description (announced after the name).
 a11y_description(handle: int, desc: string) -> int {
     aether_ui_a11y_set_description_impl(handle, desc)
+    return handle
+}
+
+// a11y_announce(w, text): have a screen reader say `text` now, from `w`,
+// without moving focus (a polite announcement): a move made, the square
+// under a keyboard cursor on a drawn board. Real on every backend: GTK4's
+// gtk_accessible_announce (4.14; before it, the description set to the
+// text), AppKit's announcement notification, UIKit's, Android's
+// View.announceForAccessibility, Win32's UI Automation notification event.
+// The driver reads the last one back: GET /widget/{id}/a11y "announced".
+a11y_announce(handle: int, text: string) -> int {
+    aether_ui_a11y_announce_impl(handle, text)
     return handle
 }
 

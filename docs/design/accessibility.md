@@ -59,6 +59,24 @@ platform actually exposes where the API allows it.
   side-store when set, else fall through to `super`. The driver reports the
   effective values via the same accessors.
 
+## Announcements
+
+`a11y_announce(w, text)` has a screen reader say `text` now, from `w`,
+without moving focus: a move made on a drawn board, the square under its
+keyboard cursor. Per backend: GTK4 `gtk_accessible_announce` (GTK 4.14;
+before it, the widget's accessible description is set to the text, a
+property change AT-SPI tells the reader); AppKit
+`NSAccessibilityAnnouncementRequestedNotification` from the widget's window;
+UIKit `UIAccessibilityAnnouncementNotification`; Android
+`View.announceForAccessibility`; Win32 a UI Automation notification event
+(`UiaRaiseNotificationEvent`, Windows 10 1709; before it, the MSAA
+description and `EVENT_OBJECT_DESCRIPTIONCHANGE`). Each records the text in
+the shared side-store `aether_ui_a11y_announce.h`, and
+`GET /widget/{id}/a11y` reports `"announced"` (the last) and
+`"announcements"` (how many). `examples/a11y_demo` and its spec cover it,
+run on all five (macOS, Linux GTK 4.6 and 4.22, Windows 11, the iOS
+simulator, the Android emulator).
+
 ## Grids (data-grid.md phase 5)
 
 `a11y_grid(w, rows, cols)`, `a11y_grid_row(w, row)`,
@@ -75,7 +93,7 @@ Grid, Table, GridItem and TableItem patterns. `/widgets` reports `a11y_rows`
 
 ## Driver surface (both servers)
 
-- `GET /widget/{id}/a11y` → `{"role":"button","name":"Delete","description":""}`
+- `GET /widget/{id}/a11y` → `{"role":"button","name":"Delete","description":"","announced":"","announcements":0}`
 - `/widgets` entries gain `"role"`/`"a11y_name"` fields (empty when unset,
   so existing specs are unaffected).
 

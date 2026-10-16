@@ -90,6 +90,7 @@
 #include "aether_ui_test_server.h"   // AetherDriverHooks + aether_ui_test_server_start
 #include "aether_ui_system_extras.h" // headless open_url record (GET /opened_urls)
 #include "aether_ui_a11y_grid.h"     // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_a11y_announce.h"   // the last announcement each widget made (a11y_announce)
 #include "aether_ui_focus_watch.h"   // on_focus_change
 
 // ---------------------------------------------------------------------------
@@ -1607,12 +1608,37 @@ void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
     v.accessibilityHint = desc ? [NSString stringWithUTF8String:desc] : nil;
 }
 
+void aether_ui_a11y_announce_impl(int handle, const char* text) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v || !text) return;
+    NSString* s = [NSString stringWithUTF8String:text];
+    if (!s) return;
+    UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, s);
+    aeui_an_store(handle, text);
+}
+
+int aether_ui_a11y_announced_get_impl(int handle, char* buf, int bufsz) {
+    return aeui_an_get(handle, buf, bufsz);
+}
+
 void aether_ui_a11y_get_impl(int handle, char* role, int rolesz,
                              char* name, int namesz, char* desc, int descsz) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     a11y_copy(role, rolesz, v ? objc_getAssociatedObject(v, &kA11yRole) : nil);
     a11y_copy(name, namesz, v ? objc_getAssociatedObject(v, &kA11yName) : nil);
     a11y_copy(desc, descsz, v ? objc_getAssociatedObject(v, &kA11yDesc) : nil);
+    // Nothing set: what UIKit gives a button by itself, as the other
+    // backends report (its role, and its title for its name), read on the
+    // main thread, where UIKit's views live.
+    if (v && get_widget_type(handle) == AUI_BUTTON && [v isKindOfClass:[UIButton class]]) {
+        if (role && rolesz && !role[0]) snprintf(role, (size_t)rolesz, "%s", "button");
+        if (name && namesz && !name[0]) {
+            __block NSString* t = nil;
+            void (^read)(void) = ^{ t = [(UIButton*)v currentTitle]; };
+            if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
+            a11y_copy(name, namesz, t);
+        }
+    }
 }
 
 // --- Image — UIImageView ----------------------------------------------------

@@ -11,13 +11,14 @@
 //   * an icon-only button ("⚙") given an explicit a11y_label so an AT has a
 //     name to announce (its glyph is not a useful name);
 //   * a heading (a text tagged role "heading");
-//   * a listbox whose rows are auto-tagged "listitem" (built-in a11y).
+//   * a listbox whose rows are auto-tagged "listitem" (built-in a11y);
+//   * an announcement (a11y_announce): a screen reader says it at once.
 //
 //   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
 
 import ui
 import ui (window, vstack, hstack, text, btn, divider, listbox, listbox_update,
-    a11y_role, a11y_label, a11y_description, enable_test_server)
+    a11y_role, a11y_label, a11y_description, a11y_announce, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -45,6 +46,9 @@ main() {
                 gear = btn("⚙") callback { }
                 _gl = a11y_label(gear, "Settings")
                 _gd = a11y_description(gear, "Open the settings panel")
+
+                // An announcement, said from the gear without moving focus.
+                _say = btn("Announce") callback { _a = a11y_announce(gear, "Settings saved") }
             }
             divider()
 

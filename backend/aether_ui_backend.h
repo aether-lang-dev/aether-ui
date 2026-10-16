@@ -335,6 +335,18 @@ void aether_ui_set_tooltip(int handle, const char* text);
 void aether_ui_a11y_set_role_impl(int handle, const char* role);
 void aether_ui_a11y_set_label_impl(int handle, const char* name);
 void aether_ui_a11y_set_description_impl(int handle, const char* desc);
+// Have a screen reader say `text` now, from the widget (a polite
+// announcement: a move made, a square under the keyboard's cursor), without
+// moving focus. GTK4 gtk_accessible_announce (GTK 4.14; before it, the
+// widget's accessible description is set to the text, a property change the
+// AT hears), AppKit NSAccessibilityAnnouncementRequestedNotification, UIKit
+// UIAccessibilityAnnouncementNotification, Android
+// View.announceForAccessibility, Win32 a UI Automation notification event
+// (Windows 10 1709; before it, the description and EVENT_OBJECT_DESCRIPTIONCHANGE).
+// Recorded for the driver (aether_ui_a11y_announce.h).
+void aether_ui_a11y_announce_impl(int handle, const char* text);
+// The widget's latest announcement into buf; how many it has made (0: none).
+int aether_ui_a11y_announced_get_impl(int handle, char* buf, int bufsz);
 // Driver readback: fill role/name/description with the widget's EFFECTIVE
 // accessible values (auto when unset). Any buffer may be left empty.
 // A grid's accessible structure (docs/design/data-grid.md, phase 5). kind 0

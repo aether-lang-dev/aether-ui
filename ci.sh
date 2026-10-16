@@ -892,8 +892,9 @@ else
     # spacercanvas_demo (spacers take a stack's slack before a canvas does),
     # pixelated_demo (image_rendering "pixelated": CoreGraphics nearest),
     # submit_demo (on_submit: Return in a field), datagrid_demo (the
-    # virtualised grid, with a vslider: a rotated UISlider in a box).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo; do
+    # virtualised grid, with a vslider: a rotated UISlider in a box),
+    # a11y_demo (roles, names, and a11y_announce through UIAccessibility).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo a11y_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi

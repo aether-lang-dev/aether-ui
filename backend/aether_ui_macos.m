@@ -24,6 +24,7 @@
 #include "aether_ui_backend.h"  // cross-platform backend ABI
 #include "aether_ui_system_extras.h"
 #include "aether_ui_a11y_grid.h"      // the grid a11y side-store (data-grid.md phase 5)
+#include "aether_ui_a11y_announce.h"   // the last announcement each widget made (a11y_announce)
 #include "aether_ui_keynames.h"       // a typed character -> its GDK key name
 #include "aether_ui_focus_watch.h"    // on_focus_change
 #include <stdint.h>
@@ -4309,6 +4310,23 @@ void aether_ui_a11y_set_description_impl(int handle, const char* desc) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     [v setAccessibilityHelp:[NSString stringWithUTF8String:desc ? desc : ""]];
+}
+
+void aether_ui_a11y_announce_impl(int handle, const char* text) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v || !text) return;
+    NSString* s = [NSString stringWithUTF8String:text];
+    if (!s) return;
+    // The announcement goes from the view's window (VoiceOver takes it from
+    // any element; the window is always one), or the app when it has none.
+    id element = v.window ? (id)v.window : (id)NSApp;
+    NSAccessibilityPostNotificationWithUserInfo(element, NSAccessibilityAnnouncementRequestedNotification,
+        @{ NSAccessibilityAnnouncementKey: s, NSAccessibilityPriorityKey: @(NSAccessibilityPriorityMedium) });
+    aeui_an_store(handle, text);
+}
+
+int aether_ui_a11y_announced_get_impl(int handle, char* buf, int bufsz) {
+    return aeui_an_get(handle, buf, bufsz);
 }
 
 // Default (auto) accessible role for a widget kind — mirrors win32's

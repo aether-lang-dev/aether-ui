@@ -5,7 +5,8 @@
 //   * a11y_label OVERRIDES the auto name — an icon-only button reports the
 //     supplied name (not its glyph), plus a11y_description;
 //   * a11y_role tags a plain text as a "heading";
-//   * listbox rows are auto-tagged "listitem" (built-in a11y).
+//   * listbox rows are auto-tagged "listitem" (built-in a11y);
+//   * a11y_announce reaches the platform and is read back (announced, a count).
 //
 // The values are read back from the REAL backend accessible state:
 // GET /widget/{id}/a11y → {role,name,description}. GTK4 sets them via
@@ -46,6 +47,20 @@ main() {
             spec.assert_contains(r, "\"name\":\"Settings\"", "name is the override, not the glyph")
             spec.assert_contains(r, "\"description\":\"Open the settings panel\"",
                 "description is set")
+        }
+
+        spec.it("a11y_announce: the screen reader is told, and the driver reads it back") callback {
+            g = uidriver.widget_id_by_text("⚙")
+            r0 = uidriver.get_body("/widget/${g}/a11y")
+            spec.assert_contains(r0, "\"announcements\":0", "none before")
+            uidriver.click_widget(uidriver.widget_id_by_text("Announce"))
+            r1 = uidriver.get_body("/widget/${g}/a11y")
+            spec.assert_contains(r1, "\"announced\":\"Settings saved\"", "the announcement")
+            spec.assert_contains(r1, "\"announcements\":1", "one")
+            uidriver.click_widget(uidriver.widget_id_by_text("Announce"))
+            r2 = uidriver.get_body("/widget/${g}/a11y")
+            spec.assert_contains(r2, "\"announcements\":2", "a repeat counted")
+            spec.assert_contains(r2, "\"name\":\"Settings\"", "its name unchanged")
         }
 
         spec.it("a11y_role tags a text as a heading") callback {
