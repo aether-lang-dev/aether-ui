@@ -240,7 +240,23 @@ jobs:
           # so vg's setters store directly again and the aliases are gone
           # (asks/aether-closure-drain-through-fn-store.md, RESOLVED). Anything
           # older than 0.801.0 builds this tree and then crashes on a click.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.801.0' }}
+          # v0.818.0 (2026-10-16): a REAL floor move. 0.818.0's ownership
+          # rework (aether #2916/#2926) borrows a `ptr` parameter for the
+          # call unless it is declared `p: @keep ptr` (E0902), and this tree
+          # now says `@keep` on every one it keeps (stored in a field or a
+          # list, returned, captured, or passed on to another keeper),
+          # applied until the checker found no more, as upstream did std.
+          # 0.817.0 and older cannot parse `@keep`, so nothing older builds
+          # this tree, and everything building it (sae, ae3d) moves with it.
+          # Three shapes the checker refuses outright were rewritten rather
+          # than annotated: a function with a `@keep` parameter used as a
+          # value (the drawn-chrome toggle cell now takes the callback as a
+          # `fn`), and a closure handing its own `ptr` parameter to a keeper
+          # (a closure's cannot be `@keep`: the animate ticks set the element
+          # they captured, LisMusic's Play button keeps the song's title).
+          # Self-declared string_substring/string_to_lower externs say
+          # `@heap`, as std's do.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.818.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the

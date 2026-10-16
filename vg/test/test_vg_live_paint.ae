@@ -52,7 +52,7 @@ kinds(bk: ptr) -> string {
 }
 
 // A fresh deferred scene on the recording backend.
-mk_scene(bk: ptr) -> ptr {
+mk_scene(bk: @keep ptr) -> ptr {
     scene = vg.scene_new(mk_ctx(), bk)
     vg.scene_set_deferred(scene, 1)
     return scene

@@ -95,7 +95,7 @@ struct ActiveAnimation {
     yoyo: int              // 0/1
 }
 
-mk_active(handle: ptr, element: ptr, tick_fn: ptr,
+mk_active(handle: @keep ptr, element: @keep ptr, tick_fn: @keep ptr,
           start_time_ms: long, duration_ms: long,
           loop: int, yoyo: int) -> *ActiveAnimation {
     // 3 ptr + 2 long + 2 int + padding → 56-64 bytes; 80 is safe.
@@ -158,7 +158,7 @@ manager_new() -> ptr { return mk_manager() }
 //   2. Bare named function via add_animation_fn (below) — for cases
 //      that don't fit the trailing-block shape.
 
-add_animation(mgr: ptr, element: ptr,
+add_animation(mgr: ptr, element: @keep ptr,
               duration_ms: long, delay_ms: long,
               loop: int, yoyo: int,
               now_ms: long, tick_fn: fn) -> ptr {
@@ -169,7 +169,7 @@ add_animation(mgr: ptr, element: ptr,
 // Internal: tick_fn arrives as `ptr` (the fn → ptr coercion at the
 // call boundary boxes it). We re-thread through impl rather than
 // duplicating logic.
-add_animation_impl(mgr: ptr, element: ptr, tick_fn: ptr,
+add_animation_impl(mgr: ptr, element: @keep ptr, tick_fn: @keep ptr,
                    duration_ms: long, delay_ms: long,
                    loop: int, yoyo: int,
                    now_ms: long) -> ptr {

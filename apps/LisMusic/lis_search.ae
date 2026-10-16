@@ -23,7 +23,7 @@ exports ( build_search_bar, build_search_page, run_search )
 
 // The top-bar search box (original: Searchtop.qml). Bound to Config.search;
 // the Search button refreshes `results` (the each-handle from build_search_page).
-build_search_bar(_ctx: ptr, c: *Config, results: ptr) {
+build_search_bar(_ctx: ptr, c: *Config, results: @keep ptr) {
     hstack(6) {
         _tf = textfield("Search music…") callback |val: string| {
             set_search(c, val)
@@ -46,8 +46,11 @@ build_search_page(_ctx: ptr, c: *Config) -> ptr {
         row = hstack(parent, 8)
         label = string.concat(song_title(s), string.concat("   —   ", song_artist(s)))
         _t = text(row, label)
+        // The button keeps the title, not the song: the row's item is a
+        // borrowed closure parameter (aether #2926).
+        title = song_title(s)
         _p = btn(row, "Play") callback {
-            play_net(c.player, song_title(s))
+            play_net(c.player, title)
             start_play(c.player)
         }
     })
@@ -62,7 +65,7 @@ build_search_page(_ctx: ptr, c: *Config) -> ptr {
 // round-trip. LIS_OFFLINE forces the deterministic canned path (the driver
 // spec sets it, so its assertions don't depend on a live network), and it's
 // also the fallback if the worker can't launch.
-run_search(c: *Config, results: ptr) {
+run_search(c: *Config, results: @keep ptr) {
     term = search_term(c)
     if string.length(term) == 0 { term = "music" }
     save_his(c.history, term)     // original: search recorded to the history table

@@ -57,9 +57,9 @@ import std.os (os_getenv)
 
 extern malloc(size: int) -> ptr
 extern lrint(x: float) -> long
-extern string_to_lower(s: string) -> string
+extern string_to_lower(s: string) -> string @heap
 extern string_contains(s: string, sub: string) -> int
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 
 const FP_PREVIEW: string = "Handgloves 123"
 

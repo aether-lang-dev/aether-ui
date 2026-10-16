@@ -199,7 +199,7 @@ compare(live: string, golden: string) -> int {
     }
     return bad
 }
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 
 // Check (or bless, under GOLDEN_UPDATE=1) one canvas; returns its verdict.
 check_one(name: string, cid: int) -> string {

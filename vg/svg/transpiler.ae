@@ -272,7 +272,7 @@ emit_children(sb: ptr, node: ptr, indent: int) {
 // — the renderer still resolves per-shape style, and g cascade is a known
 // gap shared with the surface form). A counter box names the vars.
 
-emit_children_explicit(sb: ptr, root: ptr, indent: int) {
+emit_children_explicit(sb: ptr, root: @keep ptr, indent: int) {
     ctr = malloc(sizeof(VarCounter)) as *VarCounter
     ctr.n = 0
     ctr.root = root        // for <use> href→node resolution
@@ -1154,7 +1154,7 @@ compose_opacity(inherited: string, node: ptr) -> string {
 // composing the use's own transform — which is translate(x y) prepended to
 // any transform= per SVG (the x/y offset applies first/outermost).
 
-resolve_use(use_node: ptr, root: ptr) -> ptr {
+resolve_use(use_node: ptr, root: @keep ptr) -> ptr {
     href = ""
     if parser.node_has_attr(use_node, "xlink:href") == 1 {
         href = parser.node_attr(use_node, "xlink:href")
@@ -1194,7 +1194,7 @@ use_transform(use_node: ptr) -> string {
 }
 
 // Depth-first search for a node whose id attribute equals `id`.
-find_by_id(node: ptr, id: string) -> ptr {
+find_by_id(node: @keep ptr, id: string) -> ptr {
     if parser.node_has_attr(node, "id") == 1 {
         if string.equals(string.trim(parser.node_attr(node, "id")), id) == 1 {
             return node

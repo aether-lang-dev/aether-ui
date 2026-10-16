@@ -110,14 +110,13 @@ _toggle_render(tf: *ToggleFace) {
     aether_ui_canvas_redraw_impl(tf.cv)
 }
 
-_mk_toggle(label: string, user_boxed: ptr) -> int {
+_mk_toggle(label: string, on_change: fn) -> int {
     tf = malloc(sizeof(ToggleFace)) as *ToggleFace
     tf.handle = 0
     tf.cv = 0
     tf.label = label
     wrapped = box_closure(|active: int| {
-        ucb = unbox_closure(user_boxed)
-        _invoke_user(ucb, active)
+        _invoke_user(on_change, active)
         _toggle_render(tf)
     })
     handle = aether_ui_toggle_create(label, wrapped)

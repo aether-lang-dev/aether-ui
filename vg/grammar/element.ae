@@ -258,7 +258,7 @@ const RASTER_ORIGINAL: int = 3
 // ─── Construction ────────────────────────────────────────────────
 //
 // Zero-initialised except `visible = 1` (matches TS default).
-element_new(underlying: ptr) -> ptr {
+element_new(underlying: @keep ptr) -> ptr {
     // Conservative size — counting fields (8-byte slots throughout):
     //   16 ptr-equivalent fields (underlying, context, 7 handlers,
     //     5 bindings, when_predicate) = 128
@@ -354,7 +354,7 @@ element_underlying(p: ptr) -> ptr {
     return e.underlying
 }
 
-element_set_context(p: ptr, ctx: ptr) {
+element_set_context(p: ptr, ctx: @keep ptr) {
     e = p as *AevgElement
     e.context = ctx
 }
@@ -443,7 +443,7 @@ element_right_click_handler(p: ptr) -> ptr {
 
 // ─── Tooltip / cursor / when / visibility / destroyed ────────────
 
-element_set_behavior(p: ptr, prop: string, ms: long, ease: int, scene: ptr) {
+element_set_behavior(p: ptr, prop: string, ms: long, ease: int, scene: @keep ptr) {
     e = p as *AevgElement
     e.beh_ease = ease
     e.beh_scene = scene
@@ -469,7 +469,7 @@ element_shadow_dy(p: ptr) -> float    { e = p as *AevgElement; return e.sh_dy }
 element_shadow_sigma(p: ptr) -> float { e = p as *AevgElement; return e.sh_sigma }
 element_shadow_color(p: ptr) -> string { e = p as *AevgElement; return e.sh_color }
 element_shadow_cache(p: ptr) -> ptr   { e = p as *AevgElement; return e.sh_cache }
-element_set_shadow_cache(p: ptr, c: ptr) { e = p as *AevgElement; e.sh_cache = c }
+element_set_shadow_cache(p: ptr, c: @keep ptr) { e = p as *AevgElement; e.sh_cache = c }
 
 element_set_tooltip(p: ptr, t: string) {
     e = p as *AevgElement
@@ -626,7 +626,7 @@ element_hit_test(p: ptr, px: float, py: float) -> int {
 
 // Declare precise hit geometry (a vg.geom.polypath handle). Ownership
 // passes to the element — do not pp_free after handing it over.
-element_set_hit_poly(p: ptr, pp: ptr) {
+element_set_hit_poly(p: ptr, pp: @keep ptr) {
     e = p as *AevgElement
     e.hit_poly = pp
 }
@@ -671,7 +671,7 @@ element_release(p: ptr) {
 // element_set_raster(el, pix, w, h, owned) — the pixels an image element
 // draws. A buffer the element already owns is freed first; a borrowed one
 // (owned 0) is only forgotten, since whoever lent it still updates it.
-element_set_raster(p: ptr, pix: ptr, w: int, h: int, owned: int) {
+element_set_raster(p: ptr, pix: @keep ptr, w: int, h: int, owned: int) {
     e = p as *AevgElement
     if e.rst_owned == 1 { if e.rst_pix != null { if e.rst_pix != pix { free(e.rst_pix) } } }
     e.rst_pix = pix
@@ -836,7 +836,7 @@ element_last_text(p: ptr) -> string {
 // real backend will read keys via map.get). Each refresh
 // overwrites with a fresh map.
 
-element_set_pos_props(p: ptr, props_map: ptr) {
+element_set_pos_props(p: ptr, props_map: @keep ptr) {
     e = p as *AevgElement
     e.last_pos_props = props_map
 }

@@ -109,21 +109,21 @@ struct Frame {
 // Returning the host makes it the context for frame() calls in the trailing
 // block. The scene is explicit because frames{} may be nested in mixed UI/VG
 // builder scopes where the ambient context is not necessarily a VgNode.
-frames(_ctx: ptr, scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
+frames(_ctx: ptr, scene: @keep ptr, x: float, y: float, w: float, h: float) -> ptr {
     _ = _ctx
     return frames_new(scene, x, y, w, h)
 }
 
 // A declarative child of frames{}. The callback is retained and invoked for
 // each paint with the frame-local content bounds.
-frame(_ctx: ptr, title: string, x: float, y: float, w: float, h: float,
+frame(_ctx: @keep ptr, title: string, x: float, y: float, w: float, h: float,
       content: fn) -> ptr {
     f = frame_add(_ctx, title, x, y, w, h)
     frame_set_content(f, content)
     return f
 }
 
-frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
+frames_new(scene: @keep ptr, x: float, y: float, w: float, h: float) -> ptr {
     hst = malloc(sizeof(FrameHost)) as *FrameHost
     hst.scene = scene
     hst.frames = list.new()
@@ -151,7 +151,7 @@ frames_new(scene: ptr, x: float, y: float, w: float, h: float) -> ptr {
     return hst as ptr
 }
 
-frame_add(host: ptr, title: string, x: float, y: float, w: float, h: float) -> ptr {
+frame_add(host: @keep ptr, title: string, x: float, y: float, w: float, h: float) -> ptr {
     hst = host as *FrameHost
     f = malloc(sizeof(Frame)) as *Frame
     f.host = host
@@ -239,7 +239,7 @@ frame_resize(frame: ptr, w: float, h: float) {
     _mark_frame_dirty(f)
 }
 
-frame_raise(frame: ptr) {
+frame_raise(frame: @keep ptr) {
     if frame == null { return }
     f = frame as *Frame
     hst = f.host as *FrameHost
@@ -568,7 +568,7 @@ frames_draw(host: ptr, rn: ptr, t: float) {
 // frames render as vector shapes into the app's draw region and the
 // companion still composites above that whole layer; the sandwich needs the
 // Stage-3 surface path, which every windowed backend has.
-frame_attach_region(frame: ptr, rgn: ptr) {
+frame_attach_region(frame: ptr, rgn: @keep ptr) {
     if frame == null { return }
     f = frame as *Frame
     f.att = rgn

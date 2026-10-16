@@ -19,21 +19,25 @@ main() {
     window("AeVG — animation", 420, 360) {
         vg(view_box(0, 0, 100, 100), 300, 300) {
             // Pulsing circle: opacity yoyos 0→1→0 over 2s, forever. The tick
-            // gets the element (el) — no block-local capture (which would
-            // dangle once this block returns and the timer fires later).
+            // sets the element it captured: the `el` it is handed is a
+            // closure's borrowed `ptr` parameter, which cannot reach
+            // vg.element_set_opacity (that keeps its element for a
+            // behavior() tween; aether #2926).
             pc = circle(30, 50, 18) {
                 fill("#cc4444")
             }
-            animate(pc, 2000, 1, 1) callback |el: ptr, t: float| {
-                vg.element_set_opacity(el, t)
+            pel = vg.node_element(pc)
+            animate(pc, 2000, 1, 1) callback |_el: ptr, t: float| {
+                vg.element_set_opacity(pel, t)
             }
 
             // Second circle pulses out of phase for contrast.
             sc = circle(70, 50, 18) {
                 fill("#3366cc")
             }
-            animate(sc, 2000, 1, 1) callback |el: ptr, t: float| {
-                vg.element_set_opacity(el, 1.0 - t)
+            sel = vg.node_element(sc)
+            animate(sc, 2000, 1, 1) callback |_el: ptr, t: float| {
+                vg.element_set_opacity(sel, 1.0 - t)
             }
         }
         test_port = os_getenv("AETHER_UI_TEST_PORT")

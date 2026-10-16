@@ -29,7 +29,8 @@ assert_eq_str(label: string, got: string, want: string) {
 // through correctly.
 struct Rec {
     ops: ptr      // list of *Tag markers, one per dispatch call
-    last_opts: ptr
+    want_opts: ptr   // the opts the test passes; the closure compares, not keeps
+    opts_hits: int   // calls whose opts were want_opts
 }
 
 // A returned handle tagged with the op it was produced for, so the
@@ -41,7 +42,8 @@ struct Tag {
 mk_rec() -> ptr {
     r = malloc(sizeof(Rec)) as *Rec
     r.ops = list.new()
-    r.last_opts = null
+    r.want_opts = null
+    r.opts_hits = 0
     return r
 }
 
@@ -62,13 +64,15 @@ main() {
     rec = mk_rec()
 
     // Build a dispatch table whose closure records (op) into the Rec
-    // and stashes the opts ptr. Returns a fresh handle per call so we
+    // and counts the calls whose opts ptr is the one the test passed (a
+    // closure's ptr parameter is borrowed, aether #2926, so it compares the
+    // opts rather than stashing them). Returns a fresh handle per call so we
     // can confirm the return value flows back.
     b = dispatch.backend_make(rec) callback |be: ptr, op: int, opts: ptr| {
         rc = be as *Rec
         h = mk_tag(op)
         ig = list.add(rc.ops, h)
-        rc.last_opts = opts
+        if opts == rc.want_opts { rc.opts_hits = rc.opts_hits + 1 }
         return h
     }
 
@@ -83,6 +87,8 @@ main() {
     // Each dispatch_* routes to the matching op (the returned handle's
     // tag equals the op selector).
     o1 = map.new()
+    rw = rec as *Rec
+    rw.want_opts = o1
     h0 = dispatch.dispatch_circle(b, o1)
     assert_eq_int("dispatch_circle → op 0", tag_op(h0), 0)
 
@@ -108,8 +114,8 @@ main() {
     r = rec as *Rec
     assert_eq_int("7 ops recorded", list.size(r.ops), 7)
 
-    // opts threaded through (last call's opts == o1).
-    if r.last_opts == o1 {
+    // opts threaded through: every call's opts was o1.
+    if r.opts_hits == 7 {
         println("  PASS: opts threaded through to the closure")
     } else {
         println("  FAIL: opts not threaded"); exit(1)

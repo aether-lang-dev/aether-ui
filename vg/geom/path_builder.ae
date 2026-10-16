@@ -67,7 +67,7 @@ struct PathBuilder {
     cy: float
 }
 
-pb_new(ctx: ptr, backend: ptr) -> ptr {
+pb_new(ctx: @keep ptr, backend: @keep ptr) -> ptr {
     pb = malloc(sizeof(PathBuilder)) as *PathBuilder
     pb.ctx = ctx
     pb.backend = backend

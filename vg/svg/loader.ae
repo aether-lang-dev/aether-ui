@@ -62,7 +62,7 @@ attr_get(node_h: ptr, name: string) -> string {
 // grammar_shapes factory. Unknown / unsupported tags walk their
 // children (matches TS source's default branch).
 
-walk_node(ctx: ptr, backend: ptr, node_h: ptr) {
+walk_node(ctx: @keep ptr, backend: @keep ptr, node_h: @keep ptr) {
     tag = parser.node_tag(node_h)
     attrs = parser.node_attrs(node_h)
 
@@ -183,7 +183,7 @@ walk_node(ctx: ptr, backend: ptr, node_h: ptr) {
     walk_children(ctx, backend, node_h)
 }
 
-walk_children(ctx: ptr, backend: ptr, node_h: ptr) {
+walk_children(ctx: @keep ptr, backend: @keep ptr, node_h: ptr) {
     n = parser.node_child_count(node_h)
     i = 0
     while i < n {
@@ -198,7 +198,7 @@ walk_children(ctx: ptr, backend: ptr, node_h: ptr) {
 // definitions per the SVG spec and don't render directly; they're
 // available via id for <use>. They're already indexed in
 // nodes_by_id during the first-pass index_nodes walk.
-walk_defs_children(ctx: ptr, backend: ptr, node_h: ptr) {
+walk_defs_children(ctx: @keep ptr, backend: @keep ptr, node_h: ptr) {
     n = parser.node_child_count(node_h)
     i = 0
     while i < n {
@@ -223,7 +223,7 @@ walk_defs_children(ctx: ptr, backend: ptr, node_h: ptr) {
 // attrs, walk the referenced node, then pop. Matches TS source's
 // behaviour; the implicit translate from x/y is composed with any
 // existing transform attr.
-walk_use(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr) {
+walk_use(ctx: @keep ptr, backend: @keep ptr, node_h: ptr, attrs: ptr) {
     // Get href (try xlink:href first, then plain href).
     href, _ = map.get(attrs, "xlink:href")
     if href == null {
@@ -443,7 +443,7 @@ svg_aspect_ratio(svg_string: string) -> float {
 // *AevgContext — caller can inspect `backend_call_count(backend)`
 // etc. for tests, or pass it on to a real backend wiring.
 
-load_svg(backend: ptr, svg_string: string, canvas_w: float, canvas_h: float) -> ptr {
+load_svg(backend: @keep ptr, svg_string: string, canvas_w: float, canvas_h: float) -> ptr {
     root = parser.parse_svg(svg_string)
 
     // Determine viewBox: explicit attr > width/height > computed content
@@ -539,7 +539,7 @@ load_svg(backend: ptr, svg_string: string, canvas_w: float, canvas_h: float) -> 
     return ctx
 }
 
-load_svg_default(backend: ptr, svg_string: string) -> ptr {
+load_svg_default(backend: @keep ptr, svg_string: string) -> ptr {
     return load_svg(backend, svg_string, 400.0, 400.0)
 }
 

@@ -16,7 +16,7 @@ import vg.geom.polypath
 import vg.geom.transform
 
 extern exit(code: int)
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 
 assert_true(label: string, got: int) {
     if got == 1 { println("  PASS: ${label}") }

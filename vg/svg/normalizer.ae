@@ -135,14 +135,14 @@ cmd_args(handle: ptr) -> ptr {
     return c.args
 }
 
-mk_path_cmd(type_code: int, args: ptr) -> *PathCommand {
+mk_path_cmd(type_code: int, args: @keep ptr) -> *PathCommand {
     c = malloc(sizeof(PathCommand)) as *PathCommand
     c.type = type_code
     c.args = args
     return c
 }
 
-mk_norm_cmd(type_code: int, args: ptr) -> *NormalizedCommand {
+mk_norm_cmd(type_code: int, args: @keep ptr) -> *NormalizedCommand {
     c = malloc(sizeof(NormalizedCommand)) as *NormalizedCommand
     c.type = type_code
     c.args = args

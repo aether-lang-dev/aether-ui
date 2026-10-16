@@ -71,7 +71,7 @@ struct RecordedCall {
     opts: ptr            // std.map string→string of the call's opts
 }
 
-mk_call(kind: string, opts: ptr) -> *RecordedCall {
+mk_call(kind: string, opts: @keep ptr) -> *RecordedCall {
     c = malloc(sizeof(RecordedCall)) as *RecordedCall
     c.kind = kind
     c.opts = opts

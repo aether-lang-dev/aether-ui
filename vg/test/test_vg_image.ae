@@ -55,7 +55,7 @@ mk_ctx_2x() -> ptr {
 }
 
 // A deferred scene with an event state, as live.ae builds one.
-mk_scene(bk: ptr) -> ptr {
+mk_scene(bk: @keep ptr) -> ptr {
     sc = vg.scene_new(mk_ctx_2x(), bk)
     vg.scene_set_deferred(sc, 1)
     vg.scene_set_event_state(sc, events.event_state_new())

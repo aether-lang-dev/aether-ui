@@ -55,7 +55,7 @@ import std.os (os_getenv, args_count, args_get)
 
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 extern string_retain(s: string)
 
 const SC_W: int = 560

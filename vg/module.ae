@@ -215,7 +215,7 @@ struct VgNode {
                     //   group, for a shape the group it was made inside
 }
 
-mk_node(scene: ptr, payload: ptr) -> ptr {
+mk_node(scene: @keep ptr, payload: @keep ptr) -> ptr {
     n = malloc(sizeof(VgNode)) as *VgNode
     n.scene = scene
     n.payload = payload
@@ -260,7 +260,7 @@ scene_px_to_vb_y(p: ptr, py: float) -> float {
 // each pending entry's `tracked` flag so the next vg_flush re-registers the
 // elements into the new ctx. (Also recompute their bounds at the new scale,
 // which the re-flush does via the dispatched element's bounds copy.)
-scene_set_ctx(p: ptr, ctx: ptr) {
+scene_set_ctx(p: ptr, ctx: @keep ptr) {
     s = p as *VgScene
     // A resize changes the viewBox-to-canvas MAPPING, not what the scene
     // defined: carry the old context's gradients, clip paths, filters, id
@@ -293,7 +293,7 @@ scene_canvas(p: ptr) -> int        { s = p as *VgScene; return s.canvas_id }
 // backend (recording stub, GTK adapter, …). canvas_id 0 means "no live
 // canvas" (headless / recording). vg_root wraps it as the root VgNode the
 // shape verbs accept as _ctx.
-scene_new(ctx: ptr, backend: ptr) -> ptr {
+scene_new(ctx: @keep ptr, backend: @keep ptr) -> ptr {
     s = malloc(sizeof(VgScene)) as *VgScene
     s.ctx = ctx
     s.backend = backend
@@ -366,7 +366,7 @@ scene_is_refreshing(p: ptr) -> int    { s = p as *VgScene; return s.refreshing }
 // event_state — the scene's shared hover/drag/click state. vg_live creates one
 // (events.event_state_new) so the canvas click handler and shape
 // tracking share it. null = no interaction wired (headless eager path).
-scene_set_event_state(p: ptr, es: ptr) { s = p as *VgScene; s.event_state = es }
+scene_set_event_state(p: ptr, es: @keep ptr) { s = p as *VgScene; s.event_state = es }
 scene_event_state(p: ptr) -> ptr       { s = p as *VgScene; return s.event_state }
 
 // scene_set_deferred(scene, 1) — switch the scene to deferred mode (live
@@ -379,7 +379,7 @@ scene_set_deferred(p: ptr, on: int) {
     }
 }
 scene_is_deferred(p: ptr) -> int { s = p as *VgScene; return s.deferred }
-vg_root(scene: ptr) -> ptr {
+vg_root(scene: @keep ptr) -> ptr {
     return mk_node(scene, null)
 }
 
@@ -537,12 +537,12 @@ image(_ctx: ptr, x: float, y: float, w: float, h: float) -> ptr {
 // image_pixels(rgba, pw, ph) — the buffer this image draws, BORROWED (see
 // image). Works in the block (_ctx is the image's node) and from anywhere
 // later with the node image() returned; image_set_pixels is that spelling.
-image_pixels(_ctx: ptr, rgba: ptr, pw: int, ph: int) {
+image_pixels(_ctx: ptr, rgba: @keep ptr, pw: int, ph: int) {
     el = node_payload(_ctx)
     if el == null { return }
     element.element_set_raster(el, rgba, pw, ph, 0)
 }
-image_set_pixels(node: ptr, rgba: ptr, pw: int, ph: int) { image_pixels(node, rgba, pw, ph) }
+image_set_pixels(node: ptr, rgba: @keep ptr, pw: int, ph: int) { image_pixels(node, rgba, pw, ph) }
 
 // image_bytes(data, len) — decode PNG / JPEG / GIF / BMP bytes through the
 // toolkit's decoder into pixels the element owns. Returns 1 when decoded;
@@ -995,7 +995,7 @@ group_end(_ctx: ptr, alpha: float) {
 }
 
 // A group marker pending: kind 5 (begin) / 6 (end); alpha rides in tx.
-record_group_marker(scene: ptr, kind: int, alpha: float, grp: ptr) {
+record_group_marker(scene: ptr, kind: int, alpha: float, grp: @keep ptr) {
     s = scene as *VgScene
     if s.pending == null { s.pending = list.new() }
     pend = malloc(sizeof(VgPending)) as *VgPending
@@ -1124,7 +1124,7 @@ behavior(_ctx: ptr, prop: string, ms: long, easing: string) {
 // (a vg.geom.polypath) instead of its bounding box. The natural companion
 // to polypath.pp_stroke: the stroke outline both renders and hit-tests.
 // Ownership of pp passes to the element; do not pp_free it afterwards.
-hit_outline(_ctx: ptr, pp: ptr) {
+hit_outline(_ctx: ptr, pp: @keep ptr) {
     el = node_payload(_ctx)
     if el != null { element.element_set_hit_poly(el, pp) }
 }
@@ -1310,7 +1310,7 @@ tooltip(_ctx: ptr, t: string) {
 // A handler recolors the element it captured. These forward to grammar_element
 // so callers need only `import vg`, not grammar_element too.
 
-element_set_fill(el: ptr, color: string) {
+element_set_fill(el: @keep ptr, color: string) {
     ms = element.element_behavior_fill_ms(el)
     if ms > 0 {
         bscene = element.element_behavior_scene(el)
@@ -1344,7 +1344,7 @@ element_set_text(el: ptr, content: string) {
 // Lerp helper: start a fill animation from → to on the scene's manager.
 // Ticks write via the GRAMMAR setter (element.element_set_fill), not this
 // module wrapper — re-triggering the behavior would loop.
-tween_fill(scene: ptr, el: ptr, from: string, to: string, ms: long, ease: int) -> int {
+tween_fill(scene: ptr, el: @keep ptr, from: string, to: string, ms: long, ease: int) -> int {
     fr = rasterize.parse_color_to_rgba(from)
     tr = rasterize.parse_color_to_rgba(to)
     f_r = rasterize.rgba_r(fr); f_g = rasterize.rgba_g(fr); f_b = rasterize.rgba_b(fr)
@@ -1367,7 +1367,7 @@ to_f(v: int) -> float { return v / 1.0 }
 element_set_stroke(el: ptr, color: string, width: float) {
     element.element_set_stroke(el, color, width)
 }
-element_set_opacity(el: ptr, value: float) {
+element_set_opacity(el: @keep ptr, value: float) {
     ms = element.element_behavior_op_ms(el)
     if ms > 0 {
         bscene = element.element_behavior_scene(el)
@@ -1383,7 +1383,7 @@ element_set_opacity(el: ptr, value: float) {
     element.element_set_opacity(el, value)
 }
 
-tween_opacity(scene: ptr, el: ptr, from: float, to: float, ms: long, ease: int) -> int {
+tween_opacity(scene: ptr, el: @keep ptr, from: float, to: float, ms: long, ease: int) -> int {
     mgr = scene_animation_manager(scene)
     now = scene_last_now(scene)
     _h2 = animations.add_animation(mgr, el, ms, 0, 0, 0, now) callback |ae: ptr, t: float| {
@@ -1402,7 +1402,7 @@ tween_opacity(scene: ptr, el: ptr, from: float, to: float, ms: long, ease: int) 
 // vg_flush walks the pending list in draw order, folds each element's final
 // cached style into its attrs, and dispatches for real.
 
-record_shape(_ctx: ptr, scene: ptr, kind: int, attrs: ptr) -> ptr {
+record_shape(_ctx: ptr, scene: @keep ptr, kind: int, attrs: @keep ptr) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
     p = malloc(sizeof(VgPending)) as *VgPending
@@ -1418,7 +1418,7 @@ record_shape(_ctx: ptr, scene: ptr, kind: int, attrs: ptr) -> ptr {
     return n
 }
 
-record_text(_ctx: ptr, scene: ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
+record_text(_ctx: ptr, scene: @keep ptr, x: float, y: float, size: float, anchor: string, content: string) -> ptr {
     s = scene as *VgScene
     el = element.element_new(null)
     // Where it is, for a reader (sae's vg.get, a partial vg.set): the flush
@@ -1949,7 +1949,7 @@ scene_tick(scene: ptr, now_ms: long) -> int {
 // Fold the placeholder element's cached fill/stroke/opacity into the attrs
 // map (as presentation attributes — highest priority in resolve_style), then
 // dispatch via the same grammar_shapes path the eager mode uses.
-flush_one(ctx: ptr, be: ptr, p: ptr) {
+flush_one(ctx: @keep ptr, be: ptr, p: ptr) {
     flush_one_tracked(ctx, be, p, null)
 }
 
@@ -1959,7 +1959,7 @@ flush_one(ctx: ptr, be: ptr, p: ptr) {
 // track it so dispatch_click/hover can hit-test it. The placeholder is the
 // event entity (it holds the user's handlers); the dispatched element only
 // draws — so the bounds must be copied across.
-flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
+flush_one_tracked(ctx: @keep ptr, be: ptr, p: ptr, es: ptr) {
     pend = p as *VgPending
     el = pend.element
     // clip_path on the shape: draw it inside a layer clipped to the outline.
@@ -2025,7 +2025,7 @@ _pending_bbox(pend: *VgPending) -> (int, float, float, float, float) {
     return 0, 0.0, 0.0, 0.0, 0.0
 }
 
-_flush_one_body(ctx: ptr, be: ptr, p: ptr, es: ptr) {
+_flush_one_body(ctx: @keep ptr, be: ptr, p: ptr, es: ptr) {
     pend = p as *VgPending
     el = pend.element
     // Track interactive elements regardless of visibility, so the tracked list

@@ -20,7 +20,7 @@ import std.spec
 import uidriver
 import std.string
 
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 
 main() {
     fw = spec.init()

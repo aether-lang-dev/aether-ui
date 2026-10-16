@@ -49,10 +49,11 @@ main() {
     vg.vg_flush(scene)
 
     // A 1000ms opacity fade 0→1, linear (t passed straight to opacity). The
-    // tick receives the element (el) — no capture of block-locals, which would
-    // dangle once the defining scope returns.
-    vg.animate(cnode, 1000, 0, 0) callback |el: ptr, t: float| {
-        vg.element_set_opacity(el, t)
+    // tick sets the element it captured (cel): the `el` it is handed is a
+    // closure's borrowed `ptr` parameter, which cannot reach
+    // vg.element_set_opacity, a keeper (aether #2926).
+    vg.animate(cnode, 1000, 0, 0) callback |_el: ptr, t: float| {
+        vg.element_set_opacity(cel, t)
     }
 
     assert_eq_int("animating after register", vg.scene_is_animating(scene), 1)

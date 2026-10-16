@@ -45,7 +45,7 @@ exports(
 
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 extern string_char_at(s: string, index: int) -> int
 extern string_retain(s: string)
 

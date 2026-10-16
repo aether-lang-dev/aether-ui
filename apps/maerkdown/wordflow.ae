@@ -48,7 +48,7 @@ exports(
 )
 
 extern malloc(size: int) -> ptr
-extern string_substring(s: string, start: int, end: int) -> string
+extern string_substring(s: string, start: int, end: int) -> string @heap
 extern free(p: ptr)
 
 // Page geometry (viewBox units).

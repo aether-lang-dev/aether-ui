@@ -217,11 +217,11 @@ ptr_eq(a: ptr, b: ptr) -> int { if a == b { return 1 } return 0 }
 
 null_ptr_is(p: ptr) -> int { if p == null { return 1 } return 0 }
 
-lowest_z(a: ptr, b: ptr) -> ptr {
+lowest_z(a: @keep ptr, b: @keep ptr) -> ptr {
     if region.region_z(a) <= region.region_z(b) { return a }
     return b
 }
-highest_z(a: ptr, b: ptr) -> ptr {
+highest_z(a: @keep ptr, b: @keep ptr) -> ptr {
     if region.region_z(a) > region.region_z(b) { return a }
     return b
 }

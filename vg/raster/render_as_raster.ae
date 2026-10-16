@@ -278,7 +278,7 @@ struct ShadowCache {
 render_shadow(ctx: ptr, backend: ptr, kind: int,
               bx: float, by: float, bw: float, bh: float,
               dx: float, dy: float, sigma: float, color: string,
-              cache: ptr) -> ptr {
+              cache: @keep ptr) -> ptr {
     return render_shadow_path(ctx, backend, kind, bx, by, bw, bh,
                               dx, dy, sigma, color, cache, "")
 }
@@ -289,7 +289,7 @@ render_shadow(ctx: ptr, backend: ptr, kind: int,
 render_shadow_path(ctx: ptr, backend: ptr, kind: int,
               bx: float, by: float, bw: float, bh: float,
               dx: float, dy: float, sigma: float, color: string,
-              cache: ptr, path_d: string) -> ptr {
+              cache: @keep ptr, path_d: string) -> ptr {
     avg_scale = transform.affine_average_scale_p(rendering.current_transform(ctx))
     scale = rendering.map_length(ctx, 1.0) * avg_scale
 

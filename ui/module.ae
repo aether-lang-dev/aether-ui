@@ -181,8 +181,11 @@ _chrome_invoke_face(cb: fn, handle: int, label: string) {
 
 // The toggle cell is CREATION-OWNING (it must wrap the user callback with
 // a face re-render), so it returns the handle it built.
-_chrome_invoke_toggle(cb: fn, label: string, user_boxed: ptr) -> int {
-    return cb(label, user_boxed)
+// The drawn-chrome toggle cell takes the user's callback as the closure it
+// is, not boxed into a ptr: the cell keeps it for the toggle's life, and a
+// function called through a value cannot keep a `ptr` (aether #2926).
+_chrome_invoke_toggle(cb: fn, label: string, on_change: fn) -> int {
+    return cb(label, on_change)
 }
 import std.intarr   // listbox row-handle tracking
 import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
@@ -1569,19 +1572,18 @@ securefield(_ctx: ptr, placeholder: string, on_change: fn) {
 }
 
 toggle(_ctx: ptr, label: string, on_change: fn) {
-    boxed = box_closure(on_change)
     handle = 0
     made = 0
     if _chrome_on() == 1 {
         cell = aether_ui_chrome_toggle_get_impl()
         if cell != null {
             tcb = unbox_closure(cell)
-            handle = _chrome_invoke_toggle(tcb, label, boxed)
+            handle = _chrome_invoke_toggle(tcb, label, on_change)
             made = 1
         }
     }
     if made == 0 {
-        handle = aether_ui_toggle_create(label, boxed)
+        handle = aether_ui_toggle_create(label, box_closure(on_change))
     }
     if _ctx != 0 {
         aether_ui_widget_add_child_ctx(_ctx, handle)
@@ -1766,7 +1768,7 @@ ui_set_list(handle: int, list_ptr: ptr) -> int {
     aether_ui_state_set_list(handle, list_ptr)
     return handle
 }
-each_bind(each_group: ptr, list_state: int) {
+each_bind(each_group: @keep ptr, list_state: int) {
     // Re-run each_update whenever the list-state changes -- for as long as
     // the group's container is alive. Owned by it, so an each() group that
     // was rebuilt away stops re-rendering into a dead container.
@@ -2996,7 +2998,7 @@ custom(_ctx: ptr, name: string, hex: int) { role(_ctx, name, hex) }
 // on_appearance_change event. This comment used to say no such event
 // existed and to poll for it, which sent readers to write a timer for
 // something the toolkit already does.
-styles_for_mode(light: ptr, dark: ptr) -> ptr {
+styles_for_mode(light: @keep ptr, dark: @keep ptr) -> ptr {
     if is_dark_mode() == 1 { return dark }
     return light
 }
@@ -3145,7 +3147,7 @@ _scheme_into(scp: ptr, sp: ptr) {
 // scheme_for_mode(light, dark) — the roles-level twin of styles_for_mode:
 // picks the scheme matching the OS appearance. Pairs with use_styles_pair via
 // scheme_sheet on each side.
-scheme_for_mode(light: ptr, dark: ptr) -> ptr {
+scheme_for_mode(light: @keep ptr, dark: @keep ptr) -> ptr {
     if is_dark_mode() == 1 { return dark }
     return light
 }
@@ -3275,7 +3277,7 @@ on_appearance_change(cb: fn) {
 // use_styles_pair(light, dark) — the whole dark/light story in one call:
 // applies the sheet for the CURRENT mode (as the current sheet) and
 // re-themes automatically on every OS mode flip.
-use_styles_pair(light: ptr, dark: ptr) {
+use_styles_pair(light: @keep ptr, dark: @keep ptr) {
     use_styles(styles_for_mode(light, dark))
     on_appearance_change(|isdark: int| {
         if isdark == 1 { use_styles(dark) }
@@ -3439,7 +3441,7 @@ on_state(_ctx: ptr, name: string) -> ptr {
     return sheet
 }
 
-add_state(wsp: ptr, name: string, sheet: ptr) {
+add_state(wsp: ptr, name: string, sheet: @keep ptr) {
     ws = wsp as *WStates
     e = malloc(sizeof(WStateEntry)) as *WStateEntry
     e.name = name
@@ -3562,7 +3564,7 @@ struct NameCmd { name: string, cmd: ptr }
 struct Keymap  { parent: ptr, binds: ptr, names: ptr, attached: int }
 
 // keymap(parent) — a new keymap, chained to `parent` (null for a root).
-keymap(parent: ptr) -> ptr {
+keymap(parent: @keep ptr) -> ptr {
     k = malloc(sizeof(Keymap)) as *Keymap
     k.parent = parent
     k.binds = list.new()
@@ -3656,7 +3658,7 @@ _command_own_key_live(cp: ptr) -> int {
 // Register the real accelerator for `key` on an attached keymap. Conditional,
 // so a key the keymap no longer resolves propagates to any other binding of
 // it instead of being swallowed by an inert registration.
-_keymap_register_key(km: ptr, key: string) {
+_keymap_register_key(km: @keep ptr, key: string) {
     shortcut_when(key, || {
         if keymap_command(km, key) == null { return 0 }
         return 1
@@ -3682,7 +3684,7 @@ _keymap_find(km: ptr, key: string) -> int {
 // so the enumeration a rebind UI shows never contains two rows for one key.
 // On an ATTACHED keymap a new key is registered as a real accelerator at
 // once, so a rebind at runtime makes the new key fire -- not only resolve.
-keymap_bind(km: ptr, key: string, name: string) {
+keymap_bind(km: @keep ptr, key: string, name: string) {
     if km == null { return }
     k = km as *Keymap
     at = _keymap_find(km, key)
@@ -3737,7 +3739,7 @@ keymap_lookup(km: ptr, key: string) -> string {
 // keymap_register(km, name, cmd) — a command under a name. Registering a name
 // already held here replaces it, which is how a child keymap redirects an
 // inherited key.
-keymap_register(km: ptr, name: string, cmd: ptr) {
+keymap_register(km: @keep ptr, name: string, cmd: @keep ptr) {
     if km == null { return }
     k = km as *Keymap
     n = list.size(k.names)
@@ -3851,7 +3853,7 @@ keymap_name_at(km: ptr, i: int) -> string {
 // Attaching also makes the keymap the owner of the keys of every command it
 // reaches (see _keymap_key_for above): their menu items show the key the
 // keymap binds, and each command's own accel stops firing on its own.
-keymap_attach(km: ptr) {
+keymap_attach(km: @keep ptr) {
     if km == null { return }
     k = km as *Keymap
     if k.attached == 1 { return }
@@ -4059,7 +4061,7 @@ does(_ctx: ptr, cb: fn) {
 
 // on_button() — a button surface for the ambient command, attached to the
 // widget scope `commands()` was opened in.
-on_button(_ctx: ptr) -> int {
+on_button(_ctx: @keep ptr) -> int {
     if _ctx == 0 { return 0 }
     c = _ctx as *Command
     h = btn(c.scope, c.label) callback { command_fire(_ctx) }
@@ -4068,7 +4070,7 @@ on_button(_ctx: ptr) -> int {
 }
 
 // on_menu_item(menu) — a menu-item surface for the ambient command.
-on_menu_item(_ctx: ptr, menu_handle: int) {
+on_menu_item(_ctx: @keep ptr, menu_handle: int) {
     if _ctx == 0 { return }
     menu_item_command(menu_handle, _ctx)
 }
@@ -4087,7 +4089,7 @@ command_group_set_enabled(gp: ptr, val: int) {
 }
 
 // btn_command(ctx, cmd) — a button labelled and wired from the command.
-btn_command(_ctx: ptr, cp: ptr) -> int {
+btn_command(_ctx: ptr, cp: @keep ptr) -> int {
     c = cp as *Command
     h = btn(_ctx, c.label) callback { command_fire(cp) }
     command_attach(cp, h)
@@ -4102,7 +4104,7 @@ btn_command(_ctx: ptr, cp: ptr) -> int {
 // The key SHOWN is the command's current one: its own accel, or, once an
 // attached keymap owns it, whatever that keymap binds to it now -- and the
 // item is relabelled when a keymap_bind/unbind/register changes that.
-menu_item_command(menu_handle: int, cp: ptr) {
+menu_item_command(menu_handle: int, cp: @keep ptr) {
     c = cp as *Command
     shown = _command_menu_text(cp)
     boxed = box_closure(|| { command_fire(cp) })
@@ -5201,7 +5203,7 @@ _listbox_index_of(items: ptr, target: ptr) -> int {
 // object in place before calling here has already destroyed the mapping, so
 // the item found at the old index is whatever the sort moved there. Such a
 // caller captures the selection itself before it mutates (see _table_do_sort).
-listbox_update(lbp: ptr, items: ptr) {
+listbox_update(lbp: ptr, items: @keep ptr) {
     lb = lbp as *ListBox
     prev_items = lb.items
     prev_flags = lb.sel_flags
@@ -5649,7 +5651,7 @@ _table_invoke_sort(cb: fn, c: int) {
 }
 
 // table(cols, cell) -> table-handle. cell = |item, c| -> string.
-table(_ctx: ptr, cols: ptr, cell: fn) -> ptr {
+table(_ctx: ptr, cols: @keep ptr, cell: fn) -> ptr {
     t = malloc(sizeof(TableDef)) as *TableDef
     t.cols = cols
     t.cell = box_closure(cell)
@@ -5865,7 +5867,7 @@ _table_sort_click(tp: ptr, c: int) {
 
 // table_sorter(t, items) — arm the built-in sorter over `items`. The list is
 // re-ordered in place on every sort.
-table_sorter(tp: ptr, items: ptr) {
+table_sorter(tp: ptr, items: @keep ptr) {
     t = tp as *TableDef
     t.sorter = 1
     t.items = items
@@ -6017,7 +6019,7 @@ table_item_at(tp: ptr, i: int) -> ptr {
 
 // table_update(t, items) — the app's one refresh call. Keeps the model
 // reference and renders the VIEW through the filter (see above).
-table_update(tp: ptr, items: ptr) {
+table_update(tp: ptr, items: @keep ptr) {
     t = tp as *TableDef
     // The view is a list the TABLE minted, holding borrowed item pointers: it
     // is what the table SHOWS, in the order it shows it. Filtering and sorting
@@ -6157,7 +6159,7 @@ _tree_reflatten(tp: ptr) {
     _tree_free_flat(prev)
 }
 
-tree(_ctx: ptr, roots: ptr) -> ptr {
+tree(_ctx: ptr, roots: @keep ptr) -> ptr {
     t = malloc(sizeof(TreeDef)) as *TreeDef
     t.roots = roots
     t.flat = null
@@ -6243,7 +6245,7 @@ tree_select_row(tp: ptr, i: int) {
 // tree_select(t, node) — select a node without firing on_select, the state
 // write an app uses to restore a selection or to open on a chosen node. A node
 // that is not currently visible (an ancestor is collapsed) selects nothing.
-tree_select(tp: ptr, node: ptr) {
+tree_select(tp: ptr, node: @keep ptr) {
     t = tp as *TreeDef
     t.sel_node = node
     _tree_place_selection(t)
@@ -6367,7 +6369,7 @@ _vlist_render(v: *VList) {
     }
 }
 
-vlist_set(vp: ptr, items: ptr) {
+vlist_set(vp: ptr, items: @keep ptr) {
     v = vp as *VList
     v.items = items
     v.first = 0
@@ -6417,7 +6419,7 @@ vlist_window_first(vp: ptr) -> int {
 // unchanged — this just feeds it real gestures. Headless, the driver drives a
 // step with POST /widget/{id}/scroll?dy=N (a real wheel can't be synthesised
 // off-thread), the same path a gesture takes.
-vlist_scrollable(vp: ptr) -> ptr {
+vlist_scrollable(vp: @keep ptr) -> ptr {
     v = vp as *VList
     aether_ui_vlist_attach_scroll_impl(v.container, box_closure(|dy: int| {
         vlist_scroll_to(vp, v.first + dy)
@@ -6631,7 +6633,7 @@ const DATAGRID_MAGIC = 1597463007
 // The grid an ambient verb's _ctx is, or null: inside a datagrid block _ctx
 // is the grid; inside any other block it is a widget handle (a small int,
 // never dereferenced) or another builder's own struct (no magic).
-_datagrid_ctx(_ctx: ptr) -> ptr {
+_datagrid_ctx(_ctx: @keep ptr) -> ptr {
     if _ctx == null { return null }
     // A handle is a small non-negative number. A heap pointer can read as
     // NEGATIVE: Android tags the top byte of its heap pointers, so a grid
@@ -7122,7 +7124,7 @@ _datagrid_full_h(g: *DataGrid) -> int {
 // ones (its row numbers) stay put as the rest scroll across, set and
 // changed at any time, as datagrid_freeze_rows; 0 frees them. At most all
 // but one of the positions the grid was made with. datagrid_frozen_cols(g).
-datagrid_freeze_cols(gp: ptr, n: int) -> ptr {
+datagrid_freeze_cols(gp: @keep ptr, n: int) -> ptr {
     g = gp as *DataGrid
     nf = g.frozen0 + n
     if nf < g.frozen0 { nf = g.frozen0 }
@@ -7148,7 +7150,7 @@ datagrid_frozen_cols(gp: ptr) -> int {
 // first scrolling one however tall), at most the vis_rows it was made with,
 // so a page can let it grow into room it is given and shrink back; 0 is all
 // of them. datagrid_height(g): that height now.
-datagrid_set_height(gp: ptr, px: int) -> ptr {
+datagrid_set_height(gp: @keep ptr, px: int) -> ptr {
     g = gp as *DataGrid
     h = px
     if h < 0 { h = 0 }
@@ -7237,7 +7239,7 @@ _datagrid_wraps(g: *DataGrid) {
 // datagrid_set_row_height(g, r, h): model row r's height (the grid's when
 // h is 0). The grid stays its height and shows as many rows as fit; a row
 // is never taller than the whole grid. datagrid_row_height reads it.
-datagrid_set_row_height(gp: ptr, r: int, h: int) -> ptr {
+datagrid_set_row_height(gp: @keep ptr, r: int, h: int) -> ptr {
     g = gp as *DataGrid
     if r < 0 || r >= g.rows { return gp }
     if g.row_hs == null {
@@ -7267,7 +7269,7 @@ datagrid_row_height(gp: ptr, r: int) -> int {
 // needs (wrapped at its column's width where its style wraps it), and never
 // shorter than the grid's row height. Each cell is measured in the font of
 // the cell showing it (the first row's, when r is not shown).
-datagrid_fit_row(gp: ptr, r: int) -> ptr {
+datagrid_fit_row(gp: @keep ptr, r: int) -> ptr {
     g = gp as *DataGrid
     if r < 0 || r >= g.rows || g.cell == null { return gp }
     w = g.npos
@@ -7302,7 +7304,7 @@ datagrid_fit_row(gp: ptr, r: int) -> ptr {
 // as the frozen columns do (not in what scrolls, aui-grid-frozen, drawn
 // #f2f2f5); 0 unfreezes. At most one row fewer than are shown, so something
 // still scrolls. Freeze Top Row is 1; Freeze Panes is this and the columns.
-datagrid_freeze_rows(gp: ptr, n: int) -> ptr {
+datagrid_freeze_rows(gp: @keep ptr, n: int) -> ptr {
     g = gp as *DataGrid
     k = n
     if k > g.vis_rows - 1 { k = g.vis_rows - 1 }
@@ -7438,7 +7440,7 @@ _datagrid_spans(g: *DataGrid) {
 // over the whole rectangle; a click anywhere in it selects it (the cursor
 // on its top-left), and the cursor keys step over it. A merge that
 // overlaps another replaces it. Merge & Center is this and text-align.
-datagrid_merge(gp: ptr, r: int, c: int, rows: int, cols: int) -> ptr {
+datagrid_merge(gp: @keep ptr, r: int, c: int, rows: int, cols: int) -> ptr {
     g = gp as *DataGrid
     if r < 0 || c < 0 || rows < 1 || cols < 1 || r + rows > g.rows || c + cols > g.cols { return gp }
     if rows == 1 && cols == 1 { return gp }
@@ -7480,7 +7482,7 @@ datagrid_merge(gp: ptr, r: int, c: int, rows: int, cols: int) -> ptr {
 
 // datagrid_unmerge(g, r, c): the merge covering (r, c), if any, back to
 // its cells.
-datagrid_unmerge(gp: ptr, r: int, c: int) -> ptr {
+datagrid_unmerge(gp: @keep ptr, r: int, c: int) -> ptr {
     g = gp as *DataGrid
     mi = _datagrid_merge_at(g, r, c)
     if mi < 0 { return gp }
@@ -7772,7 +7774,7 @@ _datagrid_size(g: *DataGrid) {
 // A drag on the header cell at shown position `pos`: on its grip (grip = 1)
 // a resize, as it goes; on its label (a scrolling column) a move, on
 // release.
-_datagrid_header_drag(gp: ptr, pos: int, grip: int, phase: int, x: float) {
+_datagrid_header_drag(gp: @keep ptr, pos: int, grip: int, phase: int, x: float) {
     g = gp as *DataGrid
     view = _datagrid_col_at(g, pos)
     if phase == 0 {
@@ -7859,7 +7861,7 @@ datagrid_col_width(gp: ptr, c: int) -> int {
     return intarr_get_raw(g.widths, _datagrid_model(g, c))
 }
 
-datagrid_set_col_width(gp: ptr, c: int, w: int) -> ptr {
+datagrid_set_col_width(gp: @keep ptr, c: int, w: int) -> ptr {
     g = gp as *DataGrid
     if c < 0 || c >= g.cols { return gp }
     _datagrid_width_to(g, c, w)
@@ -7868,7 +7870,7 @@ datagrid_set_col_width(gp: ptr, c: int, w: int) -> ptr {
 
 // datagrid_col_limits(g, min, max): the narrowest and widest a column may be
 // made, by a drag or from code.
-datagrid_col_limits(gp: ptr, min: int, max: int) -> ptr {
+datagrid_col_limits(gp: @keep ptr, min: int, max: int) -> ptr {
     g = gp as *DataGrid
     lo = min
     if lo < 1 { lo = 1 }
@@ -7883,7 +7885,7 @@ datagrid_col_limits(gp: ptr, min: int, max: int) -> ptr {
 // back at `to` (both scrolling columns; frozen ones do not move). The model
 // does not change, only which model column each view column shows;
 // on_col_move hears it, as it hears a header drag.
-datagrid_move_col(gp: ptr, from: int, to: int) -> ptr {
+datagrid_move_col(gp: @keep ptr, from: int, to: int) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
     if from < g.frozen || to < g.frozen || from >= g.cols || to >= g.cols || from == to { return gp }
@@ -7923,7 +7925,7 @@ datagrid_col_model(gp: ptr, c: int) -> int {
 // strip in the frozen columns marks where hidden rows are (Excel draws a
 // double line). Row numbers everywhere else stay model rows, so the cell
 // function, the callbacks and the cursor mean what they did.
-datagrid_hide_row(gp: ptr, r: int, hidden: int) -> ptr {
+datagrid_hide_row(gp: @keep ptr, r: int, hidden: int) -> ptr {
     g = gp as *DataGrid
     if r < 0 || r >= g.rows { return gp }
     h = 0
@@ -7975,7 +7977,7 @@ datagrid_hide_row(gp: ptr, r: int, hidden: int) -> ptr {
 // datagrid_hide_col(g, c, hidden): view column c out of the view or back.
 // Hiding belongs to the column, so it moves with it; the cursor keys and
 // selections step over it, and view column numbers do not change.
-datagrid_hide_col(gp: ptr, c: int, hidden: int) -> ptr {
+datagrid_hide_col(gp: @keep ptr, c: int, hidden: int) -> ptr {
     g = gp as *DataGrid
     if c < 0 || c >= g.cols { return gp }
     h = 0
@@ -8020,14 +8022,14 @@ datagrid_row_view(gp: ptr, r: int) -> int {
 
 // datagrid_on_col_resize(g) callback |c, w| { ... }: view column c was given
 // width w by a header drag (when the drag ends).
-datagrid_on_col_resize(gp: ptr, cb: fn) -> ptr {
+datagrid_on_col_resize(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_resize = box_closure(cb)
     return gp
 }
 
 // datagrid_on_col_move(g) callback |from, to| { ... }: a column moved.
-datagrid_on_col_move(gp: ptr, cb: fn) -> ptr {
+datagrid_on_col_move(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_move = box_closure(cb)
     return gp
@@ -8037,7 +8039,7 @@ datagrid_on_col_move(gp: ptr, cb: fn) -> ptr {
 // label pressed and let go without a drag; c the model column (a frozen
 // column's too, as the corner over the row numbers is). A drag on it still
 // moves the column, one on its grip resizes it.
-datagrid_on_header_click(gp: ptr, cb: fn) -> ptr {
+datagrid_on_header_click(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_hdr = box_closure(cb)
     return gp
@@ -8373,7 +8375,7 @@ _datagrid_in_areas(g: *DataGrid, r: int, c: int) -> int {
 // does (rows model rows, columns on screen); at most DATAGRID_AREAS areas.
 // datagrid_clear_areas(g): the selection one area again. datagrid_areas(g):
 // the areas before the current one, "ar,ac,r,c;..." ("" for none).
-datagrid_add_area(gp: ptr, ar: int, ac: int, r: int, c: int) -> ptr {
+datagrid_add_area(gp: @keep ptr, ar: int, ac: int, r: int, c: int) -> ptr {
     g = gp as *DataGrid
     _datagrid_push_area(g)
     g.keep_areas = 1
@@ -8383,7 +8385,7 @@ datagrid_add_area(gp: ptr, ar: int, ac: int, r: int, c: int) -> ptr {
     return gp
 }
 
-datagrid_clear_areas(gp: ptr) -> ptr {
+datagrid_clear_areas(gp: @keep ptr) -> ptr {
     g = gp as *DataGrid
     g.n_areas = 0
     _datagrid_paint(g)
@@ -8542,7 +8544,7 @@ _datagrid_clamp(v: int, hi: int) -> int {
     return v
 }
 
-_datagrid_key(gp: ptr, k: string, m: int) {
+_datagrid_key(gp: @keep ptr, k: string, m: int) {
     g = gp as *DataGrid
     shift = m % 2
     ctrl = 0
@@ -8631,7 +8633,7 @@ _datagrid_key(gp: ptr, k: string, m: int) {
 }
 
 // datagrid_header(g) callback |c| -> string: the header's text per column.
-datagrid_header(gp: ptr, header: fn) -> ptr {
+datagrid_header(gp: @keep ptr, header: fn) -> ptr {
     g = gp as *DataGrid
     g.header = box_closure(header)
     _datagrid_bind(g)
@@ -8640,7 +8642,7 @@ datagrid_header(gp: ptr, header: fn) -> ptr {
 
 // datagrid_cells(g) callback |r: int, c: int| -> string: the cells' text,
 // asked for as each is shown (r a row, c a MODEL column).
-datagrid_cells(gp: ptr, cell: fn) -> ptr {
+datagrid_cells(gp: @keep ptr, cell: fn) -> ptr {
     g = gp as *DataGrid
     g.cell = box_closure(cell)
     _datagrid_bind(g)
@@ -8651,7 +8653,7 @@ datagrid_cells(gp: ptr, cell: fn) -> ptr {
 // opened by F2, a double click or Return starts with (c a model column),
 // when that is not what the cell shows: a spreadsheet shows 42 and edits
 // =A1+B2. Typing a character still starts with that character.
-datagrid_edit_text(gp: ptr, fn_: fn) -> ptr {
+datagrid_edit_text(gp: @keep ptr, fn_: fn) -> ptr {
     g = gp as *DataGrid
     g.edit_text = box_closure(fn_)
     return gp
@@ -8661,7 +8663,7 @@ datagrid_edit_text(gp: ptr, fn_: fn) -> ptr {
 // style, from the model, as AeCS properties: "background: #ffeeee; color:
 // #c00; font-weight: bold; text-align: end" ("" for the grid's own). Asked
 // as each cell is shown; a widget is restyled only when its string changes.
-datagrid_cell_style(gp: ptr, fn_: fn) -> ptr {
+datagrid_cell_style(gp: @keep ptr, fn_: fn) -> ptr {
     g = gp as *DataGrid
     g.style = box_closure(fn_)
     _datagrid_bind(g)
@@ -8671,7 +8673,7 @@ datagrid_cell_style(gp: ptr, fn_: fn) -> ptr {
 // datagrid_cell_tooltip(g) callback |r: int, c: int| -> string: what shows
 // when the pointer rests on a cell (a comment, say: --corner marks the
 // cell); "" for none. Asked as each cell is shown (c a model column).
-datagrid_cell_tooltip(gp: ptr, fn_: fn) -> ptr {
+datagrid_cell_tooltip(gp: @keep ptr, fn_: fn) -> ptr {
     g = gp as *DataGrid
     g.tip = box_closure(fn_)
     _datagrid_bind(g)
@@ -8683,7 +8685,7 @@ datagrid_cell_tooltip(gp: ptr, fn_: fn) -> ptr {
 // in its own label's font, plus a little room; clamped to the limits. As a
 // header drag does, it tells on_col_resize. A double click on a header's
 // grip does this.
-datagrid_fit_col(gp: ptr, c: int) -> ptr {
+datagrid_fit_col(gp: @keep ptr, c: int) -> ptr {
     g = gp as *DataGrid
     if c < 0 || c >= g.cols { return gp }
     m = _datagrid_model(g, c)
@@ -8718,7 +8720,7 @@ datagrid_fit_col(gp: ptr, c: int) -> ptr {
 }
 
 // datagrid_set_col_widths(g, w): every column w wide (clamped to the limits).
-datagrid_set_col_widths(gp: ptr, w: int) -> ptr {
+datagrid_set_col_widths(gp: @keep ptr, w: int) -> ptr {
     g = gp as *DataGrid
     c = 0
     while c < g.cols {
@@ -8735,63 +8737,63 @@ datagrid_set_col_widths(gp: ptr, w: int) -> ptr {
 // ── The grid's ambient verbs: inside datagrid(...) { ... } the grid is the
 // receiver, as a button is inside button("OK") { ... }. Each is its
 // datagrid_* form for that grid; outside a grid's block they do nothing.
-cells(_ctx: ptr, cell: fn) {
+cells(_ctx: @keep ptr, cell: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cells(g, cell) }
 }
-headers(_ctx: ptr, header: fn) {
+headers(_ctx: @keep ptr, header: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_header(g, header) }
 }
-on_cell_click(_ctx: ptr, cb: fn) {
+on_cell_click(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_click(g, cb) }
 }
-on_cell_select(_ctx: ptr, cb: fn) {
+on_cell_select(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_select(g, cb) }
 }
-on_cell_activate(_ctx: ptr, cb: fn) {
+on_cell_activate(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_activate(g, cb) }
 }
-on_cell_edit(_ctx: ptr, cb: fn) {
+on_cell_edit(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_edit(g, cb) }
 }
-on_col_resize(_ctx: ptr, cb: fn) {
+on_col_resize(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_col_resize(g, cb) }
 }
-on_col_move(_ctx: ptr, cb: fn) {
+on_col_move(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_col_move(g, cb) }
 }
-on_header_click(_ctx: ptr, cb: fn) {
+on_header_click(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_header_click(g, cb) }
 }
-column_width(_ctx: ptr, w: int) {
+column_width(_ctx: @keep ptr, w: int) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_set_col_widths(g, w) }
 }
-edit_text(_ctx: ptr, fn_: fn) {
+edit_text(_ctx: @keep ptr, fn_: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_edit_text(g, fn_) }
 }
-cell_style(_ctx: ptr, fn_: fn) {
+cell_style(_ctx: @keep ptr, fn_: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cell_style(g, fn_) }
 }
-on_cell_edit_change(_ctx: ptr, cb: fn) {
+on_cell_edit_change(_ctx: @keep ptr, cb: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_edit_change(g, cb) }
 }
-cell_tooltip(_ctx: ptr, fn_: fn) {
+cell_tooltip(_ctx: @keep ptr, fn_: fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cell_tooltip(g, fn_) }
 }
-column_limits(_ctx: ptr, min: int, max: int) {
+column_limits(_ctx: @keep ptr, min: int, max: int) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_col_limits(g, min, max) }
 }
@@ -8800,7 +8802,7 @@ column_limits(_ctx: ptr, min: int, max: int) {
 // first scrolling column (clamped so the window never runs past the end; a
 // frozen column is always shown, so col below `frozen` reads as `frozen`).
 // The scrollbars follow.
-datagrid_scroll_to(gp: ptr, row: int, col: int) -> ptr {
+datagrid_scroll_to(gp: @keep ptr, row: int, col: int) -> ptr {
     g = gp as *DataGrid
     // An open editor sits on a widget that is about to show another cell.
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
@@ -8836,7 +8838,7 @@ datagrid_scroll_to(gp: ptr, row: int, col: int) -> ptr {
 }
 
 // datagrid_refresh(g): the model changed; show it again.
-datagrid_refresh(gp: ptr) -> ptr {
+datagrid_refresh(gp: @keep ptr) -> ptr {
     _datagrid_bind(gp as *DataGrid)
     return gp
 }
@@ -8845,7 +8847,7 @@ datagrid_refresh(gp: ptr) -> ptr {
 // row and column it shows now (scrolling moves what a cell widget shows, so
 // the position is worked out at the click, not when the handler was set).
 // The click has already selected the cell (or, with Shift, extended to it).
-datagrid_on_click(gp: ptr, cb: fn) -> ptr {
+datagrid_on_click(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.click = box_closure(cb)
     return gp
@@ -8882,12 +8884,12 @@ _datagrid_clicked(gp: ptr, vr: int, vc: int) {
 // datagrid_select(g, r, c): put the cursor on one cell (scrolled into view);
 // datagrid_select_range(g, ar, ac, r, c) selects from (ar, ac) to the cursor
 // at (r, c). on_select hears both, as it hears a click or a key.
-datagrid_select(gp: ptr, r: int, c: int) -> ptr {
+datagrid_select(gp: @keep ptr, r: int, c: int) -> ptr {
     _datagrid_move(gp as *DataGrid, r, c, 0)
     return gp
 }
 
-datagrid_select_range(gp: ptr, ar: int, ac: int, r: int, c: int) -> ptr {
+datagrid_select_range(gp: @keep ptr, ar: int, ac: int, r: int, c: int) -> ptr {
     _datagrid_set(gp as *DataGrid, ar, ac, r, c)
     return gp
 }
@@ -8904,14 +8906,14 @@ datagrid_is_selected(gp: ptr, r: int, c: int) -> int {
 
 // datagrid_on_select(g) callback |r, c| { ... }: the selection changed; the
 // cursor is at (r, c) (read the anchor for the range).
-datagrid_on_select(gp: ptr, cb: fn) -> ptr {
+datagrid_on_select(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_sel = box_closure(cb)
     return gp
 }
 
 // datagrid_on_activate(g) callback |r, c| { ... }: Return on the cursor cell.
-datagrid_on_activate(gp: ptr, cb: fn) -> ptr {
+datagrid_on_activate(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_act = box_closure(cb)
     return gp
@@ -8921,7 +8923,7 @@ datagrid_on_activate(gp: ptr, cb: fn) -> ptr {
 // the grid editable; called when an edit of row r, MODEL column c (the one
 // the cell function is given for that cell) commits, to store the text. The
 // grid then shows the cell function's answer for it.
-datagrid_on_edit(gp: ptr, cb: fn) -> ptr {
+datagrid_on_edit(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_edit = box_closure(cb)
     return gp
@@ -8929,7 +8931,7 @@ datagrid_on_edit(gp: ptr, cb: fn) -> ptr {
 
 // datagrid_edit(g, r, c): open the editor on a cell from code, holding its
 // text (an editable grid only).
-datagrid_edit(gp: ptr, r: int, c: int) -> ptr {
+datagrid_edit(gp: @keep ptr, r: int, c: int) -> ptr {
     g = gp as *DataGrid
     _datagrid_edit_begin(g, r, c, _datagrid_edit_start(g, r, c))
     return gp
@@ -8937,7 +8939,7 @@ datagrid_edit(gp: ptr, r: int, c: int) -> ptr {
 
 // datagrid_edit_commit(g) / datagrid_edit_cancel(g): close the open editor,
 // storing its text or not. Nothing happens when none is open.
-datagrid_edit_commit(gp: ptr) -> ptr {
+datagrid_edit_commit(gp: @keep ptr) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 {
         _datagrid_edit_finish(g, 1)
@@ -8946,7 +8948,7 @@ datagrid_edit_commit(gp: ptr) -> ptr {
     return gp
 }
 
-datagrid_edit_cancel(gp: ptr) -> ptr {
+datagrid_edit_cancel(gp: @keep ptr) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 {
         _datagrid_edit_finish(g, 0)
@@ -9048,7 +9050,7 @@ _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
 // a change before it moves the caret past the new text (GTK's "changed"
 // comes from inside the insert), so read at once the caret lags what was
 // typed; a burst of changes is heard once, as it ends.
-_datagrid_edit_changed(gp: ptr, _t: string) {
+_datagrid_edit_changed(gp: @keep ptr, _t: string) {
     g = gp as *DataGrid
     if g.on_edit_change == null || g.edit_field == 0 || g.change_due == 1 { return }
     g.change_due = 1
@@ -9069,7 +9071,7 @@ _datagrid_invoke_text_caret(cb: fn, t: string, caret: int) {
 // the open editor's text as it is typed, with its caret (in the platform's
 // units: see textfield_caret), and once as it opens. A formula's point
 // mode, or colouring the references a formula being typed names.
-datagrid_on_edit_change(gp: ptr, cb: fn) -> ptr {
+datagrid_on_edit_change(gp: @keep ptr, cb: fn) -> ptr {
     g = gp as *DataGrid
     g.on_edit_change = box_closure(cb)
     return gp
@@ -9079,7 +9081,7 @@ datagrid_on_edit_change(gp: ptr, cb: fn) -> ptr {
 // puts it, at its caret (in place of its selection); on_edit_change hears
 // it. Point mode: a click on a cell inserts its reference. Nothing when no
 // editor is open.
-datagrid_edit_insert(gp: ptr, text: string) -> ptr {
+datagrid_edit_insert(gp: @keep ptr, text: string) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 { aether_ui_textfield_insert_impl(g.edit_field, text) }
     return gp
@@ -9140,7 +9142,7 @@ table_on_select(tp: ptr, cb: fn) {
 // table_bind(t, list_state): the table tracks a LIST state — every ui_set_list
 // re-runs table_update. The each_bind sibling for tables. Seeds once.
 // Owned, like each_bind, by the container its rows render into.
-table_bind(tp: ptr, list_state: int) {
+table_bind(tp: @keep ptr, list_state: int) {
     t = tp as *TableDef
     lb = t.lb as *ListBox
     eg = lb.group as *EachGroup
@@ -9887,7 +9889,7 @@ separator(_ctx: ptr) {
 
 // menu_entry_command(cmd) — an entry wired to a `command`, on the ambient menu.
 // The command form of the same verb, so a File menu can mix both.
-menu_entry_command(_ctx: ptr, cp: ptr) {
+menu_entry_command(_ctx: ptr, cp: @keep ptr) {
     if _ctx == 0 { return }
     menu_item_command(aether_ui_ctx_to_handle_impl(_ctx), cp)
 }

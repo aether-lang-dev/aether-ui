@@ -62,7 +62,7 @@ struct Entry {
     el: ptr
 }
 
-mk_entry(item: ptr, el: ptr) -> ptr {
+mk_entry(item: @keep ptr, el: @keep ptr) -> ptr {
     e = malloc(sizeof(Entry)) as *Entry
     e.item = item
     e.el = el
@@ -239,7 +239,7 @@ struct NewSlot {
     idx: int
 }
 
-mk_slot(item: ptr, idx: int) -> ptr {
+mk_slot(item: @keep ptr, idx: int) -> ptr {
     s = malloc(sizeof(NewSlot)) as *NewSlot
     s.item = item
     s.idx = idx
