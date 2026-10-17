@@ -6559,7 +6559,8 @@ struct DataGrid {
     cur_c: int
     glide_ms: int     // datagrid_selection_glide: 0 off
     glide_on: int     // 1 while the cursor's box glides
-    glide_t0: float   // the frame clock when it began, -1 before its first frame
+    glide_t0: float   // the last frame's clock, -1 before its first frame
+    glide_el: float   // ms it has glided, frame by frame
     glide_r0: int     // from and to, as indices among the rows and columns shown
     glide_c0: int
     glide_r1: int
@@ -8236,6 +8237,7 @@ _datagrid_glide_start(g: *DataGrid, r0: int, c0: int, r1: int, c1: int) {
     g.box_r = r0
     g.box_c = c0
     g.glide_t0 = 0.0 - 1.0
+    g.glide_el = 0.0
     g.glide_on = 1
     if g.glide_frame == 0 {
         gp = g as ptr
@@ -8256,8 +8258,17 @@ _datagrid_glide_end(g: *DataGrid) {
 _datagrid_glide_tick(gp: ptr, t: float) {
     g = gp as *DataGrid
     if g.glide_on == 0 { return }
-    if g.glide_t0 < 0.0 { g.glide_t0 = t }
-    f = (t - g.glide_t0) / (g.glide_ms * 1.0)
+    // Elapsed time added up frame by frame, each step at most 100 ms: a
+    // frame clock's first time after it was idle can be one from before
+    // (GTK's is smoothed), and counted whole it would end the glide at once.
+    if g.glide_t0 >= 0.0 {
+        d = t - g.glide_t0
+        if d < 0.0 { d = 0.0 }
+        if d > 100.0 { d = 100.0 }
+        g.glide_el = g.glide_el + d
+    }
+    g.glide_t0 = t
+    f = g.glide_el / (g.glide_ms * 1.0)
     if f >= 1.0 {
         _datagrid_glide_end(g)
         _datagrid_paint(g)
