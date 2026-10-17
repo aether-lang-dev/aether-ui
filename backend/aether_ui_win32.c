@@ -10766,6 +10766,26 @@ static void canvas_replay_to_dc(Canvas* cv, HDC mem, int width, int height, COLO
 // The GDI replay core — shared by the on-screen paint and the headless
 // pixel readback below (canvas_read_pixel replays into its own memory DC,
 // exactly like the GTK4 backend replays into a cairo image surface).
+
+/* A stroked segment shorter than a pixel draws nothing in GDI (LineTo stops
+   short of its end point, and here both ends round to the same pixel), where
+   SVG paints a zero-length stroke's round or square cap as a dot of the pen's
+   width: what a vg/chart (Chartist) data point is, a 0.01 px line with a round
+   cap. Paint that dot; a butt cap paints nothing, as in SVG. */
+static void w32_cap_dot(HDC dc, int x, int y, int width, int cap, COLORREF c) {
+    if (cap == 0 || width < 2) return;
+    HBRUSH br = CreateSolidBrush(c);
+    HGDIOBJ prev_br = SelectObject(dc, br);
+    HGDIOBJ prev_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    int r = width / 2;
+    /* With the null pen GDI leaves out the right and bottom edge: + 1. */
+    if (cap == 2) Rectangle(dc, x - r, y - r, x + r + 1, y + r + 1);
+    else Ellipse(dc, x - r, y - r, x + r + 1, y + r + 1);
+    SelectObject(dc, prev_pen);
+    SelectObject(dc, prev_br);
+    DeleteObject(br);
+}
+
 static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop) {
     // Plain GDI replay — GDI+ bindings from C are clunky; for a first
     // pass this delivers lines + filled rects with correct pixels.
@@ -10847,8 +10867,14 @@ static void canvas_replay_to_dc_gdi(Canvas* cv, HDC mem, int width, int height, 
                     CanvasCmdKind k = cv->cmds[j].k;
                     if (k == CV_BEGIN) break;
                     if (k == CV_LINE) {
-                        MoveToEx(mem, (int)cv->cmds[j].p0, (int)cv->cmds[j].p1, NULL);
-                        LineTo(mem, (int)cv->cmds[j].p2, (int)cv->cmds[j].p3);
+                        int x0 = (int)cv->cmds[j].p0, y0 = (int)cv->cmds[j].p1;
+                        int x1 = (int)cv->cmds[j].p2, y1 = (int)cv->cmds[j].p3;
+                        if (x0 == x1 && y0 == y1) {
+                            w32_cap_dot(mem, x0, y0, (int)cmd->p0, cmd->cap, RGB(ri, gi, bi));
+                        } else {
+                            MoveToEx(mem, x0, y0, NULL);
+                            LineTo(mem, x1, y1);
+                        }
                     }
                 }
                 break;
@@ -11577,6 +11603,19 @@ static GpFontFamily* gdip_resolve_family(const char* stack) {
     return NULL;
 }
 
+/* The dot a zero-length stroke's cap paints (see the CV_STROKE path assembly
+   below): a disc for a round cap, a square for a square one, nothing for butt. */
+static void w32_gdip_cap_dot(GpGraphics* g, CanvasCmd* cmd, int x, int y, float w) {
+    if (cmd->cap == 0) return;
+    GpBrush* br = NULL;
+    if (GdipCreateSolidFill(gdip_argb(cmd), &br) != 0 || !br) return;
+    int d = (int)(w + 0.5f);
+    if (d < 1) d = 1;
+    if (cmd->cap == 2) GdipFillRectangleI(g, br, x - d / 2, y - d / 2, d, d);
+    else GdipFillEllipseI(g, br, x - d / 2, y - d / 2, d, d);
+    GdipDeleteBrush(br);
+}
+
 static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int height, COLORREF backdrop) {
     if (!cv) return;
     ensure_gdiplus();
@@ -11865,6 +11904,17 @@ static void canvas_replay_to_dc_gdiplus(Canvas* cv, HDC mem, int width, int heig
                                 seg[0].Y = (INT)cv->cmds[j].p1;
                                 seg[1].X = (INT)cv->cmds[j].p2;
                                 seg[1].Y = (INT)cv->cmds[j].p3;
+                                if (seg[0].X == seg[1].X && seg[0].Y == seg[1].Y) {
+                                    /* A segment shorter than a pixel is a
+                                       degenerate figure GDI+ strokes as
+                                       nothing, where SVG paints its round or
+                                       square cap as a dot of the pen's width:
+                                       a vg/chart (Chartist) data point is a
+                                       0.01 px line with a round cap. Paint the
+                                       dot; a butt cap paints nothing. */
+                                    w32_gdip_cap_dot(g, cmd, seg[0].X, seg[0].Y, w);
+                                    continue;
+                                }
                                 if (!fig_open) { GdipStartPathFigure(sp); fig_open = 1; }
                                 if (GdipAddPathLine2I(sp, seg, 2) == 0) segs++;
                             }
