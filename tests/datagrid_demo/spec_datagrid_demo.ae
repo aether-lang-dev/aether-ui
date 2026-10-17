@@ -212,6 +212,32 @@ y_of_row1() -> int {
     return field_of_text("R1C1", "y")
 }
 
+// The text of the cell the cursor's box is on (borderWidth 2), or "".
+boxed() -> string {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return "" }
+    t = ""
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.contains(uidriver.field_str(w, "classes"), "aui-grid-cell") == 1 && uidriver.field_int(w, "borderWidth") == 2 { t = uidriver.field_str(w, "text") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return t
+}
+
+// 1 once the box is on the cell reading `text`.
+boxed_on(text: string) -> int {
+    i = 0
+    while i < 40 {
+        if string.equals(boxed(), text) == 1 { return 1 }
+        sleep(50)
+        i = i + 1
+    }
+    return 0
+}
+
 press(label: string) {
     uidriver.post_ok("/widget/${uidriver.widget_id_of("button", label)}/click", label)
 }
@@ -821,6 +847,77 @@ main() {
             key("Escape")
             spec.assert_true(editor_open(0) == 1, "Escape closed it")
             spec.assert_eq(count_of("textfield"), 1, "and none is left over the grid")
+        }
+    }
+    spec.describe(fw, "the selection's glide") {
+        spec.it("datagrid_selection_glide: the cursor's box passes the cells between, then rests on the new one; 0 jumps") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("slider", 1)}/set_value?v=0", "and the left")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C1")}/click", "click R0C1")
+            spec.assert_true(boxed_on("R0C1") == 1, "the box on R0C1")
+            press("Glide")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C5")}/click", "click R0C5")
+            between = 0
+            k = 0
+            while k < 60 && between == 0 {
+                b = boxed()
+                if string.equals(b, "R0C2") == 1 || string.equals(b, "R0C3") == 1 || string.equals(b, "R0C4") == 1 { between = 1 }
+                k = k + 1
+            }
+            spec.assert_eq(between, 1, "it passed a cell between on its way")
+            spec.assert_true(boxed_on("R0C5") == 1, "and rests on R0C5")
+            press("Glide")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C1")}/click", "click R0C1")
+            spec.assert_true(string.equals(boxed(), "R0C1") == 1, "off: it is there at once")
+        }
+    }
+    spec.describe(fw, "a picture in a cell") {
+        spec.it("datagrid_cell_picture: an image over R2C5, fitted to it, and gone again") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("slider", 1)}/set_value?v=0", "and the left")
+            n0 = count_of("image")
+            press("Picture")
+            i = 0
+            while i < 30 && count_of("image") == n0 { sleep(100); i = i + 1 }
+            spec.assert_eq(count_of("image"), n0 + 1, "an image")
+            img = uidriver.widget_id_last_of("image", "")
+            cell = uidriver.widget_id_by_text("R2C5")
+            spec.assert_eq(uidriver.widget_int_field_by_id(img, "x"), uidriver.widget_int_field_by_id(cell, "x"), "over R2C5")
+            spec.assert_true(uidriver.widget_int_field_by_id(img, "w") <= uidriver.widget_int_field_by_id(cell, "w") + 1, "within it")
+            press("Picture")
+            i = 0
+            while i < 30 && count_of("image") != n0 { sleep(100); i = i + 1 }
+            spec.assert_eq(count_of("image"), n0, "gone again")
+        }
+    }
+    spec.describe(fw, "the grid's own row height") {
+        spec.it("datagrid_set_row_heights: every row that height, and back") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            c = uidriver.widget_id_by_text("R1C1")
+            h0 = uidriver.widget_int_field_by_id(c, "h")
+            press("Rows 36")
+            i = 0
+            while i < 30 && uidriver.widget_int_field_by_id(c, "h") == h0 { sleep(100); i = i + 1 }
+            spec.assert_eq(uidriver.widget_int_field_by_id(c, "h"), 36, "R1C1 36 high")
+            press("Rows 36")
+            i = 0
+            while i < 30 && uidriver.widget_int_field_by_id(c, "h") != h0 { sleep(100); i = i + 1 }
+            spec.assert_eq(uidriver.widget_int_field_by_id(c, "h"), h0, "and back")
+        }
+    }
+    spec.describe(fw, "the column headers") {
+        spec.it("datagrid_show_header hides the header row and shows it again") callback {
+            v = nth_of("slider", 0)
+            y0 = uidriver.widget_int_field_by_id(v, "y")
+            press("Headers")
+            i = 0
+            while i < 30 && uidriver.widget_int_field_by_id(v, "y") == y0 { sleep(100); i = i + 1 }
+            y1 = uidriver.widget_int_field_by_id(v, "y")
+            spec.assert_true(y0 - y1 >= 20, "hidden: the rows move up into its place (${y0} to ${y1})")
+            press("Headers")
+            i = 0
+            while i < 30 && uidriver.widget_int_field_by_id(v, "y") != y0 { sleep(100); i = i + 1 }
+            spec.assert_eq(uidriver.widget_int_field_by_id(v, "y"), y0, "shown again")
         }
     }
     spec.describe(fw, "a grid given less or more height") {

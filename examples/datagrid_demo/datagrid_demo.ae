@@ -14,7 +14,7 @@
 import ui
 import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refresh,
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
-    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, datagrid_edit, shortcut,
+    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, datagrid_edit, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, shortcut,
     on_cell_activate, on_col_resize, on_col_move, on_header_click, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
@@ -223,6 +223,34 @@ main() {
             }
             _fit = btn("Fit row 4") callback {
                 _f = datagrid_fit_row(g, 3)
+            }
+            // A picture in R2C5 (a red square), and none, and back.
+            pics = ui_state_i(0)
+            _pic = btn("Picture") callback {
+                _ps = ui_set_i(pics, 1 - ui_get_i(pics))
+                _rp = datagrid_refresh(g)
+            }
+            _pc = datagrid_cell_picture(g) callback |r: int, c: int| {
+                if ui_get_i(pics) == 1 && r == 2 && c == 5 { return "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4oaGBFTEMLQkAgl1GAWqNFmsAAAAASUVORK5CYII=" }
+                return ""
+            }
+            // The cursor's box gliding to a new cell over 600 ms, and back
+            // to jumping.
+            _glide = btn("Glide") callback {
+                ms = 600
+                if datagrid_glide_ms(g) > 0 { ms = 0 }
+                _gl = datagrid_selection_glide(g, ms)
+            }
+            // Every row 36 high and back, as a zoom does (the rows given
+            // their own height keep it).
+            _rh = btn("Rows 36") callback {
+                h = 36
+                if datagrid_row_heights(g) == 36 { h = 24 }
+                _rr = datagrid_set_row_heights(g, h)
+            }
+            // The column headers hidden and shown again (View > Headings).
+            _hdr = btn("Headers") callback {
+                _sh = datagrid_show_header(g, 1 - datagrid_header_shown(g))
             }
             _twice = btn("Edit R6C2 twice") callback {
                 _re1 = ui_set_i(reenter, 1)

@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -192,6 +192,7 @@ import std.intarr (intarr_new_raw, intarr_get_raw, intarr_set_raw, intarr_free)
 import std.longarr (longarr_new_raw, longarr_get_raw, longarr_set_raw)   // the grid's style cache
 import std.fs      // load_styles (AeCS theme files)
 import std.worker  // background(): work off the UI thread, completion back on it
+import std.encoding (base64_decode)   // datagrid_cell_picture's pictures
 
 extern aether_mem_ptr_to_long(p: ptr) -> long   // ambient grid verbs tell a grid _ctx from a widget handle
 extern malloc(size: int) -> ptr   // EachGroup allocation (house pattern, vg/module.ae:84)
@@ -6546,6 +6547,8 @@ struct DataGrid {
     header: ptr       // boxed |c| -> string, or null
     root: int
     hdr_cells: ptr    // intarr of the header labels: frozen, then vis_cols
+    hdr_row: int      // the header row (datagrid_show_header hides it)
+    hdr_off: int      // 1 while it is hidden
     hdr_boxes: ptr    // intarr of the header cells (label + grip)
     hdr_grips: ptr    // intarr of the grips at the header cells' right edges
     cells: ptr        // intarr of text handles, row-major
@@ -6554,6 +6557,16 @@ struct DataGrid {
     click: ptr        // boxed |r, c|, or null (datagrid_on_click)
     cur_r: int        // the cursor cell, -1 before anything is selected
     cur_c: int
+    glide_ms: int     // datagrid_selection_glide: 0 off
+    glide_on: int     // 1 while the cursor's box glides
+    glide_t0: float   // the frame clock when it began, -1 before its first frame
+    glide_r0: int     // from and to, as indices among the rows and columns shown
+    glide_c0: int
+    glide_r1: int
+    glide_c1: int
+    box_r: int        // where the box is drawn while it glides
+    box_c: int
+    glide_frame: int  // its on_frame subscription, 0 when none
     anc_r: int        // the range's other corner
     anc_c: int
     painted: ptr      // intarr: the colour each shown cell was last given
@@ -6610,6 +6623,9 @@ struct DataGrid {
                       // alignment (1 italic, 2 underline/line-through, 4 a font size, 8 decorations)
     tip: ptr          // boxed |r, c| -> string, or null (datagrid_cell_tooltip)
     tip_hash: ptr     // longarr: the key of the tooltip each shown cell last had
+    pic: ptr          // boxed |r, c| -> string (a picture's bytes, base64), or null (datagrid_cell_picture)
+    pic_hash: ptr     // longarr: the key of the picture each shown cell last had
+    pic_view: ptr     // intarr: the image widget over each shown cell, 0 for none
     merges: ptr       // intarr: each merge as row, view column, rows, columns (n_merge of them)
     n_merge: int
     merge_cap: int
@@ -6703,6 +6719,11 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.areas = intarr_new_raw(DATAGRID_AREAS * 4)
     g.n_areas = 0
     g.keep_areas = 0
+    g.glide_ms = 0
+    g.glide_on = 0
+    g.glide_frame = 0
+    g.box_r = 0 - 1
+    g.box_c = 0 - 1
     g.height_px = 0
     g.drag_far = 0.0
     g.min_w = 24
@@ -6764,6 +6785,8 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     // The header row: not in what scrolls, so it stays at the top.
     a11y_next_role("row")
     hdr = hstack(root, 0)
+    g.hdr_row = hdr
+    g.hdr_off = 0
     _agr = a11y_grid_row(hdr, 0)
     g.hdr_cells = intarr_new_raw(fz + vc + 1)
     g.hdr_boxes = intarr_new_raw(fz + vc + 1)
@@ -6817,6 +6840,9 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.style_fx = intarr_new_raw(vr * (fz + vc) + 1)
     g.tip = null
     g.tip_hash = longarr_new_raw(vr * (fz + vc) + 1)
+    g.pic = null
+    g.pic_hash = longarr_new_raw(vr * (fz + vc) + 1)
+    g.pic_view = intarr_new_raw(vr * (fz + vc) + 1)
     g.merges = null
     g.n_merge = 0
     g.merge_cap = 0
@@ -6877,6 +6903,8 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
             intarr_set_raw(g.cell_off, ri * (fz + vc) + ci, 0)
             intarr_set_raw(g.cell_lines, ri * (fz + vc) + ci, 1)
             longarr_set_raw(g.tip_hash, ri * (fz + vc) + ci, 0)
+            longarr_set_raw(g.pic_hash, ri * (fz + vc) + ci, 0)
+            intarr_set_raw(g.pic_view, ri * (fz + vc) + ci, 0)
             vr2 = ri
             vc2 = ci
             _hc = on_click(ch) callback {
@@ -7131,6 +7159,23 @@ _datagrid_full_h(g: *DataGrid) -> int {
     full = g.vis_rows * g.row_h
     if g.height_px > 0 && g.height_px < full { return g.height_px }
     return full
+}
+
+// datagrid_show_header(g, on): the column headers shown (1, as made) or
+// not (0: a spreadsheet's View > Headings off, with its row numbers'
+// column hidden by datagrid_hide_col); datagrid_header_shown(g).
+datagrid_show_header(gp: @keep ptr, on: int) -> ptr {
+    g = gp as *DataGrid
+    hidden = 1
+    if on != 0 { hidden = 0 }
+    _h = set_hidden(g.hdr_row, hidden)
+    g.hdr_off = hidden
+    return gp
+}
+
+datagrid_header_shown(gp: ptr) -> int {
+    g = gp as *DataGrid
+    return 1 - g.hdr_off
 }
 
 // datagrid_freeze_cols(g, n): the n columns after the grid's own frozen
@@ -7680,8 +7725,61 @@ _datagrid_bind(g: *DataGrid) {
     _datagrid_style(g)
     _datagrid_wraps(g)
     _datagrid_tips(g)
+    _datagrid_pictures(g)
     _datagrid_paint(g)
     _datagrid_a11y(g)
+}
+
+// Each shown cell's picture, from datagrid_cell_picture: an image laid
+// over the cell's text in its zstack, fitted to the cell keeping its
+// shape (a spreadsheet's Place in Cell, its IMAGE function), made, changed
+// or taken away where the picture changed, and sized to the cell each
+// time (a column widened, a row made taller).
+_datagrid_pictures(g: *DataGrid) {
+    if g.pic == null { return }
+    pf = unbox_closure(g.pic)
+    w = g.npos
+    r = 0
+    while r < g.vis_rows {
+        mr = _datagrid_row_at(g, r)
+        c = 0
+        while c < w {
+            i = r * w + c
+            t = ""
+            if mr >= 0 && intarr_get_raw(g.pos_off, c) == 0 { t = _datagrid_invoke_cell(pf, mr, _datagrid_model(g, _datagrid_col_at(g, c))) }
+            hh = _datagrid_hash(t)
+            old = intarr_get_raw(g.pic_view, i)
+            box = intarr_get_raw(g.boxes, i)
+            if longarr_get_raw(g.pic_hash, i) != hh {
+                longarr_set_raw(g.pic_hash, i, hh)
+                if old != 0 {
+                    remove_child(box, old)
+                    old = 0
+                }
+                if string.length(t) > 0 {
+                    raw, derr = base64_decode(t)
+                    if derr == "" && string.length(raw) > 0 {
+                        old = image_from_bytes(box, raw, string.length(raw))
+                        image_fill(old, "contain")
+                    }
+                }
+                intarr_set_raw(g.pic_view, i, old)
+            }
+            if old != 0 { image_size(old, intarr_get_raw(g.cell_w, i), intarr_get_raw(g.slot_h, r)) }
+            c = c + 1
+        }
+        r = r + 1
+    }
+}
+
+// datagrid_cell_picture(g) callback |r: int, c: int| -> string { ... }: a
+// cell's picture, its PNG, JPEG, GIF or BMP bytes in base64 ("" none),
+// drawn over the cell fitted to it, as Excel's Place in Cell does.
+datagrid_cell_picture(gp: @keep ptr, fn_: fn) -> ptr {
+    g = gp as *DataGrid
+    g.pic = box_closure(fn_)
+    _datagrid_bind(g)
+    return gp
 }
 
 // Each shown cell's tooltip, from datagrid_cell_tooltip, where it changed.
@@ -8091,7 +8189,11 @@ _datagrid_paint(g: *DataGrid) {
                 if c < g.frozen0 || r < g.frozen_rows { col = 0xf2f2f5 }
             }
             cur = 0
-            if mr == g.cur_r && mc == g.cur_c { cur = 1 }
+            if g.glide_on == 1 {
+                if mr == g.box_r && mc == g.box_c { cur = 1 }
+            } else if mr == g.cur_r && mc == g.cur_c {
+                cur = 1
+            }
             if _datagrid_in_range(g, mr, mc) == 1 {
                 // The range over a cell's own colour is the two half and
                 // half, so a red cell still reads as red when selected.
@@ -8118,6 +8220,92 @@ _datagrid_paint(g: *DataGrid) {
         }
         r = r + 1
     }
+}
+
+// ── The selection's glide (datagrid_selection_glide). The cursor's box
+// goes from the cell it was on to the new one over glide_ms on the frame
+// clock, decelerating (1 - (1 - t)^3), through the cells between, by
+// their place among the rows and columns shown; drawn by the grid itself,
+// so on every backend alike. The selection is the new one at once, and a
+// scroll ends the glide.
+_datagrid_glide_start(g: *DataGrid, r0: int, c0: int, r1: int, c1: int) {
+    g.glide_r0 = _datagrid_row_index(g, r0)
+    g.glide_c0 = _datagrid_index_in(g.vcols, g.n_vcols, c0)
+    g.glide_r1 = _datagrid_row_index(g, r1)
+    g.glide_c1 = _datagrid_index_in(g.vcols, g.n_vcols, c1)
+    g.box_r = r0
+    g.box_c = c0
+    g.glide_t0 = 0.0 - 1.0
+    g.glide_on = 1
+    if g.glide_frame == 0 {
+        gp = g as ptr
+        g.glide_frame = on_frame(|t: float| { _datagrid_glide_tick(gp, t) })
+    }
+}
+
+_datagrid_glide_end(g: *DataGrid) {
+    g.glide_on = 0
+    g.box_r = 0 - 1
+    g.box_c = 0 - 1
+    if g.glide_frame != 0 {
+        frame_cancel(g.glide_frame)
+        g.glide_frame = 0
+    }
+}
+
+_datagrid_glide_tick(gp: ptr, t: float) {
+    g = gp as *DataGrid
+    if g.glide_on == 0 { return }
+    if g.glide_t0 < 0.0 { g.glide_t0 = t }
+    f = (t - g.glide_t0) / (g.glide_ms * 1.0)
+    if f >= 1.0 {
+        _datagrid_glide_end(g)
+        _datagrid_paint(g)
+        return
+    }
+    u = 1.0 - f
+    e = 1.0 - u * u * u
+    ri = g.glide_r0 + _datagrid_round(e * ((g.glide_r1 - g.glide_r0) * 1.0))
+    ci = g.glide_c0 + _datagrid_round(e * ((g.glide_c1 - g.glide_c0) * 1.0))
+    br = _datagrid_row_of_index(g, ri)
+    bc = 0 - 1
+    if ci >= 0 && ci < g.n_vcols { bc = intarr_get_raw(g.vcols, ci) }
+    if br != g.box_r || bc != g.box_c {
+        g.box_r = br
+        g.box_c = bc
+        _datagrid_paint(g)
+    }
+}
+
+_datagrid_round(x: float) -> int {
+    if x >= 0.0 { return (x + 0.5) as int }
+    return 0 - ((0.5 - x) as int)
+}
+
+// datagrid_selection_glide(g, ms): the cursor's box glides to a new cell
+// over ms milliseconds (a spreadsheet's selection animation; about 120 is
+// Excel's), 0 (as made) to jump. datagrid_glide_ms(g); datagrid_gliding(g)
+// 1 while it glides, where datagrid_glide_box(g) says it is ("r,c": a model
+// row and a view column), for a driver or a test.
+datagrid_selection_glide(gp: @keep ptr, ms: int) -> ptr {
+    g = gp as *DataGrid
+    m = ms
+    if m < 0 { m = 0 }
+    if m > 2000 { m = 2000 }
+    g.glide_ms = m
+    if m == 0 && g.glide_on == 1 {
+        _datagrid_glide_end(g)
+        _datagrid_paint(g)
+    }
+    return gp
+}
+
+datagrid_glide_ms(gp: ptr) -> int { g = gp as *DataGrid; return g.glide_ms }
+datagrid_gliding(gp: ptr) -> int { g = gp as *DataGrid; return g.glide_on }
+datagrid_glide_box(gp: ptr) -> string {
+    g = gp as *DataGrid
+    if g.glide_on == 0 { return "${g.cur_r},${g.cur_c}" }
+    return "${g.box_r},${g.box_c}"
 }
 
 // Half and half of two 0xRRGGBB colours.
@@ -8471,6 +8659,8 @@ _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     if nr < 0 || nc < 0 { return }
     changed = 0
     if nr != g.cur_r || nc != g.cur_c || na_r != g.anc_r || na_c != g.anc_c { changed = 1 }
+    old_r = g.cur_r
+    old_c = g.cur_c
     // Any other move makes the selection one area again.
     if g.keep_areas == 0 && g.n_areas > 0 {
         g.n_areas = 0
@@ -8500,6 +8690,9 @@ _datagrid_set(g: *DataGrid, ar: int, ac: int, r: int, c: int) {
     if fr != g.first_row || fc != g.first_col {
         datagrid_scroll_to(g as ptr, fr, fc)
     } else {
+        // In view, from a cursor in view: the box glides there (the
+        // selection itself is there at once). A jump that scrolls appears.
+        if g.glide_ms > 0 && old_r >= 0 && old_c >= 0 && (old_r != nr || old_c != nc) { _datagrid_glide_start(g, old_r, old_c, nr, nc) }
         _datagrid_paint(g)
     }
     if changed == 1 && g.on_sel != null {
@@ -8758,6 +8951,23 @@ datagrid_set_col_widths(gp: @keep ptr, w: int) -> ptr {
     return gp
 }
 
+// datagrid_set_row_heights(g, h): every row's height the grid's own (h
+// px, 8 at the least; the rows given their own by datagrid_set_row_height
+// keep theirs), as a zoom makes it; datagrid_row_heights(g).
+datagrid_set_row_heights(gp: @keep ptr, h: int) -> ptr {
+    g = gp as *DataGrid
+    nh = h
+    if nh < 8 { nh = 8 }
+    if nh > 400 { nh = 400 }
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    g.row_h = nh
+    _vh = height(g.vsl, _datagrid_full_h(g))
+    _d = datagrid_scroll_to(gp, g.first_row, g.first_col)
+    return gp
+}
+
+datagrid_row_heights(gp: ptr) -> int { g = gp as *DataGrid; return g.row_h }
+
 // ── The grid's ambient verbs: inside datagrid(...) { ... } the grid is the
 // receiver, as a button is inside button("OK") { ... }. Each is its
 // datagrid_* form for that grid; outside a grid's block they do nothing.
@@ -8830,6 +9040,8 @@ datagrid_scroll_to(gp: @keep ptr, row: int, col: int) -> ptr {
     g = gp as *DataGrid
     // An open editor sits on a widget that is about to show another cell.
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
+    // A glide is over once the cells under it move.
+    if g.glide_on == 1 { _datagrid_glide_end(g) }
     // Rows by their index among those shown: the window never runs past
     // the last of them, and a hidden row reads as the next one shown.
     // Frozen rows are not in what scrolls: the first row is the first of
