@@ -1,0 +1,71 @@
+// vg/chart/test/check.ae — the assertions the chart tests share: each
+// prints PASS/FAIL with its label, counts, and `done()` exits non-zero when
+// any failed (the Phase-0 contract: a test binary's exit status is its
+// verdict).
+
+exports (eq_str, eq_num, eq_int, near, is_true, is_false, done, failures)
+
+import std.string
+import vg.chart.value as jv
+
+extern exit(code: int)
+
+var failed: int = 0
+var passed: int = 0
+
+failures() -> int { return failed }
+
+ok(label: string) {
+    passed = passed + 1
+    println("  PASS: ${label}")
+}
+
+bad(label: string, detail: string) {
+    failed = failed + 1
+    println("  FAIL: ${label}: ${detail}")
+}
+
+eq_str(label: string, got: string, want: string) {
+    if string.equals(got, want) == 1 { ok(label) } else {
+        bad(label, "got '${got}' want '${want}'")
+    }
+}
+
+// Exact numeric equality (Jest's toBe on numbers): NaN equals NaN here.
+eq_num(label: string, got: float, want: float) {
+    same = 0
+    if got == want { same = 1 }
+    if jv.is_nan(got) == 1 && jv.is_nan(want) == 1 { same = 1 }
+    if same == 1 { ok(label) } else {
+        bad(label, "got ${jv.js_number(got)} want ${jv.js_number(want)}")
+    }
+}
+
+eq_int(label: string, got: int, want: int) {
+    if got == want { ok(label) } else { bad(label, "got ${got} want ${want}") }
+}
+
+// toBeCloseTo(want, digits): |got - want| < 10^-digits / 2.
+near(label: string, got: float, want: float, digits: int) {
+    tol = 0.5
+    i = 0
+    while i < digits { tol = tol / 10.0; i = i + 1 }
+    d = got - want
+    if d < 0.0 { d = 0.0 - d }
+    if d < tol { ok(label) } else {
+        bad(label, "got ${jv.js_number(got)} want ${jv.js_number(want)} (to ${digits} digits)")
+    }
+}
+
+is_true(label: string, cond: int) {
+    if cond != 0 { ok(label) } else { bad(label, "expected true") }
+}
+
+is_false(label: string, cond: int) {
+    if cond == 0 { ok(label) } else { bad(label, "expected false") }
+}
+
+done(name: string) {
+    println("${name}: ${passed} passed, ${failed} failed")
+    if failed > 0 { exit(1) }
+}

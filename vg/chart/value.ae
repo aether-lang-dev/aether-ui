@@ -1,0 +1,1016 @@
+// vg/chart/value.ae — the JavaScript value model Chartist's data and options
+// live in: undefined, null, booleans, numbers, strings, arrays and objects.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: utils/utils.ts (safeHasProperty, isNumeric,
+// isFalseyButZero, getNumberOrUndefined, isArrayOfArrays), utils/extend.ts
+// (extend) and the JS semantics the data code leans on: Number(), String(),
+// JSON.stringify / JSON.parse and the JS number-to-string conversion.
+//
+// Why a value model at all: Chartist's data normalisation IS its handling of
+// loose JavaScript input ('2' is 2, null and NaN are holes, {value: …},
+// {x, y}, {data: […]} and {meta} objects). Keeping that input shape keeps the
+// hardening. A chart's data and options are Jv trees; `parse` reads a JS
+// literal (JSON plus undefined, NaN, Infinity, single quotes, unquoted keys
+// and trailing commas), so Chartist's own test data ports verbatim and a page
+// can hand over what JSON.stringify gives it.
+//
+// Objects keep their keys in insertion order, as JS objects do for string
+// keys. Values are heap boxes; nothing here frees them (a chart's trees are
+// small and built once per layout).
+
+exports (
+    JsValue,
+    JV_UNDEFINED, JV_NULL, JV_BOOL, JV_NUMBER, JV_STRING, JV_ARRAY, JV_OBJECT,
+    undef, null_v, bool_v, num, str, arr, obj,
+    kind, is_undefined, is_null, is_nullish, is_number, is_string, is_bool,
+    is_array, is_object, truthy,
+    number_of, string_of, bool_of,
+    len, at, push, set_at,
+    get, has, put, remove_key, key_count, key_at, value_at,
+    get_path, num_path, num_path_or, str_path, bool_path, has_path,
+    parse, parse_error, stringify,
+    js_number, js_string, to_number, is_numeric, is_falsey_but_zero,
+    number_or_undefined, is_array_of_arrays,
+    nan, infinity, is_nan, is_finite, js_round, is_space,
+    equals, clone, extend
+)
+
+import std.string
+import std.list
+import std.math
+import std.bytes
+
+// The runtime's locale-pinned snprintf for one double (always '.').
+extern aether_c_snprintf_double(buf: ptr, n: int, fmt: string, v: float) -> int
+
+const JV_UNDEFINED: int = 0
+const JV_NULL: int = 1
+const JV_BOOL: int = 2
+const JV_NUMBER: int = 3
+const JV_STRING: int = 4
+const JV_ARRAY: int = 5
+const JV_OBJECT: int = 6
+
+struct JsValue {
+    kind: int
+    num: float      // number, and 0/1 for a boolean
+    str: string     // string
+    items: ptr      // std.list of *JsValue: array elements, or object values
+    keys: ptr       // std.list of *JsValue strings: object keys (parallel to items)
+}
+
+// ─── construction ────────────────────────────────────────────────
+
+mk(k: int) -> *JsValue {
+    v = heap.new(JsValue)
+    v.kind = k
+    v.num = 0.0
+    v.str = ""
+    v.items = null
+    v.keys = null
+    return v
+}
+
+undef() -> *JsValue { return mk(JV_UNDEFINED) }
+null_v() -> *JsValue { return mk(JV_NULL) }
+
+bool_v(b: int) -> *JsValue {
+    v = mk(JV_BOOL)
+    if b != 0 { v.num = 1.0 }
+    return v
+}
+
+num(n: float) -> *JsValue {
+    v = mk(JV_NUMBER)
+    v.num = n
+    return v
+}
+
+str(s: string) -> *JsValue {
+    v = mk(JV_STRING)
+    v.str = string.copy(s)
+    return v
+}
+
+arr() -> *JsValue {
+    v = mk(JV_ARRAY)
+    v.items = list.new()
+    return v
+}
+
+obj() -> *JsValue {
+    v = mk(JV_OBJECT)
+    v.items = list.new()
+    v.keys = list.new()
+    return v
+}
+
+// ─── kinds ───────────────────────────────────────────────────────
+
+// A null pointer reads as undefined everywhere: a missing property.
+kind(v: *JsValue) -> int {
+    if v == null { return JV_UNDEFINED }
+    return v.kind
+}
+is_undefined(v: *JsValue) -> int { if kind(v) == JV_UNDEFINED { return 1 } return 0 }
+is_null(v: *JsValue) -> int { if kind(v) == JV_NULL { return 1 } return 0 }
+is_nullish(v: *JsValue) -> int {
+    k = kind(v)
+    if k == JV_UNDEFINED || k == JV_NULL { return 1 }
+    return 0
+}
+is_number(v: *JsValue) -> int { if kind(v) == JV_NUMBER { return 1 } return 0 }
+is_string(v: *JsValue) -> int { if kind(v) == JV_STRING { return 1 } return 0 }
+is_bool(v: *JsValue) -> int { if kind(v) == JV_BOOL { return 1 } return 0 }
+is_array(v: *JsValue) -> int { if kind(v) == JV_ARRAY { return 1 } return 0 }
+is_object(v: *JsValue) -> int { if kind(v) == JV_OBJECT { return 1 } return 0 }
+
+// JS truthiness: false, 0, NaN, "", null and undefined are falsey.
+truthy(v: *JsValue) -> int {
+    k = kind(v)
+    if k == JV_UNDEFINED || k == JV_NULL { return 0 }
+    if k == JV_BOOL || k == JV_NUMBER {
+        if v.num == 0.0 { return 0 }
+        if is_nan(v.num) == 1 { return 0 }
+        return 1
+    }
+    if k == JV_STRING {
+        if string.length(v.str) == 0 { return 0 }
+        return 1
+    }
+    return 1
+}
+
+// The raw payloads (no coercion): a number's value, a string's text, a
+// boolean's 0/1. 0 / "" for anything else.
+number_of(v: *JsValue) -> float {
+    k = kind(v)
+    if k == JV_NUMBER || k == JV_BOOL { return v.num }
+    return 0.0
+}
+string_of(v: *JsValue) -> string {
+    if kind(v) == JV_STRING { return v.str }
+    return ""
+}
+bool_of(v: *JsValue) -> int { return truthy(v) }
+
+// ─── arrays ──────────────────────────────────────────────────────
+
+len(v: *JsValue) -> int {
+    k = kind(v)
+    if k == JV_ARRAY || k == JV_OBJECT { return list.size(v.items) }
+    if k == JV_STRING { return string.length(v.str) }
+    return 0
+}
+
+// Element i of an array; out of range reads as undefined (null pointer).
+at(v: *JsValue, i: int) -> *JsValue {
+    if kind(v) != JV_ARRAY { return null }
+    if i < 0 || i >= list.size(v.items) { return null }
+    item, _e = list.get(v.items, i)
+    return item as *JsValue
+}
+
+push(a: *JsValue, item: *JsValue) {
+    if kind(a) != JV_ARRAY { return }
+    x = item
+    if x == null { x = undef() }
+    _p = list.add(a.items, x)
+}
+
+set_at(a: *JsValue, i: int, item: *JsValue) {
+    if kind(a) != JV_ARRAY { return }
+    x = item
+    if x == null { x = undef() }
+    while list.size(a.items) <= i { _p = list.add(a.items, undef()) }
+    list.set(a.items, i, x)
+}
+
+// ─── objects ─────────────────────────────────────────────────────
+
+key_index(o: *JsValue, k: string) -> int {
+    if kind(o) != JV_OBJECT { return -1 }
+    n = list.size(o.keys)
+    i = 0
+    while i < n {
+        kk, _e = list.get(o.keys, i)
+        kv = kk as *JsValue
+        if string.equals(kv.str, k) == 1 { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// o[k]: null (undefined) when the key is missing.
+get(o: *JsValue, k: string) -> *JsValue {
+    i = key_index(o, k)
+    if i < 0 { return null }
+    item, _e = list.get(o.items, i)
+    return item as *JsValue
+}
+
+// `k in o` (Reflect.has): the key is present, even with an undefined value.
+has(o: *JsValue, k: string) -> int {
+    if key_index(o, k) >= 0 { return 1 }
+    return 0
+}
+
+put(o: *JsValue, k: string, v: *JsValue) {
+    if kind(o) != JV_OBJECT { return }
+    x = v
+    if x == null { x = undef() }
+    i = key_index(o, k)
+    if i >= 0 {
+        list.set(o.items, i, x)
+        return
+    }
+    _pk = list.add(o.keys, str(k))
+    _pv = list.add(o.items, x)
+}
+
+remove_key(o: *JsValue, k: string) {
+    i = key_index(o, k)
+    if i < 0 { return }
+    list.remove(o.keys, i)
+    list.remove(o.items, i)
+}
+
+key_count(o: *JsValue) -> int {
+    if kind(o) != JV_OBJECT { return 0 }
+    return list.size(o.keys)
+}
+
+key_at(o: *JsValue, i: int) -> string {
+    if kind(o) != JV_OBJECT { return "" }
+    kk, _e = list.get(o.keys, i)
+    kv = kk as *JsValue
+    return kv.str
+}
+
+value_at(o: *JsValue, i: int) -> *JsValue {
+    if kind(o) != JV_OBJECT { return null }
+    item, _e = list.get(o.items, i)
+    return item as *JsValue
+}
+
+// o.a.b.c by a dotted path; undefined (null) when any step is missing.
+get_path(o: *JsValue, path: string) -> *JsValue {
+    cur = o
+    start = 0
+    n = string.length(path)
+    i = 0
+    while i <= n {
+        at_end = 0
+        if i == n { at_end = 1 } else {
+            if string.char_at(path, i) == 46 { at_end = 1 }
+        }
+        if at_end == 1 {
+            seg = string.substring(path, start, i)
+            cur = get(cur, seg)
+            if cur == null { return null }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return cur
+}
+
+has_path(o: *JsValue, path: string) -> int {
+    if get_path(o, path) == null { return 0 }
+    return 1
+}
+
+// An option read as a number: Number() of what is there (NaN when missing).
+num_path(o: *JsValue, path: string) -> float {
+    return to_number(get_path(o, path))
+}
+
+// A numeric option, or the fallback when it is missing or not numeric.
+num_path_or(o: *JsValue, path: string, fallback: float) -> float {
+    v = get_path(o, path)
+    if is_numeric(v) == 0 { return fallback }
+    return to_number(v)
+}
+
+str_path(o: *JsValue, path: string) -> string {
+    v = get_path(o, path)
+    if v == null { return "" }
+    if is_undefined(v) == 1 { return "" }
+    return js_string(v)
+}
+
+bool_path(o: *JsValue, path: string) -> int {
+    return truthy(get_path(o, path))
+}
+
+// ─── numbers ─────────────────────────────────────────────────────
+
+nan() -> float {
+    v, _e = string.to_double("NaN")
+    return v
+}
+
+infinity() -> float {
+    v, _e = string.to_double("Infinity")
+    return v
+}
+
+is_nan(x: float) -> int {
+    if x != x { return 1 }
+    return 0
+}
+
+is_finite(x: float) -> int {
+    if x != x { return 0 }
+    if x - x != 0.0 { return 0 }     // inf - inf is NaN
+    return 1
+}
+
+// Math.round: halves round up (toward +Infinity), -2.5 → -2.
+js_round(x: float) -> float {
+    if is_finite(x) == 0 { return x }
+    r = math.floor(x)
+    if x - r >= 0.5 { r = r + 1.0 }
+    return r
+}
+
+// Number(v), the JS ToNumber conversion.
+to_number(v: *JsValue) -> float {
+    k = kind(v)
+    if k == JV_UNDEFINED { return nan() }
+    if k == JV_NULL { return 0.0 }
+    if k == JV_BOOL || k == JV_NUMBER { return v.num }
+    if k == JV_STRING { return string_to_number(v.str) }
+    if k == JV_ARRAY {
+        n = list.size(v.items)
+        if n == 0 { return 0.0 }
+        if n == 1 { return string_to_number(js_string(at(v, 0))) }
+        return nan()
+    }
+    return nan()
+}
+
+is_space(c: int) -> int {
+    if c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12 { return 1 }
+    return 0
+}
+
+// The StringToNumber grammar: surrounding white space, "" is 0, decimal
+// literals with exponents, Infinity, and 0x/0o/0b integers.
+string_to_number(s0: string) -> float {
+    s = string.trim(s0)
+    n = string.length(s)
+    if n == 0 { return 0.0 }
+    if string.equals(s, "Infinity") == 1 || string.equals(s, "+Infinity") == 1 { return infinity() }
+    if string.equals(s, "-Infinity") == 1 { return 0.0 - infinity() }
+    if n > 2 {
+        c0 = string.char_at(s, 0)
+        c1 = string.char_at(s, 1)
+        if c0 == 48 {
+            radix = 0
+            if c1 == 120 || c1 == 88 { radix = 16 }
+            if c1 == 111 || c1 == 79 { radix = 8 }
+            if c1 == 98 || c1 == 66 { radix = 2 }
+            if radix > 0 { return radix_number(s, radix) }
+        }
+    }
+    // Only digits, one '.', an exponent and leading signs: strtod would also
+    // take "nan", "inf" and hex floats, which Number() does not.
+    i = 0
+    if string.char_at(s, 0) == 43 || string.char_at(s, 0) == 45 { i = 1 }
+    digits = 0
+    while i < n {
+        c = string.char_at(s, i)
+        ok = 0
+        if c >= 48 && c <= 57 { ok = 1; digits = digits + 1 }
+        if c == 46 { ok = 1 }
+        if c == 101 || c == 69 { ok = 1 }
+        if (c == 43 || c == 45) && i > 0 {
+            p = string.char_at(s, i - 1)
+            if p == 101 || p == 69 { ok = 1 }
+        }
+        if ok == 0 { return nan() }
+        i = i + 1
+    }
+    if digits == 0 { return nan() }
+    v, err = string.to_double(s)
+    if string.length(err) > 0 { return nan() }
+    return v
+}
+
+radix_number(s: string, radix: int) -> float {
+    n = string.length(s)
+    acc = 0.0
+    i = 2
+    while i < n {
+        c = string.char_at(s, i)
+        d = -1
+        if c >= 48 && c <= 57 { d = c - 48 }
+        if c >= 97 && c <= 102 { d = c - 87 }
+        if c >= 65 && c <= 70 { d = c - 55 }
+        if d < 0 || d >= radix { return nan() }
+        acc = acc * radix + d
+        i = i + 1
+    }
+    return acc
+}
+
+// isNumeric: everything but null that coerces to a finite number.
+is_numeric(v: *JsValue) -> int {
+    if kind(v) == JV_NULL { return 0 }
+    return is_finite(to_number(v))
+}
+
+// isFalseyButZero: falsey, and not the number 0.
+is_falsey_but_zero(v: *JsValue) -> int {
+    if truthy(v) == 1 { return 0 }
+    if kind(v) == JV_NUMBER && v.num == 0.0 { return 0 }
+    return 1
+}
+
+// getNumberOrUndefined: Number(v) when numeric, else undefined.
+number_or_undefined(v: *JsValue) -> *JsValue {
+    if is_numeric(v) == 1 { return num(to_number(v)) }
+    return undef()
+}
+
+is_array_of_arrays(v: *JsValue) -> int {
+    if kind(v) != JV_ARRAY { return 0 }
+    n = len(v)
+    i = 0
+    while i < n {
+        if kind(at(v, i)) != JV_ARRAY { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// ─── number to string (Number.prototype.toString) ─────────────────
+//
+// The shortest decimal that reads back as the same double, in JS's layout:
+// plain digits from 1e-6 up to 1e21, exponent notation outside. The digits
+// are the double's exact decimal expansion (%.40g), rounded to the fewest
+// that still round-trip: the nearest such decimal, as JS picks.
+
+js_number(x: float) -> string {
+    if is_nan(x) == 1 { return "NaN" }
+    if is_finite(x) == 0 {
+        if x < 0.0 { return "-Infinity" }
+        return "Infinity"
+    }
+    if x == 0.0 { return "0" }
+    neg = 0
+    a = x
+    if x < 0.0 { neg = 1; a = 0.0 - x }
+    full = exact_digits(a)
+    // Split %.17g into its significant digits and decimal exponent.
+    digits = ""
+    seen_point = 0
+    int_digits = 0
+    n = string.length(full)
+    i = 0
+    epos = -1
+    while i < n {
+        c = string.char_at(full, i)
+        if c == 101 || c == 69 { epos = i; i = n } else {
+            if c == 46 { seen_point = 1 } else {
+                digits = string.concat(digits, string.from_char(c))
+                if seen_point == 0 { int_digits = int_digits + 1 }
+            }
+            i = i + 1
+        }
+    }
+    e_val = 0
+    if epos >= 0 {
+        es = string.substring(full, epos + 1, n)
+        ev, _ee = string.to_int(es)
+        e_val = ev
+    }
+    // Strip leading zeros (0.00012 gives "000012"), moving the exponent.
+    lead = 0
+    while lead < string.length(digits) - 1 && string.char_at(digits, lead) == 48 { lead = lead + 1 }
+    point = int_digits + e_val - lead   // digits before the decimal point
+    digits = string.substring(digits, lead, string.length(digits))
+    best = strip_zeros(digits)
+    p = 1
+    found = 0
+    while p <= 17 && p < string.length(best) && found == 0 {
+        cand = round_digits(best, p)
+        cdig = cand
+        cpoint = point
+        if string.length(cand) > p {     // rounding carried: 9.99 -> 10.0
+            cdig = string.substring(cand, 0, p)
+            cpoint = point + 1
+        }
+        txt = layout_digits(strip_zeros(cdig), cpoint)
+        back, _be = string.to_double(txt)
+        if back == a {
+            best = strip_zeros(cdig)
+            point = cpoint
+            found = 1
+        }
+        p = p + 1
+    }
+    out = layout_digits(best, point)
+    if neg == 1 { return string.concat("-", out) }
+    return out
+}
+
+exact_digits(a: float) -> string {
+    b = bytes.new(64)
+    n = aether_c_snprintf_double(bytes.data(b), 64, "%.40g", a)
+    s = bytes.to_string(b, n)
+    bytes.free(b)
+    return s
+}
+
+strip_zeros(d: string) -> string {
+    n = string.length(d)
+    while n > 1 && string.char_at(d, n - 1) == 48 { n = n - 1 }
+    return string.substring(d, 0, n)
+}
+
+// The first p digits of d, rounded half up on the next one; may carry into
+// one more digit ("995", 2 → "100").
+round_digits(d: string, p: int) -> string {
+    head = string.substring(d, 0, p)
+    if string.char_at(d, p) < 53 { return head }
+    out = ""
+    carry = 1
+    i = p - 1
+    while i >= 0 {
+        c = string.char_at(head, i) - 48 + carry
+        carry = 0
+        if c == 10 { c = 0; carry = 1 }
+        out = string.concat(string.from_char(c + 48), out)
+        i = i - 1
+    }
+    if carry == 1 { out = string.concat("1", out) }
+    return out
+}
+
+// Digits d (no leading/trailing zeros, d[0] != '0') with `point` digits
+// before the decimal point, laid out the way Number.prototype.toString does.
+layout_digits(d: string, point: int) -> string {
+    k = string.length(d)
+    if point >= k && point <= 21 {
+        out = d
+        i = k
+        while i < point { out = string.concat(out, "0"); i = i + 1 }
+        return out
+    }
+    if point > 0 && point <= 21 {
+        return string.concat(string.concat(string.substring(d, 0, point), "."), string.substring(d, point, k))
+    }
+    if point <= 0 && point > -6 {
+        out = "0."
+        i = point
+        while i < 0 { out = string.concat(out, "0"); i = i + 1 }
+        return string.concat(out, d)
+    }
+    e = point - 1
+    m = string.substring(d, 0, 1)
+    if k > 1 { m = string.concat(string.concat(m, "."), string.substring(d, 1, k)) }
+    if e >= 0 { return string.concat(string.concat(m, "e+"), string.from_int(e)) }
+    return string.concat(string.concat(m, "e-"), string.from_int(0 - e))
+}
+
+// String(v), the JS ToString conversion.
+js_string(v: *JsValue) -> string {
+    k = kind(v)
+    if k == JV_UNDEFINED { return "undefined" }
+    if k == JV_NULL { return "null" }
+    if k == JV_BOOL {
+        if v.num != 0.0 { return "true" }
+        return "false"
+    }
+    if k == JV_NUMBER { return js_number(v.num) }
+    if k == JV_STRING { return v.str }
+    if k == JV_ARRAY {
+        out = ""
+        n = len(v)
+        i = 0
+        while i < n {
+            if i > 0 { out = string.concat(out, ",") }
+            e = at(v, i)
+            if is_nullish(e) == 0 { out = string.concat(out, js_string(e)) }
+            i = i + 1
+        }
+        return out
+    }
+    return "[object Object]"
+}
+
+// ─── JSON.stringify ──────────────────────────────────────────────
+
+json_quote(s: string) -> string {
+    out = "\""
+    n = string.length(s)
+    i = 0
+    while i < n {
+        c = string.char_at(s, i)
+        if c < 0 { c = c + 256 }
+        if c == 34 { out = string.concat(out, "\\\"") } else {
+        if c == 92 { out = string.concat(out, "\\\\") } else {
+        if c == 10 { out = string.concat(out, "\\n") } else {
+        if c == 13 { out = string.concat(out, "\\r") } else {
+        if c == 9 { out = string.concat(out, "\\t") } else {
+        if c == 8 { out = string.concat(out, "\\b") } else {
+        if c == 12 { out = string.concat(out, "\\f") } else {
+        if c < 32 {
+            hx = string.from_int_radix(c, 16)
+            if string.length(hx) < 2 { hx = string.concat("0", hx) }
+            out = string.concat(string.concat(out, "\\u00"), hx)
+        } else {
+            out = string.concat(out, string.from_char(c))
+        }}}}}}}}
+        i = i + 1
+    }
+    return string.concat(out, "\"")
+}
+
+// JSON.stringify(v): undefined (and so a missing value) gives "" — JS gives
+// undefined, which no caller here writes out; NaN and ±Infinity give null.
+stringify(v: *JsValue) -> string {
+    k = kind(v)
+    if k == JV_UNDEFINED { return "" }
+    if k == JV_NULL { return "null" }
+    if k == JV_BOOL { return js_string(v) }
+    if k == JV_NUMBER {
+        if is_finite(v.num) == 0 { return "null" }
+        return js_number(v.num)
+    }
+    if k == JV_STRING { return json_quote(v.str) }
+    if k == JV_ARRAY {
+        out = "["
+        n = len(v)
+        i = 0
+        while i < n {
+            if i > 0 { out = string.concat(out, ",") }
+            e = at(v, i)
+            if is_undefined(e) == 1 { out = string.concat(out, "null") } else {
+                out = string.concat(out, stringify(e))
+            }
+            i = i + 1
+        }
+        return string.concat(out, "]")
+    }
+    out = "{"
+    first = 1
+    n = key_count(v)
+    i = 0
+    while i < n {
+        e = value_at(v, i)
+        if is_undefined(e) == 0 {
+            if first == 0 { out = string.concat(out, ",") }
+            out = string.concat(out, json_quote(key_at(v, i)))
+            out = string.concat(out, ":")
+            out = string.concat(out, stringify(e))
+            first = 0
+        }
+        i = i + 1
+    }
+    return string.concat(out, "}")
+}
+
+// ─── parse: a JavaScript literal ─────────────────────────────────
+
+struct CtParser {
+    src: string
+    pos: int
+    n: int
+    err: string
+}
+
+// The last parse error, "" after a parse that succeeded: a parse that fails
+// is a programming error in a test or a page, reported here to be printed.
+var last_error: string = ""
+
+parse_error() -> string { return last_error }
+
+// parse(text) -> the value; undefined (and parse_error() set) on bad input.
+parse(text: string) -> *JsValue {
+    p = heap.new(CtParser)
+    p.src = text
+    p.pos = 0
+    p.n = string.length(text)
+    p.err = ""
+    last_error = ""
+    v = parse_value(p)
+    skip_ws(p)
+    if string.length(p.err) == 0 && p.pos < p.n {
+        p.err = "unexpected text at ${p.pos}"
+    }
+    if string.length(p.err) > 0 {
+        last_error = p.err
+        return undef()
+    }
+    return v
+}
+
+peek(p: *CtParser) -> int {
+    if p.pos >= p.n { return -1 }
+    c = string.char_at(p.src, p.pos)
+    if c < 0 { c = c + 256 }
+    return c
+}
+
+skip_ws(p: *CtParser) {
+    going = 1
+    while going == 1 && p.pos < p.n {
+        c = peek(p)
+        if is_space(c) == 1 { p.pos = p.pos + 1 } else {
+            // // and /* */ comments, so test data can carry notes.
+            if c == 47 && p.pos + 1 < p.n && string.char_at(p.src, p.pos + 1) == 47 {
+                while p.pos < p.n && peek(p) != 10 { p.pos = p.pos + 1 }
+            } else {
+                if c == 47 && p.pos + 1 < p.n && string.char_at(p.src, p.pos + 1) == 42 {
+                    p.pos = p.pos + 2
+                    while p.pos + 1 < p.n && (peek(p) != 42 || string.char_at(p.src, p.pos + 1) != 47) { p.pos = p.pos + 1 }
+                    p.pos = p.pos + 2
+                } else { going = 0 }
+            }
+        }
+    }
+}
+
+is_ident_char(c: int) -> int {
+    if c >= 97 && c <= 122 { return 1 }
+    if c >= 65 && c <= 90 { return 1 }
+    if c >= 48 && c <= 57 { return 1 }
+    if c == 95 || c == 36 { return 1 }
+    return 0
+}
+
+read_ident(p: *CtParser) -> string {
+    start = p.pos
+    while p.pos < p.n && is_ident_char(peek(p)) == 1 { p.pos = p.pos + 1 }
+    return string.substring(p.src, start, p.pos)
+}
+
+fail(p: *CtParser, msg: string) -> *JsValue {
+    if string.length(p.err) == 0 { p.err = "${msg} at ${p.pos}" }
+    return undef()
+}
+
+parse_value(p: *CtParser) -> *JsValue {
+    skip_ws(p)
+    c = peek(p)
+    if c < 0 { return fail(p, "unexpected end") }
+    if c == 123 { return parse_object(p) }
+    if c == 91 { return parse_array(p) }
+    if c == 34 || c == 39 { return str(read_string(p)) }
+    if c == 45 || c == 43 || c == 46 || (c >= 48 && c <= 57) { return parse_number(p) }
+    if is_ident_char(c) == 1 {
+        id = read_ident(p)
+        if string.equals(id, "undefined") == 1 { return undef() }
+        if string.equals(id, "null") == 1 { return null_v() }
+        if string.equals(id, "true") == 1 { return bool_v(1) }
+        if string.equals(id, "false") == 1 { return bool_v(0) }
+        if string.equals(id, "NaN") == 1 { return num(nan()) }
+        if string.equals(id, "Infinity") == 1 { return num(infinity()) }
+        return fail(p, "unknown word '${id}'")
+    }
+    return fail(p, "unexpected character")
+}
+
+parse_number(p: *CtParser) -> *JsValue {
+    start = p.pos
+    sign = 1.0
+    if peek(p) == 45 { sign = -1.0; p.pos = p.pos + 1 } else {
+        if peek(p) == 43 { p.pos = p.pos + 1 }
+    }
+    if is_ident_char(peek(p)) == 1 && (peek(p) < 48 || peek(p) > 57) {
+        id = read_ident(p)
+        if string.equals(id, "Infinity") == 1 { return num(sign * infinity()) }
+        if string.equals(id, "NaN") == 1 { return num(nan()) }
+        return fail(p, "bad number")
+    }
+    while p.pos < p.n {
+        c = peek(p)
+        ok = 0
+        if (c >= 48 && c <= 57) || c == 46 || c == 101 || c == 69 { ok = 1 }
+        if c == 120 || c == 88 || (c >= 97 && c <= 102) || (c >= 65 && c <= 70) { ok = 1 }
+        if (c == 43 || c == 45) && p.pos > start {
+            pc = string.char_at(p.src, p.pos - 1)
+            if pc == 101 || pc == 69 { ok = 1 }
+        }
+        if ok == 0 { break }
+        p.pos = p.pos + 1
+    }
+    txt = string.substring(p.src, start, p.pos)
+    v = string_to_number(txt)
+    if is_nan(v) == 1 { return fail(p, "bad number '${txt}'") }
+    return num(v)
+}
+
+read_string(p: *CtParser) -> string {
+    q = peek(p)
+    p.pos = p.pos + 1
+    out = ""
+    while p.pos < p.n && peek(p) != q {
+        c = peek(p)
+        if c == 92 {
+            p.pos = p.pos + 1
+            e = peek(p)
+            if e == 110 { out = string.concat(out, "\n") } else {
+            if e == 116 { out = string.concat(out, "\t") } else {
+            if e == 114 { out = string.concat(out, "\r") } else {
+            if e == 98 { out = string.concat(out, string.from_char(8)) } else {
+            if e == 102 { out = string.concat(out, string.from_char(12)) } else {
+            if e == 117 {
+                hex = string.substring(p.src, p.pos + 1, p.pos + 5)
+                cp, _he = string.to_int_radix(hex, 16)
+                out = string.concat(out, utf8_of(cp))
+                p.pos = p.pos + 4
+            } else {
+                out = string.concat(out, string.from_char(e))
+            }}}}}}
+            p.pos = p.pos + 1
+        } else {
+            out = string.concat(out, string.from_char(c))
+            p.pos = p.pos + 1
+        }
+    }
+    if p.pos >= p.n {
+        _f = fail(p, "unterminated string")
+        return out
+    }
+    p.pos = p.pos + 1
+    return out
+}
+
+utf8_of(cp: int) -> string {
+    if cp < 128 { return string.from_char(cp) }
+    if cp < 2048 {
+        return string.concat(string.from_char(192 + cp / 64), string.from_char(128 + cp % 64))
+    }
+    a = string.from_char(224 + cp / 4096)
+    b = string.from_char(128 + (cp / 64) % 64)
+    c = string.from_char(128 + cp % 64)
+    return string.concat(string.concat(a, b), c)
+}
+
+parse_array(p: *CtParser) -> *JsValue {
+    p.pos = p.pos + 1
+    a = arr()
+    skip_ws(p)
+    while string.length(p.err) == 0 {
+        skip_ws(p)
+        if peek(p) == 93 { p.pos = p.pos + 1; return a }
+        if peek(p) == 44 {
+            // An elision ([1,,2]) is a hole: undefined.
+            push(a, undef())
+            p.pos = p.pos + 1
+        } else {
+            push(a, parse_value(p))
+            skip_ws(p)
+            if peek(p) == 44 { p.pos = p.pos + 1 } else {
+                if peek(p) != 93 { return fail(p, "expected , or ]") }
+            }
+        }
+    }
+    return a
+}
+
+parse_object(p: *CtParser) -> *JsValue {
+    p.pos = p.pos + 1
+    o = obj()
+    while string.length(p.err) == 0 {
+        skip_ws(p)
+        c = peek(p)
+        if c == 125 { p.pos = p.pos + 1; return o }
+        k = ""
+        if c == 34 || c == 39 { k = read_string(p) } else {
+            if is_ident_char(c) == 1 { k = read_ident(p) } else {
+                return fail(p, "expected a key")
+            }
+        }
+        skip_ws(p)
+        if peek(p) != 58 { return fail(p, "expected :") }
+        p.pos = p.pos + 1
+        put(o, k, parse_value(p))
+        skip_ws(p)
+        if peek(p) == 44 { p.pos = p.pos + 1 } else {
+            if peek(p) != 125 { return fail(p, "expected , or }") }
+        }
+    }
+    return o
+}
+
+// ─── equality, copies and extend ─────────────────────────────────
+
+// Deep equality as Jest's toEqual has it: NaN equals NaN, and an object
+// key whose value is undefined equals a missing key.
+equals(a: *JsValue, b: *JsValue) -> int {
+    ka = kind(a)
+    kb = kind(b)
+    if ka != kb { return 0 }
+    if ka == JV_UNDEFINED || ka == JV_NULL { return 1 }
+    if ka == JV_BOOL { if a.num == b.num { return 1 } return 0 }
+    if ka == JV_NUMBER {
+        if is_nan(a.num) == 1 && is_nan(b.num) == 1 { return 1 }
+        if a.num == b.num { return 1 }
+        return 0
+    }
+    if ka == JV_STRING { return string.equals(a.str, b.str) }
+    if ka == JV_ARRAY {
+        n = len(a)
+        if n != len(b) { return 0 }
+        i = 0
+        while i < n {
+            if equals(at(a, i), at(b, i)) == 0 { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+    // Objects: every defined key of each is in the other, equal.
+    if obj_covers(a, b) == 0 { return 0 }
+    return obj_covers(b, a)
+}
+
+obj_covers(a: *JsValue, b: *JsValue) -> int {
+    n = key_count(a)
+    i = 0
+    while i < n {
+        v = value_at(a, i)
+        if is_undefined(v) == 0 {
+            if equals(v, get(b, key_at(a, i))) == 0 { return 0 }
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+clone(v: *JsValue) -> *JsValue {
+    k = kind(v)
+    if k == JV_UNDEFINED { return undef() }
+    if k == JV_NULL { return null_v() }
+    if k == JV_BOOL { return bool_v(truthy(v)) }
+    if k == JV_NUMBER { return num(v.num) }
+    if k == JV_STRING { return str(v.str) }
+    if k == JV_ARRAY {
+        a = arr()
+        n = len(v)
+        i = 0
+        while i < n { push(a, clone(at(v, i))); i = i + 1 }
+        return a
+    }
+    o = obj()
+    n2 = key_count(v)
+    j = 0
+    while j < n2 { put(o, key_at(v, j), clone(value_at(v, j))); j = j + 1 }
+    return o
+}
+
+// extend(target, source): Chartist's deep merge, in place. Plain objects
+// merge key by key into an object already there (a copy of the source when
+// what is there is no object); arrays and every other value replace what is
+// there, undefined included, as `target[prop] = source[prop]` does.
+extend(target: *JsValue, source: *JsValue) -> *JsValue {
+    if kind(target) != JV_OBJECT { return target }
+    if kind(source) != JV_OBJECT { return target }
+    n = key_count(source)
+    i = 0
+    while i < n {
+        k = key_at(source, i)
+        sp = value_at(source, i)
+        if kind(sp) == JV_OBJECT {
+            tp = get(target, k)
+            base = tp
+            if kind(tp) != JV_OBJECT { base = obj() }
+            put(target, k, extend(base, sp))
+        } else {
+            put(target, k, sp)
+        }
+        i = i + 1
+    }
+    return target
+}

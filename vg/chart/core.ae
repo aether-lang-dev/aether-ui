@@ -1,0 +1,750 @@
+// vg/chart/core.ae — Chartist's pure core: math, data normalisation, the
+// value range, the scale bounds and the hole-aware segments of a series.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: core/math.ts (orderOfMagnitude, projectLength,
+// roundWithPrecision, rho, polarToCartesian, EPSILON), core/lang.ts
+// (quantity, alphaNumerate), core/constants.ts (precision, escapingMap),
+// core/data/data.ts (getMetaData, isDataHoleValue, isArrayOfSeries,
+// isMultiValue, getMultiValue), core/data/normalize.ts (normalizeData),
+// core/data/highLow.ts (getHighLow), core/data/range.ts (nonEmptyRange),
+// core/data/bounds.ts (getBounds), core/data/segments.ts
+// (splitIntoSegments) and core/data/serialize.ts (serialize, deserialize).
+// utils/functional.ts's `times` and `sum` are inlined where they are used.
+//
+// Data is a vg.chart.value tree, as loose as Chartist's input: see value.ae.
+
+exports (
+    CtNums, CtHighLow, CtBounds, CtSegData, CtSegment, CtQuantity, CtPoint,
+    EPSILON, PRECISION,
+    nums_new, nums_push, nums_get, nums_set, nums_len, nums_slice, nums_of,
+    order_of_magnitude, project_length, round_with_precision, round_to, rho,
+    polar_to_cartesian, alpha_numerate, quantity,
+    get_meta_data, is_data_hole_value, is_array_of_series, is_multi_value,
+    get_multi_value, multi_value_num,
+    normalize_data, normalize_series_list,
+    high_low_new, get_high_low, get_high_low_ext, non_empty_range,
+    get_bounds,
+    seg_data, segment_new, split_into_segments,
+    serialize, deserialize
+)
+
+import std.string
+import std.list
+import std.math
+import std.floatarr
+import vg.chart.value as jv
+
+const EPSILON: float = 2.221e-16
+const PRECISION: int = 8
+
+// ─── Nums: a growable float array (path coordinates, tick values) ───
+
+struct CtNums {
+    data: ptr       // std.floatarr
+    n: int
+    cap: int
+}
+
+nums_new() -> *CtNums {
+    a = heap.new(CtNums)
+    fa, _e = floatarr.new(8)
+    a.data = fa
+    a.n = 0
+    a.cap = 8
+    return a
+}
+
+nums_push(a: *CtNums, v: float) {
+    if a.n == a.cap {
+        nc = a.cap * 2
+        fa, _e = floatarr.new(nc)
+        i = 0
+        while i < a.n {
+            _s = floatarr.set(fa, i, floatarr.get_unchecked(a.data, i))
+            i = i + 1
+        }
+        floatarr.free(a.data)
+        a.data = fa
+        a.cap = nc
+    }
+    _s2 = floatarr.set(a.data, a.n, v)
+    a.n = a.n + 1
+}
+
+nums_get(a: *CtNums, i: int) -> float {
+    if i < 0 || i >= a.n { return jv.nan() }   // JS: an out-of-range read is undefined
+    return floatarr.get_unchecked(a.data, i)
+}
+
+nums_set(a: *CtNums, i: int, v: float) {
+    if i >= 0 && i < a.n { _s = floatarr.set(a.data, i, v) }
+}
+
+nums_len(a: *CtNums) -> int {
+    if a == null { return 0 }
+    return a.n
+}
+
+nums_slice(a: *CtNums, from: int, to: int) -> *CtNums {
+    out = nums_new()
+    i = from
+    while i < to && i < a.n { nums_push(out, nums_get(a, i)); i = i + 1 }
+    return out
+}
+
+// Nums from a JS array literal of numbers ("[0, 10, 10, 0]").
+nums_of(text: string) -> *CtNums {
+    v = jv.parse(text)
+    out = nums_new()
+    n = jv.len(v)
+    i = 0
+    while i < n { nums_push(out, jv.to_number(jv.at(v, i))); i = i + 1 }
+    return out
+}
+
+// ─── math.ts ─────────────────────────────────────────────────────
+
+// Math.floor(Math.log(Math.abs(value)) / Math.LN10), with JS's LN10 so the
+// boundaries fall where Chartist's do.
+order_of_magnitude(value: float) -> float {
+    return math.floor(math.log(math.abs_float(value)) / 2.302585092994046)
+}
+
+project_length(axis_length: float, length: float, range: float) -> float {
+    return (length / range) * axis_length
+}
+
+round_to(value: float, digits: int) -> float {
+    p = math.pow(10.0, digits / 1.0)
+    return jv.js_round(value * p) / p
+}
+
+// roundWithPrecision(value): to the global precision of 8 digits.
+round_with_precision(value: float) -> float {
+    return round_to(value, PRECISION)
+}
+
+// The JS % operator (fmod: the sign of the dividend).
+js_mod(a: float, b: float) -> float {
+    if jv.is_finite(a) == 0 || b == 0.0 { return jv.nan() }
+    if jv.is_finite(b) == 0 { return a }
+    q = a / b
+    t = math.floor(math.abs_float(q))
+    if q < 0.0 { t = 0.0 - t }
+    r = a - t * b
+    // floor(|q|) can be one off for huge quotients; pull r back into range.
+    if math.abs_float(r) >= math.abs_float(b) { r = a - (t + 1.0) * b }
+    return r
+}
+
+// Pollard's rho: the smallest factor of an integer; num itself when it is 1
+// or not finite (#1057), NaN when the bounded gcd cannot finish.
+rho(num: float) -> float {
+    if num == 1.0 || jv.is_finite(num) == 0 { return num }
+    if js_mod(num, 2.0) == 0.0 { return 2.0 }
+    x1 = 2.0
+    x2 = 2.0
+    divisor = 1.0
+    going = 1
+    while going == 1 {
+        x1 = js_mod(x1 * x1 + 1.0, num)
+        fx2 = js_mod(x2 * x2 + 1.0, num)
+        x2 = js_mod(fx2 * fx2 + 1.0, num)
+        divisor = rho_gcd(math.abs_float(x1 - x2), num)
+        if divisor != 1.0 { going = 0 }
+    }
+    return divisor
+}
+
+rho_gcd(p0: float, q0: float) -> float {
+    p = p0
+    q = q0
+    i = 0
+    while i < 1000 && jv.is_finite(p) == 1 && q != 0.0 {
+        rem = js_mod(p, q)
+        if rem == 0.0 { return q }
+        p = q
+        q = rem
+        i = i + 1
+    }
+    return jv.nan()
+}
+
+struct CtPoint {
+    x: float
+    y: float
+}
+
+polar_to_cartesian(cx: float, cy: float, radius: float, angle_deg: float) -> *CtPoint {
+    a = ((angle_deg - 90.0) * 3.141592653589793) / 180.0
+    p = heap.new(CtPoint)
+    p.x = cx + radius * math.cos(a)
+    p.y = cy + radius * math.sin(a)
+    return p
+}
+
+// ─── lang.ts ─────────────────────────────────────────────────────
+
+alpha_numerate(n: int) -> string {
+    return string.from_char(97 + n % 26)
+}
+
+struct CtQuantity {
+    value: float
+    unit: string
+    has_unit: int
+}
+
+// quantity(input): a number's value, or a string's leading digits and the
+// unit after them ("100 %" is 100 and "%"); 0 for a string without digits.
+quantity(input: *jv.JsValue) -> *CtQuantity {
+    q = heap.new(CtQuantity)
+    q.unit = ""
+    q.has_unit = 0
+    if jv.is_string(input) == 1 {
+        s = jv.string_of(input)
+        n = string.length(s)
+        i = 0
+        while i < n && string.char_at(s, i) >= 48 && string.char_at(s, i) <= 57 { i = i + 1 }
+        if i == 0 {
+            q.value = 0.0
+            return q
+        }
+        v, _e = string.to_double(string.substring(s, 0, i))
+        q.value = v
+        j = i
+        while j < n && jv.is_space(string.char_at(s, j)) == 1 { j = j + 1 }
+        if j < n {
+            q.unit = string.substring(s, j, n)
+            q.has_unit = 1
+        }
+        return q
+    }
+    q.value = jv.to_number(input)
+    return q
+}
+
+// ─── data.ts ─────────────────────────────────────────────────────
+
+// The meta of value `index` of a series: an array's element, or a series
+// object's data element, when that is an object with a meta.
+get_meta_data(series: *jv.JsValue, index: int) -> *jv.JsValue {
+    value = jv.undef()
+    if jv.is_array(series) == 1 { value = jv.at(series, index) } else {
+        if jv.has(series, "data") == 1 { value = jv.at(jv.get(series, "data"), index) }
+    }
+    if jv.has(value, "meta") == 1 { return jv.get(value, "meta") }
+    return jv.undef()
+}
+
+is_data_hole_value(v: *jv.JsValue) -> int {
+    if jv.is_nullish(v) == 1 { return 1 }
+    if jv.is_number(v) == 1 && jv.is_nan(jv.number_of(v)) == 1 { return 1 }
+    return 0
+}
+
+is_array_of_series(v: *jv.JsValue) -> int {
+    if jv.is_array(v) == 0 { return 0 }
+    n = jv.len(v)
+    i = 0
+    while i < n {
+        e = jv.at(v, i)
+        if jv.is_array(e) == 0 && jv.has(e, "data") == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+is_multi_value(v: *jv.JsValue) -> int {
+    if jv.is_object(v) == 0 { return 0 }
+    if jv.has(v, "x") == 1 || jv.has(v, "y") == 1 { return 1 }
+    return 0
+}
+
+// getMultiValue(value, dimension): value[dimension] of a multi value, or the
+// value itself, as a number or undefined.
+get_multi_value(v: *jv.JsValue, dim: string) -> *jv.JsValue {
+    if is_multi_value(v) == 1 {
+        if jv.has(v, dim) == 1 { return jv.number_or_undefined(jv.get(v, dim)) }
+    }
+    return jv.number_or_undefined(v)
+}
+
+// Number(getMultiValue(value, dimension)): NaN for undefined.
+multi_value_num(v: *jv.JsValue, dim: string) -> float {
+    return jv.to_number(get_multi_value(v, dim))
+}
+
+// ─── normalize.ts ────────────────────────────────────────────────
+//
+// multi: "" (plain numbers), "true" ({x, y} values, single values to y),
+// "x" or "y" (single values to that dimension).
+
+normalize_multi(value: *jv.JsValue, multi: string) -> *jv.JsValue {
+    x = jv.undef()
+    y = jv.undef()
+    if jv.is_object(value) == 0 && jv.is_array(value) == 0 {
+        n = jv.number_or_undefined(value)
+        if string.equals(multi, "x") == 1 { x = n } else { y = n }
+    } else {
+        if jv.has(value, "x") == 1 { x = jv.number_or_undefined(jv.get(value, "x")) }
+        if jv.has(value, "y") == 1 { y = jv.number_or_undefined(jv.get(value, "y")) }
+    }
+    if jv.is_undefined(x) == 1 && jv.is_undefined(y) == 1 { return jv.undef() }
+    o = jv.obj()
+    jv.put(o, "x", x)
+    jv.put(o, "y", y)
+    return o
+}
+
+normalize_primitive(value: *jv.JsValue, multi: string) -> *jv.JsValue {
+    if is_data_hole_value(value) == 1 { return jv.undef() }
+    if string.length(multi) > 0 { return normalize_multi(value, multi) }
+    return jv.number_or_undefined(value)
+}
+
+normalize_single_series(series: *jv.JsValue, multi: string) -> *jv.JsValue {
+    if jv.is_array(series) == 0 {
+        return normalize_single_series(jv.get(series, "data"), multi)
+    }
+    out = jv.arr()
+    n = jv.len(series)
+    i = 0
+    while i < n {
+        value = jv.at(series, i)
+        if jv.has(value, "value") == 1 {
+            jv.push(out, normalize_primitive(jv.get(value, "value"), multi))
+        } else {
+            jv.push(out, normalize_primitive(value, multi))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+normalize_series_list(series: *jv.JsValue, multi: string, distributed: int) -> *jv.JsValue {
+    if is_array_of_series(series) == 1 {
+        out = jv.arr()
+        n = jv.len(series)
+        i = 0
+        while i < n {
+            jv.push(out, normalize_single_series(jv.at(series, i), multi))
+            i = i + 1
+        }
+        return out
+    }
+    flat = normalize_single_series(series, multi)
+    if distributed == 1 {
+        d = jv.arr()
+        m = jv.len(flat)
+        j = 0
+        while j < m {
+            one = jv.arr()
+            jv.push(one, jv.at(flat, j))
+            jv.push(d, one)
+            j = j + 1
+        }
+        return d
+    }
+    return flat
+}
+
+// normalizeData(data, reverse, multi, distributed): {labels, series}, the
+// series padded with undefined to the longest one (or the labels), the
+// labels padded with "".
+normalize_data(data: *jv.JsValue, reverse: int, multi: string, distributed: int) -> *jv.JsValue {
+    labels = jv.arr()
+    in_labels = jv.get(data, "labels")
+    nl = jv.len(in_labels)
+    i = 0
+    while i < nl { jv.push(labels, jv.at(in_labels, i)); i = i + 1 }
+    srcs = jv.get(data, "series")
+    if jv.is_array(srcs) == 0 { srcs = jv.arr() }
+    series = normalize_series_list(srcs, multi, distributed)
+    label_count = nl
+    if jv.is_array_of_arrays(series) == 1 {
+        ns = jv.len(series)
+        k = 0
+        while k < ns {
+            l = jv.len(jv.at(series, k))
+            if l > label_count { label_count = l }
+            k = k + 1
+        }
+        k = 0
+        while k < ns {
+            s = jv.at(series, k)
+            while jv.len(s) < label_count { jv.push(s, jv.undef()) }
+            k = k + 1
+        }
+    } else {
+        label_count = jv.len(series)
+    }
+    while jv.len(labels) < label_count { jv.push(labels, jv.str("")) }
+    out = jv.obj()
+    jv.put(out, "labels", labels)
+    jv.put(out, "series", series)
+    if reverse == 1 { reverse_data(out) }
+    return out
+}
+
+reverse_arr(a: *jv.JsValue) {
+    n = jv.len(a)
+    i = 0
+    while i < n / 2 {
+        t = jv.at(a, i)
+        jv.set_at(a, i, jv.at(a, n - 1 - i))
+        jv.set_at(a, n - 1 - i, t)
+        i = i + 1
+    }
+}
+
+reverse_data(d: *jv.JsValue) {
+    reverse_arr(jv.get(d, "labels"))
+    s = jv.get(d, "series")
+    reverse_arr(s)
+    n = jv.len(s)
+    i = 0
+    while i < n {
+        e = jv.at(s, i)
+        if jv.has(e, "data") == 1 { reverse_arr(jv.get(e, "data")) } else {
+            if jv.is_array(e) == 1 { reverse_arr(e) }
+        }
+        i = i + 1
+    }
+}
+
+// ─── highLow.ts / range.ts ───────────────────────────────────────
+
+struct CtHighLow {
+    high: float
+    low: float
+}
+
+high_low_new(high: float, low: float) -> *CtHighLow {
+    h = heap.new(CtHighLow)
+    h.high = high
+    h.low = low
+    return h
+}
+
+MAX_VALUE() -> float { return 1.7976931348623157e308 }
+
+// nonEmptyRange: repairs a range with high at or below low by the sign of
+// the values, or gives 0..1 to a range with no values at all.
+non_empty_range(high: float, low: float) -> *CtHighLow {
+    if high > low { return high_low_new(high, low) }
+    if low == 0.0 { return high_low_new(1.0, low) }
+    if low < 0.0 { return high_low_new(0.0, low) }
+    if high > 0.0 { return high_low_new(high, 0.0) }
+    return high_low_new(1.0, 0.0)
+}
+
+hl_walk(src: *jv.JsValue, dim: string, hl: *CtHighLow, find_high: int, find_low: int) {
+    if is_data_hole_value(src) == 1 { return }
+    if jv.is_array(src) == 1 {
+        n = jv.len(src)
+        i = 0
+        while i < n { hl_walk(jv.at(src, i), dim, hl, find_high, find_low); i = i + 1 }
+        return
+    }
+    v = 0.0
+    if string.length(dim) > 0 && jv.has(src, dim) == 1 {
+        v = jv.to_number(jv.get(src, dim))
+    } else {
+        v = jv.to_number(src)
+    }
+    if find_high == 1 && v > hl.high { hl.high = v }
+    if find_low == 1 && v < hl.low { hl.low = v }
+}
+
+get_high_low(data: *jv.JsValue, options: *jv.JsValue, dim: string) -> *CtHighLow {
+    return get_high_low_ext(data, options, dim, 0, 0.0, 0.0)
+}
+
+// getHighLow(data, options, dimension, extent): the range of the values,
+// widened by an extent the chart needs (stacked sums) and the reference
+// value; an explicit high or low (the axis's, or the chart's) wins.
+get_high_low_ext(data: *jv.JsValue, options0: *jv.JsValue, dim: string, has_extent: int, ext_low: float, ext_high: float) -> *CtHighLow {
+    options = jv.extend(jv.obj(), options0)
+    if string.length(dim) > 0 {
+        axis_key = "axisY"
+        if string.equals(dim, "x") == 1 { axis_key = "axisX" }
+        options = jv.extend(options, jv.get(options0, axis_key))
+    }
+    hv = jv.get(options, "high")
+    lv = jv.get(options, "low")
+    find_high = jv.is_undefined(hv)
+    find_low = jv.is_undefined(lv)
+    hl = heap.new(CtHighLow)
+    hl.high = 0.0 - MAX_VALUE()
+    hl.low = MAX_VALUE()
+    if find_high == 0 { hl.high = jv.to_number(hv) }
+    if find_low == 0 { hl.low = jv.to_number(lv) }
+    if find_high == 1 || find_low == 1 { hl_walk(data, dim, hl, find_high, find_low) }
+    if has_extent == 1 {
+        if find_high == 1 { hl.high = math.max_float(ext_high, hl.high) }
+        if find_low == 1 { hl.low = math.min_float(ext_low, hl.low) }
+    }
+    rv = jv.get(options, "referenceValue")
+    if jv.truthy(rv) == 1 || (jv.is_number(rv) == 1 && jv.number_of(rv) == 0.0) {
+        r = jv.to_number(rv)
+        if find_high == 1 { hl.high = math.max_float(r, hl.high) }
+        if find_low == 1 { hl.low = math.min_float(r, hl.low) }
+    }
+    return non_empty_range(hl.high, hl.low)
+}
+
+// ─── bounds.ts ───────────────────────────────────────────────────
+
+struct CtBounds {
+    high: float
+    low: float
+    value_range: float
+    oom: float
+    step: float
+    min: float
+    max: float
+    range: float
+    number_of_steps: float
+    values: *CtNums
+    error: string   // "" — or why the step search gave up (JS throws)
+}
+
+// value += increment, or a nextafter-like nudge when the increment is too
+// small to change it.
+safe_increment(value: float, increment: float) -> float {
+    nv = value + increment
+    if nv == value {
+        if increment > 0.0 { return value * (1.0 + EPSILON) }
+        return value * (1.0 - EPSILON)
+    }
+    return nv
+}
+
+get_bounds(axis_length: float, high: float, low: float, scale_min_space: float, only_integer: int) -> *CtBounds {
+    b = heap.new(CtBounds)
+    b.error = ""
+    b.high = high
+    b.low = low
+    b.value_range = b.high - b.low
+    b.oom = order_of_magnitude(b.value_range)
+    b.step = math.pow(10.0, b.oom)
+    b.min = math.floor(b.low / b.step) * b.step
+    b.max = math.ceil(b.high / b.step) * b.step
+    b.range = b.max - b.min
+    b.number_of_steps = jv.js_round(b.range / b.step)
+
+    length = project_length(axis_length, b.step, b.range)
+    scale_up = 0
+    if length < scale_min_space { scale_up = 1 }
+    smallest = 0.0
+    if only_integer == 1 { smallest = rho(b.range) }
+
+    if only_integer == 1 && project_length(axis_length, 1.0, b.range) >= scale_min_space {
+        b.step = 1.0
+    } else {
+        if only_integer == 1 && smallest < b.step && project_length(axis_length, smallest, b.range) >= scale_min_space {
+            b.step = smallest
+        } else {
+            counter = 0
+            going = 1
+            while going == 1 {
+                if scale_up == 1 && project_length(axis_length, b.step, b.range) <= scale_min_space {
+                    b.step = b.step * 2.0
+                } else {
+                    if scale_up == 0 && project_length(axis_length, b.step / 2.0, b.range) >= scale_min_space {
+                        b.step = b.step / 2.0
+                        if only_integer == 1 && js_mod(b.step, 1.0) != 0.0 {
+                            b.step = b.step * 2.0
+                            going = 0
+                        }
+                    } else {
+                        going = 0
+                    }
+                }
+                if going == 1 {
+                    counter = counter + 1
+                    if counter > 1001 {
+                        b.error = "Exceeded maximum number of iterations while optimizing scale step!"
+                        going = 0
+                    }
+                }
+            }
+        }
+    }
+
+    b.step = math.max_float(b.step, EPSILON)
+    new_min = b.min
+    new_max = b.max
+    while new_min + b.step <= b.low { new_min = safe_increment(new_min, b.step) }
+    while new_max - b.step >= b.high { new_max = safe_increment(new_max, 0.0 - b.step) }
+    b.min = new_min
+    b.max = new_max
+    b.range = b.max - b.min
+
+    vals = nums_new()
+    i = b.min
+    while i <= b.max {
+        v = round_with_precision(i)
+        if nums_len(vals) == 0 || v != nums_get(vals, nums_len(vals) - 1) { nums_push(vals, v) }
+        i = safe_increment(i, b.step)
+    }
+    b.values = vals
+    return b
+}
+
+// ─── segments.ts ─────────────────────────────────────────────────
+
+// SegmentData: the normalized value of a path point, its index in the
+// series and its meta.
+struct CtSegData {
+    value: *jv.JsValue
+    value_index: int
+    meta: *jv.JsValue
+}
+
+seg_data(value: *jv.JsValue, value_index: int, meta: *jv.JsValue) -> *CtSegData {
+    d = heap.new(CtSegData)
+    d.value = value
+    d.value_index = value_index
+    d.meta = meta
+    if d.value == null { d.value = jv.undef() }
+    if d.meta == null { d.meta = jv.undef() }
+    return d
+}
+
+struct CtSegment {
+    coords: *CtNums       // x1, y1, x2, y2, …
+    values: ptr         // std.list of *CtSegData
+}
+
+segment_new() -> *CtSegment {
+    s = heap.new(CtSegment)
+    s.coords = nums_new()
+    s.values = list.new()
+    return s
+}
+
+// splitIntoSegments(coordinates, valueData, {increasingX, fillHoles}): the
+// runs of points between holes (a value whose y is undefined).
+split_into_segments(coords: *CtNums, value_data: ptr, increasing_x: int, fill_holes: int) -> ptr {
+    segs = list.new()
+    hole = 1
+    cur = null
+    n = nums_len(coords)
+    i = 0
+    while i < n {
+        dp, _e = list.get(value_data, i / 2)
+        d = dp as *CtSegData
+        if jv.is_undefined(get_multi_value(d.value, "y")) == 1 {
+            if fill_holes == 0 { hole = 1 }
+        } else {
+            if increasing_x == 1 && i >= 2 && nums_get(coords, i) <= nums_get(coords, i - 2) { hole = 1 }
+            if hole == 1 {
+                s = segment_new()
+                _a = list.add(segs, s)
+                cur = s
+                hole = 0
+            }
+            cs = cur as *CtSegment
+            nums_push(cs.coords, nums_get(coords, i))
+            nums_push(cs.coords, nums_get(coords, i + 1))
+            _b = list.add(cs.values, d)
+        }
+        i = i + 2
+    }
+    return segs
+}
+
+// ─── serialize.ts ────────────────────────────────────────────────
+
+escape_html(s: string) -> string {
+    r = string.string_replace_all(s, "&", "&amp;")
+    r = string.string_replace_all(r, "<", "&lt;")
+    r = string.string_replace_all(r, ">", "&gt;")
+    r = string.string_replace_all(r, "\"", "&quot;")
+    return string.string_replace_all(r, "'", "&#039;")
+}
+
+unescape_html(s: string) -> string {
+    r = string.string_replace_all(s, "&amp;", "&")
+    r = string.string_replace_all(r, "&lt;", "<")
+    r = string.string_replace_all(r, "&gt;", ">")
+    r = string.string_replace_all(r, "&quot;", "\"")
+    return string.string_replace_all(r, "&#039;", "'")
+}
+
+// serialize(data): a number's digits, an object as {"data": …} JSON, any
+// other value as its string, all HTML-escaped; null and undefined come back
+// as they are (the attribute is then left out).
+serialize(data: *jv.JsValue) -> *jv.JsValue {
+    if jv.is_nullish(data) == 1 { return data }
+    s = ""
+    if jv.is_number(data) == 1 { s = jv.js_number(jv.number_of(data)) } else {
+        if jv.is_object(data) == 1 || jv.is_array(data) == 1 {
+            w = jv.obj()
+            jv.put(w, "data", data)
+            s = jv.stringify(w)
+        } else {
+            s = jv.js_string(data)
+        }
+    }
+    return jv.str(escape_html(s))
+}
+
+// deserialize(text): the value serialize wrote: "NaN" is NaN, JSON is
+// parsed (an object's "data" unwrapped), anything else stays a string.
+deserialize(data: *jv.JsValue) -> *jv.JsValue {
+    if jv.is_string(data) == 0 { return data }
+    s = jv.string_of(data)
+    if string.equals(s, "NaN") == 1 { return jv.num(jv.nan()) }
+    u = unescape_html(s)
+    p = strict_json(u)
+    if p == null { return jv.str(u) }
+    if jv.has(p, "data") == 1 {
+        d = jv.get(p, "data")
+        if jv.is_undefined(d) == 0 { return d }
+    }
+    return p
+}
+
+// JSON.parse: a JS-literal parse that refuses what JSON does not have.
+strict_json(s: string) -> *jv.JsValue {
+    t = string.trim(s)
+    if string.length(t) == 0 { return null }
+    c = string.char_at(t, 0)
+    ok = 0
+    if c == 123 || c == 91 || c == 34 || c == 45 || (c >= 48 && c <= 57) { ok = 1 }
+    if string.equals(t, "true") == 1 || string.equals(t, "false") == 1 || string.equals(t, "null") == 1 { ok = 1 }
+    if ok == 0 { return null }
+    v = jv.parse(t)
+    if string.length(jv.parse_error()) > 0 { return null }
+    return v
+}

@@ -1,0 +1,313 @@
+// test_chart_core.ae — Chartist's core unit tests, ported: core/math.spec,
+// core/lang.spec, core/data/{bound,highLow,range,normalize,segments,
+// serialize}.spec and utils/extend.spec, keeping their expected values.
+// Each area ends with a negative control: an assertion that must FAIL on a
+// deliberately wrong expectation, proving the comparison can tell.
+
+import std.string
+import std.list
+import vg.chart.value as jv
+import vg.chart.core
+import vg.chart.test.check as t
+
+// toEqual against a JS literal.
+eq_jv(label: string, got: *jv.JsValue, want_lit: string) {
+    want = jv.parse(want_lit)
+    if jv.equals(got, want) == 1 { t.is_true(label, 1) } else {
+        t.eq_str(label, jv.stringify(got), jv.stringify(want))
+    }
+}
+
+// Negative control: the comparison must report a difference.
+differs(label: string, got: *jv.JsValue, wrong_lit: string) {
+    t.is_false("negative control: ${label}", jv.equals(got, jv.parse(wrong_lit)))
+}
+
+nums_lit(a: *core.CtNums) -> string {
+    s = "["
+    i = 0
+    while i < core.nums_len(a) {
+        if i > 0 { s = string.concat(s, ",") }
+        s = string.concat(s, jv.js_number(core.nums_get(a, i)))
+        i = i + 1
+    }
+    return string.concat(s, "]")
+}
+
+math_spec() {
+    println("Core > Math")
+    // roundWithPrecision
+    t.eq_num("round 3.14159 to 0 digits (#1470)", core.round_to(3.14159, 0), 3.0)
+    t.eq_num("round 3.5 to 0 digits", core.round_to(3.5, 0), 4.0)
+    t.eq_num("round -2.7 to 0 digits", core.round_to(-2.7, 0), -3.0)
+    t.eq_num("round 3.14159 to 2", core.round_to(3.14159, 2), 3.14)
+    t.eq_num("round 3.14159 to 4", core.round_to(3.14159, 4), 3.1416)
+    t.eq_num("round 1.2345678901 to 8", core.round_with_precision(1.2345678901), 1.23456789)
+    t.eq_num("round 0.1 + 0.2 to 8", core.round_with_precision(0.1 + 0.2), 0.3)
+    // rho
+    t.eq_num("rho(1)", core.rho(1.0), 1.0)
+    t.eq_num("rho(12)", core.rho(12.0), 2.0)
+    t.eq_num("rho(15)", core.rho(15.0), 3.0)
+    t.eq_num("rho(49)", core.rho(49.0), 7.0)
+    t.is_true("rho(NaN) is NaN (#1057)", jv.is_nan(core.rho(jv.nan())))
+    t.eq_num("rho(Infinity)", core.rho(jv.infinity()), jv.infinity())
+    t.eq_num("rho(-Infinity)", core.rho(0.0 - jv.infinity()), 0.0 - jv.infinity())
+    t.is_false("negative control: rho(15) is not 5", core.rho(15.0) == 5.0)
+}
+
+q_lit(q: *core.CtQuantity) -> *jv.JsValue {
+    o = jv.obj()
+    jv.put(o, "value", jv.num(q.value))
+    if q.has_unit == 1 { jv.put(o, "unit", jv.str(q.unit)) } else { jv.put(o, "unit", jv.undef()) }
+    return o
+}
+
+lang_spec() {
+    println("Core > Lang")
+    eq_jv("quantity(100)", q_lit(core.quantity(jv.num(100.0))), "{value: 100}")
+    eq_jv("quantity(0)", q_lit(core.quantity(jv.num(0.0))), "{value: 0}")
+    eq_jv("quantity(NaN)", q_lit(core.quantity(jv.num(jv.nan()))), "{value: NaN}")
+    eq_jv("quantity(null)", q_lit(core.quantity(jv.null_v())), "{value: 0}")
+    eq_jv("quantity(undefined)", q_lit(core.quantity(jv.undef())), "{value: NaN}")
+    eq_jv("quantity('100')", q_lit(core.quantity(jv.str("100"))), "{value: 100, unit: undefined}")
+    eq_jv("quantity('0')", q_lit(core.quantity(jv.str("0"))), "{value: 0, unit: undefined}")
+    eq_jv("quantity('100%')", q_lit(core.quantity(jv.str("100%"))), "{value: 100, unit: '%'}")
+    eq_jv("quantity('100 %')", q_lit(core.quantity(jv.str("100 %"))), "{value: 100, unit: '%'}")
+    eq_jv("quantity('0px')", q_lit(core.quantity(jv.str("0px"))), "{value: 0, unit: 'px'}")
+    differs("quantity('100%') unit", q_lit(core.quantity(jv.str("100%"))), "{value: 100, unit: 'px'}")
+}
+
+bounds_spec() {
+    println("Core > Data > Bounds")
+    e = core.get_bounds(100.0, 0.627, 0.627, 20.0, 1)
+    t.eq_str("empty range with onlyInteger returns (#1057)", e.error, "")
+    b = core.get_bounds(100.0, 10.0, 1.0, 10.0, 0)
+    t.eq_num("10 steps: min", b.min, 1.0)
+    t.eq_num("10 steps: max", b.max, 10.0)
+    t.eq_str("10 steps: values", nums_lit(b.values), "[1,2,3,4,5,6,7,8,9,10]")
+    b = core.get_bounds(100.0, 10.0, 1.0, 20.0, 0)
+    t.eq_num("5 steps: min", b.min, 1.0)
+    t.eq_num("5 steps: max", b.max, 10.0)
+    t.eq_str("5 steps: values", nums_lit(b.values), "[1,3,5,7,9]")
+    b = core.get_bounds(100.0, 2.0, 1.0, 20.0, 0)
+    t.eq_num("non integer steps: min", b.min, 1.0)
+    t.eq_num("non integer steps: max", b.max, 2.0)
+    t.eq_str("non integer steps: values", nums_lit(b.values), "[1,1.25,1.5,1.75,2]")
+    b = core.get_bounds(100.0, 3.0, 1.0, 20.0, 1)
+    t.eq_num("integer steps only: min", b.min, 1.0)
+    t.eq_num("integer steps only: max", b.max, 3.0)
+    t.eq_str("integer steps only: values", nums_lit(b.values), "[1,2,3]")
+    b = core.get_bounds(100.0, 2.0, 1.0, 20.0, 1)
+    t.eq_num("single integer step: min", b.min, 1.0)
+    t.eq_num("single integer step: max", b.max, 2.0)
+    t.eq_str("single integer step: values", nums_lit(b.values), "[1,2]")
+    b = core.get_bounds(100.0, 9.9, 1.01, 20.0, 0)
+    t.eq_num("floor/ceil: min", b.min, 1.0)
+    t.eq_num("floor/ceil: max", b.max, 10.0)
+    t.eq_str("floor/ceil: values", nums_lit(b.values), "[1,3,5,7,9]")
+    b = core.get_bounds(100.0, 2.9, 1.01, 20.0, 0)
+    t.eq_num("floor/ceil non integers: min", b.min, 1.0)
+    t.eq_num("floor/ceil non integers: max", b.max, 3.0)
+    t.eq_str("floor/ceil non integers: values", nums_lit(b.values), "[1,1.5,2,2.5,3]")
+    b = core.get_bounds(100.0, 2.9, 1.01, 20.0, 1)
+    t.eq_num("floor/ceil integers only: min", b.min, 1.0)
+    t.eq_num("floor/ceil integers only: max", b.max, 3.0)
+    t.eq_str("floor/ceil integers only: values", nums_lit(b.values), "[1,2,3]")
+    b = core.get_bounds(100.0, 1.9, -0.9, 20.0, 0)
+    t.eq_num("neg and pos: min", b.min, -1.0)
+    t.eq_num("neg and pos: max", b.max, 2.0)
+    t.eq_str("neg and pos: values", nums_lit(b.values), "[-1,0,1,2]")
+    b = core.get_bounds(100.0, 5.0, 0.0, 45.0, 0)
+    t.eq_num("two steps if no space: min", b.min, 0.0)
+    t.eq_num("two steps if no space: max", b.max, 5.0)
+    t.eq_str("two steps if no space: values", nums_lit(b.values), "[0,4]")
+    b = core.get_bounds(100.0, 5.0, 0.0, 80.0, 0)
+    t.eq_num("single step if no space: min", b.min, 0.0)
+    t.eq_num("single step if no space: max", b.max, 5.0)
+    t.eq_str("single step if no space: values", nums_lit(b.values), "[0]")
+    b = core.get_bounds(100.0, 1.0000000000000002, 1.0, 20.0, 0)
+    t.eq_num("range below epsilon: min", b.min, 1.0)
+    t.eq_num("range below epsilon: max", b.max, 1.0000000000000002)
+    t.eq_num("range below epsilon: low", b.low, 1.0)
+    t.eq_num("range below epsilon: high", b.high, 1.0000000000000002)
+    t.eq_str("range below epsilon: values", nums_lit(b.values), "[1]")
+    b = core.get_bounds(613.234375, 1000.0000000000001, 999.9999999999997, 50.0, 0)
+    t.eq_num("range below smallest increment: min", b.min, 999.9999999999999)
+    t.eq_num("range below smallest increment: max", b.max, 1000.0)
+    t.eq_num("range below smallest increment: low", b.low, 999.9999999999997)
+    t.eq_num("range below smallest increment: high", b.high, 1000.0000000000001)
+    t.eq_str("range below smallest increment: values", nums_lit(b.values),
+             "[${jv.js_number(core.round_with_precision(999.9999999999999))}]")
+    b = core.get_bounds(100.0, 10.0, 1.0, 20.0, 0)
+    t.is_false("negative control: 5 steps are not 10", string.equals(nums_lit(b.values), "[1,2,3,4,5,6,7,8,9,10]"))
+}
+
+hl_lit(h: *core.CtHighLow) -> *jv.JsValue {
+    o = jv.obj()
+    jv.put(o, "low", jv.num(h.low))
+    jv.put(o, "high", jv.num(h.high))
+    return o
+}
+
+high_low_spec() {
+    println("Core > getHighLow")
+    series = jv.parse("[[{x: 1, y: 12}, {x: 2, y: 18}]]")
+    eq_jv("range of y", hl_lit(core.get_high_low(series, jv.parse("{}"), "y")), "{low: 12, high: 18}")
+    eq_jv("range of x", hl_lit(core.get_high_low(series, jv.parse("{}"), "x")), "{low: 1, high: 2}")
+    eq_jv("widens to reference 0", hl_lit(core.get_high_low(series, jv.parse("{referenceValue: 0}"), "y")), "{low: 0, high: 18}")
+    eq_jv("widens to reference 30", hl_lit(core.get_high_low(series, jv.parse("{referenceValue: 30}"), "y")), "{low: 12, high: 30}")
+    eq_jv("axis low wins over reference (#1476)", hl_lit(core.get_high_low(series, jv.parse("{referenceValue: 0, axisY: {low: 10}}"), "y")), "{low: 10, high: 18}")
+    eq_jv("axis high wins over reference", hl_lit(core.get_high_low(series, jv.parse("{referenceValue: 30, axisY: {high: 20}}"), "y")), "{low: 12, high: 20}")
+    eq_jv("chart low wins over reference", hl_lit(core.get_high_low(series, jv.parse("{referenceValue: 0, low: 5}"), "y")), "{low: 5, high: 18}")
+    eq_jv("reference still widens the free side", hl_lit(core.get_high_low(series, jv.parse("{referenceValue: 30, axisY: {low: 10}}"), "y")), "{low: 10, high: 30}")
+    differs("range of y", hl_lit(core.get_high_low(series, jv.parse("{}"), "y")), "{low: 1, high: 18}")
+}
+
+range_spec() {
+    println("Core > Data > nonEmptyRange")
+    eq_jv("keeps high above low", hl_lit(core.non_empty_range(5.0, 2.0)), "{high: 5, low: 2}")
+    eq_jv("0/0", hl_lit(core.non_empty_range(0.0, 0.0)), "{high: 1, low: 0}")
+    eq_jv("-3/-3", hl_lit(core.non_empty_range(-3.0, -3.0)), "{high: 0, low: -3}")
+    eq_jv("crossed", hl_lit(core.non_empty_range(0.627, 0.7)), "{high: 0.627, low: 0}")
+    eq_jv("no values", hl_lit(core.non_empty_range(-1.7976931348623157e308, 1.7976931348623157e308)), "{high: 1, low: 0}")
+    differs("0/0", hl_lit(core.non_empty_range(0.0, 0.0)), "{high: 0, low: 0}")
+}
+
+norm(data_lit: string) -> *jv.JsValue {
+    return jv.get(core.normalize_data(jv.parse(data_lit), 0, "", 0), "series")
+}
+
+normalize_spec() {
+    println("Core > Data > Normalize")
+    eq_jv("mixed series types",
+        norm("{labels: [1,2,3,4,5,6,7,8,9,10], series: [{data: [1, 0, 3, 4, 5, 6]}, [1, {value: 0}, 3, {value: 4}, 5, 6, 7, 8], {data: [1, 0, {value: 3}]}]}"),
+        "[[1,0,3,4,5,6,undefined,undefined,undefined,undefined],[1,0,3,4,5,6,7,8,undefined,undefined],[1,0,3,undefined,undefined,undefined,undefined,undefined,undefined,undefined]]")
+    eq_jv("mixed series for pie",
+        norm("{series: [1, {value: 0}, 3, {value: 4}, 5, 6, 7, 8]}"), "[1,0,3,4,5,6,7,8]")
+    eq_jv("mixed string series for pie",
+        norm("{series: ['1', {value: '0'}, '3', {value: '4'}, '5', '6', '7', '8']}"), "[1,0,3,4,5,6,7,8]")
+    eq_jv("mixed series types with strings",
+        norm("{labels: [1,2,3,4,5,6,7,8,9,10], series: [{data: ['1', '0', '3', '4', '5', '6']}, ['1', {value: '0'}, '3', {value: '4'}, '5', '6', '7', '8'], {data: ['1', '0', {value: '3'}]}]}"),
+        "[[1,0,3,4,5,6,undefined,undefined,undefined,undefined],[1,0,3,4,5,6,7,8,undefined,undefined],[1,0,3,undefined,undefined,undefined,undefined,undefined,undefined,undefined]]")
+    eq_jv("weird values",
+        norm("{labels: [1,2,3,4,5,6,7,8,9,10], series: [{data: [null, NaN, undefined, '4', '5', '6']}, ['1', {value: null}, '3', {value: NaN}, '5', '6', '7', '8'], {data: ['1', '0', {value: undefined}]}]}"),
+        "[[undefined,undefined,undefined,4,5,6,undefined,undefined,undefined,undefined],[1,undefined,3,undefined,5,6,7,8,undefined,undefined],[1,0,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined]]")
+    eq_jv("0 values in value objects",
+        norm("{labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], series: [{data: [{value: 1}, {value: 4}, {value: 2}, {value: 7}, {value: 2}, {value: 0}]}]}"),
+        "[[1, 4, 2, 7, 2, 0]]")
+    multi = core.normalize_data(jv.parse("{labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], series: [{data: [{value: 1}, {value: {y: 4, x: 1}}, {y: 2, x: 2}, NaN, null, {value: 7}, {value: 2}, {value: null}, {y: undefined, x: NaN}]}]}"), 0, "true", 0)
+    eq_jv("mixed dimensions into multi values", jv.get(multi, "series"),
+        "[[{x: undefined, y: 1}, {x: 1, y: 4}, {x: 2, y: 2}, undefined, undefined, {x: undefined, y: 7}, {x: undefined, y: 2}, undefined, undefined]]")
+    eq_jv("boolean series", norm("{series: [[true, false, false, true]]}"), "[[1, 0, 0, 1]]")
+    eq_jv("align series by holes", norm("{series: [[1, 2, 3, 4], [1, 2, 3], [1, 2]]}"),
+        "[[1, 2, 3, 4], [1, 2, 3, undefined], [1, 2, undefined, undefined]]")
+    eq_jv("align series with labels by holes", norm("{labels: ['a', 'b', 'c', 'd', 'e', 'f'], series: [[1, 2, 3, 4], [1, 2, 3], [1, 2]]}"),
+        "[[1, 2, 3, 4, undefined, undefined], [1, 2, 3, undefined, undefined, undefined], [1, 2, undefined, undefined, undefined, undefined]]")
+    differs("align series by holes", norm("{series: [[1, 2, 3, 4], [1, 2, 3], [1, 2]]}"),
+        "[[1, 2, 3, 4], [1, 2, 3], [1, 2]]")
+}
+
+values_of(lit: string) -> ptr {
+    a = jv.parse(lit)
+    l = list.new()
+    i = 0
+    while i < jv.len(a) {
+        _x = list.add(l, core.seg_data(jv.at(a, i), i, jv.undef()))
+        i = i + 1
+    }
+    return l
+}
+
+segs_lit(segs: ptr) -> *jv.JsValue {
+    out = jv.arr()
+    i = 0
+    while i < list.size(segs) {
+        sp, _e = list.get(segs, i)
+        s = sp as *core.CtSegment
+        o = jv.obj()
+        jv.put(o, "pathCoordinates", jv.parse(nums_lit(s.coords)))
+        vd = jv.arr()
+        j = 0
+        while j < list.size(s.values) {
+            dp, _e2 = list.get(s.values, j)
+            d = dp as *core.CtSegData
+            e = jv.obj()
+            jv.put(e, "value", d.value)
+            jv.put(e, "valueIndex", jv.num(d.value_index / 1.0))
+            jv.push(vd, e)
+            j = j + 1
+        }
+        jv.put(o, "valueData", vd)
+        jv.push(out, o)
+        i = i + 1
+    }
+    return out
+}
+
+segments_spec() {
+    println("Core > Data > Segments")
+    eq_jv("empty input", segs_lit(core.split_into_segments(core.nums_new(), list.new(), 0, 0)), "[]")
+    coords = core.nums_of("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]")
+    vals = values_of("[1, undefined, undefined, 4, undefined, 6]")
+    eq_jv("removes undefined values", segs_lit(core.split_into_segments(coords, vals, 0, 0)),
+        "[{pathCoordinates: [1, 2], valueData: [{value: 1, valueIndex: 0}]}, {pathCoordinates: [7, 8], valueData: [{value: 4, valueIndex: 3}]}, {pathCoordinates: [11, 12], valueData: [{value: 6, valueIndex: 5}]}]")
+    eq_jv("fillHoles", segs_lit(core.split_into_segments(coords, vals, 0, 1)),
+        "[{pathCoordinates: [1, 2, 7, 8, 11, 12], valueData: [{value: 1, valueIndex: 0}, {value: 4, valueIndex: 3}, {value: 6, valueIndex: 5}]}]")
+    c2 = core.nums_of("[1, 2, 3, 4, 5, 6, 5, 6, 7, 8, 1, 2]")
+    v2 = values_of("[1, 2, 3, 4, 5, 6]")
+    eq_jv("increasingX", segs_lit(core.split_into_segments(c2, v2, 1, 0)),
+        "[{pathCoordinates: [1, 2, 3, 4, 5, 6], valueData: [{value: 1, valueIndex: 0}, {value: 2, valueIndex: 1}, {value: 3, valueIndex: 2}]}, {pathCoordinates: [5, 6, 7, 8], valueData: [{value: 4, valueIndex: 3}, {value: 5, valueIndex: 4}]}, {pathCoordinates: [1, 2], valueData: [{value: 6, valueIndex: 5}]}]")
+    differs("fillHoles", segs_lit(core.split_into_segments(coords, vals, 0, 1)),
+        "[{pathCoordinates: [1, 2], valueData: [{value: 1, valueIndex: 0}]}]")
+}
+
+roundtrip(v: *jv.JsValue) -> *jv.JsValue {
+    return core.deserialize(core.serialize(v))
+}
+
+serialize_spec() {
+    println("Core > Data > Serialize")
+    eq_jv("regular strings", roundtrip(jv.str("String test")), "'String test'")
+    crit = "String test with critical characters \" < > ' & &amp;"
+    t.eq_str("critical characters", jv.string_of(roundtrip(jv.str(crit))), crit)
+    eq_jv("numbers", roundtrip(jv.num(12345.6789)), "12345.6789")
+    eq_jv("complex objects", roundtrip(jv.parse("{a: {b: 100, c: 'String test', d: 'String test with critical characters \" < > \\' & &amp;', e: {f: 'String test'}}}")),
+        "{a: {b: 100, c: 'String test', d: 'String test with critical characters \" < > \\' & &amp;', e: {f: 'String test'}}}")
+    t.is_true("null", jv.is_null(roundtrip(jv.null_v())))
+    t.is_true("undefined", jv.is_undefined(roundtrip(jv.undef())))
+    t.is_true("NaN", jv.is_nan(jv.to_number(roundtrip(jv.num(jv.nan())))))
+    t.eq_str("escapes the attribute", jv.string_of(core.serialize(jv.parse("{m: 1}"))), "{&quot;data&quot;:{&quot;m&quot;:1}}")
+    differs("numbers", roundtrip(jv.num(12345.6789)), "'12345.6789'")
+}
+
+extend_spec() {
+    println("Utils > extend")
+    target = jv.parse("{a: 1, nested: {b: 2, c: 3}}")
+    result = jv.extend(jv.extend(target, jv.parse("{nested: {c: 4}}")), jv.parse("{d: 5}"))
+    t.is_true("merges into the target itself", result == target)
+    eq_jv("merges plain objects deeply", result, "{a: 1, nested: {b: 2, c: 4}, d: 5}")
+    eq_jv("replaces a number with an object (#842)",
+        jv.extend(jv.extend(jv.obj(), jv.parse("{chartPadding: 5}")), jv.parse("{chartPadding: {top: 10}}")), "{chartPadding: {top: 10}}")
+    src = jv.parse("{chartPadding: {top: 10}}")
+    r2 = jv.extend(jv.extend(jv.obj(), jv.parse("{chartPadding: 5}")), src)
+    jv.put(jv.get(r2, "chartPadding"), "top", jv.num(20.0))
+    t.eq_num("does not change the source when it replaces a number", jv.num_path(src, "chartPadding.top"), 10.0)
+    eq_jv("replaces null and strings with an object", jv.extend(jv.parse("{a: null, b: 'x'}"), jv.parse("{a: {c: 1}, b: {d: 2}}")), "{a: {c: 1}, b: {d: 2}}")
+    eq_jv("replaces an object with a number", jv.extend(jv.parse("{chartPadding: {top: 10}}"), jv.parse("{chartPadding: 5}")), "{chartPadding: 5}")
+    eq_jv("replaces arrays instead of merging them", jv.extend(jv.parse("{ticks: [1, 2, 3]}"), jv.parse("{ticks: [4]}")), "{ticks: [4]}")
+    differs("replaces arrays", jv.extend(jv.parse("{ticks: [1, 2, 3]}"), jv.parse("{ticks: [4]}")), "{ticks: [4, 2, 3]}")
+}
+
+main() {
+    println("=== test_chart_core ===")
+    math_spec()
+    lang_spec()
+    bounds_spec()
+    high_low_spec()
+    range_spec()
+    normalize_spec()
+    segments_spec()
+    serialize_spec()
+    extend_spec()
+    t.done("test_chart_core")
+}
