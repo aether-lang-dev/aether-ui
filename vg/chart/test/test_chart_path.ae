@@ -1,0 +1,384 @@
+// test_chart_path.ae — Chartist's svg/SvgPath.spec, interpolation/*.spec and
+// layers/path.spec (reversePath), ported with their expected values, plus a
+// negative control per area.
+
+import std.string
+import std.list
+import vg.chart.value as jv
+import vg.chart.core
+import vg.chart.svgpath as sp
+import vg.chart.interpolation as ip
+import vg.chart.test.check as t
+
+els_lit(p: *sp.CtSvgPath) -> *jv.JsValue {
+    a = jv.arr()
+    i = 0
+    while i < sp.path_len(p) { jv.push(a, sp.el_params_lit(sp.path_el(p, i))); i = i + 1 }
+    return a
+}
+
+eq_jv(label: string, got: *jv.JsValue, want_lit: string) {
+    want = jv.parse(want_lit)
+    if jv.equals(got, want) == 1 { t.is_true(label, 1) } else {
+        t.eq_str(label, jv.stringify(got), jv.stringify(want))
+    }
+}
+
+commands(p: *sp.CtSvgPath) -> string {
+    s = ""
+    i = 0
+    while i < sp.path_len(p) { s = string.concat(s, sp.path_command(p, i)); i = i + 1 }
+    return s
+}
+
+count_char(s: string, c: int) -> int {
+    n = 0
+    i = 0
+    while i < string.length(s) {
+        if string.char_at(s, i) == c { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+parse(d: string) -> *sp.CtSvgPath { return sp.path_parse(sp.path_new(0), d) }
+
+piece(pieces: ptr, i: int) -> *sp.CtSvgPath {
+    it, _e = list.get(pieces, i)
+    return it as *sp.CtSvgPath
+}
+
+svg_path_spec() {
+    println("Svg > SvgPath")
+    p = sp.path_new(0)
+    t.eq_int("position starts at 0", sp.path_pos(p), 0)
+    t.eq_int("position(100) clamps to 0", sp.path_pos(sp.path_set_pos(p, 100)), 0)
+    t.eq_int("position(-1) clamps to 0", sp.path_pos(sp.path_set_pos(p, -1)), 0)
+    _a = sp.path_move(sp.path_move(sp.path_move(p, 0.0, 0.0, 0), 0.0, 0.0, 0), 0.0, 0.0, 0)
+    t.eq_int("position(100) clamps to the 3 elements", sp.path_pos(sp.path_set_pos(p, 100)), 3)
+
+    q = sp.path_new(0)
+    _b = sp.path_move(q, 1.0, 2.0, 0)
+    _c = sp.path_move(q, 3.0, 4.0, 1)
+    _d = sp.path_line(q, 5.0, 6.0, 0)
+    _e = sp.path_line(q, 7.0, 8.0, 1)
+    _f = sp.path_curve(q, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 0)
+    _g = sp.path_curve(q, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 1)
+    t.eq_int("absolute and relative: 6 elements", sp.path_len(q), 6)
+    eq_jv("absolute and relative elements", els_lit(q),
+        "[{command: 'M', x: 1, y: 2}, {command: 'm', x: 3, y: 4}, {command: 'L', x: 5, y: 6}, {command: 'l', x: 7, y: 8}, {command: 'C', x1: 9, y1: 10, x2: 11, y2: 12, x: 13, y: 14}, {command: 'c', x1: 15, y1: 16, x2: 17, y2: 18, x: 19, y: 20}]")
+
+    r = sp.path_new(0)
+    _h = sp.path_move(sp.path_move(sp.path_move(r, 1.0, 2.0, 0), 7.0, 8.0, 0), 9.0, 10.0, 0)
+    _i = sp.path_move(sp.path_move(sp.path_set_pos(r, 1), 3.0, 4.0, 0), 5.0, 6.0, 0)
+    _j = sp.path_move(sp.path_set_pos(r, 100000), 11.0, 12.0, 0)
+    _k = sp.path_move(sp.path_set_pos(r, -100000), -1.0, 0.0, 0)
+    t.eq_int("inserted at the cursor: 7 elements", sp.path_len(r), 7)
+    eq_jv("inserted at the cursor", els_lit(r),
+        "[{command: 'M', x: -1, y: 0}, {command: 'M', x: 1, y: 2}, {command: 'M', x: 3, y: 4}, {command: 'M', x: 5, y: 6}, {command: 'M', x: 7, y: 8}, {command: 'M', x: 9, y: 10}, {command: 'M', x: 11, y: 12}]")
+
+    s = sp.path_new(1)
+    _l = sp.path_line(sp.path_line(sp.path_line(sp.path_move(s, 10.0, 10.0, 0), 10.0, 100.0, 0), 100.0, 100.0, 0), 100.0, 10.0, 0)
+    t.eq_str("stringify simple shape", sp.path_stringify(s), "M10,10L10,100L100,100L100,10Z")
+
+    a2 = sp.path_new_with(0, 2)
+    _m = sp.path_line(sp.path_line(sp.path_move(a2, 10.12345, 10.14345, 0), 10.14545, 10.0, 0), 10.14000000645, 10.3333333333, 0)
+    t.eq_str("stringify with configured precision", sp.path_stringify(a2), "M10.12,10.14L10.15,10L10.14,10.33")
+
+    t.eq_str("parse Chartist style", sp.path_stringify(parse("M10,10L10,100L100,100L100,10")), "M10,10L10,100L100,100L100,10")
+    t.eq_str("parse MDN style", sp.path_stringify(parse("M10 10 L 10 100 L 100 100 L 100 10 C 1 1, 1 1, 1 1")), "M10,10L10,100L100,100L100,10C1,1,1,1,1,1")
+    t.eq_str("parse with closing command", sp.path_stringify(parse("M10 10 L 10 100 L 100 100 L 100 10 C 1 1, 1 1, 1 1 Z")), "M10,10L10,100L100,100L100,10C1,1,1,1,1,1")
+    cx = "M7.566371681415929,313.5870318472049L15.132743362831858,322.1479887268699L22.699115044247787,292.49058976570063L30.265486725663717,284.9469379116152L37.83185840707964,277.62070141556273L45.39823008849557,285.4043086222666L52.9646017699115,295.16905806058617L60.530973451327434,288.5395967440654L68.09734513274336,282.3023155078293L75.66371681415929,276.9420221519757L83.23008849557522,271.31296300227655L90.79646017699115,273.1827546735411L98.36283185840708,282.72148250847295L105.929203539823,276.55760703185683L113.49557522123892,278.16318930715545L121.06194690265487,279.67913384762466L128.6283185840708,296.53529757775897L136.1946902654867,324.4003397770142L143.76106194690263,317.1376004332516L151.32743362831857,323.3390406432677L158.89380530973452,328.5597479599146L166.46017699115043,329.67851354926904L174.02654867256635,327.71837583373326L181.5929203539823,335.05972598190976L189.15929203539824,334.29372633331286L196.72566371681415,332.68724934321176L204.29203539823007,330.6752327006325L211.858407079646,325.971917329413L219.42477876106196,328.13057177790404L226.99115044247785,309.6546479835954L234.5575221238938,310.6637826993739L242.12389380530973,310.65221523366176L249.69026548672568,318.40285733188773L257.2566371681416,298.18154267575227L264.8230088495575,307.4788389000347L272.3893805309734,304.189264255087L279.95575221238937,289.0288876874009L287.52212389380526,300.20654714775424L295.0884955752212,298.0164127652739L302.65486725663715,287.69192345832175L310.2212389380531,293.1860711045035L317.78761061946904,300.4760502113585L325.3539823008849,297.94852206276937L332.92035398230087,305.6594311405378L340.4867256637168,306.7859423144216L348.0530973451327,275.68998851331963L355.61946902654864,286.5550640745874L363.1858407079646,288.4952543187362L370.75221238938053,290.1896066608983L378.3185840707965,277.8447927515142L385.88495575221236,282.46018876596827L393.4513274336283,261.617847596371L401.01769911504425,265.06101027918726L408.58407079646014,264.60492966286677L416.1504424778761,252.35288845280365L423.716814159292,239.29220756750195L431.283185840708,229.73170018586225L438.8495575221239,224.1580859168795L446.41592920353986,217.20551113129414L453.9823008849557,212.63435660265037L461.54867256637164,210.4425212857057L469.1150442477876,201.0077146146342L476.6814159292035,182.3934004122068L484.24778761061947,176.98732946386616L491.8141592920354,175.3660655079267L499.38053097345136,181.1589144624976L506.9469026548673,172.81581557677976L514.5132743362832,177.82343674256106L522.079646017699,183.5573714672562L529.646017699115,184.4980688436067L537.2123893805309,201.60789339862924L544.7787610619469,193.42268767053048L552.3451327433628,209.9219909677575L559.9115044247787,221.1318944868172L567.4778761061947,222.47350026973174L575.0442477876105,229.94061399967882L582.6106194690265,213.57676800697396L590.1769911504424,232.97280246785252L597.7433628318583,232.8915724787845L605.3097345132743,231.486089735319L612.8761061946902,234.26534000120475L620.4424778761062,219.90951817170736L628.0088495575221,214.36149678900725L635.5752212389381,204.7245641444236L643.1415929203539,205.04759319834227L650.7079646017698,178.61624621480792L658.2743362831858,174.30656351022486L665.8407079646017,194.06864637030463L673.4070796460177,191.38404795482728L680.9734513274336,188.88380371217903L688.5398230088496,182.47430260433697L696.1061946902654,192.70175438596493L703.6725663716813,182.37945067166908L711.2389380530973,163.80499447227572L718.8053097345132,157.4839718811134L726.3716814159292,149.57403342725343L733.9380530973451,142.6076734278762L741.5044247787611,144.9954413314636L749.070796460177,152.29112878815386L756.637168141593,150.02544379977235L764.2035398230088,139.40203164917125L771.7699115044247,149.22935357717972L779.3362831858407,155.78116263659354L786.9026548672566,145.09966219897575L794.4690265486726,157.52407467202426L802.0353982300885,147.01645902195105L809.6017699115044,141.8658056183404L817.1681415929203,134.36135158737966L824.7345132743362,127.49269525433283L832.3008849557522,120.25886939571154L839.8672566371681,118.26230310074709L847.433628318584,98.76959064327474"
+    t.eq_str("parse complex path (accuracy false)", sp.path_stringify(sp.path_parse(sp.path_new_with(0, -1), cx)), cx)
+
+    sc = sp.path_new(0)
+    _n = sp.path_scale(sp.path_curve(sp.path_line(sp.path_move(sc, 1.0, 2.0, 0), 3.0, 4.0, 0), 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 0), 10.0, 100.0)
+    eq_jv("scale along both axes", els_lit(sc), "[{command: 'M', x: 10, y: 200}, {command: 'L', x: 30, y: 400}, {command: 'C', x1: 50, y1: 600, x2: 70, y2: 800, x: 90, y: 1000}]")
+    tr = sp.path_new(0)
+    _o = sp.path_translate(sp.path_curve(sp.path_line(sp.path_move(tr, 1.0, 2.0, 0), 3.0, 4.0, 0), 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 0), 10.0, 100.0)
+    eq_jv("translate along both axes", els_lit(tr), "[{command: 'M', x: 11, y: 102}, {command: 'L', x: 13, y: 104}, {command: 'C', x1: 15, y1: 106, x2: 17, y2: 108, x: 19, y: 110}]")
+    tf = sp.path_new(0)
+    _p = sp.path_curve(sp.path_line(sp.path_move(tf, 1.0, 2.0, 0), 3.0, 4.0, 0), 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 0)
+    _q = sp.path_transform(tf) callback |el: ptr, name: string, ei: int, pi: int| {
+        if pi > 3 { return 0.0 }
+        if string.char_at(name, 0) == 121 { return 100.0 }
+        return jv.nan()
+    }
+    eq_jv("transform with a custom function", els_lit(tf), "[{command: 'M', x: 1, y: 100}, {command: 'L', x: 3, y: 100}, {command: 'C', x1: 5, y1: 100, x2: 7, y2: 100, x: 0, y: 0}]")
+
+    pcs = sp.path_split_by_command(parse("M0,0L0,0L0,0L0,0M0,0L0,0L0,0L0,0"), "M")
+    t.eq_int("split by move: 2 pieces", list.size(pcs), 2)
+    t.eq_str("split by move: piece 0 starts with M", sp.path_command(piece(pcs, 0), 0), "M")
+    t.eq_int("split by move: piece 0 has 4", sp.path_len(piece(pcs, 0)), 4)
+    t.eq_str("split by move: piece 1 starts with M", sp.path_command(piece(pcs, 1), 0), "M")
+    t.eq_int("split by move: piece 1 has 4", sp.path_len(piece(pcs, 1)), 4)
+    pcs2 = sp.path_split_by_command(parse("M0,0L0,0L0,0L0,0M0,0L0,0L0,0L0,0M0,0"), "M")
+    t.eq_int("split with a trailing move: 3 pieces", list.size(pcs2), 3)
+    t.eq_str("split with a trailing move: piece 2 is M", sp.path_command(piece(pcs2, 2), 0), "M")
+    pcs3 = sp.path_split_by_command(parse("L0,0C0,0,0,0,0,0M0,0L0,0L0,0L0,0M0,0L0,0L0,0L0,0"), "M")
+    t.eq_int("split with leading commands: 3 pieces", list.size(pcs3), 3)
+    t.eq_int("split with leading commands: piece 0 has 2", sp.path_len(piece(pcs3, 0)), 2)
+    t.eq_str("split with leading commands: piece 0 is L, C", commands(piece(pcs3, 0)), "LC")
+    t.eq_int("split with leading commands: piece 1 has 4", sp.path_len(piece(pcs3, 1)), 4)
+    t.eq_str("split with leading commands: piece 1 starts with M", sp.path_command(piece(pcs3, 1), 0), "M")
+
+    ng = parse("M-10,10L-100,-100")
+    t.eq_int("negative values: 2 elements", sp.path_len(ng), 2)
+    t.eq_str("negative values: commands", commands(ng), "ML")
+    t.eq_num("negative values: x0", sp.path_el(ng, 0).x, -10.0)
+    t.eq_num("negative values: y0", sp.path_el(ng, 0).y, 10.0)
+    t.eq_num("negative values: x1", sp.path_el(ng, 1).x, -100.0)
+    t.eq_num("negative values: y1", sp.path_el(ng, 1).y, -100.0)
+
+    // accuracy (#1491)
+    t.eq_str("accuracy 0 rounds to integers", sp.path_stringify(sp.path_move(sp.path_new_with(0, 0), 0.4, 0.6, 0)), "M0,1")
+    t.eq_str("accuracy false keeps the decimals", sp.path_stringify(sp.path_move(sp.path_new_with(0, -1), 0.4, 0.6, 0)), "M0.4,0.6")
+    t.eq_str("rounds to 3 decimals by default", sp.path_stringify(sp.path_move(sp.path_new(0), 0.12345, 1.0, 0)), "M0.123,1")
+
+    // splitByCommand (#1491)
+    src = sp.path_parse(sp.path_new_with(1, 1), "M0.123,0L1,1M2,2L3.456,3")
+    kp = sp.path_split_by_command(src, "M")
+    t.eq_str("split keeps options: piece 0", sp.path_stringify(piece(kp, 0)), "M0.1,0L1,1")
+    t.eq_str("split closes only the last piece", sp.path_stringify(piece(kp, 1)), "M2,2L3.5,3Z")
+    t.eq_str("split pieces join back", string.concat(sp.path_stringify(piece(kp, 0)), sp.path_stringify(piece(kp, 1))), sp.path_stringify(src))
+    src2 = parse("M0,0L1,1")
+    cp = piece(sp.path_split_by_command(src2, "M"), 0)
+    sp.path_el(cp, 1).x = 42.0
+    t.eq_str("split copies the commands", sp.path_stringify(src2), "M0,0L1,1")
+    ap = piece(sp.path_split_by_command(parse("M0,0L1,1"), "M"), 0)
+    t.eq_int("split piece cursor at its end", sp.path_pos(ap), 2)
+    t.eq_str("appends at the end of a piece", sp.path_stringify(sp.path_line(ap, 2.0, 2.0, 0)), "M0,0L1,1L2,2")
+    rp = sp.path_split_by_command(parse("m0,0l1,1m2,2l3,3"), "m")
+    t.eq_str("splits at relative commands: 0", sp.path_stringify(piece(rp, 0)), "m0,0l1,1")
+    t.eq_str("splits at relative commands: 1", sp.path_stringify(piece(rp, 1)), "m2,2l3,3")
+
+    // join (#1491)
+    js = sp.path_line(sp.path_move(sp.path_new(0), 0.0, 0.0, 0), 1.0, 1.0, 0)
+    jl = list.new()
+    _r = list.add(jl, js)
+    joined = sp.path_join(jl, 0)
+    sp.path_el(joined, 1).x = 42.0
+    t.eq_str("join copies the commands: source", sp.path_stringify(js), "M0,0L1,1")
+    t.eq_str("join copies the commands: joined", sp.path_stringify(joined), "M0,0L42,1")
+    jl2 = list.new()
+    _s = list.add(jl2, sp.path_move(sp.path_new(0), 0.0, 0.0, 0))
+    _u = list.add(jl2, sp.path_move(sp.path_new(0), 1.0, 1.0, 0))
+    j2 = sp.path_join(jl2, 0)
+    t.eq_int("join cursor at the end", sp.path_pos(j2), 2)
+    t.eq_str("appends at the end of the joined path", sp.path_stringify(sp.path_line(j2, 5.0, 5.0, 0)), "M0,0M1,1L5,5")
+
+    // parse (#1491)
+    hv = "M0,0H10V20h-5v-5Q1,2,3,4q1,2,3,4S5,6,7,8s5,6,7,8T9,10t9,10"
+    t.eq_str("round-trips H, V, Q, S and T", sp.path_stringify(parse(hv)), hv)
+    t.eq_str("keeps an inner Z, drops the last", sp.path_stringify(parse("M0,0L1,1ZM2,2L3,3z")), "M0,0L1,1ZM2,2L3,3")
+    t.eq_str("exponents, signs, no separators", sp.path_stringify(sp.path_parse(sp.path_new_with(0, -1), "M1e-3,+2E2L1-2L.5.5l-.5-1.5e1")), "M0.001,200L1,-2L0.5,0.5l-0.5,-15")
+    t.eq_str("implicit repeats are lines after a move", sp.path_stringify(parse("M0,0 10,10 20,0")), "M0,0L10,10L20,0")
+    t.eq_str("implicit repeats after a relative move", sp.path_stringify(parse("m0,0 10,10")), "m0,0l10,10")
+    t.eq_str("implicit repeats of L and C", sp.path_stringify(parse("L1,1 2,2 C1,2,3,4,5,6 7,8,9,10,11,12")), "L1,1L2,2C1,2,3,4,5,6C7,8,9,10,11,12")
+    t.eq_str("arc flags written together", sp.path_stringify(parse("M0,0A10,10,0,1120,0")), "M0,0A10,10,0,1,1,20,0")
+    t.is_true("invalid: M0,0L1", string.starts_with(sp.path_error(parse("M0,0L1")), "Invalid SVG path"))
+    t.is_true("invalid: X0,0", string.starts_with(sp.path_error(parse("X0,0")), "Invalid SVG path"))
+    t.is_true("invalid: M0,0L1,1x", string.starts_with(sp.path_error(parse("M0,0L1,1x")), "Invalid SVG path"))
+    t.eq_int("empty path parses to nothing", sp.path_len(parse("")), 0)
+    t.eq_int("blank path parses to nothing", sp.path_len(parse("  ")), 0)
+
+    // arcs (#1491)
+    t.eq_str("scales arc radii, keeps rotation and flags", sp.path_stringify(sp.path_scale(sp.path_arc(sp.path_move(sp.path_new(0), 0.0, 0.0, 0), 10.0, 20.0, 30.0, 0.0, 1.0, 40.0, 0.0, 0), 2.0, 3.0)), "M0,0A20,60,30,0,1,80,0")
+    t.eq_str("translates the arc end point only", sp.path_stringify(sp.path_translate(sp.path_arc(sp.path_move(sp.path_new(0), 0.0, 0.0, 0), 10.0, 20.0, 30.0, 0.0, 1.0, 40.0, 0.0, 0), 5.0, 5.0)), "M5,5A10,20,30,0,1,45,5")
+    t.eq_str("scales and translates H and V", sp.path_stringify(sp.path_translate(sp.path_scale(parse("M0,0H10V20"), 2.0, 3.0), 1.0, 1.0)), "M1,1H21V61")
+
+    t.is_false("negative control: stringify differs from a wrong path", string.equals(sp.path_stringify(s), "M10,10L10,100L100,100L100,10"))
+    t.eq_str("negative control: valid path has no error", sp.path_error(parse("M0,0L1,1")), "")
+}
+
+// values(ys) as in the interpolation specs: {value: {y}, valueIndex}.
+y_values(lit: string) -> ptr {
+    a = jv.parse(lit)
+    l = list.new()
+    i = 0
+    while i < jv.len(a) {
+        v = jv.obj()
+        jv.put(v, "y", jv.at(a, i))
+        _x = list.add(l, core.seg_data(v, i, jv.undef()))
+        i = i + 1
+    }
+    return l
+}
+
+// [1, undefined, 2, 2] as {value: {x: i, y}, valueIndex}.
+xy_values(lit: string) -> ptr {
+    a = jv.parse(lit)
+    l = list.new()
+    i = 0
+    while i < jv.len(a) {
+        v = jv.obj()
+        jv.put(v, "x", jv.num(i / 1.0))
+        jv.put(v, "y", jv.at(a, i))
+        _x = list.add(l, core.seg_data(v, i, jv.undef()))
+        i = i + 1
+    }
+    return l
+}
+
+curves_of(p: *sp.CtSvgPath) -> *core.CtNums {
+    out = core.nums_new()
+    sx = 0.0
+    sy = 0.0
+    i = 0
+    while i < sp.path_len(p) {
+        e = sp.path_el(p, i)
+        if string.equals(e.command, "C") == 1 {
+            core.nums_push(out, sx)
+            core.nums_push(out, sy)
+            core.nums_push(out, e.x1)
+            core.nums_push(out, e.y1)
+            core.nums_push(out, e.x2)
+            core.nums_push(out, e.y2)
+            core.nums_push(out, e.x)
+            core.nums_push(out, e.y)
+        }
+        sx = e.x
+        sy = e.y
+        i = i + 1
+    }
+    return out
+}
+
+interpolation_spec() {
+    println("Interpolation > monotoneCubic")
+    asc = core.nums_of("[0, 10, 10, 0, 20, 10, 30, 5]")
+    desc = core.nums_of("[30, 5, 20, 10, 10, 0, 0, 10]")
+    mc = ip.interp_monotone_cubic(0)
+    path = ip.interpolate(mc, desc, y_values("[5, 10, 0, 10]"))
+    d = sp.path_stringify(path)
+    t.is_true("descending x: one piece (#1038)", string.starts_with(d, "M") == 1 && count_char(d, 77) == 1)
+    t.eq_str("descending x: M C C C", commands(path), "MCCC")
+    sorted = curves_of(ip.interpolate(mc, asc, y_values("[10, 0, 10, 5]")))
+    actual = curves_of(path)
+    t.eq_int("descending x: as many curves as sorted", core.nums_len(actual), core.nums_len(sorted))
+    // reversed(sorted): curves in reverse order, each with its points reversed.
+    nc = core.nums_len(sorted) / 8
+    ci = 0
+    ok = 1
+    while ci < nc {
+        ri = nc - 1 - ci
+        pj = 0
+        while pj < 4 {
+            ex = core.nums_get(sorted, ri * 8 + (3 - pj) * 2)
+            ey = core.nums_get(sorted, ri * 8 + (3 - pj) * 2 + 1)
+            ax = core.nums_get(actual, ci * 8 + pj * 2)
+            ay = core.nums_get(actual, ci * 8 + pj * 2 + 1)
+            t.near("descending curve ${ci} point ${pj} x", ax, ex, 6)
+            t.near("descending curve ${ci} point ${pj} y", ay, ey, 6)
+            pj = pj + 1
+        }
+        ci = ci + 1
+    }
+    coords = core.nums_of("[0, 10, 10, 0, 20, 10, 10, 5, 0, 0, -10, 5]")
+    data = y_values("[1, 2, 1, 3, 2, 3]")
+    whole = sp.path_stringify(ip.interpolate(mc, coords, data))
+    there_d = list.new()
+    back_d = list.new()
+    k = 0
+    while k < 6 {
+        it, _e = list.get(data, k)
+        if k < 3 { _a = list.add(there_d, it) } else { _b = list.add(back_d, it) }
+        k = k + 1
+    }
+    there = sp.path_stringify(ip.interpolate(mc, core.nums_slice(coords, 0, 6), there_d))
+    back = sp.path_stringify(ip.interpolate(mc, core.nums_slice(coords, 6, 12), back_d))
+    t.eq_str("breaks where x turns back", whole, string.concat(there, back))
+    t.eq_int("turning back: 2 moves", count_char(whole, 77), 2)
+    t.eq_int("turning back: 4 curves", count_char(whole, 67), 4)
+    t.eq_str("breaks where x repeats", sp.path_stringify(ip.interpolate(mc, core.nums_of("[0, 10, 10, 0, 10, 5, 20, 10]"), y_values("[1, 2, 3, 1]"))), "M0,10L10,0M10,5L20,10")
+    holes = y_values("[5, undefined, 0, 10]")
+    t.eq_str("still breaks at holes", sp.path_stringify(ip.interpolate(mc, desc, holes)), "M30,5M10,0L0,10")
+    filled = sp.path_stringify(ip.interpolate(ip.interp_monotone_cubic(1), desc, holes))
+    t.is_true("fillHoles joins across the hole", string.starts_with(filled, "M30,5C") == 1 && count_char(filled, 77) == 1 && count_char(filled, 67) == 2)
+    t.is_false("negative control: holes break the line", string.equals(sp.path_stringify(ip.interpolate(mc, desc, holes)), filled))
+
+    println("Interpolation > simple")
+    c4 = core.nums_of("[0, 10, 10, 0, 20, 5, 30, 5]")
+    v4 = xy_values("[1, undefined, 2, 2]")
+    t.eq_str("simple leaves a gap at an object hole (#1040)", sp.path_stringify(ip.interpolate(ip.interp_simple(2.0, 0), c4, v4)), "M0,10M20,5C25,5,25,5,30,5")
+    t.eq_str("simple curves across with fillHoles", sp.path_stringify(ip.interpolate(ip.interp_simple(2.0, 1), c4, v4)), "M0,10C10,10,10,5,20,5C25,5,25,5,30,5")
+    t.is_false("negative control: simple gap", string.equals(sp.path_stringify(ip.interpolate(ip.interp_simple(2.0, 0), c4, v4)), "M0,10C10,10,10,5,20,5C25,5,25,5,30,5"))
+
+    println("Interpolation > step")
+    t.eq_str("step leaves a gap at an object hole (#1040)", sp.path_stringify(ip.interpolate(ip.interp_step(1, 0), c4, v4)), "M0,10M20,5L30,5L30,5")
+    t.eq_str("step steps across with fillHoles", sp.path_stringify(ip.interpolate(ip.interp_step(1, 1), c4, v4)), "M0,10L20,10L20,5L30,5L30,5")
+    t.is_false("negative control: step gap", string.equals(sp.path_stringify(ip.interpolate(ip.interp_step(1, 0), c4, v4)), "M0,10L20,10L20,5L30,5L30,5"))
+}
+
+shape(p: *sp.CtSvgPath) -> *jv.JsValue {
+    a = jv.arr()
+    i = 0
+    while i < sp.path_len(p) {
+        e = sp.path_el(p, i)
+        o = sp.el_params_lit(e)
+        k = 0
+        while k < jv.key_count(o) {
+            v = jv.value_at(o, k)
+            if jv.is_number(v) == 1 { jv.put(o, jv.key_at(o, k), jv.num(core.round_to(jv.number_of(v), 3))) }
+            k = k + 1
+        }
+        jv.push(a, o)
+        i = i + 1
+    }
+    return a
+}
+
+moves(p: *sp.CtSvgPath) -> int { return count_char(commands(p), 77) }
+
+reverse_spec() {
+    println("layers/path reversePath")
+    coords = core.nums_of("[0, 10, 10, 30, 20, 0, 30, 20, 40, 5, 50, 25]")
+    raw = jv.parse("[1, 3, undefined, 2, 0.5, 2.5]")
+    data = list.new()
+    i = 0
+    while i < jv.len(raw) {
+        v = jv.undef()
+        if jv.is_undefined(jv.at(raw, i)) == 0 {
+            v = jv.obj()
+            jv.put(v, "x", jv.num(i / 1.0))
+            jv.put(v, "y", jv.at(raw, i))
+        }
+        _a = list.add(data, core.seg_data(v, i, jv.undef()))
+        i = i + 1
+    }
+    names = "none simple monotoneCubic cardinal step"
+    interps = list.new()
+    _b = list.add(interps, ip.interp_none(0))
+    _c = list.add(interps, ip.interp_simple(2.0, 0))
+    _d = list.add(interps, ip.interp_monotone_cubic(0))
+    _e = list.add(interps, ip.interp_cardinal(1.0, 0))
+    _f = list.add(interps, ip.interp_step(1, 0))
+    j = 0
+    while j < 5 {
+        it, _g = list.get(interps, j)
+        interp = it as *ip.CtInterp
+        nm = ip.interp_kind(interp)
+        path = ip.interpolate(interp, coords, data)
+        rev = ip.reverse_path(path)
+        t.eq_int("${nm}: as many moves backward", moves(rev), moves(path))
+        last = sp.path_el(path, sp.path_len(path) - 1)
+        t.eq_num("${nm}: starts at the last x", sp.path_el(rev, 0).x, last.x)
+        t.eq_num("${nm}: starts at the last y", sp.path_el(rev, 0).y, last.y)
+        t.eq_int("${nm}: as many elements", sp.path_len(rev), sp.path_len(path))
+        t.is_true("${nm}: reversed twice is the path", jv.equals(shape(ip.reverse_path(rev)), shape(path)))
+        j = j + 1
+    }
+    sw = sp.path_curve(sp.path_move(sp.path_new(0), 0.0, 0.0, 0), 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0)
+    eq_jv("swaps the control points of a curve", shape(ip.reverse_path(sw)), "[{command: 'M', x: 5, y: 6}, {command: 'C', x1: 3, y1: 4, x2: 1, y2: 2, x: 0, y: 0}]")
+    arc = sp.path_arc(sp.path_move(sp.path_new(0), 0.0, 0.0, 0), 5.0, 5.0, 0.0, 0.0, 1.0, 10.0, 0.0, 0)
+    t.is_true("throws for arcs", string.contains(ip.reverse_path(arc).error, "\"A\" commands") == 1)
+    t.is_false("negative control: a curve reversed is not itself", jv.equals(shape(ip.reverse_path(sw)), shape(sw)))
+}
+
+main() {
+    println("=== test_chart_path ===")
+    svg_path_spec()
+    interpolation_spec()
+    reverse_spec()
+    t.done("test_chart_path")
+}

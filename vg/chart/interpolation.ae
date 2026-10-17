@@ -1,0 +1,432 @@
+// vg/chart/interpolation.ae — the line interpolations: how a series' points
+// become the SvgPath of its line.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: interpolation/none.ts, simple.ts, step.ts, cardinal.ts and
+// monotoneCubic.ts, and layers/path.ts (interpolationOf, centerShift's
+// sibling seriesPath lives in chart, reversePath here).
+//
+// An interpolation is an Interp value (Chartist's factory call, e.g.
+// Interpolation.cardinal({tension: 0.2}), is interp_cardinal(0.2, 0)), or
+// built from a lineSmooth option: true, false, or an object such as
+// {type: 'step', postpone: false, fillHoles: true}. A custom one is an Aether
+// closure |coords: ptr, values: ptr| -> ptr returning an *CtSvgPath.
+
+exports (
+    CtInterp,
+    interp_none, interp_simple, interp_step, interp_cardinal,
+    interp_monotone_cubic, interp_custom, interp_of_option, interp_kind,
+    interpolate, reverse_path
+)
+
+import std.string
+import std.list
+import std.math
+import vg.chart.value as jv
+import vg.chart.core
+import vg.chart.svgpath as sp
+
+struct CtInterp {
+    kind: string        // none | simple | step | cardinal | monotoneCubic | custom
+    divisor: float      // simple
+    tension: float      // cardinal
+    postpone: int       // step
+    fill_holes: int
+    custom: ptr         // boxed closure for custom
+}
+
+mk_interp(kind: string, fill_holes: int) -> *CtInterp {
+    ip = heap.new(CtInterp)
+    ip.kind = kind
+    ip.divisor = 2.0
+    ip.tension = 1.0
+    ip.postpone = 1
+    ip.fill_holes = fill_holes
+    ip.custom = null
+    return ip
+}
+
+interp_none(fill_holes: int) -> *CtInterp { return mk_interp("none", fill_holes) }
+
+interp_simple(divisor: float, fill_holes: int) -> *CtInterp {
+    ip = mk_interp("simple", fill_holes)
+    ip.divisor = divisor
+    return ip
+}
+
+interp_step(postpone: int, fill_holes: int) -> *CtInterp {
+    ip = mk_interp("step", fill_holes)
+    ip.postpone = postpone
+    return ip
+}
+
+interp_cardinal(tension: float, fill_holes: int) -> *CtInterp {
+    ip = mk_interp("cardinal", fill_holes)
+    ip.tension = tension
+    return ip
+}
+
+interp_monotone_cubic(fill_holes: int) -> *CtInterp { return mk_interp("monotoneCubic", fill_holes) }
+
+interp_custom(f: fn) -> *CtInterp {
+    ip = mk_interp("custom", 0)
+    ip.custom = f
+    return ip
+}
+
+interp_kind(ip: *CtInterp) -> string { return ip.kind }
+
+// interpolationOf(lineSmooth): true smooths with monotoneCubic, false draws
+// straight lines, an object names one with its options.
+interp_of_option(v: *jv.JsValue) -> *CtInterp {
+    if jv.is_object(v) == 0 {
+        if jv.truthy(v) == 1 { return interp_monotone_cubic(0) }
+        return interp_none(0)
+    }
+    t = jv.str_path(v, "type")
+    fh = jv.bool_path(v, "fillHoles")
+    if string.equals(t, "simple") == 1 { return interp_simple(jv.num_path_or(v, "divisor", 2.0), fh) }
+    if string.equals(t, "step") == 1 {
+        pp = 1
+        if jv.has(v, "postpone") == 1 { pp = jv.bool_path(v, "postpone") }
+        return interp_step(pp, fh)
+    }
+    if string.equals(t, "cardinal") == 1 { return interp_cardinal(jv.num_path_or(v, "tension", 1.0), fh) }
+    if string.equals(t, "none") == 1 { return interp_none(fh) }
+    return interp_monotone_cubic(fh)
+}
+
+data_at(values: ptr, i: int) -> *core.CtSegData {
+    item, _e = list.get(values, i)
+    return item as *core.CtSegData
+}
+
+has_value(d: *core.CtSegData) -> int {
+    if jv.is_undefined(core.get_multi_value(d.value, "y")) == 1 { return 0 }
+    return 1
+}
+
+// interpolate(ip, pathCoordinates, valueData) -> *CtSvgPath
+interpolate(ip: *CtInterp, coords: *core.CtNums, values: ptr) -> *sp.CtSvgPath {
+    k = ip.kind
+    if string.equals(k, "none") == 1 { return none_i(ip, coords, values) }
+    if string.equals(k, "simple") == 1 { return simple_i(ip, coords, values) }
+    if string.equals(k, "step") == 1 { return step_i(ip, coords, values) }
+    if string.equals(k, "cardinal") == 1 { return cardinal_i(ip, coords, values) }
+    if string.equals(k, "custom") == 1 {
+        f = ip.custom
+        r = call_custom(f, coords, values)
+        return r as *sp.CtSvgPath
+    }
+    return monotone_i(ip, coords, values)
+}
+
+call_custom(f: fn, coords: ptr, values: ptr) -> ptr {
+    ptr r = call(f, coords, values)
+    return r
+}
+
+none_i(ip: *CtInterp, coords: *core.CtNums, values: ptr) -> *sp.CtSvgPath {
+    path = sp.path_new(0)
+    hole = 1
+    n = core.nums_len(coords)
+    i = 0
+    while i < n {
+        x = core.nums_get(coords, i)
+        y = core.nums_get(coords, i + 1)
+        d = data_at(values, i / 2)
+        if has_value(d) == 1 {
+            if hole == 1 { _m = sp.path_move_d(path, x, y, 0, d) } else { _l = sp.path_line_d(path, x, y, 0, d) }
+            hole = 0
+        } else {
+            if ip.fill_holes == 0 { hole = 1 }
+        }
+        i = i + 2
+    }
+    return path
+}
+
+simple_i(ip: *CtInterp, coords: *core.CtNums, values: ptr) -> *sp.CtSvgPath {
+    dv = 1.0 / math.max_float(1.0, ip.divisor)
+    path = sp.path_new(0)
+    prev_x = 0.0
+    prev_y = 0.0
+    prev = null
+    n = core.nums_len(coords)
+    i = 0
+    while i < n {
+        x = core.nums_get(coords, i)
+        y = core.nums_get(coords, i + 1)
+        length = (x - prev_x) * dv
+        d = data_at(values, i / 2)
+        if has_value(d) == 1 {
+            if prev == null { _m = sp.path_move_d(path, x, y, 0, d) } else {
+                _c = sp.path_curve_d(path, prev_x + length, prev_y, x - length, y, x, y, 0, d)
+            }
+            prev_x = x
+            prev_y = y
+            prev = d
+        } else {
+            if ip.fill_holes == 0 {
+                prev_x = 0.0
+                prev_y = 0.0
+                prev = null
+            }
+        }
+        i = i + 2
+    }
+    return path
+}
+
+step_i(ip: *CtInterp, coords: *core.CtNums, values: ptr) -> *sp.CtSvgPath {
+    path = sp.path_new(0)
+    prev_x = 0.0
+    prev_y = 0.0
+    prev = null
+    n = core.nums_len(coords)
+    i = 0
+    while i < n {
+        x = core.nums_get(coords, i)
+        y = core.nums_get(coords, i + 1)
+        d = data_at(values, i / 2)
+        if has_value(d) == 1 {
+            if prev == null { _m = sp.path_move_d(path, x, y, 0, d) } else {
+                if ip.postpone == 1 {
+                    _a = sp.path_line_d(path, x, prev_y, 0, prev as *core.CtSegData)
+                } else {
+                    _b = sp.path_line_d(path, prev_x, y, 0, d)
+                }
+                _c = sp.path_line_d(path, x, y, 0, d)
+            }
+            prev_x = x
+            prev_y = y
+            prev = d
+        } else {
+            if ip.fill_holes == 0 {
+                prev_x = 0.0
+                prev_y = 0.0
+                prev = null
+            }
+        }
+        i = i + 2
+    }
+    return path
+}
+
+join_segments(ip: *CtInterp, segs: ptr) -> *sp.CtSvgPath {
+    paths = list.new()
+    i = 0
+    while i < list.size(segs) {
+        it, _e = list.get(segs, i)
+        s = it as *core.CtSegment
+        _a = list.add(paths, interpolate(ip, s.coords, s.values))
+        i = i + 1
+    }
+    return sp.path_join(paths, 0)
+}
+
+cardinal_i(ip: *CtInterp, coords0: *core.CtNums, values0: ptr) -> *sp.CtSvgPath {
+    t = math.min_float(1.0, math.max_float(0.0, ip.tension))
+    c = 1.0 - t
+    segs = core.split_into_segments(coords0, values0, 0, ip.fill_holes)
+    if list.size(segs) == 0 { return none_i(interp_none(0), core.nums_new(), list.new()) }
+    if list.size(segs) > 1 { return join_segments(ip, segs) }
+    s0, _e = list.get(segs, 0)
+    seg = s0 as *core.CtSegment
+    coords = seg.coords
+    values = seg.values
+    n = core.nums_len(coords)
+    if n <= 4 { return none_i(interp_none(0), coords, values) }
+    path = sp.path_move_d(sp.path_new(0), core.nums_get(coords, 0), core.nums_get(coords, 1), 0, data_at(values, 0))
+    i = 0
+    while n - 2 > i {
+        p0x = core.nums_get(coords, i - 2)
+        p0y = core.nums_get(coords, i - 1)
+        p1x = core.nums_get(coords, i)
+        p1y = core.nums_get(coords, i + 1)
+        p2x = core.nums_get(coords, i + 2)
+        p2y = core.nums_get(coords, i + 3)
+        p3x = core.nums_get(coords, i + 4)
+        p3y = core.nums_get(coords, i + 5)
+        if n - 4 == i {
+            p3x = p2x
+            p3y = p2y
+        } else {
+            if i == 0 {
+                p0x = core.nums_get(coords, i)
+                p0y = core.nums_get(coords, i + 1)
+            }
+        }
+        _cv = sp.path_curve_d(path,
+            (t * (0.0 - p0x + 6.0 * p1x + p2x)) / 6.0 + c * p2x,
+            (t * (0.0 - p0y + 6.0 * p1y + p2y)) / 6.0 + c * p2y,
+            (t * (p1x + 6.0 * p2x - p3x)) / 6.0 + c * p2x,
+            (t * (p1y + 6.0 * p2y - p3y)) / 6.0 + c * p2y,
+            p2x, p2y, 0, data_at(values, (i + 2) / 2))
+        i = i + 2
+    }
+    return path
+}
+
+sign_of(x: float) -> int {
+    if x > 0.0 { return 1 }
+    if x < 0.0 { return -1 }
+    return 0
+}
+
+// Splits a segment where x repeats or changes direction: the monotone curve
+// needs strictly monotonic x within a piece, in either direction.
+split_by_direction(seg: *core.CtSegment, out: ptr) {
+    coords = seg.coords
+    direction = 0
+    cur = null
+    n = core.nums_len(coords)
+    i = 0
+    while i < n {
+        dx = 0.0
+        if i >= 2 { dx = core.nums_get(coords, i) - core.nums_get(coords, i - 2) }
+        sg = sign_of(dx)
+        if i == 0 || sg == 0 || (direction != 0 && sg != direction) {
+            s = core.segment_new()
+            _a = list.add(out, s)
+            cur = s
+            direction = 0
+        } else {
+            direction = sg
+        }
+        cs = cur as *core.CtSegment
+        core.nums_push(cs.coords, core.nums_get(coords, i))
+        core.nums_push(cs.coords, core.nums_get(coords, i + 1))
+        _b = list.add(cs.values, data_at(seg.values, i / 2))
+        i = i + 2
+    }
+}
+
+monotone_i(ip: *CtInterp, coords0: *core.CtNums, values0: ptr) -> *sp.CtSvgPath {
+    raw = core.split_into_segments(coords0, values0, 0, ip.fill_holes)
+    segs = list.new()
+    r = 0
+    while r < list.size(raw) {
+        it, _e = list.get(raw, r)
+        split_by_direction(it as *core.CtSegment, segs)
+        r = r + 1
+    }
+    if list.size(segs) == 0 { return none_i(interp_none(0), core.nums_new(), list.new()) }
+    if list.size(segs) > 1 { return join_segments(ip, segs) }
+    s0, _e0 = list.get(segs, 0)
+    seg = s0 as *core.CtSegment
+    coords = seg.coords
+    values = seg.values
+    if core.nums_len(coords) <= 4 { return none_i(interp_none(0), coords, values) }
+    n = core.nums_len(coords) / 2
+    xs = core.nums_new()
+    ys = core.nums_new()
+    i = 0
+    while i < n {
+        core.nums_push(xs, core.nums_get(coords, i * 2))
+        core.nums_push(ys, core.nums_get(coords, i * 2 + 1))
+        i = i + 1
+    }
+    dxs = core.nums_new()
+    ds = core.nums_new()
+    i = 0
+    while i < n - 1 {
+        dy = core.nums_get(ys, i + 1) - core.nums_get(ys, i)
+        dx = core.nums_get(xs, i + 1) - core.nums_get(xs, i)
+        core.nums_push(dxs, dx)
+        core.nums_push(ds, dy / dx)
+        i = i + 1
+    }
+    // Fritsch-Carlson slopes.
+    ms = core.nums_new()
+    i = 0
+    while i < n { core.nums_push(ms, 0.0); i = i + 1 }
+    core.nums_set(ms, 0, core.nums_get(ds, 0))
+    core.nums_set(ms, n - 1, core.nums_get(ds, n - 2))
+    i = 1
+    while i < n - 1 {
+        d0 = core.nums_get(ds, i - 1)
+        d1 = core.nums_get(ds, i)
+        if d1 == 0.0 || d0 == 0.0 || (d0 > 0.0) != (d1 > 0.0) {
+            core.nums_set(ms, i, 0.0)
+        } else {
+            x0 = core.nums_get(dxs, i - 1)
+            x1 = core.nums_get(dxs, i)
+            m = (3.0 * (x0 + x1)) / ((2.0 * x1 + x0) / d0 + (x1 + 2.0 * x0) / d1)
+            if jv.is_finite(m) == 0 { m = 0.0 }
+            core.nums_set(ms, i, m)
+        }
+        i = i + 1
+    }
+    path = sp.path_move_d(sp.path_new(0), core.nums_get(xs, 0), core.nums_get(ys, 0), 0, data_at(values, 0))
+    i = 0
+    while i < n - 1 {
+        dxi = core.nums_get(dxs, i)
+        _c = sp.path_curve_d(path,
+            core.nums_get(xs, i) + dxi / 3.0,
+            core.nums_get(ys, i) + (core.nums_get(ms, i) * dxi) / 3.0,
+            core.nums_get(xs, i + 1) - dxi / 3.0,
+            core.nums_get(ys, i + 1) - (core.nums_get(ms, i + 1) * dxi) / 3.0,
+            core.nums_get(xs, i + 1),
+            core.nums_get(ys, i + 1),
+            0, data_at(values, i + 1))
+        i = i + 1
+    }
+    return path
+}
+
+// reversePath (layers/path.ts): the same path traced backward, holes kept
+// between the same points, a curve's control points swapped. Arcs (and any
+// command but M, L and C) set the path's error instead (JS throws).
+reverse_path(path: *sp.CtSvgPath) -> *sp.CtSvgPath {
+    rev = sp.path_new(0)
+    n = sp.path_len(path)
+    i = n - 1
+    while i >= 0 {
+        e = sp.path_el(path, i)
+        if i == n - 1 || string.equals(sp.path_el(path, i + 1).command, "M") == 1 {
+            _m = sp.path_move_d(rev, e.x, e.y, 0, e.data)
+        }
+        if string.equals(e.command, "M") == 0 && i > 0 {
+            tg = sp.path_el(path, i - 1)
+            if string.equals(e.command, "C") == 1 {
+                _c = sp.path_curve_d(rev, e.x2, e.y2, e.x1, e.y1, tg.x, tg.y, 0, tg.data)
+            } else {
+                if string.equals(e.command, "L") == 1 {
+                    _l = sp.path_line_d(rev, tg.x, tg.y, 0, tg.data)
+                } else {
+                    rev.error = "Chartist: can't reverse a path with \"${e.command}\" commands"
+                    return rev
+                }
+            }
+        }
+        i = i - 1
+    }
+    return rev
+}
