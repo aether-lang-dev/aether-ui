@@ -14,7 +14,7 @@
 import ui
 import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refresh,
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
-    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, shortcut,
+    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, datagrid_edit, shortcut,
     on_cell_activate, on_col_resize, on_col_move, on_header_click, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
@@ -66,6 +66,7 @@ main() {
     rowmodel = ui_state_s("")
     hidc = ui_state_i(0)
     typing = ui_state_s("")
+    reenter = ui_state_i(0)
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
@@ -157,6 +158,13 @@ main() {
                 more = datagrid_areas(g)
                 if string.length(more) > 0 { more = " and ${more}" }
                 _s2 = ui_set_s(selected, "${r},${c} from ${datagrid_anchor_row(g)},${datagrid_anchor_col(g)}${more}")
+                // "Edit R6C2 twice": the move datagrid_edit makes is heard
+                // here, and an editor opened from it, as a spreadsheet's
+                // point mode does; one editor is left open, not two.
+                if ui_get_i(reenter) == 1 {
+                    _re = ui_set_i(reenter, 0)
+                    _ed = datagrid_edit(g, r, c)
+                }
             }
             // A field outside the grid: focus moving to it commits an open
             // editor (a field, since a button takes no focus on iOS).
@@ -215,6 +223,10 @@ main() {
             }
             _fit = btn("Fit row 4") callback {
                 _f = datagrid_fit_row(g, 3)
+            }
+            _twice = btn("Edit R6C2 twice") callback {
+                _re1 = ui_set_i(reenter, 1)
+                _ed1 = datagrid_edit(g, 5, 2)
             }
             // F4 puts a reference in the open editor at its caret (point mode).
             shortcut("F4") callback {

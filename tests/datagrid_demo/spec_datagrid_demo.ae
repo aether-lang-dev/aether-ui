@@ -812,6 +812,16 @@ main() {
             key("Escape")
             spec.assert_true(editor_open(0) == 1, "Escape closed it")
         }
+        spec.it("an editor opened from on_select while datagrid_edit moves the cursor: one editor, and none once it closes") callback {
+            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C1")}/click", "click R0C1")
+            press("Edit R6C2 twice")
+            spec.assert_true(editor_open(1) == 1, "an editor opened")
+            spec.assert_eq(count_of("textfield"), 2, "Notes and one editor, not two")
+            key("Escape")
+            spec.assert_true(editor_open(0) == 1, "Escape closed it")
+            spec.assert_eq(count_of("textfield"), 1, "and none is left over the grid")
+        }
     }
     spec.describe(fw, "a grid given less or more height") {
         spec.it("datagrid_set_height shows the rows that fit, and all of them again") callback {

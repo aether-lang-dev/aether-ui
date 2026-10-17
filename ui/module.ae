@@ -9023,10 +9023,15 @@ _datagrid_edit_start(g: *DataGrid, r: int, c: int) -> string {
 // focus with the caret at the end. The focus is given on the next turn of
 // the loop, not now: a keystroke that opened the editor is still being
 // delivered, and AppKit would type it into the new field a second time.
+// One editor at a time: the move tells on_select, and a handler there may
+// open one of its own (datagrid_edit from on_select, as a spreadsheet's
+// point mode does); this call's is the one left open, the handler's
+// closed unstored, rather than left over the grid with nothing to close it.
 _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
     if g.on_edit == null { return }
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
     _datagrid_move(g, r, c, 0)
+    if g.edit_field != 0 { _datagrid_edit_finish(g, 0) }
     r2 = g.cur_r
     c2 = g.cur_c
     if r2 < 0 { return }
