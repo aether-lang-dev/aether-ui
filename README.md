@@ -372,9 +372,9 @@ clicks a link never launches a browser; it is recorded instead, and the
 driver's `GET /opened_urls` lists every URL asked for, in order. `print_pdf` under
 a test (headless, or the driver armed) shows no print dialog either: the
 request is recorded, and `GET /printed` lists each as `{title, path}`. On
-UIKit it is `UIPrintInteractionController`; Android has no print path (it
-would need a Java `PrintDocumentAdapter`), so it returns 0 there outside a
-test.
+UIKit it is `UIPrintInteractionController`; on Android, `PrintManager`'s
+dialog over the shim's `AetherPrint`, a `PrintDocumentAdapter` that hands
+the print service the file's bytes.
 
 ### Keys, and why there are two kinds
 

@@ -5582,14 +5582,29 @@ void aether_ui_open_url_impl(const char* url) {
     aeui_android_run_sync(aeui_open_url_run, &u);
 }
 
-// Printing a PDF: Android's PrintManager takes a PrintDocumentAdapter, a
-// Java class of the app's own, which this native backend does not ship:
-// under a test the request is recorded as on every backend; otherwise 0
-// (not asked), said, never pretended.
+// Printing a PDF: PrintManager's dialog over the file, through the shim's
+// AetherPrint (a PrintDocumentAdapter that hands the print service the
+// file's bytes). Under a test the request is recorded, as on every backend.
+static jclass g_print_class = NULL;
+static jmethodID g_print_method = NULL;
+typedef struct { const char* path; const char* title; int ok; } AeuiPrint;
+static void aeui_print_pdf_run(void* arg) {
+    AeuiPrint* p = (AeuiPrint*)arg;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    if (g_activity && g_print_method) {
+        jboolean r = (*env)->CallStaticBooleanMethod(env, g_print_class, g_print_method, g_activity,
+                                                     aeui_jstring(env, p->path), aeui_jstring(env, p->title));
+        if (!aeui_check(env, "AetherPrint.print")) p->ok = r ? 1 : 0;
+    }
+    aeui_unframe(env);
+}
 int aether_ui_print_pdf_impl(const char* path, const char* title) {
     if (!path || !path[0]) return 0;
     if (aether_ui_print_records()) { aether_ui_printed_record(path, title ? title : ""); return 1; }
-    return 0;
+    AeuiPrint p = { path, title ? title : "", 0 };
+    aeui_android_run_sync(aeui_print_pdf_run, &p);
+    return p.ok;
 }
 
 // Dark mode is the configuration's night bit (Configuration.uiMode), which
@@ -9957,6 +9972,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     if (g_scroll_class) g_scroll_init = M(g_scroll_class, "<init>", "(Landroid/content/Context;)V");
     g_host_class = aeui_find_class(env, "dev/aether/ui/AetherHost");
     if (g_host_class) g_host_init = M(g_host_class, "<init>", "(Landroid/content/Context;)V");
+    g_print_class = aeui_find_class(env, "dev/aether/ui/AetherPrint");
+    if (g_print_class) g_print_method = (*env)->GetStaticMethodID(env, g_print_class, "print",
+        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)Z");
     g_wrap_class = aeui_find_class(env, "dev/aether/ui/AetherWrap");
     if (g_wrap_class) g_wrap_init = M(g_wrap_class, "<init>", "(Landroid/content/Context;II)V");
     g_adapter_class = aeui_find_class(env, "dev/aether/ui/AetherListAdapter");
