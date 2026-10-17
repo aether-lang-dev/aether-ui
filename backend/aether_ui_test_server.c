@@ -361,6 +361,17 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
                           ",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d", rx, ry, rw, rh);
         }
     }
+    // A canvas's own handle, which the /canvas/{id} routes take (it is not
+    // the widget's id): a spec finds a canvas by what /widgets says of it (its
+    // a11y name, its place) and drives it by this.
+    if (strcmp(type, "canvas") == 0) {
+        for (int cid = 1; cid <= 4096; cid++) {
+            if (aether_ui_canvas_get_widget(cid) == handle) {
+                n += snprintf(buf + n, bufsize - n, ",\"canvas\":%d", cid);
+                break;
+            }
+        }
+    }
     if (h->widget_classes_into) {
         char cls[256] = "";
         h->widget_classes_into(handle, cls, sizeof(cls));
