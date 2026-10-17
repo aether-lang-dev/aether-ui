@@ -1,0 +1,311 @@
+// test_chart_render.ae — the node tree (Chartist's scene/node.spec and
+// scene/tree.spec, ported where they do not test immutability), the hooks
+// that replace Chartist's event pipeline, the theme that replaces its
+// stylesheet, and the vg drawing: a chart drawn into a deferred vg scene on
+// the recording backend, read back shape by shape. Negative controls close
+// each area.
+
+import std.string
+import std.list
+import vg
+import vg.grammar.element
+import vg.grammar.context
+import vg.geom.transform
+import vg.backend.record
+import vg.chart
+import vg.chart.render
+import vg.chart.value as jv
+import vg.chart.node as cn
+import vg.chart.test.check as t
+
+nth(l: ptr, i: int) -> *cn.CtNode {
+    it, _e = list.get(l, i)
+    return it as *cn.CtNode
+}
+
+point(si: int, vi: int) -> *cn.CtNode {
+    p = cn.node("line", "", "ct-point")
+    cn.set_role(p, "point")
+    cn.ctx_put(p, "seriesIndex", jv.num(si / 1.0))
+    cn.ctx_put(p, "valueIndex", jv.num(vi / 1.0))
+    return p
+}
+
+series(si: int) -> *cn.CtNode {
+    g = cn.node("g", "", "ct-series")
+    cn.set_role(g, "series")
+    cn.ctx_put(g, "seriesIndex", jv.num(si / 1.0))
+    cn.append(g, point(si, 0))
+    cn.append(g, point(si, 1))
+    return g
+}
+
+sample() -> *cn.CtNode {
+    s = cn.node("svg", "", "")
+    cn.append(s, cn.node("g", "", "ct-grids"))
+    cn.append(s, series(0))
+    cn.append(s, series(1))
+    return s
+}
+
+tree_spec() {
+    println("scene/tree")
+    s = sample()
+    t.eq_int("findAll: points", list.size(cn.find_all(s, "point", -1, -1)), 4)
+    p1 = cn.find_all(s, "point", 1, -1)
+    t.eq_str("findAll: by series, in document order", "${cn.ctx_int(nth(p1, 0), "valueIndex")} ${cn.ctx_int(nth(p1, 1), "valueIndex")}", "0 1")
+    t.eq_int("findAll: series", list.size(cn.find_all(s, "series", -1, -1)), 2)
+    t.eq_int("findAll: every node, the root included", list.size(cn.find_all(s, "", -1, -1)), 8)
+    marked = cn.map_nodes(sample()) callback |nn: *cn.CtNode| {
+        if string.equals(nn.role, "point") == 1 && cn.ctx_int(nn, "seriesIndex") == 1 { cn.add_class(nn, "marked") }
+        return nn
+    }
+    t.eq_str("mapNodes: the mapped node's classes", cn.class_string(nth(cn.find_all(marked, "point", 1, -1), 0)), "ct-point marked")
+    t.eq_str("mapNodes: other nodes untouched", cn.class_string(nth(cn.find_all(marked, "point", 0, -1), 0)), "ct-point")
+    seen = jv.arr()
+    dropped = cn.map_nodes(sample()) callback |nn: *cn.CtNode| {
+        if string.equals(nn.role, "series") == 1 { jv.push(seen, jv.num(cn.child_count(nn) / 1.0)) }
+        if string.equals(nn.role, "point") == 1 && cn.ctx_int(nn, "valueIndex") == 0 { return null }
+        return nn
+    }
+    t.is_true("mapNodes: parents see their mapped children", jv.equals(seen, jv.parse("[1, 1]")))
+    t.eq_int("mapNodes: null drops", list.size(cn.find_all(dropped, "point", -1, -1)), 2)
+    k = sample()
+    keyed = cn.node("line", "", "")
+    cn.set_key(keyed, "mine")
+    cn.ctx_put(keyed, "seriesIndex", jv.num(0.0))
+    cn.ctx_put(keyed, "valueIndex", jv.num(0.0))
+    cn.append(k, keyed)
+    cn.assign_keys(k, 2)
+    pk = cn.find_all(k, "point", -1, -1)
+    t.eq_str("assignKeys: values", "${nth(pk, 0).key} ${nth(pk, 1).key} ${nth(pk, 2).key} ${nth(pk, 3).key}", "2/0/0 2/0/1 2/1/0 2/1/1")
+    sk = cn.find_all(k, "series", -1, -1)
+    t.eq_str("assignKeys: series", "${nth(sk, 0).key} ${nth(sk, 1).key}", "2/0 2/1")
+    t.eq_str("assignKeys keeps an existing key", keyed.key, "mine")
+    t.eq_str("assignKeys leaves the root unkeyed", k.key, "")
+    t.is_false("negative control: a wrong key", string.equals(nth(pk, 0).key, "0/0/0"))
+
+    println("scene/node")
+    pt = cn.node("line", "{x1: 1, y1: undefined, y2: null}", "a  b a")
+    cn.set_role(pt, "point")
+    t.is_true("attributes without undefined and null", jv.equals(pt.attrs, jv.parse("{x1: 1}")))
+    t.eq_str("unique classes", cn.class_string(pt), "a b")
+    t.eq_int("no children", cn.child_count(pt), 0)
+    t.eq_str("its role", pt.role, "point")
+    t.eq_str("no key", pt.key, "")
+    ln = cn.node("line", "{x1: 1, x2: 2, y1: 3}", "")
+    cn.attr(ln, "x1", jv.undef())
+    cn.attr(ln, "x2", jv.null_v())
+    t.is_true("attr removes undefined and null", jv.equals(ln.attrs, jv.parse("{y1: 3}")))
+    gr = cn.node("g", "", "a b")
+    cn.add_class(gr, "b a")
+    t.eq_str("addClass adds nothing twice", cn.class_string(gr), "a b")
+    a = cn.node("line", "", "a")
+    b = cn.node("line", "", "b")
+    c = cn.node("circle", "", "c")
+    g = cn.node("g", "", "")
+    cn.append(g, a)
+    cn.append(g, b)
+    cn.prepend(g, c)
+    t.is_true("append first", cn.child_at(g, 0) == c && cn.child_at(g, 1) == a && cn.child_at(g, 2) == b)
+    cn.remove_child(g, a)
+    t.is_true("remove by identity", cn.child_count(g) == 2 && cn.child_at(g, 0) == c && cn.child_at(g, 1) == b)
+    cn.replace_child(g, b, a)
+    t.is_true("replace by identity", cn.child_at(g, 1) == a)
+    lab = cn.node("text", "", "")
+    cn.set_text(lab, "x")
+    cn.append(lab, cn.node("tspan", "", ""))
+    cn.clear_children(lab)
+    t.is_true("empty removes children and text", cn.child_count(lab) == 0 && cn.has_text(lab) == 0)
+    cn.set_text(lab, "y")
+    t.eq_str("text after empty", cn.text_of(lab), "y")
+    cn.set_text(lab, "b")
+    t.eq_str("text replaces text", cn.text_of(lab), "b")
+    t.is_false("negative control: classes are not doubled", string.equals(cn.class_string(pt), "a b a"))
+}
+
+// ─── hooks: the replacement for Chartist's draw events ─────────────
+
+hooks_spec() {
+    println("hooks (compose and scene)")
+    c = chart.line_chart("{labels: ['a', 'b', 'c'], series: [[1, 3, 2]]}", "")
+    chart.on_compose(c) callback |nn: *cn.CtNode| {
+        if string.equals(nn.role, "grid") == 1 { return null }
+        if string.equals(nn.role, "point") == 1 { cn.add_class(nn, "is-marked") }
+        return nn
+    }
+    tree = chart.built_root(chart.build(c, 400.0, 200.0))
+    t.eq_int("compose: a dropped role is gone", cn.count_role(tree, "grid"), 0)
+    t.eq_int("compose: the points are marked", cn.query_count(tree, ".ct-point.is-marked"), 3)
+    t.eq_int("compose: other nodes stay", cn.count_role(tree, "label") > 0, 1)
+    c2 = chart.line_chart("{labels: ['a', 'b'], series: [[1, 2]]}", "")
+    chart.on_compose(c2) callback |nn: *cn.CtNode| {
+        if string.equals(nn.role, "point") == 0 { return nn }
+        circ = cn.node("circle", "", "ct-circle")
+        cn.attr(circ, "cx", cn.ctx_get(nn, "x"))
+        cn.attr(circ, "cy", cn.ctx_get(nn, "y"))
+        cn.attr(circ, "r", jv.num(5.0))
+        cn.set_role(circ, "point")
+        cn.set_ctx(circ, nn.ctx)
+        cn.set_key(circ, nn.key)
+        return circ
+    }
+    t2 = chart.built_root(chart.build(c2, 400.0, 200.0))
+    t.eq_int("compose: points replaced by circles", cn.query_count(t2, "circle.ct-circle"), 2)
+    t.eq_int("compose: no line points left", cn.query_count(t2, "line.ct-point"), 0)
+    c3 = chart.bar_chart("{labels: ['a'], series: [[1]]}", "")
+    chart.on_scene(c3) callback |r: *cn.CtNode| {
+        style = cn.node("style", "", "")
+        cn.set_text(style, ".ct-bar { stroke: red }")
+        cn.prepend(r, style)
+        return r
+    }
+    t3 = chart.built_root(chart.build(c3, 300.0, 200.0))
+    t.eq_str("scene: the hook sees and changes the root", cn.child_at(t3, 0).name, "style")
+    t.is_false("negative control: no hook, grids stay", cn.count_role(chart.built_root(chart.build(chart.line_chart("{labels: ['a'], series: [[1]]}", ""), 400.0, 200.0)), "grid") == 0)
+}
+
+// ─── theme ───────────────────────────────────────────────────────
+
+theme_spec() {
+    println("theme (Chartist's default stylesheet)")
+    tree = chart.built_root(chart.build(chart.line_chart("{labels: ['a', 'b'], series: [[1, 2], [2, 1]]}", "{showArea: true}"), 400.0, 200.0))
+    render.theme(tree)
+    t.eq_str("series a line colour", cn.attr_str(cn.query_first(tree, ".ct-series-a .ct-line"), "stroke"), "#d70206")
+    t.eq_str("series b line colour", cn.attr_str(cn.query_first(tree, ".ct-series-b .ct-line"), "stroke"), "#f05b4f")
+    t.eq_num("line width", cn.attr_num(cn.query_first(tree, ".ct-line"), "stroke-width"), 4.0)
+    t.eq_str("line not filled", cn.attr_str(cn.query_first(tree, ".ct-line"), "fill"), "none")
+    t.eq_num("point size", cn.attr_num(cn.query_first(tree, ".ct-point"), "stroke-width"), 10.0)
+    t.eq_str("point shape", cn.attr_str(cn.query_first(tree, ".ct-point"), "stroke-linecap"), "round")
+    t.eq_str("area fill at 0.1", cn.attr_str(cn.query_first(tree, ".ct-series-a .ct-area"), "fill"), "rgba(215,2,6,0.1)")
+    t.eq_str("grid colour", cn.attr_str(cn.query_first(tree, ".ct-grid"), "stroke"), "rgba(0,0,0,0.2)")
+    t.eq_str("label colour", cn.attr_str(cn.query_first(tree, ".ct-label"), "fill"), "rgba(0,0,0,0.4)")
+    t.eq_num("label size", cn.attr_num(cn.query_first(tree, ".ct-label"), "font-size"), 12.0)
+    t.eq_str("series p wraps to colour a", render.series_color(15), "#d70206")
+    d = chart.built_root(chart.build(chart.pie_chart("{series: [1, 2]}", "{donut: true, donutWidth: 30}"), 200.0, 200.0))
+    render.theme(d)
+    t.eq_num("donut ring width from donutWidth", cn.attr_num(cn.query_first(d, ".ct-slice-donut"), "stroke-width"), 30.0)
+    t.eq_str("donut not filled", cn.attr_str(cn.query_first(d, ".ct-slice-donut"), "fill"), "none")
+    t.eq_str("pie labels centred on their point", cn.attr_str(cn.query_first(d, ".ct-label"), "dominant-baseline"), "central")
+    c = chart.bar_chart("{labels: ['a'], series: [[1]]}", "")
+    chart.on_compose(c) callback |nn: *cn.CtNode| {
+        if string.equals(nn.role, "bar") == 1 { cn.attr(nn, "stroke", jv.str("#123456")) }
+        return nn
+    }
+    bt = chart.built_root(chart.build(c, 300.0, 200.0))
+    render.theme(bt)
+    t.eq_str("the theme leaves a hook's paint", cn.attr_str(cn.query_first(bt, ".ct-bar"), "stroke"), "#123456")
+    t.eq_num("and fills in the rest", cn.attr_num(cn.query_first(bt, ".ct-bar"), "stroke-width"), 10.0)
+    cs = chart.built_root(chart.build(chart.line_chart("{series: [{className: 'mine', data: [1, 2]}]}", ""), 400.0, 200.0))
+    render.theme(cs)
+    t.eq_str("a custom series class has no theme colour", cn.attr_str(cn.query_first(cs, ".ct-line"), "stroke"), "")
+    t.is_false("negative control: series b is not colour a", string.equals(cn.attr_str(cn.query_first(tree, ".ct-series-b .ct-line"), "stroke"), "#d70206"))
+}
+
+// ─── drawing with vg ─────────────────────────────────────────────
+
+struct CtRec {
+    bk: ptr
+    scene: ptr
+    root: ptr
+}
+
+recorder(w: float, h: float) -> *CtRec {
+    id = transform.affine_identity()
+    m = context.mapping_new(0.0, 0.0, w, h, w, h, 1.0, 0.0, 0.0, id)
+    r = heap.new(CtRec)
+    r.bk = record.backend_new()
+    r.scene = vg.scene_new(context.new_context(m), r.bk)
+    vg.scene_set_deferred(r.scene, 1)
+    r.root = vg.vg_root(r.scene)
+    return r
+}
+
+count_kind(bk: ptr, kind: string) -> int {
+    n = 0
+    i = 0
+    while i < record.backend_call_count(bk) {
+        if string.equals(record.backend_kind(bk, i), kind) == 1 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+first_kind(bk: ptr, kind: string) -> int {
+    i = 0
+    while i < record.backend_call_count(bk) {
+        if string.equals(record.backend_kind(bk, i), kind) == 1 { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+draw_spec() {
+    println("render (a chart drawn with vg)")
+    r = recorder(400.0, 200.0)
+    tree = chart.built_root(chart.build(chart.line_chart("{labels: ['Mon', 'Tue', 'Wed'], series: [[5, 2, 4]]}", "{showArea: true}"), 400.0, 200.0))
+    render.theme(tree)
+    els = jv.arr()
+    render.draw_with(r.root, tree) callback |el: ptr, n: ptr| {
+        nn = n as *cn.CtNode
+        jv.push(els, jv.str(nn.role))
+        if string.equals(nn.role, "point") == 1 { vg.tooltip(el, "a point") }
+    }
+    vg.vg_flush(r.scene)
+    bk = r.bk
+    grids = cn.count_role(tree, "grid")
+    pts = cn.count_role(tree, "point")
+    t.eq_int("one vg line per grid line and point", count_kind(bk, "line"), grids + pts)
+    t.eq_int("one vg path per line and area", count_kind(bk, "path"), 2)
+    t.eq_int("one vg text per label line", count_kind(bk, "text"), cn.count_role(tree, "label"))
+    t.eq_int("the hook saw every drawn element", jv.len(els), grids + pts + 2 + cn.count_role(tree, "label"))
+    ai = first_kind(bk, "path")
+    t.eq_str("the area is drawn first, filled", record.backend_opt_get(bk, ai, "fillColor"), "rgba(215,2,6,0.1)")
+    t.eq_str("then the line, stroked", record.backend_opt_get(bk, ai + 1, "strokeColor"), "#d70206")
+    t.eq_str("the line is not filled", record.backend_opt_get(bk, ai + 1, "fillColor"), "")
+    t.eq_str("points stroked in the series colour", record.backend_opt_get(bk, ai + 2, "strokeColor"), "#d70206")
+    t.eq_str("the first label", record.backend_opt_get(bk, first_kind(bk, "text"), "text"), "Mon")
+
+    pr = recorder(200.0, 200.0)
+    pt = chart.built_root(chart.build(chart.pie_chart("{series: [1, 3]}", "{donut: true}"), 200.0, 200.0))
+    render.theme(pt)
+    render.draw(pr.root, pt)
+    vg.vg_flush(pr.scene)
+    t.eq_int("donut: a path per slice", count_kind(pr.bk, "path"), 2)
+    p0 = first_kind(pr.bk, "path")
+    t.eq_str("donut: slice a stroked", record.backend_opt_get(pr.bk, p0, "strokeColor"), "#d70206")
+    t.eq_str("donut: slice b stroked", record.backend_opt_get(pr.bk, p0 + 1, "strokeColor"), "#f05b4f")
+    t.eq_str("donut: ring 60 wide", record.backend_opt_get(pr.bk, p0, "strokeWidth"), "60")
+    t.eq_int("donut: a text per label", count_kind(pr.bk, "text"), 2)
+
+    br = recorder(300.0, 200.0)
+    bt = chart.built_root(chart.build(chart.bar_chart("{labels: ['a', 'b'], series: [[1, 2], [2, 1]]}", "{stackBars: true}"), 300.0, 200.0))
+    render.theme(bt)
+    render.draw(br.root, bt)
+    vg.vg_flush(br.scene)
+    t.eq_int("bars: grid lines and bars", count_kind(br.bk, "line"), cn.count_role(bt, "grid") + 4)
+    t.is_false("negative control: a donut is not filled", string.equals(record.backend_opt_get(pr.bk, p0, "fillColor"), "#d70206"))
+}
+
+responsive_build_spec() {
+    println("responsive options chosen by the chart's width")
+    c = chart.line_chart("{labels: ['a', 'b'], series: [[1, 2]]}", "")
+    chart.responsive(c, "(max-width: 300px)", "{showPoint: false, axisX: {showLabel: false}}")
+    narrow = chart.built_root(chart.build(c, 300.0, 200.0))
+    wide = chart.built_root(chart.build(c, 600.0, 200.0))
+    t.eq_int("narrow: no points", cn.count_role(narrow, "point"), 0)
+    t.eq_int("narrow: no X labels", cn.query_count(narrow, ".ct-label.ct-horizontal"), 0)
+    t.eq_int("wide: the points", cn.count_role(wide, "point"), 2)
+    t.eq_int("wide: the X labels", cn.query_count(wide, ".ct-label.ct-horizontal"), 2)
+    t.is_false("negative control: wide keeps its points", cn.count_role(wide, "point") == 0)
+}
+
+main() {
+    println("=== test_chart_render ===")
+    tree_spec()
+    hooks_spec()
+    theme_spec()
+    draw_spec()
+    responsive_build_spec()
+    t.done("test_chart_render")
+}

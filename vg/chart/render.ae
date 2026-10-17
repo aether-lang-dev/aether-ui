@@ -1,0 +1,299 @@
+// vg/chart/render.ae — draws a chart's node tree with vg, and paints it with
+// Chartist's default theme.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: styles/_settings.scss and styles/index.scss — the default
+// theme's colours, widths and label styling — as `theme`, which writes them
+// onto the tree as presentation attributes (fill, stroke, stroke-width, …),
+// leaving any a hook already set. That replaces the stylesheet: vg's CSS has
+// no descendant selectors, and `.ct-series-a .ct-line` is one. The classes
+// still go onto every vg element (css_class), so a page's own vg css() rules
+// with single-class selectors apply to elements the theme left unpainted, and
+// a driver spec reads them back.
+//
+// Not drawn as Chartist draws them: dashed grid lines (vg has no
+// stroke-dasharray; grids are solid) and HTML foreignObject labels (labels
+// are SVG text, as Chartist's own SVG label mode draws them).
+//
+// Usage, inside a vg scene whose viewBox is the chart's size:
+//   vg(view_box(0, 0, 600, 300), 600, 300) {
+//       render.draw(chart.built_root(chart.build(c, 600.0, 300.0)))
+//   }
+// draw_with(tree, hook) also hands each drawn vg node and its chart node to
+// hook |el: ptr, n: ptr| — where vg.animate, tween_*, on_hover, on_click,
+// tooltip and bind_* attach to the chart's elements.
+
+exports (
+    theme, series_color, draw, draw_with, SERIES_COLORS
+)
+
+import std.string
+import std.list
+import vg
+import vg.chart.value as jv
+import vg.chart.node as cn
+
+const SERIES_COLORS: string = "#d70206 #f05b4f #f4c63d #d17905 #453d3f #59922b #0544d3 #6b0392 #e6805e #dda458 #eacf7d #86797d #b2c326 #6188e2 #a748ca"
+
+// The colour of series letter index i (a = 0): the 15 colours repeat.
+series_color(i: int) -> string {
+    parts = string.split(SERIES_COLORS, " ")
+    c = string.copy(string.array_get(parts, i % 15))
+    string.array_free(parts)
+    return c
+}
+
+// The series a node is in: the letter index of the nearest ct-series-<x>
+// class, or -1 (a custom className has no theme colour, as in Chartist).
+series_letter(n: *cn.CtNode) -> int {
+    i = 0
+    while i < cn.class_count(n) {
+        c = cn.class_at(n, i)
+        if string.starts_with(c, "ct-series-") == 1 && string.length(c) == 11 {
+            ch = string.char_at(c, 10)
+            if ch >= 97 && ch <= 122 { return ch - 97 }
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+set_if_absent(n: *cn.CtNode, name: string, v: *jv.JsValue) {
+    if cn.has_attr(n, name) == 0 { cn.attr(n, name, v) }
+}
+
+hex_rgba(hex: string, alpha: float) -> string {
+    h = string.substring(hex, 1, string.length(hex))
+    r, _a = string.to_int_radix(string.substring(h, 0, 2), 16)
+    g, _b = string.to_int_radix(string.substring(h, 2, 4), 16)
+    b, _c = string.to_int_radix(string.substring(h, 4, 6), 16)
+    return "rgba(${r},${g},${b},${jv.js_number(alpha)})"
+}
+
+// theme(root): the default Chartist stylesheet as attributes on the tree.
+theme(root: *cn.CtNode) {
+    pie = 0
+    if cn.has_class(root, "ct-chart-pie") == 1 || cn.has_class(root, "ct-chart-donut") == 1 { pie = 1 }
+    theme_node(root, -1, pie)
+}
+
+theme_node(n: *cn.CtNode, letter0: int, pie: int) {
+    letter = letter0
+    sl = series_letter(n)
+    if sl >= 0 { letter = sl }
+    color = ""
+    if letter >= 0 { color = series_color(letter) }
+    if cn.has_class(n, "ct-label") == 1 {
+        set_if_absent(n, "fill", jv.str("rgba(0,0,0,0.4)"))
+        set_if_absent(n, "font-size", jv.num(12.0))
+        if pie == 1 { set_if_absent(n, "dominant-baseline", jv.str("central")) }
+    }
+    if cn.has_class(n, "ct-grid") == 1 {
+        set_if_absent(n, "stroke", jv.str("rgba(0,0,0,0.2)"))
+        set_if_absent(n, "stroke-width", jv.num(1.0))
+    }
+    if cn.has_class(n, "ct-grid-background") == 1 { set_if_absent(n, "fill", jv.str("none")) }
+    if cn.has_class(n, "ct-point") == 1 {
+        set_if_absent(n, "stroke-width", jv.num(10.0))
+        set_if_absent(n, "stroke-linecap", jv.str("round"))
+        if string.length(color) > 0 { set_if_absent(n, "stroke", jv.str(color)) }
+    }
+    if cn.has_class(n, "ct-line") == 1 {
+        set_if_absent(n, "fill", jv.str("none"))
+        set_if_absent(n, "stroke-width", jv.num(4.0))
+        if string.length(color) > 0 { set_if_absent(n, "stroke", jv.str(color)) }
+    }
+    if cn.has_class(n, "ct-area") == 1 {
+        set_if_absent(n, "stroke", jv.str("none"))
+        if string.length(color) > 0 { set_if_absent(n, "fill", jv.str(hex_rgba(color, 0.1))) }
+    }
+    if cn.has_class(n, "ct-bar") == 1 {
+        set_if_absent(n, "fill", jv.str("none"))
+        set_if_absent(n, "stroke-width", jv.num(10.0))
+        if string.length(color) > 0 { set_if_absent(n, "stroke", jv.str(color)) }
+    }
+    if cn.has_class(n, "ct-slice-donut") == 1 {
+        set_if_absent(n, "fill", jv.str("none"))
+        // A donutWidth option writes style="stroke-width: Npx".
+        sw = 60.0
+        st = cn.attr_str(n, "style")
+        if string.starts_with(st, "stroke-width:") == 1 {
+            v = string.trim(string.substring(st, 13, string.length(st)))
+            if string.ends_with(v, "px") == 1 { v = string.substring(v, 0, string.length(v) - 2) }
+            d, err = string.to_double(string.trim(v))
+            if string.length(err) == 0 { sw = d }
+        }
+        set_if_absent(n, "stroke-width", jv.num(sw))
+        if string.length(color) > 0 { set_if_absent(n, "stroke", jv.str(color)) }
+    }
+    if cn.has_class(n, "ct-slice-pie") == 1 {
+        if string.length(color) > 0 { set_if_absent(n, "fill", jv.str(color)) }
+    }
+    i = 0
+    while i < cn.child_count(n) {
+        theme_node(cn.child_at(n, i), letter, pie)
+        i = i + 1
+    }
+}
+
+// ─── drawing ─────────────────────────────────────────────────────
+
+draw(_ctx: ptr, root: *cn.CtNode) {
+    draw_node(_ctx, root, null, "")
+}
+
+// draw_with(tree, hook): draw, handing each drawn element (its vg node) and
+// the chart node it came from to hook |el: ptr, n: ptr|.
+draw_with(_ctx: ptr, root: *cn.CtNode, hook: fn) {
+    draw_node(_ctx, root, hook, "")
+}
+
+call_hook(hook: fn, el: ptr, n: ptr) { call(hook, el, n) }
+
+num_attr(n: *cn.CtNode, name: string, fallback: float) -> float {
+    if cn.has_attr(n, name) == 0 { return fallback }
+    v = cn.attr_num(n, name)
+    if jv.is_nan(v) == 1 { return fallback }
+    return v
+}
+
+// Paint, from the node's own attributes; inherited ones (a g's fill) are
+// passed down in `inherited` as "fill" only, which is all a chart group sets.
+paint(el: ptr, n: *cn.CtNode, kind: string) {
+    fillv = cn.attr_str(n, "fill")
+    if string.length(fillv) > 0 {
+        vg.fill(el, fillv)
+    } else {
+        // SVG's default fill is black; a stroked shape with no fill would be
+        // filled, so only text and plain shapes keep the default.
+        if string.equals(kind, "line") == 1 { vg.fill(el, "none") }
+    }
+    sc = cn.attr_str(n, "stroke")
+    if string.length(sc) > 0 && string.equals(sc, "none") == 0 {
+        vg.stroke(el, sc, num_attr(n, "stroke-width", 1.0))
+    }
+    lc = cn.attr_str(n, "stroke-linecap")
+    if string.length(lc) > 0 { vg.linecap(el, lc) }
+    if cn.has_attr(n, "opacity") == 1 { vg.opacity(el, num_attr(n, "opacity", 1.0)) }
+    cls = cn.class_string(n)
+    if string.length(cls) > 0 { vg.css_class(el, cls) }
+}
+
+anchor_of(a: string) -> string {
+    if string.equals(a, "middle") == 1 || string.equals(a, "end") == 1 { return a }
+    return ""
+}
+
+// One text run at (x, y): dominant-baseline central moves the baseline down
+// by (ascent - ½) em so the line's middle sits on y, as Chartist's pie CSS
+// asks of a browser.
+draw_text(_ctx: ptr, owner: *cn.CtNode, x: float, y: float, content: string, hook: ptr, src: *cn.CtNode) {
+    size = num_attr(owner, "font-size", 12.0)
+    yy = y
+    if string.equals(cn.attr_str(owner, "dominant-baseline"), "central") == 1 { yy = y + 0.35 * size }
+    el = vg.text_anchored(_ctx, x, yy, size, anchor_of(cn.attr_str(owner, "text-anchor")), content)
+    paint(el, owner, "text")
+    if hook != null { call_hook(hook, el, src) }
+}
+
+draw_node(_ctx: ptr, n: *cn.CtNode, hook: ptr, inherited: string) {
+    name = n.name
+    if string.equals(name, "svg") == 1 || string.equals(name, "g") == 1 {
+        gnode = _ctx
+        if string.equals(name, "g") == 1 {
+            gnode = vg.g(_ctx)
+            if cn.has_attr(n, "opacity") == 1 { vg.opacity(gnode, num_attr(n, "opacity", 1.0)) }
+        }
+        i = 0
+        while i < cn.child_count(n) {
+            draw_node(gnode, cn.child_at(n, i), hook, inherited)
+            i = i + 1
+        }
+        return
+    }
+    if string.equals(name, "line") == 1 {
+        el = vg.line(_ctx, num_attr(n, "x1", 0.0), num_attr(n, "y1", 0.0), num_attr(n, "x2", 0.0), num_attr(n, "y2", 0.0))
+        paint(el, n, "line")
+        if hook != null { call_hook(hook, el, n) }
+        return
+    }
+    if string.equals(name, "path") == 1 {
+        d = cn.attr_str(n, "d")
+        if string.length(d) == 0 { return }
+        el2 = vg.path(_ctx, d)
+        paint(el2, n, "path")
+        if hook != null { call_hook(hook, el2, n) }
+        return
+    }
+    if string.equals(name, "rect") == 1 {
+        el3 = vg.rect(_ctx, num_attr(n, "x", 0.0), num_attr(n, "y", 0.0), num_attr(n, "width", 0.0), num_attr(n, "height", 0.0))
+        paint(el3, n, "rect")
+        if hook != null { call_hook(hook, el3, n) }
+        return
+    }
+    if string.equals(name, "circle") == 1 {
+        el4 = vg.circle(_ctx, num_attr(n, "cx", 0.0), num_attr(n, "cy", 0.0), num_attr(n, "r", 0.0))
+        paint(el4, n, "circle")
+        if hook != null { call_hook(hook, el4, n) }
+        return
+    }
+    if string.equals(name, "text") == 1 {
+        // x/y, or 1.x's dx/dy on a pie label.
+        x = num_attr(n, "x", num_attr(n, "dx", 0.0))
+        y = num_attr(n, "y", num_attr(n, "dy", 0.0))
+        if cn.child_count(n) == 0 {
+            if cn.has_text(n) == 1 { draw_text(_ctx, n, x, y, cn.text_of(n), hook, n) }
+            return
+        }
+        size = num_attr(n, "font-size", 12.0)
+        cy = y
+        i = 0
+        while i < cn.child_count(n) {
+            sp = cn.child_at(n, i)
+            sx = num_attr(sp, "x", x)
+            sy = cy
+            if cn.has_attr(sp, "y") == 1 { sy = num_attr(sp, "y", cy) }
+            if cn.has_attr(sp, "dy") == 1 { sy = cy + em_of(cn.attr_str(sp, "dy"), size) }
+            cy = sy
+            draw_text(_ctx, n, sx, sy, cn.text_of(sp), hook, n)
+            i = i + 1
+        }
+        return
+    }
+}
+
+// A dy value: "1.2em", "-0.6em" or px.
+em_of(v: string, size: float) -> float {
+    if string.ends_with(v, "em") == 1 {
+        d, _e = string.to_double(string.substring(v, 0, string.length(v) - 2))
+        return d * size
+    }
+    d2, _e2 = string.to_double(v)
+    return d2
+}
