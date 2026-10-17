@@ -213,6 +213,11 @@ y_of_row1() -> int {
 }
 
 // The text of the cell the cursor's box is on (borderWidth 2), or "".
+// How far widget w's top is below widget top's bottom edge.
+below(w: int, top: int) -> int {
+    return uidriver.widget_int_field_by_id(w, "y") - uidriver.widget_int_field_by_id(top, "y") - uidriver.widget_int_field_by_id(top, "h")
+}
+
 boxed() -> string {
     v, _jerr = json.parse(uidriver.get_body("/widgets"))
     if v == null { return "" }
@@ -907,17 +912,22 @@ main() {
     }
     spec.describe(fw, "the column headers") {
         spec.it("datagrid_show_header hides the header row and shows it again") callback {
+            // The rows' top (the scrollbar's) below the caption over the
+            // grid: on a phone the demo is taller than the screen, and the
+            // views Auto Layout squeezed take back some of what the header
+            // gives up, so the screen position alone moves only part of it.
             v = nth_of("slider", 0)
-            y0 = uidriver.widget_int_field_by_id(v, "y")
+            cap = uidriver.widget_id_by_text("100,000 rows x 50 columns")
+            d0 = below(v, cap)
             press("Headers")
             i = 0
-            while i < 30 && uidriver.widget_int_field_by_id(v, "y") == y0 { sleep(100); i = i + 1 }
-            y1 = uidriver.widget_int_field_by_id(v, "y")
-            spec.assert_true(y0 - y1 >= 20, "hidden: the rows move up into its place (${y0} to ${y1})")
+            while i < 30 && d0 - below(v, cap) < 20 { sleep(100); i = i + 1 }
+            d1 = below(v, cap)
+            spec.assert_true(d0 - d1 >= 20, "hidden: the rows move up into its place (${d0} to ${d1} below the caption)")
             press("Headers")
             i = 0
-            while i < 30 && uidriver.widget_int_field_by_id(v, "y") != y0 { sleep(100); i = i + 1 }
-            spec.assert_eq(uidriver.widget_int_field_by_id(v, "y"), y0, "shown again")
+            while i < 30 && below(v, cap) != d0 { sleep(100); i = i + 1 }
+            spec.assert_eq(below(v, cap), d0, "shown again")
         }
     }
     spec.describe(fw, "a grid given less or more height") {
