@@ -2617,6 +2617,9 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     (void)event;
     CanvasState* cs = get_canvas_state(self.canvasId);
     if (!cs) return;
+    // A canvas that hears keys takes the keyboard when touched, as a click
+    // focuses one on the desktop backends.
+    if ((cs->on_key || cs->on_key_release) && !self.isFirstResponder) [self becomeFirstResponder];
     [self fireTouch:touches closure:cs->on_click];
     // A double tap is the touch double click: UIKit counts taps (the second
     // tap of a pair carries tapCount 2), as AppKit counts clicks.
@@ -2678,6 +2681,41 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
            a 362x555 canvas (top-aligned, overflowing, never re-centred). */
         ((void(*)(void*, double, double))c->fn)(c->env, (double)w, (double)h);
     });
+}
+
+// Keys from a hardware keyboard (iPadOS, the simulator's): a canvas with a
+// key handler is a responder, takes the keyboard when it joins a window (as
+// GTK's grabs focus on map) or is touched, and hears each press and its
+// release by the names the desktop backends give (aeui_press_key_name).
+// A key it does not hear goes up the chain, to the window's handler.
+- (BOOL)canBecomeFirstResponder {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    return cs && (cs->on_key || cs->on_key_release);
+}
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (self.window && [self canBecomeFirstResponder]) [self becomeFirstResponder];
+}
+- (BOOL)aeuiPresses:(NSSet<UIPress*>*)presses closure:(AeClosure*)c {
+    if (!c || !c->fn) return NO;
+    BOOL handled = NO;
+    if (@available(iOS 13.4, *)) {
+        for (UIPress* press in presses) {
+            char name[64];
+            if (!aeui_press_key_name(press, name, sizeof(name))) continue;
+            ((void(*)(void*, const char*))c->fn)(c->env, name);
+            handled = YES;
+        }
+    }
+    return handled;
+}
+- (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || ![self aeuiPresses:presses closure:cs->on_key]) [super pressesBegan:presses withEvent:event];
+}
+- (void)pressesEnded:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || ![self aeuiPresses:presses closure:cs->on_key_release]) [super pressesEnded:presses withEvent:event];
 }
 @end
 
@@ -2837,18 +2875,26 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
 // Keyboard input on a canvas. No-op stub for now — the AppKit bridge would
 // route NSView keyDown: → key-name string into the closure (mirrors the GTK4
 // GtkEventControllerKey path). The Linux backend is the reference impl.
+// A canvas given a key handler takes the keyboard now if it is on screen
+// (else when it joins a window: didMoveToWindow).
+static void aeui_canvas_want_keys(CanvasState* cs) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
+    if (v && v.window && !v.isFirstResponder) [v becomeFirstResponder];
+}
 void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
     cs->on_key = (AeClosure*)boxed_closure;
+    aeui_canvas_want_keys(cs);
 }
 
-// Key-up on a canvas. Stored (and driver-drivable via POST /canvas/{id}/keyup)
-// like on_key; the real NSView keyUp: bridge lands with the keyDown: one.
+// Key-up on a canvas: pressesEnded: on AetherCanvasView, and POST
+// /canvas/{id}/keyup from the driver.
 void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
     cs->on_key_release = (AeClosure*)boxed_closure;
+    aeui_canvas_want_keys(cs);
 }
 
 /* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real

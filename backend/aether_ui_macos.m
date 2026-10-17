@@ -6847,6 +6847,18 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     ((void(*)(void*, const char*))cs->on_key->fn)(cs->on_key->env, name);
 }
 
+// The key's release, by the same name: a held key's state for a game.
+- (void)keyUp:(NSEvent*)event {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || !cs->on_key_release || !cs->on_key_release->fn) {
+        [super keyUp:event];
+        return;
+    }
+    char name[32];
+    aeui_key_name_for_event(event, name, sizeof(name));
+    ((void(*)(void*, const char*))cs->on_key_release->fn)(cs->on_key_release->env, name);
+}
+
 - (void)setFrameSize:(NSSize)newSize {
     NSSize old = [self frame].size;
     [super setFrameSize:newSize];
@@ -7336,8 +7348,8 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     cs->on_key = (AeClosure*)boxed_closure;
 }
 
-// Key-up on a canvas. Stored (and driver-drivable via POST /canvas/{id}/keyup)
-// like on_key; the real NSView keyUp: bridge lands with the keyDown: one.
+// Key-up on a canvas: -[AetherCanvasView keyUp:], and POST
+// /canvas/{id}/keyup from the driver.
 void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;

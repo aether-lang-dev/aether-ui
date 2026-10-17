@@ -18,6 +18,11 @@
 #include "aether_ui_backend.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#import <UIKit/UIKit.h>
+
+void* aether_ui_get_widget(int handle);
+void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure);
 
 double floatarr_get_raw(void* a, int i) { (void)a; (void)i; return 0.0; }
 double floatarr_get_unchecked(void* a, int i) { (void)a; (void)i; return 0.0; }
@@ -77,6 +82,72 @@ static void filled_square(int cid, double x, double y, double s,
     aether_ui_canvas_fill_impl(cid, r, g, b, 1.0, 0);
 }
 
+
+// The canvas's hardware keys (pressesBegan:/pressesEnded: on the canvas
+// view): a UIPress carrying a UIKey, as a hardware keyboard gives one. The
+// two are UIKit's own classes with the properties the backend reads
+// answered, so the press goes through the view's real responder methods.
+@interface ProbeKey : UIKey
+@property (nonatomic) UIKeyboardHIDUsage probeCode;
+@property (nonatomic, copy) NSString* probeChars;
+@end
+@implementation ProbeKey
+- (UIKeyboardHIDUsage)keyCode { return self.probeCode; }
+- (NSString*)charactersIgnoringModifiers { return self.probeChars; }
+- (NSString*)characters { return self.probeChars; }
+- (UIKeyModifierFlags)modifierFlags { return 0; }
+@end
+@interface ProbePress : UIPress
+@property (nonatomic, strong) UIKey* probeKey;
+@end
+@implementation ProbePress
+- (UIKey*)key { return self.probeKey; }
+@end
+
+static char heard_down[64], heard_up[64];
+typedef struct { void (*fn)(void); void* env; } ProbeClosure;
+static void on_down(void* env, const char* k) { (void)env; snprintf(heard_down, sizeof(heard_down), "%s", k); }
+static void on_up(void* env, const char* k) { (void)env; snprintf(heard_up, sizeof(heard_up), "%s", k); }
+static ProbeClosure down_c = { (void (*)(void))on_down, NULL };
+static ProbeClosure up_c = { (void (*)(void))on_up, NULL };
+
+static void expect_str(const char* got, const char* want, const char* what) {
+    if (strcmp(got, want) == 0) printf("  OK   %-14s %s\n", what, got);
+    else { printf("  FAIL %-14s got \"%s\" want \"%s\"\n", what, got, want); failures++; }
+}
+
+static void press(UIView* v, UIKeyboardHIDUsage code, NSString* chars, int down) {
+    ProbeKey* k = [[ProbeKey alloc] init];
+    k.probeCode = code;
+    k.probeChars = chars;
+    ProbePress* p = [[ProbePress alloc] init];
+    p.probeKey = k;
+    NSSet* set = [NSSet setWithObject:p];
+    if (down) [v pressesBegan:set withEvent:nil];
+    else [v pressesEnded:set withEvent:nil];
+}
+
+static void check_keys(void) {
+    int cid = aether_ui_canvas_create_impl(40, 40);
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(aether_ui_canvas_get_widget(cid));
+    if (!v) { printf("  FAIL canvas-view    none\n"); failures++; return; }
+    if ([v canBecomeFirstResponder]) { printf("  FAIL key-responder a canvas with no key handler takes the keyboard\n"); failures++; }
+    aether_ui_canvas_on_key_impl(cid, &down_c);
+    aether_ui_canvas_on_key_release_impl(cid, &up_c);
+    if (![v canBecomeFirstResponder]) { printf("  FAIL key-responder a canvas with a key handler is no responder\n"); failures++; }
+    else printf("  OK   key-responder  a responder once it hears keys\n");
+    if (@available(iOS 13.4, *)) {
+        press(v, UIKeyboardHIDUsageKeyboardRightArrow, @"", 1);
+        expect_str(heard_down, "Right", "key-down");
+        press(v, UIKeyboardHIDUsageKeyboardRightArrow, @"", 0);
+        expect_str(heard_up, "Right", "key-up");
+        press(v, UIKeyboardHIDUsageKeyboardReturnOrEnter, @"\r", 1);
+        expect_str(heard_down, "Return", "key-return");
+        press(v, UIKeyboardHIDUsageKeyboardQ, @"q", 1);
+        expect_str(heard_down, "q", "key-letter");
+    }
+}
+
 int main(void) {
     const int N = 300;
     int cid = aether_ui_canvas_create_impl(N, N);
@@ -97,6 +168,8 @@ int main(void) {
     expect_rgb(cid, N, 220,  80,  26, 153,  51, "green-path");
     expect_rgb(cid, N,  80, 220,  13,  64, 191, "blue-path");
     expect_rgb(cid, N,  10,  10,  26,  26,  26, "background");
+
+    check_keys();
 
     const char* png = getenv("AETHER_UI_RENDER_PROBE_PNG");
     if (png && png[0]) {
