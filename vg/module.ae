@@ -1487,7 +1487,7 @@ vg_flush(scene: ptr) {
 }
 
 // The scene's nodes as JSON, in draw order: kind, visibility, canvas-px
-// bounds (as hit-testing has them), paint and, for a text, its text. What a
+// bounds (as hit-testing has them), paint, classes and, for a text, its text. What a
 // spec reads instead of sampling pixels or clicking cells to learn them.
 _nodes_json(s: *VgScene) -> string {
     out = "["
@@ -1508,6 +1508,9 @@ _nodes_json(s: *VgScene) -> string {
             sc = ""
             if element.element_has_stroke(el) == 1 { sc = element.element_last_stroke_color(el) }
             o = string.concat(o, ",\"stroke\":\"${_json_esc(sc)}\"")
+            // The shape's css_class list ("" when none): what a scene built from
+            // a class-marked tree (vg/chart's ct-line, ct-bar, ...) is read by.
+            o = string.concat(o, ",\"class\":\"${_json_esc(element.element_last_class(el))}\"")
             if p.kind == 4 {
                 o = string.concat(o, ",\"text\":\"${_json_esc(_text_of(p))}\"")
             }
