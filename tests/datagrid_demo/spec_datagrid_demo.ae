@@ -862,11 +862,16 @@ main() {
             spec.assert_true(boxed_on("R0C1") == 1, "the box on R0C1")
             press("Glide")
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C5")}/click", "click R0C5")
+            // Polled until the box is on a cell between, or has come to rest
+            // on R0C5 without passing one (the glide is the demo's 1500 ms).
             between = 0
+            rested = 0
             k = 0
-            while k < 60 && between == 0 {
+            while k < 300 && between == 0 && rested == 0 {
                 b = boxed()
                 if string.equals(b, "R0C2") == 1 || string.equals(b, "R0C3") == 1 || string.equals(b, "R0C4") == 1 { between = 1 }
+                if string.equals(b, "R0C5") == 1 { rested = 1 }
+                sleep(10)
                 k = k + 1
             }
             spec.assert_eq(between, 1, "it passed a cell between on its way")

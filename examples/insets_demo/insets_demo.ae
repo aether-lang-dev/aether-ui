@@ -44,14 +44,21 @@ main() {
         enable_test_server_root(9222, main_root)
     }
     tid = 0
+    tries = 0
+    // Asked every 150 ms until the window has been laid out (the leaf has a
+    // width; a slow box under xvfb takes longer than one tick), 3 s at most.
     tid = timer(150) callback {
-        timer_cancel(tid)
         lw = get_width(leaf)
         rw = get_width(row)
-        // The row must get the same content box as the leaf: parent width
-        // minus both insets. Report both widths; equal means aligned.
-        println("leaf_w=${lw} row_w=${rw}")
-        app_quit()
+        tries = tries + 1
+        if lw > 0 || tries >= 20 {
+            timer_cancel(tid)
+            // The row must get the same content box as the leaf: parent
+            // width minus both insets. Report both widths; equal means
+            // aligned.
+            println("leaf_w=${lw} row_w=${rw}")
+            app_quit()
+        }
     }
     ui.app_start(app, main_root)
 }

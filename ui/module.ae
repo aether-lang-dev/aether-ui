@@ -8258,13 +8258,13 @@ _datagrid_glide_end(g: *DataGrid) {
 _datagrid_glide_tick(gp: ptr, t: float) {
     g = gp as *DataGrid
     if g.glide_on == 0 { return }
-    // Elapsed time added up frame by frame, each step at most 100 ms: a
+    // Elapsed time added up frame by frame, each step at most 250 ms: a
     // frame clock's first time after it was idle can be one from before
     // (GTK's is smoothed), and counted whole it would end the glide at once.
     if g.glide_t0 >= 0.0 {
         d = t - g.glide_t0
         if d < 0.0 { d = 0.0 }
-        if d > 100.0 { d = 100.0 }
+        if d > 250.0 { d = 250.0 }
         g.glide_el = g.glide_el + d
     }
     g.glide_t0 = t
