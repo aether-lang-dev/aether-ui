@@ -4044,6 +4044,22 @@ void aether_ui_open_url_impl(const char* url) {
         if (app) [app openURL:u options:@{} completionHandler:nil];
     }
 }
+// Printing a PDF: UIKit's print interaction over the file itself.
+int aether_ui_print_pdf_impl(const char* path, const char* title) {
+    if (!path || !path[0]) return 0;
+    if (aether_ui_print_records()) { aether_ui_printed_record(path, title ? title : ""); return 1; }
+    NSURL* u = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    if (![UIPrintInteractionController canPrintURL:u]) return 0;
+    UIPrintInteractionController* pc = [UIPrintInteractionController sharedPrintController];
+    UIPrintInfo* info = [UIPrintInfo printInfo];
+    info.outputType = UIPrintInfoOutputGeneral;
+    if (title && title[0]) info.jobName = [NSString stringWithUTF8String:title];
+    pc.printInfo = info;
+    pc.printingItem = u;
+    [pc presentAnimated:YES completionHandler:nil];
+    return 1;
+}
+
 int aether_ui_dark_mode_check(void) {
     if (@available(iOS 13.0, *)) {
         return UITraitCollection.currentTraitCollection.userInterfaceStyle

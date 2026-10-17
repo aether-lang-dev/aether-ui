@@ -5582,6 +5582,16 @@ void aether_ui_open_url_impl(const char* url) {
     aeui_android_run_sync(aeui_open_url_run, &u);
 }
 
+// Printing a PDF: Android's PrintManager takes a PrintDocumentAdapter, a
+// Java class of the app's own, which this native backend does not ship:
+// under a test the request is recorded as on every backend; otherwise 0
+// (not asked), said, never pretended.
+int aether_ui_print_pdf_impl(const char* path, const char* title) {
+    if (!path || !path[0]) return 0;
+    if (aether_ui_print_records()) { aether_ui_printed_record(path, title ? title : ""); return 1; }
+    return 0;
+}
+
 // Dark mode is the configuration's night bit (Configuration.uiMode), which
 // follows the system theme; the driver's override comes first.
 JCLASS(C_Resources, "android/content/res/Resources");

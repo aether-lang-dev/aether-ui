@@ -88,7 +88,7 @@ exports (
     a11y_role, a11y_next_role, a11y_grid, a11y_grid_row, a11y_grid_cell, a11y_grid_header, a11y_label, a11y_description, a11y_announce,
     edge_insets, content_inset, width, height, distribution, alignment,
     fill_width, fill_height, margin, margin_of,
-    alert, clipboard_write, clipboard_read, open_url, open_file, save_file,
+    alert, clipboard_write, clipboard_read, open_url, print_pdf, open_file, save_file,
     pick_folder,
     is_dark_mode,
     timer, timer_cancel, backend_name,
@@ -438,6 +438,7 @@ extern aether_ui_file_open(title: string, start_dir: string) -> string @heap
 extern aether_ui_file_save(title: string, default_name: string) -> string @heap
 extern aether_ui_file_pick_folder(title: string, start_dir: string) -> string @heap
 extern aether_ui_open_url_impl(url: string)
+extern aether_ui_print_pdf_impl(path: string, title: string) -> int
 extern aether_ui_dark_mode_check() -> int
 extern aether_ui_backend_name_impl() -> string
 extern aether_ui_timer_create_impl(interval_ms: int, boxed_closure: ptr) -> int
@@ -4359,6 +4360,15 @@ clipboard_write(text: string) {
 // cannot hang the caller; it yields "" in that case.
 clipboard_read() -> string {
     return aether_ui_clipboard_read_impl()
+}
+
+// print_pdf(path, title): the system's print dialog for a PDF file, its job
+// named title (AppKit's print panel, GTK's print dialog, the file's Print
+// verb on Win32, UIKit's print interaction): 1 when it was asked for.
+// Under a test (headless, or the driver armed) it is recorded, never
+// shown: the driver's GET /printed lists [{title, path}].
+print_pdf(path: string, title: string) -> int {
+    return aether_ui_print_pdf_impl(path, title)
 }
 
 open_url(url: string) {

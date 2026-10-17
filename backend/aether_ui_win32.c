@@ -8052,6 +8052,16 @@ void aether_ui_open_url_impl(const char* url) {
     ShellExecuteW(NULL, L"open", utf8_to_wide(url), NULL, NULL, SW_SHOWNORMAL);
 }
 
+// Printing a PDF: the file's "print" verb, as Explorer's Print does: the
+// PDF handler Windows has (Edge, as it comes) prints it, with its dialog.
+int aether_ui_print_pdf_impl(const char* path, const char* title) {
+    (void)title;
+    if (!path || !path[0]) return 0;
+    if (aether_ui_print_records()) { aether_ui_printed_record(path, title ? title : ""); return 1; }
+    HINSTANCE r = ShellExecuteW(NULL, L"print", utf8_to_wide(path), NULL, NULL, SW_SHOWNORMAL);
+    return (INT_PTR)r > 32 ? 1 : 0;
+}
+
 // The system setting, read once and kept: this is asked on every erase,
 // every WM_CTLCOLOR and every rule painted now that the default ground
 // follows it, and a registry open per question made a small form's first

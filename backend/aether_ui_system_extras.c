@@ -396,6 +396,38 @@ const char* aether_ui_opened_url_at(int index) {
 }
 
 // ---------------------------------------------------------------------------
+// Print requests under a test (see the header).
+// ---------------------------------------------------------------------------
+#define PRINTED_MAX 32
+static char* g_printed_title[PRINTED_MAX];
+static char* g_printed_path[PRINTED_MAX];
+static int   g_printed_count = 0;
+
+int aether_ui_print_records(void) {
+    const char* h = getenv("AETHER_UI_HEADLESS");
+    const char* t = getenv("AETHER_UI_TEST_PORT");
+    return (h && h[0] && strcmp(h, "0") != 0) || (t && t[0]);
+}
+
+static char* aeui_copy_str(const char* s) {
+    size_t n = strlen(s ? s : "");
+    char* c = (char*)malloc(n + 1);
+    if (c) memcpy(c, s ? s : "", n + 1);
+    return c;
+}
+
+void aether_ui_printed_record(const char* path, const char* title) {
+    if (g_printed_count >= PRINTED_MAX) return;
+    g_printed_title[g_printed_count] = aeui_copy_str(title);
+    g_printed_path[g_printed_count] = aeui_copy_str(path);
+    g_printed_count++;
+}
+
+int aether_ui_printed_count(void) { return g_printed_count; }
+const char* aether_ui_printed_title_at(int i) { return i >= 0 && i < g_printed_count && g_printed_title[i] ? g_printed_title[i] : ""; }
+const char* aether_ui_printed_path_at(int i) { return i >= 0 && i < g_printed_count && g_printed_path[i] ? g_printed_path[i] : ""; }
+
+// ---------------------------------------------------------------------------
 // Headless dialog answers (see the header). The driver thread queues and
 // the UI thread consumes, so both sides take one lock. Records are written
 // once, complete, before the count that publishes them moves, and never

@@ -357,6 +357,7 @@ dir  = ui.pick_folder("New file in", "")   // native folder chooser
 | `on_file_drop(cb)` | `GtkDropTarget` over `GDK_TYPE_FILE_LIST` | `NSPasteboardTypeFileURL` | `DragAcceptFiles` + `WM_DROPFILES` |
 | `draggable(h, path)` | `GtkDragSource` over a `GFile` | `NSDraggingSession` over an `NSURL` | OLE `DoDragDrop` offering `CF_HDROP` |
 | `reorderable(stack, cb)` | `GtkDragSource` + `GtkDropTargetAsync` on the stack, a private mime type | `NSDraggingSession` from a pan recogniser on the stack, a private pasteboard type | a `WH_MOUSE` thread hook and mouse capture on the stack |
+| `print_pdf(path, title)` | `GtkPrintUnixDialog`, the file sent as it is by a `GtkPrintJob` | `NSPrintOperation` over a view drawing the file's pages (`CGPDFDocument`) | the file's `print` verb (`ShellExecuteW`) |
 
 `open_file(title, start_dir)`, `save_file(title, name)` and `pick_folder` are
 native modals, so under `AETHER_UI_HEADLESS` none of them opens: each takes
@@ -368,7 +369,12 @@ title, start folder or default name (an alert's message) and the answer it
 got. `open_url(url)` under
 `AETHER_UI_HEADLESS` does not hand the URL to the OS at all, so a spec that
 clicks a link never launches a browser; it is recorded instead, and the
-driver's `GET /opened_urls` lists every URL asked for, in order.
+driver's `GET /opened_urls` lists every URL asked for, in order. `print_pdf` under
+a test (headless, or the driver armed) shows no print dialog either: the
+request is recorded, and `GET /printed` lists each as `{title, path}`. On
+UIKit it is `UIPrintInteractionController`; Android has no print path (it
+would need a Java `PrintDocumentAdapter`), so it returns 0 there outside a
+test.
 
 ### Keys, and why there are two kinds
 
@@ -797,7 +803,7 @@ so a user can't mistake a test-driven session for a real one.
 The HTTP API exposes `/widgets` (list + filter), `/widget/{id}` (state),
 `/widget/{id}/click | set_text | toggle | set_value` (mutations),
 `/state/{id}` + `/state/{id}/set` (reactive-state cells), and what a
-headless app asked of the OS: `/opened_urls`, `/prompts`, and
+headless app asked of the OS: `/opened_urls`, `/printed`, `/prompts`, and
 `/prompts/answer?kind=&value=` to script a file dialog's answer. See the full
 reference and end-to-end examples in
 [`tests/test_driver.sh`](tests/test_driver.sh) (curl against every route)

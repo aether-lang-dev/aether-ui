@@ -490,6 +490,10 @@ void aether_ui_worker_poster_install_impl(void);
  * spec prove the contract from the outside: `work` reports 0, `done` 1. */
 int  aether_ui_on_ui_thread_impl(void);
 void aether_ui_open_url_impl(const char* url);
+/* The system's print dialog for a PDF file (its job named `title`): 1 when
+ * it was asked for, 0 when it could not be. Under a test (headless, or with
+ * the driver armed) it is recorded instead (GET /printed), never shown. */
+int  aether_ui_print_pdf_impl(const char* path, const char* title);
 int aether_ui_dark_mode_check(void);
 
 int aether_ui_window_create_impl(const char* title, int width, int height);

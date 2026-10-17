@@ -1608,6 +1608,26 @@ static void handle_request_inner(aether_sock_t client_fd,
     // GET /opened_urls → every URL the app passed to open_url while headless,
     // in order. Headless open_url records instead of launching a browser
     // (toolkit-envy G6), so a spec can assert a link was followed.
+    } else if (method == 0 && strcmp(path, "/printed") == 0) {
+        // What the app asked to print, under the test: [{title, path}, ...].
+        int n = aether_ui_printed_count();
+        size_t cap = 64;
+        for (int i = 0; i < n; i++) cap += (strlen(aether_ui_printed_title_at(i)) + strlen(aether_ui_printed_path_at(i))) * 6 + 32;
+        char* body = (char*)malloc(cap);
+        size_t pos = 0;
+        body[pos++] = '[';
+        for (int i = 0; i < n; i++) {
+            if (i > 0) body[pos++] = ',';
+            memcpy(body + pos, "{\"title\":", 9); pos += 9;
+            pos = json_put_str(body, pos, aether_ui_printed_title_at(i));
+            memcpy(body + pos, ",\"path\":", 8); pos += 8;
+            pos = json_put_str(body, pos, aether_ui_printed_path_at(i));
+            body[pos++] = '}';
+        }
+        body[pos++] = ']';
+        body[pos] = '\0';
+        send_http(client_fd, 200, "OK", "application/json", body);
+        free(body);
     } else if (method == 0 && strcmp(path, "/opened_urls") == 0) {
         int n = aether_ui_opened_url_count();
         size_t cap = 64;

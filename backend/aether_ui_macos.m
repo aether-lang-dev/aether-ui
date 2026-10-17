@@ -4781,6 +4781,77 @@ void aether_ui_open_url_impl(const char* url) {
         [NSURL URLWithString:[NSString stringWithUTF8String:url]]];
 }
 
+// Printing a PDF: AppKit's print panel over a view that draws the file's
+// pages with Core Graphics (CGPDFDocument: no PDFKit to link), a page of
+// the job a page of the file, at the file's size.
+@interface AeuiPdfPrintView : NSView
+@property (nonatomic) CGPDFDocumentRef doc;
+@end
+@implementation AeuiPdfPrintView
+- (BOOL)isFlipped { return NO; }
+- (BOOL)knowsPageRange:(NSRangePointer)range {
+    range->location = 1;
+    range->length = self.doc ? CGPDFDocumentGetNumberOfPages(self.doc) : 0;
+    return YES;
+}
+- (NSRect)rectForPage:(NSInteger)page {
+    CGPDFPageRef p = self.doc ? CGPDFDocumentGetPage(self.doc, (size_t)page) : NULL;
+    CGRect box = p ? CGPDFPageGetBoxRect(p, kCGPDFMediaBox) : CGRectMake(0, 0, 595, 842);
+    // Each page stacked below the last in the view's own space.
+    CGFloat y = 0;
+    for (NSInteger i = (NSInteger)CGPDFDocumentGetNumberOfPages(self.doc); i > page; i--) {
+        CGPDFPageRef q = CGPDFDocumentGetPage(self.doc, (size_t)i);
+        y += q ? CGPDFPageGetBoxRect(q, kCGPDFMediaBox).size.height : 842;
+    }
+    return NSMakeRect(0, y, box.size.width, box.size.height);
+}
+- (void)drawRect:(NSRect)dirty {
+    if (!self.doc) return;
+    CGContextRef cg = [[NSGraphicsContext currentContext] CGContext];
+    size_t n = CGPDFDocumentGetNumberOfPages(self.doc);
+    for (size_t i = 1; i <= n; i++) {
+        NSRect r = [self rectForPage:(NSInteger)i];
+        if (!NSIntersectsRect(r, dirty)) continue;
+        CGPDFPageRef p = CGPDFDocumentGetPage(self.doc, i);
+        if (!p) continue;
+        CGContextSaveGState(cg);
+        CGContextTranslateCTM(cg, r.origin.x, r.origin.y);
+        CGContextDrawPDFPage(cg, p);
+        CGContextRestoreGState(cg);
+    }
+}
+- (void)dealloc { if (_doc) CGPDFDocumentRelease(_doc); }
+@end
+
+int aether_ui_print_pdf_impl(const char* path, const char* title) {
+    if (!path || !path[0]) return 0;
+    if (aether_ui_print_records()) { aether_ui_printed_record(path, title ? title : ""); return 1; }
+    if (![NSThread isMainThread]) {
+        __block int r = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{ r = aether_ui_print_pdf_impl(path, title); });
+        return r;
+    }
+    CFURLRef url = (__bridge CFURLRef)[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    CGPDFDocumentRef doc = CGPDFDocumentCreateWithURL(url);
+    if (!doc || CGPDFDocumentGetNumberOfPages(doc) == 0) { if (doc) CGPDFDocumentRelease(doc); return 0; }
+    AeuiPdfPrintView* v = [[AeuiPdfPrintView alloc] init];
+    v.doc = doc;
+    CGFloat h = 0, w = 0;
+    for (size_t i = 1; i <= CGPDFDocumentGetNumberOfPages(doc); i++) {
+        CGRect b = CGPDFPageGetBoxRect(CGPDFDocumentGetPage(doc, i), kCGPDFMediaBox);
+        h += b.size.height;
+        if (b.size.width > w) w = b.size.width;
+    }
+    [v setFrame:NSMakeRect(0, 0, w, h)];
+    NSPrintInfo* info = [[NSPrintInfo sharedPrintInfo] copy];
+    [info setTopMargin:0]; [info setBottomMargin:0]; [info setLeftMargin:0]; [info setRightMargin:0];
+    NSPrintOperation* op = [NSPrintOperation printOperationWithView:v printInfo:info];
+    if (title && title[0]) [op setJobTitle:[NSString stringWithUTF8String:title]];
+    [op setShowsPrintPanel:YES];
+    [op runOperation];
+    return 1;
+}
+
 int aether_ui_dark_mode_check(void) {
     // Driver override first (POST /appearance?dark=N — headless spec steer).
     int ov = aether_ui_appearance_override_get();

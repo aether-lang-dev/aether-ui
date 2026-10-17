@@ -38,5 +38,14 @@ main() {
                 "both, in click order")
         }
     }
+    spec.describe(fw, "print_pdf under a test") {
+        spec.it("the print dialog asked for is recorded, not shown: its title and its file") callback {
+            spec.assert_str_eq(uidriver.get_body("/printed"), "[]", "nothing printed yet")
+            uidriver.click_widget(uidriver.widget_id_by_text("Print report"))
+            ok = uidriver.wait_body_contains("/printed", "Quarterly report", 20)
+            spec.assert_true(ok, "the request recorded")
+            spec.assert_str_eq(uidriver.get_body("/printed"), "[{\"title\":\"Quarterly report\",\"path\":\"/tmp/aeui-spec-report.pdf\"}]", "its title and file")
+        }
+    }
     return spec.run_summary(fw)
 }

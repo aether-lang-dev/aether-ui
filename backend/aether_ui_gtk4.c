@@ -3983,6 +3983,50 @@ void aether_ui_open_url_impl(const char* url) {
     gtk_show_uri(NULL, url, GDK_CURRENT_TIME);
 }
 
+// Printing a PDF: GTK's own print dialog (GtkPrintUnixDialog), the file
+// sent to the printer chosen as it is (CUPS takes PDF). The unix-print
+// functions are libgtk-4's; declared here so the build needs no
+// gtk4-unix-print include path.
+typedef struct _GtkPrinter GtkPrinter;
+typedef struct _GtkPrintJob GtkPrintJob;
+typedef void (*AeuiPrintJobDone)(GtkPrintJob* job, gpointer data, const GError* error);
+extern GtkWidget* gtk_print_unix_dialog_new(const char* title, GtkWindow* parent);
+extern GtkPrinter* gtk_print_unix_dialog_get_selected_printer(GtkWidget* dialog);
+extern GtkPrintSettings* gtk_print_unix_dialog_get_settings(GtkWidget* dialog);
+extern GtkPageSetup* gtk_print_unix_dialog_get_page_setup(GtkWidget* dialog);
+extern GtkPrintJob* gtk_print_job_new(const char* title, GtkPrinter* printer, GtkPrintSettings* settings, GtkPageSetup* page_setup);
+extern gboolean gtk_print_job_set_source_file(GtkPrintJob* job, const char* filename, GError** error);
+extern void gtk_print_job_send(GtkPrintJob* job, AeuiPrintJobDone callback, gpointer user_data, GDestroyNotify dnotify);
+
+static void aeui_print_done(GtkPrintJob* job, gpointer data, const GError* error) { (void)job; (void)data; (void)error; }
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+static void aeui_print_response(GtkDialog* d, int response, gpointer data) {
+    char* path = (char*)data;
+    if (response == GTK_RESPONSE_OK) {
+        GtkPrinter* pr = gtk_print_unix_dialog_get_selected_printer(GTK_WIDGET(d));
+        GtkPrintSettings* st = gtk_print_unix_dialog_get_settings(GTK_WIDGET(d));
+        GtkPageSetup* ps = gtk_print_unix_dialog_get_page_setup(GTK_WIDGET(d));
+        if (pr) {
+            GtkPrintJob* job = gtk_print_job_new(gtk_window_get_title(GTK_WINDOW(d)), pr, st, ps);
+            if (gtk_print_job_set_source_file(job, path, NULL)) gtk_print_job_send(job, aeui_print_done, NULL, NULL);
+        }
+        if (st) g_object_unref(st);
+    }
+    g_free(path);
+    gtk_window_destroy(GTK_WINDOW(d));
+}
+G_GNUC_END_IGNORE_DEPRECATIONS
+
+int aether_ui_print_pdf_impl(const char* path, const char* title) {
+    if (!path || !path[0]) return 0;
+    if (aether_ui_print_records()) { aether_ui_printed_record(path, title ? title : ""); return 1; }
+    ensure_gtk_init();
+    GtkWidget* d = gtk_print_unix_dialog_new(title && title[0] ? title : "Print", NULL);
+    g_signal_connect(d, "response", G_CALLBACK(aeui_print_response), g_strdup(path));
+    gtk_window_present(GTK_WINDOW(d));
+    return 1;
+}
+
 // Dark mode detection
 int aether_ui_dark_mode_check(void) {
     // Driver override first (POST /appearance?dark=N) so headless specs can

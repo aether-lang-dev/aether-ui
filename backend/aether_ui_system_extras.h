@@ -132,6 +132,14 @@ int          aether_ui_menu_handles(int* out, int max);
 // open, in order. Not recorded outside headless: there the URL really opens.
 // ---------------------------------------------------------------------------
 void        aether_ui_opened_url_record(const char* url);
+// Printing (aether_ui_print_pdf_impl) under a test: a modal print dialog
+// would stop a spec, so a request is recorded, and the driver's GET
+// /printed lists them. aether_ui_print_records() is 1 under a test.
+int         aether_ui_print_records(void);
+void        aether_ui_printed_record(const char* path, const char* title);
+int         aether_ui_printed_count(void);
+const char* aether_ui_printed_title_at(int index);
+const char* aether_ui_printed_path_at(int index);
 int         aether_ui_opened_url_count(void);
 const char* aether_ui_opened_url_at(int index);   // "" when out of range
 
