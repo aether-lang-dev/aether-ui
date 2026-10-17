@@ -11,8 +11,8 @@
 //   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
 
 import ui
-import ui (window, vstack, text, root_vstack, textfield, securefield, textarea,
-    enable_test_server_root)
+import ui (window, vstack, hstack, text, root_vstack, textfield, securefield, textarea,
+    btn, enable_test_server_root)
 import std.os (os_getenv)
 
 main() {
@@ -21,6 +21,13 @@ main() {
         _f = textfield("your name") callback |v: string| { }
         _s = securefield("your password") callback |v: string| { }
         _a = textarea("tell us more") callback |v: string| { }
+        // Two fields side by side, neither sized: each its natural width.
+        // (AppKit gave one the row and the other 0 px.)
+        hstack(6) {
+            _l = textfield("from") callback |v: string| { }
+            _r = textfield("to") callback |v: string| { }
+            _g = btn("Go") callback { }
+        }
     }
 
     app = ui.app_create("Placeholder demo", 360, 320)

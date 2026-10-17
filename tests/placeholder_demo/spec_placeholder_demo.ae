@@ -33,6 +33,21 @@ placeholder_of(wtype: string) -> string {
     return r
 }
 
+// The text field with this placeholder.
+field_of(ph: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "placeholder"), ph) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -52,6 +67,22 @@ main() {
         spec.it("a TEXTAREA keeps its placeholder too") callback {
             spec.assert_str_eq(placeholder_of("textarea"), "tell us more",
                                "textarea hint")
+        }
+    }
+
+    spec.describe(fw, "a field's natural width") {
+        // AppKit's editable field had none: of two in a row, one took the
+        // spare width and the other was 0 px wide (the Looks panel's format
+        // field in sae's spreadsheet). Each now asks for its natural width.
+        spec.it("two unsized fields in an hstack are both their natural width, side by side") callback {
+            a = field_of("from")
+            b = field_of("to")
+            spec.assert_true(a > 0 && b > 0, "both fields there")
+            wa = uidriver.widget_int_field_by_id(a, "w")
+            wb = uidriver.widget_int_field_by_id(b, "w")
+            spec.assert_true(wa >= 100 && wb >= 100, "neither collapsed (${wa}, ${wb})")
+            spec.assert_true(wa - wb < 20 && wb - wa < 20, "the same width, neither taking the row (${wa}, ${wb})")
+            spec.assert_true(uidriver.widget_int_field_by_id(a, "x") + wa <= uidriver.widget_int_field_by_id(b, "x"), "side by side")
         }
     }
     return spec.run_summary(fw)

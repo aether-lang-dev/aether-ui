@@ -2926,9 +2926,19 @@ static NSRect aeui_field_inset(NSView* cv, NSRect r) {
     [super selectWithFrame:aeui_field_inset(v, r) inView:v editor:t delegate:d \
                      start:st length:n]; \
 }
+// An editable NSTextField has no natural width of its own (its intrinsic
+// width is NSViewNoIntrinsicMetric), so two fields in an hstack were
+// ambiguous to Auto Layout: one took the row's spare width and the other
+// came out 0 px wide, and which one flipped as the window resized. A field
+// asks for 140 px, as an EDIT does on Win32 and close to a GtkEntry's
+// natural width, and keeps it until set_width, weight() or fill_width say
+// otherwise (in a vstack it is as wide as the column, as a button is);
+// when its row is too narrow it gives way before buttons do.
+#define AEUI_FIELD_NATURAL_W 140.0
 #define AEUI_FIELD_VIEW_BODY \
 - (NSSize)intrinsicContentSize { \
     NSSize sz = [super intrinsicContentSize]; \
+    if (sz.width == NSViewNoIntrinsicMetric) sz.width = AEUI_FIELD_NATURAL_W; \
     if (aeui_field_owns_bezel(self)) { \
         if (sz.width != NSViewNoIntrinsicMetric) sz.width += 2 * AEUI_FIELD_PAD_X; \
         if (sz.height != NSViewNoIntrinsicMetric) sz.height += 2 * AEUI_FIELD_PAD_Y; \
@@ -2970,6 +2980,12 @@ AEUI_FIELD_VIEW_BODY
 int aether_ui_textfield_create(const char* placeholder, void* boxed_closure) {
     NSTextField* field = [[AetherTextField alloc] init];
     [field setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [field setContentCompressionResistancePriority:250
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    // Hugging as a button's: its natural width in an hstack (the packing
+    // slack takes the rest), the column's width in a vstack, as GTK fills.
+    [field setContentHuggingPriority:200
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
     [field setEditable:YES];
     [field setBordered:YES];
     [field setBezeled:YES];
@@ -3125,6 +3141,12 @@ void aether_ui_bind_value(int state_handle, int widget_handle) {
 int aether_ui_securefield_create(const char* placeholder, void* boxed_closure) {
     NSSecureTextField* field = [[AetherSecureTextField alloc] init];
     [field setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [field setContentCompressionResistancePriority:250
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    // Hugging as a button's: its natural width in an hstack (the packing
+    // slack takes the rest), the column's width in a vstack, as GTK fills.
+    [field setContentHuggingPriority:200
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
     if (placeholder && *placeholder) {
         [field setPlaceholderString:[NSString stringWithUTF8String:placeholder]];
         objc_setAssociatedObject(field, "aeui-placeholder",
