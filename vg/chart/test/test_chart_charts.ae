@@ -3,7 +3,8 @@
 // charts/PieChart.spec (their DOM queries become queries of the node tree),
 // layers/{line,bar,pie,label}.spec, axes/{Axis,FixedScaleAxis,StepAxis}.spec,
 // scales/{grid,scales,svgLabels}.spec (the cases not comparing against the
-// 1.x DOM code) and responsive.spec's merge order. Negative controls close
+// 1.x DOM code), presets/{lineChart,barChart,pieChart}.spec, core/creation's
+// grid and padding cases and responsive.spec's merge order. Negative controls close
 // each area.
 //
 // Chartist's chart specs render into a mocked 500x500 container; here the
@@ -14,6 +15,33 @@
 // compose a lone layer (0); and the LineChart "holes everywhere" specs
 // register their `draw` listener after the chart is created, so upstream
 // their expectations never run. Here they run, against the line's path.
+//
+// The specs here are ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
 
 import std.string
 import std.list
@@ -952,6 +980,202 @@ responsive_spec() {
     t.is_false("negative control: max-width above the width", chart.query_matches("(max-width: 100px)", 600.0) == 1)
 }
 
+// ─── presets/*.spec and core/creation.spec ───────────────────────
+
+child_classes(root: *cn.CtNode) -> string {
+    s = ""
+    i = 0
+    while i < cn.child_count(root) {
+        if i > 0 { s = string.concat(s, "|") }
+        s = string.concat(s, cn.class_string(cn.child_at(root, i)))
+        i = i + 1
+    }
+    return s
+}
+
+vertical_label_values(root: *cn.CtNode) -> *jv.JsValue {
+    out = jv.arr()
+    ls = cn.query_all(root, ".ct-label.ct-vertical")
+    i = 0
+    while i < list.size(ls) {
+        jv.push(out, jv.num(jv.to_number(jv.str(text(nth(ls, i))))))
+        i = i + 1
+    }
+    return out
+}
+
+presets_spec() {
+    println("presets/barChart")
+    hb = root_of("bar", "{labels: ['a', 'b'], series: [[1, 2]]}", "{horizontalBars: true}", 400.0, 200.0)
+    t.eq_str("1.x structure with the horizontal class", cn.class_string(hb), "ct-chart-bar ct-horizontal-bars")
+    t.eq_str("grids, the series group, labels", child_classes(hb), "ct-grids||ct-labels")
+    t.eq_int("two bars", cn.query_count(hb, "line.ct-bar"), 2)
+    gl = cn.query_all(hb, ".ct-grids line")
+    t.eq_str("the label axis's grid first", cn.class_string(nth(gl, 0)), "ct-grid ct-vertical")
+    t.eq_str("the value axis's grid last", cn.class_string(nth(gl, list.size(gl) - 1)), "ct-grid ct-horizontal")
+    rp = root_of("bar", "{labels: ['Q1', 'Q2', 'Q3'], series: [{data: [0.627]}, {data: [0]}, {data: [0]}]}", "{stackBars: true, horizontalBars: true, axisX: {onlyInteger: true}, axisY: {offset: 100}, low: 0.627}", 400.0, 200.0)
+    bars = cn.query_all(rp, "line.ct-bar")
+    finite = list.size(bars) > 0
+    i = 0
+    while i < list.size(bars) {
+        b = nth(bars, i)
+        if jv.is_finite(cn.attr_num(b, "x1")) == 0 || jv.is_finite(cn.attr_num(b, "x2")) == 0 || jv.is_finite(cn.attr_num(b, "y1")) == 0 || jv.is_finite(cn.attr_num(b, "y2")) == 0 { finite = false }
+        i = i + 1
+    }
+    t.is_true("repairs a chart-level low that empties the range (#1057): finite bars", finite)
+    hz = cn.query_all(rp, ".ct-label.ct-horizontal")
+    has0 = 0
+    i = 0
+    while i < list.size(hz) {
+        if string.equals(text(nth(hz, i)), "0") == 1 { has0 = 1 }
+        i = i + 1
+    }
+    t.is_true("repairs a chart-level low: a 0 label", has0 == 1)
+    t.eq_num("value axis: the reference value 0", jv.to_number(jv.at(vertical_label_values(root_of("bar", "{series: [[12, 15, 18]]}", "", 400.0, 200.0)), 0)), 0.0)
+    t.eq_num("value axis: its own low wins (#1476)", jv.to_number(jv.at(vertical_label_values(root_of("bar", "{series: [[12, 15, 18]]}", "{axisY: {low: 10}}", 400.0, 200.0)), 0)), 10.0)
+    hl = root_of("bar", "{series: [[12, 15, 18]]}", "{horizontalBars: true, axisX: {low: 10}}", 400.0, 200.0)
+    t.eq_num("horizontal value axis: its own low wins", jv.to_number(jv.str(text(cn.query_first(hl, ".ct-label.ct-horizontal")))), 10.0)
+    ar = root_of("bar", "{labels: ['A', 'B'], series: [[5, 5], [-3, 2], [-4, 1]]}", "{stackBars: true, stackMode: 'accumulate-relative'}", 400.0, 200.0)
+    vals = vertical_label_values(ar)
+    t.is_true("accumulate-relative: the axis reaches -7 (#1473)", jv.to_number(jv.at(vals, 0)) <= -7.0)
+    t.is_true("accumulate-relative: and 8", jv.to_number(jv.at(vals, jv.len(vals) - 1)) >= 8.0)
+    abars = cn.query_all(ar, "line.ct-bar")
+    five = nth(abars, 0)
+    minus3 = nth(abars, 2)
+    t.eq_num("the -3 bar starts where the 5 bar does", cn.attr_num(minus3, "y1"), cn.attr_num(five, "y1"))
+    t.is_true("and runs down", cn.attr_num(minus3, "y2") > cn.attr_num(minus3, "y1"))
+    modes = jv.parse("[['accumulate', true], ['overlap', true], [true, false]]")
+    i = 0
+    while i < jv.len(modes) {
+        m = jv.at(modes, i)
+        ml = jv.stringify(jv.at(m, 0))
+        mr = root_of("bar", "{series: [[5, 5], [4, 4]]}", "{stackBars: true, stackMode: ${ml}, axisY: {onlyInteger: true}}", 400.0, 200.0)
+        mv = vertical_label_values(mr)
+        top = 0.0
+        k = 0
+        while k < jv.len(mv) {
+            if jv.to_number(jv.at(mv, k)) > top { top = jv.to_number(jv.at(mv, k)) }
+            k = k + 1
+        }
+        t.eq_int("stackMode ${ml} fits the sums: ${jv.stringify(jv.at(m, 1))}", top > 5.0, jv.truthy(jv.at(m, 1)))
+        i = i + 1
+    }
+    rc = chart.bar_chart("{series: [[1, 2]]}", "")
+    chart.responsive(rc, "(max-width: 300px)", "{horizontalBars: true}")
+    t.eq_str("responsive: not matching", cn.class_string(chart.built_root(chart.build(rc, 400.0, 200.0))), "ct-chart-bar")
+    t.eq_str("responsive: matching", cn.class_string(chart.built_root(chart.build(rc, 300.0, 200.0))), "ct-chart-bar ct-horizontal-bars")
+    so = chart.bar_chart("{series: [[1, 2]]}", "")
+    chart.set_options(so, jv.parse("{horizontalBars: true}"), 0)
+    t.eq_str("setOptions changes the options", cn.class_string(chart.built_root(chart.build(so, 400.0, 200.0))), "ct-chart-bar ct-horizontal-bars")
+
+    println("presets/pieChart")
+    pr = root_of("pie", "{labels: ['a', 'b'], series: [1, 2]}", "", 300.0, 300.0)
+    t.eq_str("1.x pie structure: class", cn.class_string(pr), "ct-chart-pie")
+    t.eq_str("1.x pie structure: children", child_classes(pr), "ct-series ct-series-a|ct-series ct-series-b|")
+    pl = cn.query_all(pr, "text.ct-label")
+    t.eq_str("label texts", "${text(nth(pl, 0))} ${text(nth(pl, 1))}", "a b")
+    dr = root_of("pie", "{series: [1, 2]}", "{donut: true}", 300.0, 300.0)
+    t.eq_str("donut structure: class", cn.class_string(dr), "ct-chart-donut")
+    t.eq_int("donut structure: slices", cn.query_count(dr, "path.ct-slice-donut"), 2)
+    prc = chart.pie_chart("{series: [1, 2]}", "")
+    chart.responsive(prc, "(max-width: 200px)", "{donut: true}")
+    t.eq_str("responsive: not matching", cn.class_string(chart.built_root(chart.build(prc, 300.0, 300.0))), "ct-chart-pie")
+    t.eq_str("responsive: matching", cn.class_string(chart.built_root(chart.build(prc, 200.0, 200.0))), "ct-chart-donut")
+    ps = chart.pie_chart("{series: [1, 2]}", "")
+    chart.set_options(ps, jv.parse("{donut: true}"), 0)
+    t.eq_str("setOptions: donut", cn.class_string(chart.built_root(chart.build(ps, 300.0, 300.0))), "ct-chart-donut")
+    chart.set_options(ps, jv.parse("{showLabel: false}"), 1)
+    psr = chart.built_root(chart.build(ps, 300.0, 300.0))
+    t.eq_str("setOptions with replace: the defaults again", cn.class_string(psr), "ct-chart-pie")
+    t.eq_int("setOptions with replace: no labels", cn.query_count(psr, ".ct-label"), 0)
+    opad = cn.query_all(root_of("pie", "{series: [1, 2]}", "{chartPadding: {top: 20}}", 300.0, 300.0), "path.ct-slice-pie")
+    t.is_true("an object chartPadding over its default (#842)", matches("L150,157\\.5Z$", cn.attr_str(nth(opad, 0), "d")) == 1 && matches("L150,157\\.5Z$", cn.attr_str(nth(opad, 1), "d")) == 1)
+    rpc = chart.pie_chart("{series: [1, 2]}", "{chartPadding: 10}")
+    chart.responsive(rpc, "screen", "{chartPadding: {top: 20}}")
+    rpd = cn.query_all(chart.built_root(chart.build(rpc, 300.0, 300.0)), "path.ct-slice-pie")
+    t.is_true("a responsive object chartPadding replaces a number (#903)", matches(",157\\.5Z$", cn.attr_str(nth(rpd, 0), "d")) == 1 && matches(",157\\.5Z$", cn.attr_str(nth(rpd, 1), "d")) == 1)
+
+    println("presets/lineChart")
+    lr = root_of("line", "{labels: ['a', 'b'], series: [[1, 2]]}", "", 400.0, 200.0)
+    t.eq_str("1.x structure: class", cn.class_string(lr), "ct-chart-line")
+    t.eq_str("1.x structure: children", child_classes(lr), "ct-grids||ct-labels")
+    fx = chart.line_chart("{series: [[1, 5, 9]]}", "{axisY: {type: 'fixedScaleAxis', ticks: [0, 5, 10]}}")
+    fx1 = chart.line_chart("{series: [[1, 5, 9]]}", "{axisY: {type: 'FixedScaleAxis', ticks: [0, 5, 10]}}")
+    t.eq_int("the v2 and 1.x axis names agree", cn.query_count(chart.built_root(chart.build(fx, 400.0, 200.0)), ".ct-grid.ct-vertical"), cn.query_count(chart.built_root(chart.build(fx1, 400.0, 200.0)), ".ct-grid.ct-vertical"))
+    lc = chart.line_chart("{series: [[1, 2]]}", "")
+    chart.responsive(lc, "(max-width: 600px)", "{showPoint: false}")
+    t.eq_int("responsive: wide, the points", cn.query_count(chart.built_root(chart.build(lc, 700.0, 200.0)), ".ct-point"), 2)
+    t.eq_int("responsive: narrow, none", cn.query_count(chart.built_root(chart.build(lc, 400.0, 200.0)), ".ct-point"), 0)
+    for_roles = chart.built_root(chart.build(chart.line_chart("{labels: ['a', 'b'], series: [[1, 2]]}", ""), 400.0, 200.0))
+    roles = jv.parse("['grid', 'label', 'series', 'line', 'point']")
+    i = 0
+    while i < jv.len(roles) {
+        rn = jv.string_of(jv.at(roles, i))
+        t.is_true("nodes with the ${rn} role", cn.count_role(for_roles, rn) > 0)
+        i = i + 1
+    }
+    sx = chart.line_chart("{series: [[1, 2]]}", "{showPoint: false}")
+    t.eq_int("setOptions: no area before", cn.query_count(chart.built_root(chart.build(sx, 700.0, 200.0)), ".ct-area"), 0)
+    chart.set_options(sx, jv.parse("{showArea: true}"), 0)
+    sxr = chart.built_root(chart.build(sx, 700.0, 200.0))
+    t.eq_int("setOptions extends: an area", cn.query_count(sxr, ".ct-area"), 1)
+    t.eq_int("setOptions extends: still no points", cn.query_count(sxr, ".ct-point"), 0)
+    sr = chart.line_chart("{series: [[1, 2]]}", "{showPoint: false}")
+    chart.set_options(sr, jv.parse("{showArea: true}"), 1)
+    srr = chart.built_root(chart.build(sr, 700.0, 200.0))
+    t.eq_int("setOptions with replace: an area", cn.query_count(srr, ".ct-area"), 1)
+    t.eq_int("setOptions with replace: the default points", cn.query_count(srr, ".ct-point"), 2)
+    sk = chart.line_chart("{series: [[1, 2]]}", "")
+    chart.responsive(sk, "(max-width: 600px)", "{showPoint: false}")
+    chart.set_options(sk, jv.parse("{showArea: true, showPoint: true}"), 0)
+    skn = chart.built_root(chart.build(sk, 400.0, 200.0))
+    t.eq_int("responsive stays on top of setOptions: area", cn.query_count(skn, ".ct-area"), 1)
+    t.eq_int("responsive stays on top of setOptions: no points", cn.query_count(skn, ".ct-point"), 0)
+    skw = chart.built_root(chart.build(sk, 700.0, 200.0))
+    t.eq_int("off the breakpoint: the points", cn.query_count(skw, ".ct-point"), 2)
+    t.eq_int("off the breakpoint: the area", cn.query_count(skw, ".ct-area"), 1)
+    kd = chart.line_chart("{series: [[1, 2, 3]]}", "")
+    chart.responsive(kd, "(max-width: 600px)", "{showLine: false}")
+    chart.set_data(kd, jv.parse("{series: [[5, 4, 3, 2]]}"))
+    t.eq_int("new data: four points", cn.query_count(chart.built_root(chart.build(kd, 700.0, 200.0)), ".ct-point"), 4)
+    kdn = chart.built_root(chart.build(kd, 400.0, 200.0))
+    t.eq_int("a breakpoint keeps the new data (#1472): no line", cn.query_count(kdn, ".ct-line"), 0)
+    t.eq_int("a breakpoint keeps the new data: four points", cn.query_count(kdn, ".ct-point"), 4)
+    chart.set_options(kd, jv.parse("{showArea: true}"), 0)
+    t.eq_int("and after setOptions", cn.query_count(chart.built_root(chart.build(kd, 400.0, 200.0)), ".ct-point"), 4)
+    t.eq_num("Y axis: the lowest label is the lowest value", jv.to_number(jv.at(vertical_label_values(root_of("line", "{series: [[5, 8, 6]]}", "", 400.0, 200.0)), 0)), 5.0)
+    t.eq_num("a top-level referenceValue reaches the Y axis", jv.to_number(jv.at(vertical_label_values(root_of("line", "{series: [[5, 8, 6]]}", "{referenceValue: 0}", 400.0, 200.0)), 0)), 0.0)
+    t.eq_num("the axis's own referenceValue wins", jv.to_number(jv.at(vertical_label_values(root_of("line", "{series: [[5, 8, 6]]}", "{referenceValue: 0, axisY: {referenceValue: 4}}", 400.0, 200.0)), 0)), 4.0)
+
+    println("core/creation")
+    ga = ax.area_new(0.0, 120.0, 100.0, 20.0)
+    gpad = ax.padding_new(0.0, 0.0, 0.0, 0.0)
+    gx = ax.axis_linear("x", ga, jv.parse("[10]"), 0.0, 1.0)
+    gls = list.new()
+    glb = list.new()
+    ax.axis_nodes(gx, ga, gpad, jv.parse("{offset: 30, position: 'end', labelOffset: {x: 0, y: 0}, showLabel: false, showGrid: true}"), jv.parse(AX_OPTS), jv.parse(CLS), null, "line", gls, glb)
+    t.eq_int("createGrid: a single grid line", list.size(gls), 1)
+    g0 = nth(gls, 0)
+    t.is_true("createGrid: the line", cn.attr_num(g0, "x1") == 10.0 && cn.attr_num(g0, "x2") == 10.0 && cn.attr_num(g0, "y1") == 20.0 && cn.attr_num(g0, "y2") == 120.0)
+    gb = ax.area_new(20.0, 110.0, 120.0, 0.0)
+    gy = ax.axis_linear("y", gb, jv.parse("[100]"), 0.0, 1.0)
+    gls2 = list.new()
+    ax.axis_nodes(gy, gb, gpad, jv.parse(AX_OPTS), jv.parse("{offset: 40, position: 'start', labelOffset: {x: 0, y: 0}, showLabel: false, showGrid: true}"), jv.parse(CLS), null, "line", gls2, list.new())
+    g1 = nth(gls2, 0)
+    t.is_true("createGrid: a horizontal line", cn.attr_num(g1, "y1") == 10.0 && cn.attr_num(g1, "y2") == 10.0 && cn.attr_num(g1, "x1") == 20.0 && cn.attr_num(g1, "x2") == 120.0)
+    bg = ax.grid_background(ax.area_new(5.0, 60.0, 105.0, 10.0), "ct-test")
+    t.is_true("createGridBackground: the rect", cn.attr_num(bg, "x") == 5.0 && cn.attr_num(bg, "y") == 10.0 && cn.attr_num(bg, "width") == 100.0 && cn.attr_num(bg, "height") == 50.0)
+    t.eq_str("createGridBackground: its class", cn.class_string(bg), "ct-test")
+    t.eq_str("createGridBackground: its role", bg.role, "gridBackground")
+    p10 = ax.padding_of(jv.num(10.0), 0.0, 0.0, 0.0, 0.0)
+    t.is_true("padding: a number", p10.top == 10.0 && p10.right == 10.0 && p10.bottom == 10.0 && p10.left == 10.0)
+    p0 = ax.padding_of(jv.num(0.0), 15.0, 15.0, 5.0, 10.0)
+    t.is_true("padding: 0", p0.top == 0.0 && p0.right == 0.0 && p0.bottom == 0.0 && p0.left == 0.0)
+    pe = ax.padding_of(jv.obj(), 0.0, 0.0, 0.0, 0.0)
+    t.is_true("padding: an empty object takes the fallback", pe.top == 0.0 && pe.right == 0.0 && pe.bottom == 0.0 && pe.left == 0.0)
+    t.is_false("negative control: a wrong class", string.equals(cn.class_string(hb), "ct-chart-bar"))
+}
+
 main() {
     println("=== test_chart_charts ===")
     line_chart_spec()
@@ -964,5 +1188,6 @@ main() {
     axes_spec()
     svg_labels_spec()
     responsive_spec()
+    presets_spec()
     t.done("test_chart_charts")
 }
