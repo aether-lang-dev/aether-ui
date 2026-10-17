@@ -1,0 +1,208 @@
+// spec_vg_chart_demo.ae — vg/chart's three charts on a live vg scene, read
+// back over the driver on every backend:
+//
+//   1 smoothed line  the nodes the scene drew carry Chartist's classes and
+//                    the theme's paint (two ct-line paths in the series
+//                    colours, their ct-area fills, 14 ct-point lines, the
+//                    axis labels as text); a point's pixel is its colour.
+//   2 stacked bar    eight ct-bar lines; along Q1's bar, series a's red runs
+//                    up to 800 and series b's colour stacks on it to 1000,
+//                    with the white ground above.
+//   3 donut          three ct-slice-donut rings; clicking slice a's ring (the
+//                    hook on the drawn elements) recolours it #222222, in
+//                    the nodes and in the pixels; slice b keeps its colour.
+//
+// Geometry is vg/chart's own at 480x240 (the demo builds every chart at its
+// canvas size): Q1's bar at x 101.875 with 400 at y 167, 900 at 119.5 and 1100
+// at 100.5; the first line point at (50, 22.6); the donut centred at (240, 120)
+// with its ring's middle at radius 85: slice a (0-180 degrees) at 45 degrees is
+// (300.1, 59.9), slice b (180-288) at 200 degrees is (210.9, 199.9) — away from
+// the labels, which sit on the ring's middle at each slice's mid angle.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vg_chart_demo/bin/vg_chart_demo &
+//   UI_SPEC=vg_chart_demo/spec_vg_chart_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+// The c-th canvas's allocation from /widgets (canvases in creation order).
+canvas_field(c: int, f: string) -> int {
+    body = uidriver.get_body("/widgets")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = 0
+    seen = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "canvas") == 1 {
+            seen = seen + 1
+            if seen == c { r = uidriver.field_int(w, f) }
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+cw(c: int) -> int { return canvas_field(c, "w") }
+ch(c: int) -> int { return canvas_field(c, "h") }
+// The scene scales its 480x240 viewBox uniformly to the allocation, centred.
+scale(c: int) -> float {
+    sx = cw(c) / 480.0
+    sy = ch(c) / 240.0
+    if sx < sy { return sx }
+    return sy
+}
+px_x(c: int, vx: float) -> int { return ((cw(c) - 480.0 * scale(c)) / 2.0 + vx * scale(c)) as int }
+px_y(c: int, vy: float) -> int { return ((ch(c) - 240.0 * scale(c)) / 2.0 + vy * scale(c)) as int }
+
+pixel_at(c: int, vx: float, vy: float) -> int {
+    body = uidriver.get_body("/canvas/${c}/pixel?x=${px_x(c, vx)}&y=${px_y(c, vy)}&w=${cw(c)}&h=${ch(c)}")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    r = uidriver.field_int(v, "pixel")
+    json.json_free(v)
+    return r
+}
+red(p: int) -> int { return (p >> 16) & 255 }
+green(p: int) -> int { return (p >> 8) & 255 }
+blue(p: int) -> int { return p & 255 }
+chan_near(a: int, b: int, tol: int) -> int {
+    d = (a & 255) - (b & 255)
+    if d < 0 { d = 0 - d }
+    if d <= tol { return 1 }
+    return 0
+}
+near_rgb(p: int, rgb: int, tol: int) -> int {
+    if chan_near(p >> 16, rgb >> 16, tol) == 0 { return 0 }
+    if chan_near(p >> 8, rgb >> 8, tol) == 0 { return 0 }
+    return chan_near(p, rgb, tol)
+}
+hex(p: int) -> string { return "rgb(${red(p)},${green(p)},${blue(p)})" }
+
+assert_px(c: int, vx: float, vy: float, rgb: int, msg: string) {
+    p = pixel_at(c, vx, vy)
+    spec.assert_true(near_rgb(p, rgb, 28) == 1, "${msg}: canvas ${c} viewBox (${vx},${vy}) is ${hex(p)}")
+}
+
+wait_px(c: int, vx: float, vy: float, rgb: int) -> int {
+    i = 0
+    while i < 30 {
+        if near_rgb(pixel_at(c, vx, vy), rgb, 28) == 1 { return 1 }
+        sleep(100)
+        i = i + 1
+    }
+    return 0
+}
+
+// How many of canvas c's nodes have exactly this class list, and the stroke
+// / fill / text of the i-th of them.
+count_class(c: int, cls: string) -> int {
+    body = uidriver.get_body("/canvas/${c}/nodes")
+    v, _jerr = json.parse(body)
+    if v == null { return -1 }
+    k = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        o = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(o, "class"), cls) == 1 { k = k + 1 }
+        i = i + 1
+    }
+    json.json_free(v)
+    return k
+}
+
+nth_field(c: int, cls: string, idx: int, f: string) -> string {
+    body = uidriver.get_body("/canvas/${c}/nodes")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    out = ""
+    k = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        o = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(o, "class"), cls) == 1 {
+            if k == idx { out = string.copy(uidriver.field_str(o, f)) }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    json.json_free(v)
+    return out
+}
+
+has_text(c: int, txt: string) -> int {
+    body = uidriver.get_body("/canvas/${c}/nodes")
+    v, _jerr = json.parse(body)
+    if v == null { return 0 }
+    found = 0
+    n = json.json_array_size(v)
+    i = 0
+    while i < n {
+        o = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(o, "kind"), "text") == 1 && string.equals(uidriver.field_str(o, "text"), txt) == 1 { found = 1 }
+        i = i + 1
+    }
+    json.json_free(v)
+    return found
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a smoothed line chart") {
+        spec.it("draws two ct-line paths in the series colours over their ct-area fills") callback {
+            spec.assert_eq(count_class(1, "ct-line"), 2, "two ct-line paths")
+            spec.assert_true(string.equals(nth_field(1, "ct-line", 0, "stroke"), "#d70206") == 1, "series a stroked #d70206, got '${nth_field(1, "ct-line", 0, "stroke")}'")
+            spec.assert_true(string.equals(nth_field(1, "ct-line", 1, "stroke"), "#f05b4f") == 1, "series b stroked #f05b4f")
+            spec.assert_eq(count_class(1, "ct-area"), 2, "two ct-area fills")
+            spec.assert_true(string.equals(nth_field(1, "ct-area", 0, "fill"), "rgba(215,2,6,0.1)") == 1, "series a's area at 0.1 opacity")
+        }
+        spec.it("draws a ct-point per value and the axis labels as text") callback {
+            spec.assert_eq(count_class(1, "ct-point"), 14, "14 points")
+            spec.assert_eq(count_class(1, "ct-grid ct-horizontal"), 7, "a vertical grid line per day")
+            spec.assert_true(has_text(1, "Mon") == 1, "the X label Mon")
+            spec.assert_true(has_text(1, "12.5") == 1, "the Y label 12.5")
+        }
+        spec.it("paints the first point in series a's colour") callback {
+            assert_px(1, 50.0, 22.6, 0xd70206, "first point")
+            assert_px(1, 470.0, 230.0, 0xffffff, "the white ground in the corner")
+        }
+    }
+
+    spec.describe(fw, "a stacked bar chart") {
+        spec.it("draws eight ct-bar lines, a series' bars in its colour") callback {
+            spec.assert_eq(count_class(2, "ct-bar"), 8, "8 bars")
+            spec.assert_true(string.equals(nth_field(2, "ct-bar", 0, "stroke"), "#d70206") == 1, "series a's first bar")
+            spec.assert_true(string.equals(nth_field(2, "ct-bar", 4, "stroke"), "#f05b4f") == 1, "series b's first bar")
+        }
+        spec.it("stacks series b on series a: Q1 is red to 800, b's colour to 1000, white above") callback {
+            assert_px(2, 101.875, 167.0, 0xd70206, "Q1 at 400 (series a)")
+            assert_px(2, 101.875, 119.5, 0xf05b4f, "Q1 at 900 (series b on a)")
+            assert_px(2, 101.875, 100.5, 0xffffff, "Q1 at 1100 (above the stack)")
+        }
+    }
+
+    spec.describe(fw, "a donut chart") {
+        spec.it("draws three ct-slice-donut rings in the series colours") callback {
+            spec.assert_eq(count_class(3, "ct-slice-donut"), 3, "3 rings")
+            spec.assert_true(string.equals(nth_field(3, "ct-slice-donut", 0, "stroke"), "#d70206") == 1, "slice a")
+            spec.assert_true(string.equals(nth_field(3, "ct-slice-donut", 1, "stroke"), "#f05b4f") == 1, "slice b")
+            assert_px(3, 300.1, 59.9, 0xd70206, "slice a's ring")
+            assert_px(3, 210.9, 199.9, 0xf05b4f, "slice b's ring")
+            assert_px(3, 240.0, 120.0, 0xffffff, "the hole")
+        }
+        spec.it("recolours a clicked slice through the draw hook") callback {
+            uidriver.post_ok("/canvas/3/click?x=${px_x(3, 300.1)}&y=${px_y(3, 59.9)}", "POST canvas click")
+            spec.assert_true(wait_px(3, 300.1, 59.9, 0x222222) == 1, "slice a's ring turns #222222: ${hex(pixel_at(3, 300.1, 59.9))}")
+            spec.assert_true(string.equals(nth_field(3, "ct-slice-donut", 0, "stroke"), "#222222") == 1, "and its node says so")
+            assert_px(3, 210.9, 199.9, 0xf05b4f, "slice b keeps its colour")
+        }
+    }
+    return spec.run_summary(fw)
+}

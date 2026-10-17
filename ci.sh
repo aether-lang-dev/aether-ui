@@ -425,6 +425,28 @@ else
     echo "  SKIP AEVG_GTK_TESTS (gtk4 dev libs absent)"
 fi
 
+# vg/chart (the Chartist port) unit tests: Chartist's own specs ported with
+# their expected values, pure Aether like the AeVG tests above (they draw
+# through vg only onto the recording backend, so the same text-metrics stub
+# links them). They live beside the module in vg/chart/test.
+CHART_TESTS=(test_chart_core test_chart_path test_chart_charts test_chart_render)
+echo
+echo "=== Phase 0: vg/chart unit tests (Chartist's specs, ported) ==="
+for t in "${CHART_TESTS[@]}"; do
+    src="vg/chart/test/${t}.ae"; cfile="build/chart_${t}.c"; bin="build/chart_${t}"
+    if ! aetherc --lib "$ROOT" "$src" "$cfile" > "/tmp/ci_chart_${t}.log" 2>&1; then
+        echo "  FAIL $t (compile)"; tail -15 "/tmp/ci_chart_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
+    fi
+    if ! "$HOST_CC" "$cfile" vg/test/text_metrics_stub.c $(ae cflags) -o "$bin" >> "/tmp/ci_chart_${t}.log" 2>&1; then
+        echo "  FAIL $t (link)"; tail -15 "/tmp/ci_chart_${t}.log" | sed 's/^/       /'; FAIL=$((FAIL + 1)); continue
+    fi
+    if "$bin" > "/tmp/ci_chart_${t}_run.log" 2>&1; then
+        echo "  OK   $t ($(tail -1 "/tmp/ci_chart_${t}_run.log" | sed 's/^[^:]*: //'))"
+    else
+        echo "  FAIL $t (run)"; grep "FAIL" "/tmp/ci_chart_${t}_run.log" | head -15 | sed 's/^/       /'; FAIL=$((FAIL + 1))
+    fi
+done
+
 # App-level pure engine tests — game logic factored out of an app with NO UI
 # or vg dependency, so it's unit-testable in isolation (the svg_tetris engine:
 # collision, rotation, line-clear, ghost, scoring, game-over). Compiled with
@@ -893,8 +915,9 @@ else
     # pixelated_demo (image_rendering "pixelated": CoreGraphics nearest),
     # submit_demo (on_submit: Return in a field), datagrid_demo (the
     # virtualised grid, with a vslider: a rotated UISlider in a box),
-    # a11y_demo (roles, names, and a11y_announce through UIAccessibility).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo a11y_demo; do
+    # a11y_demo (roles, names, and a11y_announce through UIAccessibility),
+    # vg_chart_demo (vg/chart's charts on UIKit's vg scenes).
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo a11y_demo vg_chart_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1435,6 +1458,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=vgpaint_demo/spec_vgpaint_demo \
     run_server_test "$(EX_BIN vgpaint_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" vgpaint_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9c2: AetherUIDriver vg/chart spec (the Chartist port) ==="
+# vg/chart's line, stacked bar and donut drawn on live vg scenes: the nodes
+# carry Chartist's classes and the theme's paint (/canvas/{id}/nodes), the
+# pixels are the series colours (/canvas/{id}/pixel), and a click on a donut
+# slice recolours it through the draw hook.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=vg_chart_demo/spec_vg_chart_demo \
+    run_server_test "$(EX_BIN vg_chart_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" vg_chart_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

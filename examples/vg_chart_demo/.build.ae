@@ -1,0 +1,19 @@
+// vg_chart_demo — vg/chart's three charts, built as its own cached aeb node.
+import bldr
+import aether
+import aether (source, output, no_closure_regen, lib)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("vg_chart_demo.ae")
+            output("vg_chart_demo")
+            lib("${root}")               // so `import vg.*` resolves at the repo root
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

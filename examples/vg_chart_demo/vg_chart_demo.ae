@@ -1,0 +1,100 @@
+// vg_chart_demo — vg/chart, the Chartist port: three charts, each a function
+// of data and options returning a node tree, drawn into a live vg scene.
+//
+// Three scenes, one canvas each (canvas ids 1..3, top to bottom), each a
+// 480x240 viewBox on a 480x240 canvas over a white ground, the chart built at
+// that size:
+//
+//   1 smoothed line  two series, monotone-cubic smoothing (lineSmooth: true),
+//                    areas under them, a tooltip on every point.
+//   2 stacked bar    two series stacked per quarter (stackBars), with
+//                    Chartist's default series colours.
+//   3 donut          50 / 30 / 20 as a donut; clicking a slice recolours its
+//                    ring (#222222), through a hook on the drawn elements.
+//
+// The spec (tests/vg_chart_demo) reads the scenes back through the driver:
+// GET /canvas/{id}/nodes for kinds, classes and paint, /canvas/{id}/pixel for
+// what was painted, and a click on the donut.
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/vg_chart_demo/bin/vg_chart_demo &
+//   UI_SPEC=vg_chart_demo/spec_vg_chart_demo tests/run_spec.sh
+
+import ui                                   // full — transitive canvas_* resolve
+import ui (window, vstack, text, enable_test_server)
+import vg.live (vg)
+import vg                                    // full — vg.live uses vg.scene_new
+import vg (view_box, rect, fill, node_element, element_set_stroke, on_click, tooltip)
+import vg.chart
+import vg.chart.render
+import vg.chart.node as cn
+import vg.chart.value as jv
+import std.string
+import std.os (os_getenv)
+
+extern string_retain(s: string)
+
+line_tree() -> *cn.CtNode {
+    c = chart.line_chart("{labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], series: [[12, 9, 7, 8, 5, 4, 6], [2, 1, 3.5, 7, 3, 4, 5]]}",
+                         "{low: 0, showArea: true, fullWidth: true, chartPadding: {right: 30}}")
+    t = chart.built_root(chart.build(c, 480.0, 240.0))
+    render.theme(t)
+    return t
+}
+
+bar_tree() -> *cn.CtNode {
+    c = chart.bar_chart("{labels: ['Q1', 'Q2', 'Q3', 'Q4'], series: [[800, 1200, 1400, 1300], [200, 400, 500, 300]]}",
+                        "{stackBars: true}")
+    t = chart.built_root(chart.build(c, 480.0, 240.0))
+    render.theme(t)
+    return t
+}
+
+donut_tree() -> *cn.CtNode {
+    c = chart.pie_chart("{labels: ['Rent', 'Food', 'Fun'], series: [50, 30, 20]}", "{donut: true}")
+    t = chart.built_root(chart.build(c, 480.0, 240.0))
+    render.theme(t)
+    return t
+}
+
+// A point's tooltip: its value.
+point_tooltip(el: ptr, n: *cn.CtNode) {
+    if string.equals(n.role, "point") == 0 { return }
+    tip = "${jv.js_string(jv.get(cn.ctx_get(n, "value"), "y"))}"
+    string_retain(tip)
+    tooltip(el, tip)
+}
+
+// Clicking a slice recolours its ring.
+slice_click(el: ptr, n: *cn.CtNode) {
+    if string.equals(n.role, "slice") == 0 { return }
+    e = node_element(el)
+    w = cn.attr_num(n, "stroke-width")
+    on_click(el) callback |x: float, y: float| {
+        println("slice clicked")
+        _xy = x + y
+        element_set_stroke(e, "#222222", w)
+    }
+}
+
+main() {
+    lt = line_tree()
+    bt = bar_tree()
+    dt = donut_tree()
+    window("vg chart", 500, 790) {
+        vstack(4) {
+            text("vg chart")
+            vg(view_box(0, 0, 480, 240), 480, 240) {
+                rect(0, 0, 480, 240) { fill("#ffffff") }
+                render.draw_with(lt) callback |el: ptr, n: *cn.CtNode| { point_tooltip(el, n) }
+            }
+            vg(view_box(0, 0, 480, 240), 480, 240) {
+                rect(0, 0, 480, 240) { fill("#ffffff") }
+                render.draw(bt)
+            }
+            vg(view_box(0, 0, 480, 240), 480, 240) {
+                rect(0, 0, 480, 240) { fill("#ffffff") }
+                render.draw_with(dt) callback |el: ptr, n: *cn.CtNode| { slice_click(el, n) }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
