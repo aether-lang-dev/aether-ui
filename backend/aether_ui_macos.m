@@ -3314,6 +3314,12 @@ static void aeui_slider_set_vertical(int handle, int on) {
     double cur = aeui_slider_value_of(sl);
     objc_setAssociatedObject(sl, "aeui-vflip", on ? @YES : nil, OBJC_ASSOCIATION_RETAIN);
     [sl setVertical:on ? YES : NO];
+    // AppKit fills a slider's track from its minimum to the knob; mirrored,
+    // the minimum is at the bottom, so a slider at the top (a datagrid
+    // scrolled to its first row) drew its whole track in the accent colour,
+    // a long blue line beside the grid. The track is left unfilled, as
+    // a scrollbar's is (GTK's fills from the top, empty at the first row).
+    if (@available(macOS 10.12.2, *)) [sl setTrackFillColor:on ? [NSColor clearColor] : nil];
     aether_ui_slider_set_value(handle, cur);
 }
 

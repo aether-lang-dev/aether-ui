@@ -7335,7 +7335,7 @@ datagrid_freeze_rows(gp: @keep ptr, n: int) -> ptr {
                         add_css_class(h, "aui-grid-cell")
                     }
                 }
-                intarr_set_raw(g.painted, s * w + j, 0 - 1)
+                _datagrid_unpaint(g, s * w + j)
                 j = j + 1
             }
         }
@@ -8054,6 +8054,17 @@ _datagrid_invoke_hdr(cb: fn, c: int) {
 
 // Colour every shown cell for the selection. A widget is only touched when
 // its colour changes, so scrolling a plain grid sets no colours at all.
+// A shown cell to be painted afresh: its colour forgotten (-1), but not
+// whether the cursor's border is drawn on it (-2: drawn), so the next
+// paint takes the border off a cell the cursor has left. Forgetting that
+// too left a stale cursor box on every cell whose style changed while the
+// cursor was on it (a reference outlined as a formula was typed, a cell
+// just entered).
+_datagrid_unpaint(g: *DataGrid, i: int) {
+    was = intarr_get_raw(g.painted, i)
+    if was >= 16777216 || was == 0 - 2 { intarr_set_raw(g.painted, i, 0 - 2) } else { intarr_set_raw(g.painted, i, 0 - 1) }
+}
+
 _datagrid_paint(g: *DataGrid) {
     w = g.npos
     r = 0
@@ -8083,7 +8094,7 @@ _datagrid_paint(g: *DataGrid) {
                 h = intarr_get_raw(g.cells, i)
                 aether_ui_set_bg_color(h, ((col / 65536) % 256) / 255.0, ((col / 256) % 256) / 255.0, (col % 256) / 255.0, 1.0)
                 wascur = 0
-                if was >= 16777216 { wascur = 1 }
+                if was >= 16777216 || was == 0 - 2 { wascur = 1 }
                 if cur != wascur {
                     if cur == 1 {
                         bc = DATAGRID_CURSOR_BORDER
@@ -8267,7 +8278,7 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     string.string_array_free(parts)
     h = intarr_get_raw(g.cells, i)
     intarr_set_raw(g.style_bg, i, bg)
-    intarr_set_raw(g.painted, i, 0 - 1)   // repaint it with the new base
+    _datagrid_unpaint(g, i)   // repaint it with the new base
     if fg < 0 { fg = 0 }
     aether_ui_set_text_color(h, ((fg / 65536) % 256) / 255.0, ((fg / 256) % 256) / 255.0, (fg % 256) / 255.0)
     aether_ui_set_font_bold(h, bold)
