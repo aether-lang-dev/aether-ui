@@ -1,0 +1,541 @@
+// vg/chart/axis.ae — the axes: StepAxis, AutoScaleAxis and FixedScaleAxis,
+// the chart area they leave, and their grid lines and SVG text labels.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: axes/{Axis,StepAxis,AutoScaleAxis,FixedScaleAxis}.ts and
+// their v2 functional forms scales/factories.ts (stepAxis, autoScaleAxis,
+// fixedScaleAxis) and scales/axis.ts (axisLength, axisArea — 1.x
+// createChartRect), scales/grid.ts (axisNodes: grid lines, label boxes,
+// label offsets and the skipping of falsey labels; gridBackground),
+// scales/svgLabels.ts (labelAlign, wrapText, svgLabels) and
+// render/measure.ts (estimateText, textAscent).
+//
+// Labels are always SVG text here: vg has no HTML foreignObject, so the 1.x
+// HTML labels are replaced by v2's SVG labels, which Chartist aligns in the
+// same boxes the way its CSS aligns the HTML ones.
+
+exports (
+    CtAxis, CtArea, CtPadding,
+    area_new, padding_new, padding_of, chart_area, chart_area_axes,
+    axis_step, axis_auto, axis_fixed, axis_linear, axis_project, axis_length,
+    axis_dimension, axis_kind, axis_ticks, axis_has_range, axis_range_min, axis_range_max,
+    axis_nodes, grid_background, label_align, wrap_text, estimate_width,
+    svg_label, DEFAULT_FONT_SIZE, TEXT_ASCENT, label_text_of
+)
+
+import std.string
+import std.list
+import std.math
+import vg.chart.value as jv
+import vg.chart.core
+import vg.chart.node as cn
+
+const DEFAULT_FONT_SIZE: float = 12.0
+const TEXT_ASCENT: float = 0.85
+
+struct CtPadding {
+    top: float
+    right: float
+    bottom: float
+    left: float
+}
+
+struct CtArea {
+    x1: float
+    y1: float       // the bottom edge (y grows down)
+    x2: float
+    y2: float       // the top edge
+    width: float
+    height: float
+}
+
+padding_new(top: float, right: float, bottom: float, left: float) -> *CtPadding {
+    p = heap.new(CtPadding)
+    p.top = top
+    p.right = right
+    p.bottom = bottom
+    p.left = left
+    return p
+}
+
+// The chartPadding option: one number for every side, or an object whose
+// missing sides keep the defaults given.
+padding_of(v: *jv.JsValue, top: float, right: float, bottom: float, left: float) -> *CtPadding {
+    if jv.is_number(v) == 1 {
+        n = jv.number_of(v)
+        return padding_new(n, n, n, n)
+    }
+    return padding_new(jv.num_path_or(v, "top", top), jv.num_path_or(v, "right", right),
+                       jv.num_path_or(v, "bottom", bottom), jv.num_path_or(v, "left", left))
+}
+
+area_new(x1: float, y1: float, x2: float, y2: float) -> *CtArea {
+    a = heap.new(CtArea)
+    a.x1 = x1
+    a.y1 = y1
+    a.x2 = x2
+    a.y2 = y2
+    a.width = x2 - x1
+    a.height = y1 - y2
+    return a
+}
+
+// The 1.x createChartRect without axes: at least the padding, a 1 px area.
+chart_area(width: float, height: float, p: *CtPadding) -> *CtArea {
+    w = math.max_float(width, p.left + p.right)
+    h = math.max_float(height, p.top + p.bottom)
+    x1 = p.left
+    y2 = p.top
+    x2 = math.max_float(w - p.right, x1 + 1.0)
+    y1 = math.max_float(h - p.bottom, y2 + 1.0)
+    return area_new(x1, y1, x2, y2)
+}
+
+// axisArea for one X axis (at the bottom, or the top when x_at_start) and
+// one Y axis (on the left, or the right when y_at_end): the axis offsets
+// reserved beside the padding.
+chart_area_axes(width: float, height: float, p: *CtPadding, x_offset: float, x_at_start: int, y_offset: float, y_at_end: int) -> *CtArea {
+    top = 0.0
+    bottom = 0.0
+    left = 0.0
+    right = 0.0
+    if x_at_start == 1 { top = x_offset } else { bottom = x_offset }
+    if y_at_end == 1 { right = y_offset } else { left = y_offset }
+    w = math.max_float(width, left + right + p.left + p.right)
+    h = math.max_float(height, top + bottom + p.top + p.bottom)
+    y2 = p.top + top
+    y1 = math.max_float(h - p.bottom - bottom, y2 + 1.0)
+    x1 = p.left + left
+    x2 = math.max_float(w - p.right - right, x1 + 1.0)
+    return area_new(x1, y1, x2, y2)
+}
+
+// ─── the axes ────────────────────────────────────────────────────
+
+struct CtAxis {
+    dimension: string   // "x" | "y"
+    kind: string        // step | autoScale | fixedScale | linear (tests)
+    stretch: int
+    step: float         // step axes: px between ticks
+    ticks: *jv.JsValue       // array of labels / numbers
+    has_range: int
+    range_min: float
+    range_max: float
+    length: float
+    bounds_min: float   // autoScale projection
+    bounds_range: float
+    lin_offset: float   // linear: (value - offset) * factor
+    lin_factor: float
+    error: string
+}
+
+axis_length(dim: string, a: *CtArea) -> float {
+    if string.equals(dim, "x") == 1 { return a.x2 - a.x1 }
+    return a.y1 - a.y2
+}
+
+mk_axis(dim: string, kind: string, a: *CtArea) -> *CtAxis {
+    ax = heap.new(CtAxis)
+    ax.dimension = dim
+    ax.kind = kind
+    ax.stretch = 0
+    ax.step = 0.0
+    ax.ticks = jv.arr()
+    ax.has_range = 0
+    ax.range_min = 0.0
+    ax.range_max = 0.0
+    ax.length = axis_length(dim, a)
+    ax.bounds_min = 0.0
+    ax.bounds_range = 1.0
+    ax.lin_offset = 0.0
+    ax.lin_factor = 1.0
+    ax.error = ""
+    return ax
+}
+
+axis_dimension(ax: *CtAxis) -> string { return ax.dimension }
+axis_kind(ax: *CtAxis) -> string { return ax.kind }
+axis_ticks(ax: *CtAxis) -> *jv.JsValue { return ax.ticks }
+axis_has_range(ax: *CtAxis) -> int { return ax.has_range }
+axis_range_min(ax: *CtAxis) -> float { return ax.range_min }
+axis_range_max(ax: *CtAxis) -> float { return ax.range_max }
+
+// stepAxis: one tick per label (the axis's `ticks` when given); values are
+// placed by index, the last tick at the axis end with `stretch`.
+axis_step(dim: string, a: *CtArea, labels: *jv.JsValue, options: *jv.JsValue) -> *CtAxis {
+    ax = mk_axis(dim, "step", a)
+    ticks = jv.get(options, "ticks")
+    if jv.is_array(ticks) == 0 { ticks = jv.clone(labels) }
+    ax.ticks = ticks
+    ax.stretch = jv.bool_path(options, "stretch")
+    n = jv.len(ticks)
+    ax.step = ax.length / math.max_float(1.0, (n - ax.stretch) / 1.0)
+    return ax
+}
+
+// The range of an axis: options.highLow when given ({high, low}), else from
+// the series (getHighLow with the axis options and any extent).
+axis_high_low(series: *jv.JsValue, options: *jv.JsValue, dim: string, has_ext: int, ext_low: float, ext_high: float) -> *core.CtHighLow {
+    hl = jv.get(options, "highLow")
+    if jv.is_object(hl) == 1 {
+        return core.high_low_new(jv.num_path(hl, "high"), jv.num_path(hl, "low"))
+    }
+    return core.get_high_low_ext(series, options, dim, has_ext, ext_low, ext_high)
+}
+
+// autoScaleAxis: a scale fitted to the values, in round steps at least
+// scaleMinSpace px apart (getBounds).
+axis_auto(dim: string, a: *CtArea, series: *jv.JsValue, options: *jv.JsValue, has_ext: int, ext_low: float, ext_high: float) -> *CtAxis {
+    ax = mk_axis(dim, "autoScale", a)
+    hl = axis_high_low(series, options, dim, has_ext, ext_low, ext_high)
+    sms = jv.num_path(options, "scaleMinSpace")
+    if jv.truthy(jv.get(options, "scaleMinSpace")) == 0 { sms = 20.0 }
+    b = core.get_bounds(ax.length, hl.high, hl.low, sms, jv.bool_path(options, "onlyInteger"))
+    ax.error = b.error
+    t = jv.arr()
+    i = 0
+    while i < core.nums_len(b.values) { jv.push(t, jv.num(core.nums_get(b.values, i))); i = i + 1 }
+    ax.ticks = t
+    ax.has_range = 1
+    ax.range_min = b.min
+    ax.range_max = b.max
+    ax.bounds_min = b.min
+    ax.bounds_range = b.range
+    return ax
+}
+
+// fixedScaleAxis: a scale from low to high with the `ticks` given, or
+// `divisor` equal parts with a tick at both ends (#1022); ticks sorted.
+axis_fixed(dim: string, a: *CtArea, series: *jv.JsValue, options: *jv.JsValue, has_ext: int, ext_low: float, ext_high: float) -> *CtAxis {
+    ax = mk_axis(dim, "fixedScale", a)
+    hl = axis_high_low(series, options, dim, has_ext, ext_low, ext_high)
+    divisor = jv.num_path(options, "divisor")
+    if jv.truthy(jv.get(options, "divisor")) == 0 { divisor = 1.0 }
+    ticks = jv.get(options, "ticks")
+    t = jv.arr()
+    if jv.is_array(ticks) == 1 {
+        i = 0
+        while i < jv.len(ticks) { jv.push(t, jv.at(ticks, i)); i = i + 1 }
+    } else {
+        k = 0.0
+        while k < divisor + 1.0 {
+            jv.push(t, jv.num(hl.low + ((hl.high - hl.low) / divisor) * k))
+            k = k + 1.0
+        }
+    }
+    sort_numeric(t)
+    ax.ticks = t
+    ax.has_range = 1
+    ax.range_min = hl.low
+    ax.range_max = hl.high
+    return ax
+}
+
+// A test axis with the projection (value - offset) * factor: the MockAxis
+// and OffsetAxis subclasses of Chartist's Axis spec.
+axis_linear(dim: string, a: *CtArea, ticks: *jv.JsValue, offset: float, factor: float) -> *CtAxis {
+    ax = mk_axis(dim, "linear", a)
+    ax.ticks = ticks
+    ax.lin_offset = offset
+    ax.lin_factor = factor
+    return ax
+}
+
+// Array.prototype.sort((a, b) => Number(a) - Number(b)), stable.
+sort_numeric(t: *jv.JsValue) {
+    n = jv.len(t)
+    i = 1
+    while i < n {
+        cur = jv.at(t, i)
+        j = i - 1
+        going = 1
+        while j >= 0 && going == 1 {
+            if jv.to_number(jv.at(t, j)) > jv.to_number(cur) {
+                jv.set_at(t, j + 1, jv.at(t, j))
+                j = j - 1
+            } else { going = 0 }
+        }
+        jv.set_at(t, j + 1, cur)
+        i = i + 1
+    }
+}
+
+// project(value, index): px from the axis start (left, or bottom for y).
+axis_project(ax: *CtAxis, value: *jv.JsValue, index: int) -> float {
+    if string.equals(ax.kind, "step") == 1 { return ax.step * index }
+    if string.equals(ax.kind, "linear") == 1 {
+        return (jv.to_number(value) - ax.lin_offset) * ax.lin_factor
+    }
+    v = core.multi_value_num(value, ax.dimension)
+    if string.equals(ax.kind, "autoScale") == 1 {
+        return (ax.length * (v - ax.bounds_min)) / ax.bounds_range
+    }
+    return (ax.length * (v - ax.range_min)) / (ax.range_max - ax.range_min)
+}
+
+// ─── text: estimate, wrap, align ─────────────────────────────────
+
+// estimateText: an average glyph is 0.6 em wide.
+estimate_width(text: string, font_size: float) -> float {
+    return string.length(text) * font_size * 0.6
+}
+
+// Greedy word wrap: words go on a line while it fits; a word wider than the
+// width stays on a line of its own. Returns an array of lines.
+wrap_text(text: string, width: float, font_size: float) -> *jv.JsValue {
+    lines = jv.arr()
+    line = ""
+    n = string.length(text)
+    i = 0
+    while i <= n {
+        // Split on runs of white space.
+        start = i
+        while i < n && jv.is_space(string.char_at(text, i)) == 0 { i = i + 1 }
+        if i > start {
+            word = string.substring(text, start, i)
+            cand = word
+            if string.length(line) > 0 { cand = "${line} ${word}" }
+            if string.length(line) > 0 && estimate_width(cand, font_size) > width {
+                jv.push(lines, jv.str(line))
+                line = word
+            } else {
+                line = cand
+            }
+        }
+        i = i + 1
+    }
+    if string.length(line) > 0 { jv.push(lines, jv.str(line)) }
+    return lines
+}
+
+// labelAlign(kind, dimension, atStart) -> "horizontal vertical", e.g.
+// "start top": how the default CSS aligns a label in its box. kind is line,
+// bar or horizontalBar.
+label_align(kind: string, dim: string, at_start: int) -> string {
+    vertical = "top"
+    if at_start == 1 { vertical = "bottom" }
+    if string.equals(dim, "x") == 1 {
+        h = "start"
+        if string.equals(kind, "bar") == 1 { h = "middle" }
+        return "${h} ${vertical}"
+    }
+    v = "bottom"
+    if string.equals(kind, "horizontalBar") == 1 { v = "middle" }
+    h2 = "start"
+    if at_start == 1 { h2 = "end" }
+    return "${h2} ${v}"
+}
+
+round2(v: float) -> float { return jv.js_round(v * 100.0) / 100.0 }
+
+// svgLabels: a text node aligned in the box (x, y, w, h), its lines tspans
+// one font size apart (text measured by the estimate at font_size), or null
+// for empty text. align_h / align_v override
+// the CSS alignment when not "".
+svg_label(text: string, bx: float, by: float, bw: float, bh: float, classes: string, kind: string, dim: string, at_start: int, align_h: string, align_v: string, font_size: float) -> *cn.CtNode {
+    fs = font_size
+    lines = wrap_text(text, jv.js_round(bw), fs)
+    if jv.len(lines) == 0 { return null }
+    al = string.split(label_align(kind, dim, at_start), " ")
+    h = string.copy(string.array_get(al, 0))
+    v = string.copy(string.array_get(al, 1))
+    string.array_free(al)
+    if string.length(align_h) > 0 { h = align_h }
+    if string.length(align_v) > 0 { v = align_v }
+    block = jv.len(lines) * fs
+    top = by + bh - block
+    if string.equals(v, "top") == 1 { top = by }
+    if string.equals(v, "middle") == 1 { top = by + (bh - block) / 2.0 }
+    x = bx + bw
+    if string.equals(h, "start") == 1 { x = bx }
+    if string.equals(h, "middle") == 1 { x = bx + bw / 2.0 }
+    t = cn.node("text", "", classes)
+    cn.attr(t, "x", jv.num(round2(x)))
+    cn.attr(t, "y", jv.num(round2(top + TEXT_ASCENT * fs)))
+    cn.attr(t, "text-anchor", jv.str(h))
+    i = 0
+    while i < jv.len(lines) {
+        sp = cn.node("tspan", "", "")
+        cn.attr(sp, "x", jv.num(round2(x)))
+        cn.attr(sp, "y", jv.num(round2(top + (i + TEXT_ASCENT) * fs)))
+        cn.set_text(sp, jv.string_of(jv.at(lines, i)))
+        cn.append(t, sp)
+        i = i + 1
+    }
+    return t
+}
+
+// ─── grid lines and labels (axisNodes) ───────────────────────────
+
+call_label(f: fn, value: *jv.JsValue, index: int) -> *jv.JsValue {
+    ptr r = call(f, value, index)
+    return r as *jv.JsValue
+}
+
+// The label an axis tick shows: the label function's result (labelTransform
+// or labelInterpolationFnc), or the tick itself.
+label_text_of(label_fn: ptr, value: *jv.JsValue, index: int) -> *jv.JsValue {
+    if label_fn == null { return value }
+    r = call_label(label_fn, value, index)
+    if r == null { return jv.undef() }
+    return r
+}
+
+// axisNodes(axis, frame): appends the axis's grid lines to `grids` and its
+// labels to `labels` (std.lists of *CtNode), in tick order. axis_x / axis_y
+// are the two axes' options; cls the classNames object; label_kind the CSS
+// row SVG labels align by (line, bar, horizontalBar).
+axis_nodes(ax: *CtAxis, area: *CtArea, pad: *CtPadding, axis_x: *jv.JsValue, axis_y: *jv.JsValue, cls: *jv.JsValue, label_fn: ptr, label_kind: string, grids: ptr, labels: ptr) {
+    is_x = string.equals(ax.dimension, "x")
+    opts = axis_y
+    if is_x == 1 { opts = axis_x }
+    ticks = ax.ticks
+    nt = jv.len(ticks)
+    projected = core.nums_new()
+    values = jv.arr()
+    i = 0
+    while i < nt {
+        core.nums_push(projected, axis_project(ax, jv.at(ticks, i), i))
+        jv.push(values, label_text_of(label_fn, jv.at(ticks, i), i))
+        i = i + 1
+    }
+    grid_offset = area.x1
+    grid_length = area.width
+    if is_x == 1 {
+        grid_offset = area.y2
+        grid_length = area.height
+    }
+    dir_class = jv.str_path(cls, "vertical")
+    if is_x == 1 { dir_class = jv.str_path(cls, "horizontal") }
+    at_start = 0
+    if string.equals(jv.str_path(opts, "position"), "start") == 1 { at_start = 1 }
+    i = 0
+    while i < nt {
+        rel = core.nums_get(projected, i)
+        lv = jv.at(values, i)
+        label_length = 0.0
+        if i + 1 < nt { label_length = core.nums_get(projected, i + 1) - rel } else {
+            label_length = math.max_float(ax.length - rel, ax.length / nt)
+        }
+        skip = 0
+        empty_string = 0
+        if jv.is_string(lv) == 1 && string.length(jv.string_of(lv)) == 0 { empty_string = 1 }
+        if empty_string == 0 && jv.is_falsey_but_zero(lv) == 1 { skip = 1 }
+        if skip == 0 {
+            position = 0.0
+            lox = 0.0
+            loy = 0.0
+            if is_x == 1 {
+                position = area.x1 + rel
+                lox = jv.num_path(axis_x, "labelOffset.x")
+                if at_start == 1 {
+                    loy = pad.top + jv.num_path(axis_x, "labelOffset.y") + 5.0
+                } else {
+                    loy = area.y1 + jv.num_path(axis_x, "labelOffset.y") + 5.0
+                }
+            } else {
+                position = area.y1 - rel
+                loy = jv.num_path(axis_y, "labelOffset.y") - label_length
+                if at_start == 1 {
+                    lox = pad.left + jv.num_path(axis_y, "labelOffset.x")
+                } else {
+                    lox = area.x2 + jv.num_path(axis_y, "labelOffset.x") + 10.0
+                }
+            }
+            if jv.bool_path(opts, "showGrid") == 1 {
+                g = cn.node("line", "", "")
+                if is_x == 1 {
+                    cn.attr(g, "x1", jv.num(position))
+                    cn.attr(g, "x2", jv.num(position))
+                    cn.attr(g, "y1", jv.num(grid_offset))
+                    cn.attr(g, "y2", jv.num(grid_offset + grid_length))
+                } else {
+                    cn.attr(g, "y1", jv.num(position))
+                    cn.attr(g, "y2", jv.num(position))
+                    cn.attr(g, "x1", jv.num(grid_offset))
+                    cn.attr(g, "x2", jv.num(grid_offset + grid_length))
+                }
+                cn.add_class(g, "${jv.str_path(cls, "grid")} ${dir_class}")
+                cn.set_role(g, "grid")
+                g.axis = ax
+                cn.ctx_put(g, "index", jv.num(i / 1.0))
+                _ag = list.add(grids, g)
+            }
+            if jv.bool_path(opts, "showLabel") == 1 {
+                bx = 0.0
+                by = 0.0
+                bw = 0.0
+                bh = 0.0
+                counter_len = math.max_float(0.0, jv.num_path(opts, "offset") - 10.0)
+                if is_x == 1 {
+                    bx = position + lox
+                    by = loy
+                    bw = label_length
+                    bh = counter_len
+                } else {
+                    by = position + loy
+                    bx = lox
+                    bh = label_length
+                    bw = counter_len
+                }
+                end_class = jv.str_path(cls, "end")
+                if at_start == 1 { end_class = jv.str_path(cls, "start") }
+                classes = "${jv.str_path(cls, "label")} ${dir_class} ${end_class}"
+                txt = jv.js_string(lv)
+                al_h = jv.str_path(opts, "labelAlign.horizontal")
+                al_v = jv.str_path(opts, "labelAlign.vertical")
+                lab = svg_label(txt, bx, by, bw, bh, classes, label_kind, ax.dimension, at_start, al_h, al_v, DEFAULT_FONT_SIZE)
+                if lab != null {
+                    cn.set_role(lab, "label")
+                    lab.axis = ax
+                    cn.ctx_put(lab, "kind", jv.str("axis"))
+                    cn.ctx_put(lab, "index", jv.num(i / 1.0))
+                    cn.ctx_put(lab, "text", lv)
+                    cn.ctx_put(lab, "x", jv.num(bx))
+                    cn.ctx_put(lab, "y", jv.num(by))
+                    cn.ctx_put(lab, "width", jv.num(bw))
+                    cn.ctx_put(lab, "height", jv.num(bh))
+                    _al = list.add(labels, lab)
+                }
+            }
+        }
+        i = i + 1
+    }
+}
+
+// gridBackground: a rect over the chart area.
+grid_background(area: *CtArea, class_name: string) -> *cn.CtNode {
+    r = cn.node("rect", "", class_name)
+    cn.attr(r, "x", jv.num(area.x1))
+    cn.attr(r, "y", jv.num(area.y2))
+    cn.attr(r, "width", jv.num(area.width))
+    cn.attr(r, "height", jv.num(area.height))
+    cn.set_role(r, "gridBackground")
+    return r
+}

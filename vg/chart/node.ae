@@ -1,0 +1,453 @@
+// vg/chart/node.ae — the chart's declarative tree: what a chart function
+// returns, what hooks walk and change, and what render.ae draws with vg.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: scene/node.ts (node, attr, addClass, removeClass, append,
+// remove, replace, text, empty) and scene/tree.ts (findAll, mapNodes,
+// assignKeys). Chartist's nodes are immutable and its builder methods return
+// copies; these are plain mutable records, since an Aether hook changes a
+// node in place (or returns a replacement from map_nodes). The node replaces
+// Chartist's DOM Svg wrapper: no element is created until render.
+//
+// A node has an SVG element name (g, line, path, rect, text, tspan), its
+// attributes in insertion order (numbers or strings), its classes, its
+// children, optional text, and what it means: a role (series, line, point,
+// area, bar, slice, label, grid, gridBackground), a key ("0/1/3": layer,
+// series, value) and a context object (seriesIndex, valueIndex, value,
+// meta, x, y, …). Line and area nodes also carry their SvgPath, axis labels
+// their axis.
+
+exports (
+    CtNode,
+    node, node_role, set_role, set_key, set_ctx, ctx_put,
+    attr, attr_num, attr_str, has_attr, attr_num_or, remove_attr, attr_count, attr_name_at,
+    add_class, remove_class, has_class, class_string, class_count, class_at,
+    append, prepend, remove_child, replace_child, child_count, child_at, clear_children,
+    set_text, text_of, has_text,
+    find_all, find_first, count_role, map_nodes, walk, assign_keys,
+    query_all, query_first, query_count, ctx_num, ctx_int, ctx_get
+)
+
+import std.string
+import std.list
+import vg.chart.value as jv
+
+struct CtNode {
+    name: string
+    attrs: *jv.JsValue       // object: name -> number | string
+    classes: ptr        // std.list of *jv.JsValue strings
+    children: ptr       // std.list of *CtNode
+    content: string
+    has_content: int
+    role: string        // "" for a plain node
+    key: string
+    ctx: *jv.JsValue         // object
+    path: ptr           // *CtSvgPath for line / area / slice nodes, else null
+    axis: ptr           // *CtAxis for grid and axis-label nodes, else null
+}
+
+// node(name, attributes, className): attributes as a JS object literal
+// ("{x1: 10, y1: 2}", or "" for none); undefined and null values are left
+// out, as Chartist leaves them out.
+node(name: string, attrs_lit: string, class_name: string) -> *CtNode {
+    n = heap.new(CtNode)
+    n.name = name
+    n.attrs = jv.obj()
+    n.classes = list.new()
+    n.children = list.new()
+    n.content = ""
+    n.has_content = 0
+    n.role = ""
+    n.key = ""
+    n.ctx = jv.obj()
+    n.path = null
+    n.axis = null
+    if string.length(attrs_lit) > 0 {
+        a = jv.parse(attrs_lit)
+        i = 0
+        while i < jv.key_count(a) {
+            attr(n, jv.key_at(a, i), jv.value_at(a, i))
+            i = i + 1
+        }
+    }
+    add_class(n, class_name)
+    return n
+}
+
+node_role(n: *CtNode) -> string { return n.role }
+set_role(n: *CtNode, role: string) { n.role = role }
+set_key(n: *CtNode, key: string) { n.key = key }
+set_ctx(n: *CtNode, ctx: *jv.JsValue) { n.ctx = ctx }
+ctx_put(n: *CtNode, k: string, v: *jv.JsValue) { jv.put(n.ctx, k, v) }
+ctx_get(n: *CtNode, k: string) -> *jv.JsValue { return jv.get(n.ctx, k) }
+ctx_num(n: *CtNode, k: string) -> float { return jv.to_number(jv.get(n.ctx, k)) }
+ctx_int(n: *CtNode, k: string) -> int {
+    v = jv.get(n.ctx, k)
+    if jv.is_number(v) == 0 { return -1 }
+    f = jv.number_of(v)
+    r = 0
+    while r + 1 <= f { r = r + 1 }
+    return r
+}
+
+// attr(name, value): sets it; undefined or null removes it.
+attr(n: *CtNode, name: string, v: *jv.JsValue) {
+    if jv.is_nullish(v) == 1 {
+        jv.remove_key(n.attrs, name)
+        return
+    }
+    jv.put(n.attrs, name, v)
+}
+
+attr_num(n: *CtNode, name: string) -> float { return jv.to_number(jv.get(n.attrs, name)) }
+attr_num_or(n: *CtNode, name: string, fallback: float) -> float {
+    v = jv.get(n.attrs, name)
+    if v == null { return fallback }
+    return jv.to_number(v)
+}
+attr_str(n: *CtNode, name: string) -> string {
+    v = jv.get(n.attrs, name)
+    if v == null { return "" }
+    return jv.js_string(v)
+}
+has_attr(n: *CtNode, name: string) -> int { return jv.has(n.attrs, name) }
+remove_attr(n: *CtNode, name: string) { jv.remove_key(n.attrs, name) }
+attr_count(n: *CtNode) -> int { return jv.key_count(n.attrs) }
+attr_name_at(n: *CtNode, i: int) -> string { return jv.key_at(n.attrs, i) }
+
+// ─── classes ─────────────────────────────────────────────────────
+
+has_class(n: *CtNode, name: string) -> int {
+    i = 0
+    while i < list.size(n.classes) {
+        it, _e = list.get(n.classes, i)
+        c = it as *jv.JsValue
+        if string.equals(jv.string_of(c), name) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// addClass(names): adds the space-separated names not there yet, in order.
+add_class(n: *CtNode, names: string) {
+    parts = string.split(names, " ")
+    k = string.array_size(parts)
+    i = 0
+    while i < k {
+        nm = string.copy(string.array_get(parts, i))
+        nm = string.trim(nm)
+        if string.length(nm) > 0 && has_class(n, nm) == 0 {
+            _a = list.add(n.classes, jv.str(nm))
+        }
+        i = i + 1
+    }
+    string.array_free(parts)
+}
+
+remove_class(n: *CtNode, names: string) {
+    parts = string.split(names, " ")
+    k = string.array_size(parts)
+    i = 0
+    while i < k {
+        nm = string.trim(string.copy(string.array_get(parts, i)))
+        j = 0
+        while j < list.size(n.classes) {
+            it, _e = list.get(n.classes, j)
+            c = it as *jv.JsValue
+            if string.equals(jv.string_of(c), nm) == 1 { list.remove(n.classes, j) } else { j = j + 1 }
+        }
+        i = i + 1
+    }
+    string.array_free(parts)
+}
+
+class_count(n: *CtNode) -> int { return list.size(n.classes) }
+
+class_at(n: *CtNode, i: int) -> string {
+    it, _e = list.get(n.classes, i)
+    c = it as *jv.JsValue
+    return jv.string_of(c)
+}
+
+// The class attribute: the names joined by spaces.
+class_string(n: *CtNode) -> string {
+    s = ""
+    i = 0
+    while i < list.size(n.classes) {
+        if i > 0 { s = string.concat(s, " ") }
+        s = string.concat(s, class_at(n, i))
+        i = i + 1
+    }
+    return s
+}
+
+// ─── children and text ───────────────────────────────────────────
+
+append(n: *CtNode, child: *CtNode) {
+    if child == null { return }
+    _a = list.add(n.children, child)
+}
+
+// append(child, insertFirst = true)
+prepend(n: *CtNode, child: *CtNode) {
+    if child == null { return }
+    rest = list.new()
+    i = 0
+    while i < list.size(n.children) {
+        it, _e = list.get(n.children, i)
+        _a = list.add(rest, it)
+        i = i + 1
+    }
+    list.clear(n.children)
+    _b = list.add(n.children, child)
+    j = 0
+    while j < list.size(rest) {
+        it2, _e2 = list.get(rest, j)
+        _c = list.add(n.children, it2)
+        j = j + 1
+    }
+    list.free(rest)
+}
+
+remove_child(n: *CtNode, child: *CtNode) {
+    i = 0
+    while i < list.size(n.children) {
+        it, _e = list.get(n.children, i)
+        if it == child { list.remove(n.children, i) } else { i = i + 1 }
+    }
+}
+
+replace_child(n: *CtNode, child: *CtNode, next: *CtNode) {
+    i = 0
+    while i < list.size(n.children) {
+        it, _e = list.get(n.children, i)
+        if it == child { list.set(n.children, i, next) }
+        i = i + 1
+    }
+}
+
+child_count(n: *CtNode) -> int { return list.size(n.children) }
+
+child_at(n: *CtNode, i: int) -> *CtNode {
+    if i < 0 || i >= list.size(n.children) { return null }
+    it, _e = list.get(n.children, i)
+    return it as *CtNode
+}
+
+// empty(): no children and no text.
+clear_children(n: *CtNode) {
+    list.clear(n.children)
+    n.content = ""
+    n.has_content = 0
+}
+
+set_text(n: *CtNode, content: string) {
+    n.content = string.copy(content)
+    n.has_content = 1
+}
+
+text_of(n: *CtNode) -> string { return n.content }
+has_text(n: *CtNode) -> int { return n.has_content }
+
+// ─── tree.ts ─────────────────────────────────────────────────────
+
+// findAll(scene, {role, key, seriesIndex, valueIndex}): every node, the root
+// included, in document order, that matches each criterion given ("" / -1
+// for criteria not given).
+find_all(root: *CtNode, role: string, series_index: int, value_index: int) -> ptr {
+    out = list.new()
+    find_into(root, role, "", series_index, value_index, out)
+    return out
+}
+
+find_into(n: *CtNode, role: string, key: string, si: int, vi: int, out: ptr) {
+    ok = 1
+    if string.length(role) > 0 && string.equals(n.role, role) == 0 { ok = 0 }
+    if string.length(key) > 0 && string.equals(n.key, key) == 0 { ok = 0 }
+    if si >= 0 && ctx_int(n, "seriesIndex") != si { ok = 0 }
+    if vi >= 0 && ctx_int(n, "valueIndex") != vi { ok = 0 }
+    if ok == 1 { _a = list.add(out, n) }
+    i = 0
+    while i < list.size(n.children) {
+        find_into(child_at(n, i), role, key, si, vi, out)
+        i = i + 1
+    }
+}
+
+find_first(root: *CtNode, role: string) -> *CtNode {
+    l = find_all(root, role, -1, -1)
+    if list.size(l) == 0 { return null }
+    it, _e = list.get(l, 0)
+    return it as *CtNode
+}
+
+count_role(root: *CtNode, role: string) -> int {
+    return list.size(find_all(root, role, -1, -1))
+}
+
+// walk(root, fn |n: ptr|): every node, parents before children.
+walk(n: *CtNode, f: fn) {
+    call(f, n)
+    i = 0
+    while i < list.size(n.children) {
+        walk(child_at(n, i), f)
+        i = i + 1
+    }
+}
+
+// mapNodes(root, fn |n: ptr| -> ptr): bottom-up, children first; the
+// mapper returns the node to keep it (changed in place or not), another
+// node to replace it, or null to drop it. Returns the mapped root (null
+// when the root was dropped).
+map_nodes(n: *CtNode, f: fn) -> *CtNode {
+    i = 0
+    while i < list.size(n.children) {
+        c = child_at(n, i)
+        r = map_nodes(c, f)
+        if r == null { list.remove(n.children, i) } else {
+            if r != c { list.set(n.children, i, r) }
+            i = i + 1
+        }
+    }
+    ptr res = call(f, n)
+    return res as *CtNode
+}
+
+// assignKeys: keys the data nodes that have none, "layer/series/value" for
+// a node with both indexes, "layer/series" for one with only a series.
+assign_keys(n: *CtNode, layer_index: int) {
+    i = 0
+    while i < list.size(n.children) {
+        assign_keys(child_at(n, i), layer_index)
+        i = i + 1
+    }
+    if string.length(n.key) > 0 { return }
+    si = jv.get(n.ctx, "seriesIndex")
+    if jv.is_number(si) == 0 { return }
+    vi = jv.get(n.ctx, "valueIndex")
+    k = "${layer_index}/${jv.js_string(si)}"
+    if jv.is_number(vi) == 1 { k = "${k}/${jv.js_string(vi)}" }
+    n.key = k
+}
+
+// ─── a CSS selector subset, for the chart specs' querySelectorAll ────
+//
+// Compound selectors of a tag and/or classes (`g.ct-grids`, `.ct-grid.ct-
+// horizontal`) joined by descendant combinators (spaces). Enough for the
+// queries Chartist's chart specs make.
+
+matches_compound(n: *CtNode, comp: string) -> int {
+    tag = ""
+    cls = list.new()
+    cur = ""
+    in_class = 0
+    i = 0
+    len = string.length(comp)
+    while i <= len {
+        c = 46
+        if i < len { c = string.char_at(comp, i) }
+        if c == 46 {
+            if in_class == 1 { _a = list.add(cls, jv.str(cur)) } else { tag = cur }
+            cur = ""
+            in_class = 1
+        } else {
+            cur = string.concat(cur, string.from_char(c))
+        }
+        i = i + 1
+    }
+    if string.length(tag) > 0 && string.equals(tag, n.name) == 0 { return 0 }
+    j = 0
+    while j < list.size(cls) {
+        it, _e = list.get(cls, j)
+        cj = it as *jv.JsValue
+        if string.length(jv.string_of(cj)) > 0 && has_class(n, jv.string_of(cj)) == 0 { return 0 }
+        j = j + 1
+    }
+    return 1
+}
+
+// Does `n`, with these ancestors (nearest last), match the compounds? The
+// last compound is n's own; the earlier ones match ancestors, in order,
+// nearest first (greedy, as a right-to-left selector engine does).
+query_match(n: *CtNode, ancestors: ptr, comps: ptr) -> int {
+    total = list.size(comps)
+    last, _e = list.get(comps, total - 1)
+    if matches_compound(n, jv.string_of(last as *jv.JsValue)) == 0 { return 0 }
+    ci = total - 2
+    ai = list.size(ancestors) - 1
+    while ci >= 0 && ai >= 0 {
+        cp, _e2 = list.get(comps, ci)
+        an, _e3 = list.get(ancestors, ai)
+        if matches_compound(an as *CtNode, jv.string_of(cp as *jv.JsValue)) == 1 { ci = ci - 1 }
+        ai = ai - 1
+    }
+    if ci < 0 { return 1 }
+    return 0
+}
+
+query_into(n: *CtNode, ancestors: ptr, comps: ptr, out: ptr) {
+    if query_match(n, ancestors, comps) == 1 { _a = list.add(out, n) }
+    _p = list.add(ancestors, n)
+    i = 0
+    while i < list.size(n.children) {
+        query_into(child_at(n, i), ancestors, comps, out)
+        i = i + 1
+    }
+    list.remove(ancestors, list.size(ancestors) - 1)
+}
+
+// querySelectorAll(selector) over root and its descendants, in document
+// order (the root counts, as the svg does inside its container).
+query_all(root: *CtNode, selector: string) -> ptr {
+    comps = list.new()
+    parts = string.split(selector, " ")
+    k = string.array_size(parts)
+    i = 0
+    while i < k {
+        p = string.trim(string.copy(string.array_get(parts, i)))
+        if string.length(p) > 0 { _a = list.add(comps, jv.str(p)) }
+        i = i + 1
+    }
+    string.array_free(parts)
+    out = list.new()
+    if list.size(comps) == 0 { return out }
+    query_into(root, list.new(), comps, out)
+    return out
+}
+
+query_first(root: *CtNode, selector: string) -> *CtNode {
+    l = query_all(root, selector)
+    if list.size(l) == 0 { return null }
+    it, _e = list.get(l, 0)
+    return it as *CtNode
+}
+
+query_count(root: *CtNode, selector: string) -> int {
+    return list.size(query_all(root, selector))
+}

@@ -1,0 +1,968 @@
+// test_chart_charts.ae — Chartist's chart-level unit tests, ported with
+// their expected values: charts/LineChart.spec, charts/BarChart.spec,
+// charts/PieChart.spec (their DOM queries become queries of the node tree),
+// layers/{line,bar,pie,label}.spec, axes/{Axis,FixedScaleAxis,StepAxis}.spec,
+// scales/{grid,scales,svgLabels}.spec (the cases not comparing against the
+// 1.x DOM code) and responsive.spec's merge order. Negative controls close
+// each area.
+//
+// Chartist's chart specs render into a mocked 500x500 container; here the
+// chart is built at 500x500 unless the options set a size.
+//
+// Differences that are by design, not drift: data-node keys carry the layer
+// index of the preset (grid 0, series 1, labels 2), where the layer specs
+// compose a lone layer (0); and the LineChart "holes everywhere" specs
+// register their `draw` listener after the chart is created, so upstream
+// their expectations never run. Here they run, against the line's path.
+
+import std.string
+import std.list
+import std.regex
+import vg.chart
+import vg.chart.value as jv
+import vg.chart.core
+import vg.chart.node as cn
+import vg.chart.svgpath as sp
+import vg.chart.axis as ax
+import vg.chart.test.check as t
+
+eq_jv(label: string, got: *jv.JsValue, want_lit: string) {
+    want = jv.parse(want_lit)
+    if jv.equals(got, want) == 1 { t.is_true(label, 1) } else {
+        t.eq_str(label, jv.stringify(got), jv.stringify(want))
+    }
+}
+
+root_of(kind: string, data: string, options: string, w: float, h: float) -> *cn.CtNode {
+    c = chart.line_chart(data, options)
+    if string.equals(kind, "bar") == 1 { c = chart.bar_chart(data, options) }
+    if string.equals(kind, "pie") == 1 { c = chart.pie_chart(data, options) }
+    return chart.built_root(chart.build(c, w, h))
+}
+
+line(data: string, options: string) -> *cn.CtNode { return root_of("line", data, options, 500.0, 500.0) }
+bar(data: string, options: string) -> *cn.CtNode { return root_of("bar", data, options, 500.0, 500.0) }
+pie(data: string, options: string) -> *cn.CtNode { return root_of("pie", data, options, 500.0, 500.0) }
+
+nth(l: ptr, i: int) -> *cn.CtNode {
+    if i < 0 || i >= list.size(l) { return cn.node("missing", "", "") }
+    it, _e = list.get(l, i)
+    return it as *cn.CtNode
+}
+
+q(root: *cn.CtNode, sel: string, i: int) -> *cn.CtNode { return nth(cn.query_all(root, sel), i) }
+qn(root: *cn.CtNode, sel: string) -> int { return cn.query_count(root, sel) }
+
+matches(pattern: string, s: string) -> int {
+    re, err = regex.compile(pattern)
+    if string.length(err) > 0 {
+        println("bad pattern ${pattern}: ${err}")
+        return 0
+    }
+    r = regex.matches(re, s)
+    regex.free(re)
+    return r
+}
+
+// The text of a label: its own, or its tspans' joined by spaces.
+text(n: *cn.CtNode) -> string {
+    if cn.has_text(n) == 1 { return cn.text_of(n) }
+    s = ""
+    i = 0
+    while i < cn.child_count(n) {
+        if i > 0 { s = string.concat(s, " ") }
+        s = string.concat(s, text(cn.child_at(n, i)))
+        i = i + 1
+    }
+    return s
+}
+
+// The attribute values of every node under n, as outerHTML would hold them.
+outer_has(n: *cn.CtNode, name: string, value: string) -> int {
+    if cn.has_attr(n, name) == 1 && string.equals(cn.attr_str(n, name), value) == 1 { return 1 }
+    i = 0
+    while i < cn.child_count(n) {
+        if outer_has(cn.child_at(n, i), name, value) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+const XY_INT: string = "{axisX: {type: 'AutoScaleAxis', onlyInteger: true}, axisY: {type: 'AutoScaleAxis', onlyInteger: true}}"
+const XY_DATA: string = "{series: [[{x: 1, y: 1}, {x: 3, y: 5}]]}"
+const META: string = "{test: 'Serialized Test'}"
+
+line_chart_spec() {
+    println("Charts > LineChart")
+    r = line(XY_DATA, XY_INT)
+    t.eq_int("contains a ct-grids group", qn(r, ".ct-grids"), 1)
+    t.eq_int("draws 3 horizontal grid lines", qn(r, ".ct-grids .ct-grid.ct-horizontal"), 3)
+    t.eq_int("draws 5 vertical grid lines", qn(r, ".ct-grids .ct-grid.ct-vertical"), 5)
+    t.eq_int("draws the grid background", qn(line(XY_DATA, "{axisX: {type: 'AutoScaleAxis', onlyInteger: true}, axisY: {type: 'AutoScaleAxis', onlyInteger: true}, showGridBackground: true}"), ".ct-grids .ct-grid-background"), 1)
+    t.eq_int("no grid background when false", qn(line(XY_DATA, "{axisX: {type: 'AutoScaleAxis', onlyInteger: true}, axisY: {type: 'AutoScaleAxis', onlyInteger: true}, showGridBackground: false}"), ".ct-grids .ct-grid-background"), 0)
+
+    rs = line(XY_DATA, "{axisY: {position: 'start'}}")
+    labs = cn.query_all(rs, ".ct-label.ct-vertical")
+    ok = 1
+    i = 0
+    while i < list.size(labs) {
+        if string.equals(cn.class_string(nth(labs, i)), "ct-label ct-vertical ct-start") == 0 { ok = 0 }
+        i = i + 1
+    }
+    t.is_true("ct-start class at position start", ok == 1 && list.size(labs) > 0)
+    re = line(XY_DATA, "{axisY: {position: 'end'}}")
+    labs2 = cn.query_all(re, ".ct-label.ct-vertical")
+    ok = 1
+    i = 0
+    while i < list.size(labs2) {
+        if string.equals(cn.class_string(nth(labs2, i)), "ct-label ct-vertical ct-end") == 0 { ok = 0 }
+        i = i + 1
+    }
+    t.is_true("ct-end class at any other position", ok == 1 && list.size(labs2) > 0)
+
+    v = line("{series: [[{x: 1, y: 2}, {x: 3, y: 4}]]}", "{axisX: {type: 'FixedScaleAxis'}}")
+    t.eq_str("ct:value x and y (1)", cn.attr_str(q(v, ".ct-point", 0), "ct:value"), "1,2")
+    t.eq_str("ct:value x and y (2)", cn.attr_str(q(v, ".ct-point", 1), "ct:value"), "3,4")
+    z = line("{series: [[{x: 0, y: 1}, {x: 1, y: 0}, {x: 0, y: 0}]]}", "{axisX: {type: 'FixedScaleAxis'}}")
+    t.eq_str("ct:value zero (1)", cn.attr_str(q(z, ".ct-point", 0), "ct:value"), "0,1")
+    t.eq_str("ct:value zero (2)", cn.attr_str(q(z, ".ct-point", 1), "ct:value"), "1,0")
+    t.eq_str("ct:value zero (3)", cn.attr_str(q(z, ".ct-point", 2), "ct:value"), "0,0")
+
+    m1 = line("{labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'], series: [[5, 2, 4, {value: 2, meta: ${META}}, 0]]}", "")
+    eq_jv("meta with a mixed value array", core.deserialize(jv.get(q(m1, ".ct-point", 3).attrs, "ct:meta")), META)
+    m2 = line("{labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], series: [[5, 2, 4, {value: 2, meta: ${META}}, 0]]}", "")
+    eq_jv("meta with a different normalized length", core.deserialize(jv.get(q(m2, ".ct-point", 3).attrs, "ct:meta")), META)
+    m3 = line("{labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], series: [[5, 2, 4, {value: 2, meta: ${META}}, 0], {meta: 9999, data: [5, 2, {value: 2, meta: ${META}}, 0]}]}", "")
+    eq_jv("meta of a value in series a", core.deserialize(jv.get(q(m3, ".ct-series-a .ct-point", 3).attrs, "ct:meta")), META)
+    eq_jv("meta of series b", core.deserialize(jv.get(q(m3, ".ct-series-b", 0).attrs, "ct:meta")), "9999")
+    eq_jv("meta of a value in series b", core.deserialize(jv.get(q(m3, ".ct-series-b .ct-point", 2).attrs, "ct:meta")), META)
+
+    holes = "{labels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], series: [[NaN, 15, 0, null, 2, 3, 4, undefined, {value: 1, meta: 'meta data'}, null]]}"
+    // {command, data: {valueIndex, value, meta}} per path element.
+    v15 = "{valueIndex: 1, value: {x: undefined, y: 15}, meta: undefined}"
+    v0 = "{valueIndex: 2, value: {x: undefined, y: 0}, meta: undefined}"
+    v2 = "{valueIndex: 4, value: {x: undefined, y: 2}, meta: undefined}"
+    v3 = "{valueIndex: 5, value: {x: undefined, y: 3}, meta: undefined}"
+    v4 = "{valueIndex: 6, value: {x: undefined, y: 4}, meta: undefined}"
+    v1 = "{valueIndex: 8, value: {x: undefined, y: 1}, meta: 'meta data'}"
+    eq_jv("holes everywhere, Interpolation.none", path_data(line(holes, "{lineSmooth: false}")),
+        "[{command: 'M', data: ${v15}}, {command: 'L', data: ${v0}}, {command: 'M', data: ${v2}}, {command: 'L', data: ${v3}}, {command: 'L', data: ${v4}}, {command: 'M', data: ${v1}}]")
+    eq_jv("holes everywhere, lineSmooth true", path_data(line(holes, "{lineSmooth: true}")),
+        "[{command: 'M', data: ${v15}}, {command: 'L', data: ${v0}}, {command: 'M', data: ${v2}}, {command: 'C', data: ${v3}}, {command: 'C', data: ${v4}}, {command: 'M', data: ${v1}}]")
+    eq_jv("holes everywhere, Interpolation.monotoneCubic", path_data(line(holes, "{lineSmooth: {type: 'monotoneCubic'}}")),
+        "[{command: 'M', data: ${v15}}, {command: 'L', data: ${v0}}, {command: 'M', data: ${v2}}, {command: 'C', data: ${v3}}, {command: 'C', data: ${v4}}, {command: 'M', data: ${v1}}]")
+    eq_jv("holes everywhere, Interpolation.simple", path_data(line(holes, "{lineSmooth: {type: 'simple'}}")),
+        "[{command: 'M', data: ${v15}}, {command: 'C', data: ${v0}}, {command: 'M', data: ${v2}}, {command: 'C', data: ${v3}}, {command: 'C', data: ${v4}}, {command: 'M', data: ${v1}}]")
+    eq_jv("holes everywhere, postponed Interpolation.step", path_data(line(holes, "{lineSmooth: {type: 'step'}}")),
+        "[{command: 'M', data: ${v15}}, {command: 'L', data: ${v15}}, {command: 'L', data: ${v0}}, {command: 'M', data: ${v2}}, {command: 'L', data: ${v2}}, {command: 'L', data: ${v3}}, {command: 'L', data: ${v3}}, {command: 'L', data: ${v4}}, {command: 'M', data: ${v1}}]")
+    eq_jv("holes everywhere, preponed Interpolation.step", path_data(line(holes, "{lineSmooth: {type: 'step', postpone: false}}")),
+        "[{command: 'M', data: ${v15}}, {command: 'L', data: ${v0}}, {command: 'L', data: ${v0}}, {command: 'M', data: ${v2}}, {command: 'L', data: ${v3}}, {command: 'L', data: ${v3}}, {command: 'L', data: ${v4}}, {command: 'L', data: ${v4}}, {command: 'M', data: ${v1}}]")
+
+    s1 = line("{labels: [1], series: [[1]]}", "")
+    t.eq_str("single value: line d", cn.attr_str(q(s1, ".ct-line", 0), "d"), "M50,15")
+    t.eq_str("single value: point x1", cn.attr_str(q(s1, ".ct-point", 0), "x1"), "50")
+    t.eq_str("single value: point x2", cn.attr_str(q(s1, ".ct-point", 0), "x2"), "50.01")
+
+    t.is_true("empty grid with no data", qn(line("{series: []}", ""), ".ct-grids .ct-grid.ct-vertical") > 0)
+    ol = line("{labels: [1, 2, 3, 4], series: []}", "")
+    t.is_true("only labels: a vertical grid line", qn(ol, ".ct-grids .ct-grid.ct-vertical") > 0)
+    t.eq_int("only labels: a horizontal line per label", qn(ol, ".ct-grids .ct-grid.ct-horizontal"), 4)
+    os = line("{series: [[1, 2, 3, 4], [2, 3, 4], [3, 4]]}", "")
+    t.is_true("only series: a vertical grid line", qn(os, ".ct-grids .ct-grid.ct-vertical") > 0)
+    t.eq_int("only series: labels from the longest series", qn(os, ".ct-grids .ct-grid.ct-horizontal"), 4)
+    hl = line("{series: []}", "{width: 400, height: 300, high: 100, low: -100}")
+    vl = cn.query_all(hl, ".ct-labels .ct-label.ct-vertical")
+    t.eq_str("no data, high/low: first label", string.trim(text(nth(vl, 0))), "-100")
+    t.eq_str("no data, high/low: last label", string.trim(text(nth(vl, list.size(vl) - 1))), "100")
+    t.is_true("no data, reverseData", qn(line("{series: []}", "{reverseData: true}"), ".ct-grids .ct-grid.ct-vertical") > 0)
+    jp = q(line("{series: [[{x: 1, y: 2}]]}", "{fullWidth: true}"), ".ct-point", 0)
+    t.is_false("one datapoint: x1 is not NaN", string.equals(cn.attr_str(jp, "x1"), "NaN"))
+    t.is_false("one datapoint: x2 is not NaN", string.equals(cn.attr_str(jp, "x2"), "NaN"))
+    cl = line("{labels: ['A', 'B', 'C'], series: [{className: 'series-1', data: [1, 2, 3]}, {className: 'series-2', data: [4, 5, 6]}]}", "{reverseData: true}")
+    t.is_true("class names: first series is series-2", cn.has_class(q(cl, ".ct-series", 0), "series-2"))
+    t.is_true("class names: first series holds 6", outer_has(q(cl, ".ct-series", 0), "ct:value", "6"))
+    t.is_true("class names: second series is series-1", cn.has_class(q(cl, ".ct-series", 1), "series-1"))
+    t.is_true("class names: second series holds 3", outer_has(q(cl, ".ct-series", 1), "ct:value", "3"))
+
+    t.is_false("negative control: a wrong grid count", qn(r, ".ct-grids .ct-grid.ct-vertical") == 4)
+    t.is_false("negative control: a wrong path", jv.equals(path_data(line(holes, "{lineSmooth: false}")), jv.parse("[{command: 'M', data: ${v15}}]")))
+}
+
+// The line's path elements as {command, data}.
+path_data(root: *cn.CtNode) -> *jv.JsValue {
+    ln = cn.find_first(root, "line")
+    out = jv.arr()
+    if ln == null { return out }
+    p = ln.path as *sp.CtSvgPath
+    i = 0
+    while i < sp.path_len(p) {
+        e = sp.path_el(p, i)
+        o = jv.obj()
+        jv.put(o, "command", jv.str(e.command))
+        d = jv.obj()
+        if e.data != null {
+            jv.put(d, "valueIndex", jv.num(e.data.value_index / 1.0))
+            jv.put(d, "value", e.data.value)
+            jv.put(d, "meta", e.data.meta)
+        }
+        jv.put(o, "data", d)
+        jv.push(out, o)
+        i = i + 1
+    }
+    return out
+}
+
+bar_chart_spec() {
+    println("Charts > BarChart")
+    t.eq_int("contains a g.ct-grids group", qn(bar("{series: []}", ""), "g.ct-grids"), 1)
+    r = bar(XY_DATA, XY_INT)
+    t.eq_int("draws 3 horizontal grid lines", qn(r, "g.ct-grids line.ct-grid.ct-horizontal"), 3)
+    t.eq_int("draws 6 vertical grid lines", qn(r, "g.ct-grids line.ct-grid.ct-vertical"), 6)
+    t.eq_int("draws the grid background", qn(bar(XY_DATA, "{axisX: {type: 'AutoScaleAxis', onlyInteger: true}, axisY: {type: 'AutoScaleAxis', onlyInteger: true}, showGridBackground: true}"), "g.ct-grids rect.ct-grid-background"), 1)
+    t.eq_int("no grid background when false", qn(bar(XY_DATA, "{axisX: {type: 'AutoScaleAxis', onlyInteger: true}, axisY: {type: 'AutoScaleAxis', onlyInteger: true}, showGridBackground: false}"), "g.ct-grids rect.ct-grid-background"), 0)
+    v = bar("{series: [[{x: 1, y: 2}, {x: 3, y: 4}]]}", "{axisX: {type: 'AutoScaleAxis'}}")
+    t.eq_str("ct:value x and y (1)", cn.attr_str(q(v, ".ct-bar", 0), "ct:value"), "1,2")
+    t.eq_str("ct:value x and y (2)", cn.attr_str(q(v, ".ct-bar", 1), "ct:value"), "3,4")
+    z = bar("{series: [[{x: 0, y: 1}, {x: 2, y: 0}, {x: 0, y: 0}]]}", "{axisX: {type: 'AutoScaleAxis'}}")
+    t.eq_str("ct:value zero (1)", cn.attr_str(q(z, ".ct-bar", 0), "ct:value"), "0,1")
+    t.eq_str("ct:value zero (2)", cn.attr_str(q(z, ".ct-bar", 1), "ct:value"), "2,0")
+    t.eq_str("ct:value zero (3)", cn.attr_str(q(z, ".ct-bar", 2), "ct:value"), "0,0")
+    m1 = bar("{labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'], series: [[5, 2, 4, {value: 2, meta: ${META}}, 0]]}", "")
+    eq_jv("meta with a mixed value array", core.deserialize(jv.get(q(m1, ".ct-bar", 3).attrs, "ct:meta")), META)
+    m2 = bar("{labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], series: [[5, 2, 4, {value: 2, meta: ${META}}, 0]]}", "")
+    eq_jv("meta with a different normalized length", core.deserialize(jv.get(q(m2, ".ct-bar", 3).attrs, "ct:meta")), META)
+    m3 = bar("{labels: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], series: [[5, 2, 4, {value: 2, meta: ${META}}, 0], {meta: 9999, data: [5, 2, {value: 2, meta: ${META}}, 0]}]}", "")
+    eq_jv("meta of a value in series a", core.deserialize(jv.get(q(m3, ".ct-series-a .ct-bar", 3).attrs, "ct:meta")), META)
+    eq_jv("meta of series b", core.deserialize(jv.get(q(m3, ".ct-series-b", 0).attrs, "ct:meta")), "9999")
+    eq_jv("meta of a value in series b", core.deserialize(jv.get(q(m3, ".ct-series-b .ct-bar", 2).attrs, "ct:meta")), META)
+    t.is_true("empty grid with no data", qn(bar("{series: []}", ""), ".ct-grids .ct-grid.ct-vertical") > 0)
+    ol = bar("{labels: [1, 2, 3, 4], series: []}", "")
+    t.is_true("only labels: a vertical grid line", qn(ol, ".ct-grids .ct-grid.ct-vertical") > 0)
+    t.eq_int("only labels: a horizontal line per label", qn(ol, ".ct-grids .ct-grid.ct-horizontal"), 4)
+    os = bar("{series: [[1, 2, 3, 4], [2, 3, 4], [3, 4]]}", "")
+    t.is_true("only series: a vertical grid line", qn(os, ".ct-grids .ct-grid.ct-vertical") > 0)
+    t.eq_int("only series: labels from the longest series", qn(os, ".ct-grids .ct-grid.ct-horizontal"), 4)
+    hl = bar("{series: []}", "{width: 400, height: 300, high: 100, low: -100}")
+    vl = cn.query_all(hl, ".ct-labels .ct-label.ct-vertical")
+    t.eq_str("no data, high/low: first label", string.trim(text(nth(vl, 0))), "-100")
+    t.eq_str("no data, high/low: last label", string.trim(text(nth(vl, list.size(vl) - 1))), "100")
+    t.is_true("no data, reverseData", qn(bar("{series: []}", "{reverseData: true}"), ".ct-grids .ct-grid.ct-vertical") > 0)
+    t.is_true("no data, stackBars", qn(bar("{series: []}", "{stackBars: true}"), ".ct-grids .ct-grid.ct-vertical") > 0)
+    // Upstream asserts querySelector(...).toBeDefined(), which null passes; its
+    // TODO notes the label axis (here Y, with no labels) draws no lines. What
+    // is drawn is the value axis's grid, horizontal.
+    t.eq_int("no data, horizontalBars: no label-axis lines", qn(bar("{series: []}", "{horizontalBars: true}"), ".ct-grids .ct-grid.ct-vertical"), 0)
+    t.is_true("no data, horizontalBars: the value-axis grid", qn(bar("{series: []}", "{horizontalBars: true}"), ".ct-grids .ct-grid.ct-horizontal") > 0)
+    t.is_true("no data, distributeSeries", qn(bar("{series: []}", "{distributeSeries: true}"), ".ct-grids .ct-grid.ct-vertical") > 0)
+    cl = bar("{labels: ['A', 'B', 'C'], series: [{className: 'series-1', data: [1, 2, 3]}, {className: 'series-2', data: [4, 5, 6]}]}", "{reverseData: true}")
+    t.is_true("class names: first series is series-2", cn.has_class(q(cl, ".ct-series", 0), "series-2"))
+    t.is_true("class names: first series holds 6", outer_has(q(cl, ".ct-series", 0), "ct:value", "6"))
+    t.is_true("class names: second series is series-1", cn.has_class(q(cl, ".ct-series", 1), "series-1"))
+    t.is_true("class names: second series holds 3", outer_has(q(cl, ".ct-series", 1), "ct:value", "3"))
+    t.is_false("negative control: a wrong ct:value", string.equals(cn.attr_str(q(v, ".ct-bar", 0), "ct:value"), "2,1"))
+}
+
+slice_d(root: *cn.CtNode, sel: string, i: int) -> string { return cn.attr_str(q(root, sel, i), "d") }
+
+pie_chart_spec() {
+    println("Charts > PieChart")
+    mp = pie("{labels: ['A', 'B', 'C'], series: [5, {value: 8, meta: ${META}}, 1]}", "")
+    eq_jv("meta on a slice with a mixed value array", core.deserialize(jv.get(q(mp, ".ct-slice-pie", 1).attrs, "ct:meta")), META)
+    simple = "{width: 100, height: 100, chartPadding: 10}"
+    c = chart.pie_chart("{series: [5, 3, 4]}", simple)
+    chart.label_pie(c) callback |v: ptr, i: int| {
+        n = jv.to_number(v as *jv.JsValue)
+        return jv.str("${jv.js_number(jv.js_round((n / 12.0) * 100.0))}%")
+    }
+    sr = chart.built_root(chart.build(c, 500.0, 500.0))
+    t.eq_int("three slices", qn(sr, ".ct-slice-pie"), 3)
+    t.eq_str("value attribute (1)", cn.attr_str(q(sr, ".ct-slice-pie", 0), "ct:value"), "5")
+    t.eq_str("value attribute (2)", cn.attr_str(q(sr, ".ct-slice-pie", 1), "ct:value"), "3")
+    t.eq_str("value attribute (3)", cn.attr_str(q(sr, ".ct-slice-pie", 2), "ct:value"), "4")
+    num = "\\d+(\\.\\d*)?"
+    k = 0
+    while k < 3 {
+        t.is_true("slice path ${k}", matches("M${num},${num}A40,40,0,0,0,${num},${num}L50,50Z$", slice_d(sr, ".ct-slice-pie", k)))
+        k = k + 1
+    }
+    t.is_true("label 42%", string.contains(text(q(sr, ".ct-label", 0)), "42%"))
+    t.is_true("label 25%", string.contains(text(q(sr, ".ct-label", 1)), "25%"))
+    t.is_true("label 33%", string.contains(text(q(sr, ".ct-label", 2)), "33%"))
+    ov = root_of("pie", "{series: [1, 1]}", simple, 500.0, 500.0)
+    t.is_true("overlapping slices (1)", matches("^M50,90A40,40,0,0,0,50,10L50,50Z", slice_d(ov, ".ct-slice-pie", 0)))
+    t.is_true("overlapping slices (2)", matches("^M50,10A40,40,0,0,0,50.\\d+,90L50,50Z", slice_d(ov, ".ct-slice-pie", 1)))
+    la = root_of("pie", "{series: [1, 2]}", simple, 500.0, 500.0)
+    t.is_true("large arc sweep flag", matches("^M50,10A40,40,0,1,0", slice_d(la, ".ct-slice-pie", 1)))
+    t.eq_str("complete circle (#1302)", slice_d(root_of("pie", "{series: [1]}", simple, 500.0, 500.0), ".ct-slice-pie", 0), "M50,10A40,40,0,0,0,50,90A40,40,0,0,0,50,10L50,50Z")
+    t.eq_str("complete circle with startAngle", slice_d(root_of("pie", "{series: [100]}", "{width: 100, height: 100, chartPadding: 10, startAngle: 90}", 500.0, 500.0), ".ct-slice-pie", 0), "M90,50A40,40,0,0,0,10,50A40,40,0,0,0,90,50L50,50Z")
+    t.eq_str("complete circle if the others are 0", slice_d(root_of("pie", "{series: [0, 1, 0]}", simple, 500.0, 500.0), ".ct-slice-pie", 1), "M50,10A40,40,0,0,0,50,90A40,40,0,0,0,50,10L50,50Z")
+
+    op = root_of("pie", "{series: [1, 2]}", "{width: 100, height: 100, chartPadding: {top: 20}}", 500.0, 500.0)
+    t.eq_int("object chartPadding: two slices (#842)", qn(op, ".ct-slice-pie"), 2)
+    t.is_true("object chartPadding: slice 1", matches("A37\\.5,37\\.5,.*L50,57\\.5Z$", slice_d(op, ".ct-slice-pie", 0)))
+    t.is_true("object chartPadding: slice 2", matches("A37\\.5,37\\.5,.*L50,57\\.5Z$", slice_d(op, ".ct-slice-pie", 1)))
+
+    small = "{width: 100, height: 100, chartPadding: 0}"
+    sm = root_of("pie", "{series: [0.001, 2]}", small, 500.0, 500.0)
+    t.is_true("very small slices (1)", matches("^M50.1\\d+,0A50,50,0,0,0,50,0", slice_d(sm, ".ct-slice-pie", 0)))
+    t.is_true("very small slices (2)", matches("^M49.9\\d*,0A50,50,0,1,0,50,0", slice_d(sm, ".ct-slice-pie", 1)))
+    sm2 = root_of("pie", "{series: [0.001, 2]}", "{width: 100, height: 100, chartPadding: 0, startAngle: 90}", 500.0, 500.0)
+    t.is_true("very small slices on startAngle (1)", matches("^M100,50.1\\d*A50,50,0,0,0,100,50", slice_d(sm2, ".ct-slice-pie", 0)))
+    t.is_true("very small slices on startAngle (2)", matches("^M100,49.97\\d*A50,50,0,1,0,100,49.98\\d*", slice_d(sm2, ".ct-slice-pie", 1)))
+    sm3 = root_of("pie", "{series: [0.001, 2]}", "{width: 100, height: 100, chartPadding: 0, donut: true}", 500.0, 500.0)
+    t.is_true("very small donut slices (1)", matches("^M50.\\d+,30A20,20,0,0,0,50,30", slice_d(sm3, ".ct-slice-donut", 0)))
+    t.is_true("very small donut slices (2)", matches("^M49.9\\d*,30A20,20,0,1,0,50,30", slice_d(sm3, ".ct-slice-donut", 1)))
+
+    ie = root_of("pie", "{series: [1, 2, 0, 4]}", "{width: 100, height: 100, ignoreEmptyValues: true}", 500.0, 500.0)
+    t.eq_int("no empty slices", qn(ie, ".ct-slice-pie"), 3)
+    t.eq_str("no empty slices (1)", cn.attr_str(q(ie, ".ct-slice-pie", 0), "ct:value"), "1")
+    t.eq_str("no empty slices (2)", cn.attr_str(q(ie, ".ct-slice-pie", 1), "ct:value"), "2")
+    t.eq_str("no empty slices (3)", cn.attr_str(q(ie, ".ct-slice-pie", 2), "ct:value"), "4")
+    zz = root_of("pie", "{series: [0, 0, 0]}", "{width: 400, height: 400}", 500.0, 500.0)
+    t.eq_int("all zero: three slices", qn(zz, ".ct-slice-pie"), 3)
+    k = 0
+    while k < 3 {
+        t.eq_str("all zero: value ${k}", cn.attr_str(q(zz, ".ct-slice-pie", k), "ct:value"), "0")
+        t.eq_str("all zero: no NaN in path ${k}", slice_d(zz, ".ct-slice-pie", k), "M200,5A195,195,0,0,0,200,5L200,200Z")
+        k = k + 1
+    }
+    ne = root_of("pie", "{series: [1, 2, 0, 4]}", "{width: 100, height: 100, ignoreEmptyValues: false}", 500.0, 500.0)
+    t.eq_int("empty slices drawn", qn(ne, ".ct-slice-pie"), 4)
+    t.eq_str("empty slices drawn (3)", cn.attr_str(q(ne, ".ct-slice-pie", 2), "ct:value"), "0")
+
+    g = root_of("pie", "{series: [20, 10, 30, 40]}", "{chartPadding: 50, height: 500, width: 500, donut: true, donutWidth: 60, startAngle: 270, total: 200, showLabel: false}", 500.0, 500.0)
+    t.eq_int("gauge: four strokes", qn(g, ".ct-slice-donut"), 4)
+    t.eq_str("gauge: value 1", cn.attr_str(q(g, ".ct-slice-donut", 0), "ct:value"), "20")
+    t.eq_str("gauge: value 4", cn.attr_str(q(g, ".ct-slice-donut", 3), "ct:value"), "40")
+    k = 0
+    while k < 4 {
+        t.is_true("gauge: slice path ${k}", matches("^M${num},${num}A170,170,0,0,0,${num},${num}$", slice_d(g, ".ct-slice-donut", k)))
+        t.is_true("gauge: stroke-width ${k}", matches("stroke-width:\\s*60px", cn.attr_str(q(g, ".ct-slice-donut", k), "style")))
+        k = k + 1
+    }
+    t.eq_int("gauge: no labels", qn(g, ".ct-label"), 0)
+    rd = root_of("pie", "{series: [20, 10, 30, 40]}", "{chartPadding: 50, height: 500, width: 500, donut: true, donutWidth: '25%', showLabel: false}", 500.0, 500.0)
+    t.eq_int("relative donutWidth: four strokes", qn(rd, ".ct-slice-donut"), 4)
+    k = 0
+    while k < 4 {
+        t.is_true("relative donutWidth: path ${k}", matches("^M${num},${num}A175,175,0,0,0,${num},${num}$", slice_d(rd, ".ct-slice-donut", k)))
+        t.is_true("relative donutWidth: stroke-width ${k}", matches("stroke-width:\\s?50px", cn.attr_str(q(rd, ".ct-slice-donut", k), "style")))
+        k = k + 1
+    }
+    t.is_false("negative control: a full circle is not one arc", string.equals(slice_d(root_of("pie", "{series: [1]}", simple, 500.0, 500.0), ".ct-slice-pie", 0), "M50,10A40,40,0,0,0,50,10L50,50Z"))
+}
+
+// ─── layers/*.spec ───────────────────────────────────────────────
+
+line_layer_spec() {
+    println("layers/line")
+    r = root_of("line", "{labels: ['a', 'b', 'c'], series: [{name: 'a', meta: {m: 1}, data: [1, 2]}, [3, 4]]}", "", 400.0, 200.0)
+    groups = cn.find_all(r, "series", -1, -1)
+    t.eq_str("series classes (a)", cn.class_string(nth(groups, 0)), "ct-series ct-series-a")
+    t.eq_str("series classes (b)", cn.class_string(nth(groups, 1)), "ct-series ct-series-b")
+    t.eq_str("series name", cn.attr_str(nth(groups, 0), "ct:series-name"), "a")
+    t.eq_str("series meta", cn.attr_str(nth(groups, 0), "ct:meta"), "{&quot;data&quot;:{&quot;m&quot;:1}}")
+    t.eq_str("series keys (a)", nth(groups, 0).key, "1/0")
+    t.eq_str("series keys (b)", nth(groups, 1).key, "1/1")
+    a = root_of("line", "{labels: ['a', 'b', 'c'], series: [[1, 2, 3]]}", "{showArea: true}", 400.0, 200.0)
+    g = cn.find_first(a, "series")
+    roles = ""
+    i = 0
+    while i < cn.child_count(g) { roles = "${roles}${cn.child_at(g, i).role} "; i = i + 1 }
+    t.eq_str("areas, line and points in 1.x order", roles, "area line point point point ")
+    pts = cn.find_all(g, "point", -1, -1)
+    t.eq_str("point keys", "${nth(pts, 0).key} ${nth(pts, 1).key} ${nth(pts, 2).key}", "1/0/0 1/0/1 1/0/2")
+    p = cn.find_first(root_of("line", "{labels: ['a', 'b', 'c'], series: [[{value: 5, meta: 'm'}]]}", "", 400.0, 200.0), "point")
+    t.eq_int("point context: seriesIndex", cn.ctx_int(p, "seriesIndex"), 0)
+    t.eq_int("point context: valueIndex", cn.ctx_int(p, "valueIndex"), 0)
+    eq_jv("point context: value", cn.ctx_get(p, "value"), "{x: undefined, y: 5}")
+    eq_jv("point context: meta", cn.ctx_get(p, "meta"), "'m'")
+    t.is_true("point context: x and y are numbers", jv.is_number(cn.ctx_get(p, "x")) == 1 && jv.is_number(cn.ctx_get(p, "y")) == 1)
+    t.eq_str("point ct:value", cn.attr_str(p, "ct:value"), "5")
+    t.eq_str("point ct:meta", cn.attr_str(p, "ct:meta"), "m")
+    la = root_of("line", "{labels: ['a', 'b', 'c'], series: [[1, 2]]}", "{showArea: true}", 400.0, 200.0)
+    lnode = cn.find_first(la, "line")
+    anode = cn.find_first(la, "area")
+    t.is_true("line context carries a path copy", lnode.path != null)
+    t.is_true("area context carries a path copy", anode.path != null)
+    eq_jv("line values padded to the labels", cn.ctx_get(lnode, "values"), "[{x: undefined, y: 1}, {x: undefined, y: 2}, undefined]")
+    eq_jv("area values padded to the labels", cn.ctx_get(anode, "values"), "[{x: undefined, y: 1}, {x: undefined, y: 2}, undefined]")
+    ov = root_of("line", "{labels: ['a', 'b', 'c'], series: [{name: 'hidden', data: [1, 2]}, {name: 'shown', data: [1, 2]}]}", "{series: {hidden: {showPoint: false, showLine: false}}}", 400.0, 200.0)
+    t.eq_int("override: no points for hidden", list.size(cn.find_all(ov, "point", 0, -1)), 0)
+    t.eq_int("override: no line for hidden", list.size(cn.find_all(ov, "line", 0, -1)), 0)
+    t.eq_int("override: points for shown", list.size(cn.find_all(ov, "point", 1, -1)), 2)
+    rv = root_of("line", "{labels: ['a', 'b', 'c'], series: [{name: 'first', data: [1]}, {name: 'second', data: [2]}]}", "{reverseData: true}", 400.0, 200.0)
+    rg = cn.find_all(rv, "series", -1, -1)
+    t.eq_str("reverseData from the end", "${cn.attr_str(nth(rg, 0), "ct:series-name")} ${cn.attr_str(nth(rg, 1), "ct:series-name")}", "second first")
+    t.is_false("negative control: the order is not reversed twice", string.equals(cn.attr_str(nth(rg, 0), "ct:series-name"), "first"))
+}
+
+bar_build(series: string, options: string, w: float, h: float) -> *chart.CtBuilt {
+    return chart.build(chart.bar_chart("{labels: ['a', 'b', 'c'], series: ${series}}", options), w, h)
+}
+
+bar_layer_spec() {
+    println("layers/bar")
+    first = cn.find_first(chart.built_root(bar_build("[[{value: 2, meta: 'm'}, 3, 1]]", "", 400.0, 200.0)), "bar")
+    t.eq_int("bar context: seriesIndex", cn.ctx_int(first, "seriesIndex"), 0)
+    t.eq_int("bar context: valueIndex", cn.ctx_int(first, "valueIndex"), 0)
+    eq_jv("bar context: meta", cn.ctx_get(first, "meta"), "'m'")
+    eq_jv("bar context: value", cn.ctx_get(first, "value"), "{x: undefined, y: 2}")
+    names = jv.arr()
+    i = 0
+    while i < cn.attr_count(first) { jv.push(names, jv.str(cn.attr_name_at(first, i))); i = i + 1 }
+    eq_jv("bar attributes", sorted_strs(names), "['ct:meta', 'ct:value', 'x1', 'x2', 'y1', 'y2']")
+    t.eq_str("bar key", first.key, "1/0/0")
+    hr = chart.built_root(bar_build("[[1, null, 3], [2, 2, 2]]", "{stackBars: true}", 400.0, 200.0))
+    t.eq_int("holes are skipped", list.size(cn.find_all(hr, "bar", 0, -1)), 2)
+    sec = cn.find_all(hr, "bar", 1, -1)
+    t.eq_str("holes keep their stack slot", "${cn.ctx_int(nth(sec, 0), "valueIndex")} ${cn.ctx_int(nth(sec, 1), "valueIndex")} ${cn.ctx_int(nth(sec, 2), "valueIndex")}", "0 1 2")
+    hb = cn.find_all(chart.built_root(bar_build("[[1, 2, 3]]", "{horizontalBars: true}", 400.0, 200.0)), "bar", -1, -1)
+    last = nth(hb, list.size(hb) - 1)
+    t.eq_num("horizontal bars run along x: y1 = y2", cn.attr_num(last, "y1"), cn.attr_num(last, "y2"))
+    t.is_true("horizontal bars run along x: x2 > x1", cn.attr_num(last, "x2") > cn.attr_num(last, "x1"))
+
+    ser = jv.parse("[[{x: 1, y: 2}, {x: 0, y: 1}], [{x: 3, y: 4}, undefined], [{x: -9, y: -7}]]")
+    e1 = chart.stacked_extent(ser, "y", 0)
+    t.is_true("stackedExtent y", e1.low == -1.0 && e1.high == 6.0)
+    e2 = chart.stacked_extent(ser, "x", 0)
+    t.is_true("stackedExtent x", e2.low == -5.0 && e2.high == 4.0)
+    e3 = chart.stacked_extent(ser, "y", 1)
+    t.is_true("stackedExtent relative", e3.low == -7.0 && e3.high == 6.0)
+    t.is_true("stackedExtent without values", chart.stacked_extent(jv.arr(), "y", 0) == null)
+
+    stack_modes(0)
+    stack_modes(1)
+    t.is_false("negative control: stackedExtent y is not 0..6", e1.low == 0.0)
+}
+
+sorted_strs(a: *jv.JsValue) -> *jv.JsValue {
+    n = jv.len(a)
+    i = 1
+    while i < n {
+        cur = jv.at(a, i)
+        j = i - 1
+        going = 1
+        while j >= 0 && going == 1 {
+            if string.compare(jv.string_of(jv.at(a, j)), jv.string_of(cur)) > 0 {
+                jv.set_at(a, j + 1, jv.at(a, j))
+                j = j - 1
+            } else { going = 0 }
+        }
+        jv.set_at(a, j + 1, cur)
+        i = i + 1
+    }
+    return a
+}
+
+// Bars as [from, to] along the value axis, against where a value lands.
+stacked(series: string, horizontal: int, mode: string) -> *chart.CtBuilt {
+    hz = "false"
+    if horizontal == 1 { hz = "true" }
+    o = "{stackBars: true, horizontalBars: ${hz}${mode}}"
+    return chart.build(chart.bar_chart("{labels: ['a', 'b'], series: ${series}}", o), 400.0, 300.0)
+}
+
+at(b: *chart.CtBuilt, horizontal: int, v: float) -> float {
+    area = chart.built_area(b)
+    if horizontal == 1 { return area.x1 + ax.axis_project(chart.built_axis_x(b), jv.num(v), 0) }
+    return area.y1 - ax.axis_project(chart.built_axis_y(b), jv.num(v), 0)
+}
+
+expect_bars(label: string, b: *chart.CtBuilt, horizontal: int, want: string) {
+    bars = cn.find_all(chart.built_root(b), "bar", -1, -1)
+    w = jv.parse(want)
+    t.eq_int("${label}: bar count", list.size(bars), jv.len(w))
+    i = 0
+    while i < list.size(bars) && i < jv.len(w) {
+        bn = nth(bars, i)
+        from = cn.attr_num(bn, "y1")
+        to = cn.attr_num(bn, "y2")
+        if horizontal == 1 {
+            from = cn.attr_num(bn, "x1")
+            to = cn.attr_num(bn, "x2")
+        }
+        pair = jv.at(w, i)
+        t.near("${label}: bar ${i} from", from, at(b, horizontal, jv.to_number(jv.at(pair, 0))), 6)
+        t.near("${label}: bar ${i} to", to, at(b, horizontal, jv.to_number(jv.at(pair, 1))), 6)
+        i = i + 1
+    }
+}
+
+value_axis(b: *chart.CtBuilt, horizontal: int) -> *ax.CtAxis {
+    if horizontal == 1 { return chart.built_axis_x(b) }
+    return chart.built_axis_y(b)
+}
+
+stack_modes(h: int) {
+    name = "vertical"
+    if h == 1 { name = "horizontal" }
+    println("layers/bar stack modes (${name})")
+    b = stacked("[[5, 5], [4, 4]]", h, "")
+    t.is_true("${name} accumulate: the axis fits the sums (#1483)", ax.axis_range_max(value_axis(b, h)) >= 9.0)
+    expect_bars("${name} accumulate", b, h, "[[0, 5], [0, 5], [5, 9], [5, 9]]")
+    b2 = stacked("[[5], [-3]]", h, "")
+    t.is_true("${name} accumulate negatives: max", ax.axis_range_max(value_axis(b2, h)) >= 5.0)
+    expect_bars("${name} accumulate negatives", b2, h, "[[0, 5], [5, 2]]")
+    expect_bars("${name} stackMode false", stacked("[[5], [4]]", h, ", stackMode: false"), h, "[[0, 5], [5, 9]]")
+    b3 = stacked("[[10, 1], [-6, 1], [-6, 1]]", h, ", stackMode: 'accumulate-relative'")
+    t.is_true("${name} accumulate-relative: min (#1473)", ax.axis_range_min(value_axis(b3, h)) <= -12.0)
+    t.is_true("${name} accumulate-relative: max", ax.axis_range_max(value_axis(b3, h)) >= 10.0)
+    expect_bars("${name} accumulate-relative", b3, h, "[[0, 10], [0, 1], [0, -6], [1, 2], [-6, -12], [2, 3]]")
+    pt = "[[{x: 1, y: 4}], [{x: 1, y: -4}]]"
+    if h == 1 { pt = "[[{x: 4, y: 1}], [{x: -4, y: 1}]]" }
+    b4 = stacked(pt, h, ", stackMode: 'accumulate-relative'")
+    t.is_true("${name} relative by the value axis: min (#1469)", ax.axis_range_min(value_axis(b4, h)) <= -4.0)
+    expect_bars("${name} relative by the value axis", b4, h, "[[0, 4], [0, -4]]")
+    b5 = stacked("[[5], [4]]", h, ", stackMode: 'overlap'")
+    expect_bars("${name} stackMode overlap", b5, h, "[[0, 5], [0, 4]]")
+    b6 = stacked("[[5], [4]]", h, ", stackMode: true")
+    t.is_true("${name} stackMode true: the axis fits the values", ax.axis_range_max(value_axis(b6, h)) < 9.0)
+    expect_bars("${name} stackMode true", b6, h, "[[0, 5], [0, 4]]")
+}
+
+pie_root(series: string, options: string, labels: string) -> *cn.CtNode {
+    d = "{series: ${series}}"
+    if string.length(labels) > 0 { d = "{labels: ${labels}, series: ${series}}" }
+    o = "{chartPadding: 0}"
+    if string.length(options) > 0 { o = "{chartPadding: 0, ${options}}" }
+    return root_of("pie", d, o, 200.0, 200.0)
+}
+
+pie_layer_spec() {
+    println("layers/pie")
+    f = cn.find_first(pie_root("[1, 3]", "", ""), "slice")
+    t.eq_num("slice value", cn.ctx_num(f, "value"), 1.0)
+    t.eq_num("slice totalDataSum", cn.ctx_num(f, "totalDataSum"), 4.0)
+    t.eq_num("slice index", cn.ctx_num(f, "index"), 0.0)
+    t.eq_num("slice startAngle", cn.ctx_num(f, "startAngle"), 0.0)
+    t.eq_num("slice endAngle", cn.ctx_num(f, "endAngle"), 90.0)
+    t.eq_num("slice radius", cn.ctx_num(f, "radius"), 100.0)
+    eq_jv("slice center", cn.ctx_get(f, "center"), "{x: 100, y: 100}")
+    t.eq_num("donutWidth 20 px", cn.ctx_num(cn.find_first(pie_root("[1]", "donut: true, donutWidth: 20", ""), "slice"), "radius"), 90.0)
+    t.eq_num("donutWidth 50%", cn.ctx_num(cn.find_first(pie_root("[1]", "donut: true, donutWidth: '50%'", ""), "slice"), "radius"), 75.0)
+    t.eq_str("donutWidth style", cn.attr_str(cn.find_first(pie_root("[1]", "donut: true, donutWidth: 20", ""), "slice"), "style"), "stroke-width: 20px")
+    angles = jv.parse("[34, 120, 150]")
+    ai = 0
+    while ai < 3 {
+        a = jv.js_number(jv.to_number(jv.at(angles, ai)))
+        dn = 0
+        while dn < 2 {
+            don = "false"
+            if dn == 1 { don = "true" }
+            s = cn.find_first(pie_root("[5]", "donut: ${don}, startAngle: ${a}", ""), "slice")
+            centres_ok(s, "full circle from ${a} (donut ${don})")
+            dn = dn + 1
+        }
+        ai = ai + 1
+    }
+    sl = cn.find_all(pie_root("[0, 5, 0]", "startAngle: 90", ""), "slice", -1, -1)
+    t.eq_str("starts at the start angle, closes at the centre", cn.attr_str(nth(sl, 1), "d"), "M200,100A100,100,0,0,0,0,100A100,100,0,0,0,200,100L100,100Z")
+    t.eq_str("a value above the total fills the circle", cn.attr_str(cn.find_first(pie_root("[150]", "donut: true, total: 100", ""), "slice"), "d"), "M100,30A70,70,0,0,0,100,170A70,70,0,0,0,100,30")
+    css = cn.find_first(pie_root("[1, 2]", "donut: true", ""), "slice")
+    t.is_false("donut width left to CSS: no style", cn.has_attr(css, "style"))
+    t.eq_num("laid out for the 60px default", cn.ctx_num(css, "radius"), 70.0)
+    t.eq_str("donutWidth 60 gives a style", cn.attr_str(cn.find_first(pie_root("[1, 2]", "donut: true, donutWidth: 60", ""), "slice"), "style"), "stroke-width: 60px")
+
+    // measureStyle (#1493)
+    calls = jv.arr()
+    c = chart.pie_chart("{series: [1, 2]}", "{chartPadding: 0, donut: true}")
+    chart.measure_style(c) callback |prop: string, classes: string| {
+        jv.push(calls, jv.str("${prop}|${classes}"))
+        return "20px"
+    }
+    ring = cn.find_first(chart.built_root(chart.build(c, 200.0, 200.0)), "slice")
+    eq_jv("reads the stroke width of a donut slice", calls, "['stroke-width|ct-slice-donut']")
+    t.eq_num("laid out for the measured ring", cn.ctx_num(ring, "radius"), 90.0)
+    t.is_false("still drawn by CSS", cn.has_attr(ring, "style"))
+    c2 = chart.pie_chart("{series: [1, 1]}", "{chartPadding: 0, donut: true, labelPosition: 'outside'}")
+    chart.measure_style(c2) callback |prop: string, classes: string| { return "20px" }
+    lab = cn.find_first(chart.built_root(chart.build(c2, 200.0, 200.0)), "label")
+    dx = cn.ctx_num(lab, "x") - 100.0
+    dy = cn.ctx_num(lab, "y") - 100.0
+    t.near("outside labels on the measured ring's edge", jv.to_number(jv.num(dx * dx + dy * dy)), 10000.0, 2)
+    calls3 = jv.arr()
+    c3 = chart.pie_chart("{series: [1, 2]}", "{chartPadding: 0, donut: true, classNames: {sliceDonut: 'ring wide'}}")
+    chart.measure_style(c3) callback |prop: string, classes: string| {
+        jv.push(calls3, jv.str(classes))
+        return "20px"
+    }
+    _b3 = chart.build(c3, 200.0, 200.0)
+    eq_jv("reads the slice class from classNames", calls3, "['ring wide']")
+    calls4 = jv.arr()
+    c4 = chart.pie_chart("{series: [1, 2]}", "{chartPadding: 0, donut: true, donutWidth: 40}")
+    chart.measure_style(c4) callback |prop: string, classes: string| {
+        jv.push(calls4, jv.str(classes))
+        return "20px"
+    }
+    t.eq_num("donutWidth wins over the stylesheet", cn.ctx_num(cn.find_first(chart.built_root(chart.build(c4, 200.0, 200.0)), "slice"), "radius"), 80.0)
+    t.eq_int("donutWidth set: nothing measured", jv.len(calls4), 0)
+    bad = jv.parse("['var(--ct-donut-width, 60px)', '10%', '']")
+    bi = 0
+    while bi < 3 {
+        bv = jv.string_of(jv.at(bad, bi))
+        c5 = chart.pie_chart("{series: [1, 2]}", "{chartPadding: 0, donut: true}")
+        chart.measure_style(c5) callback |prop: string, classes: string| { return bv }
+        t.eq_num("60px for '${bv}'", cn.ctx_num(cn.find_first(chart.built_root(chart.build(c5, 200.0, 200.0)), "slice"), "radius"), 70.0)
+        bi = bi + 1
+    }
+    calls6 = jv.arr()
+    c6 = chart.pie_chart("{series: [1, 2]}", "{chartPadding: 0}")
+    chart.measure_style(c6) callback |prop: string, classes: string| {
+        jv.push(calls6, jv.str(classes))
+        return "20px"
+    }
+    t.eq_num("no measuring for a pie: radius", cn.ctx_num(cn.find_first(chart.built_root(chart.build(c6, 200.0, 200.0)), "slice"), "radius"), 100.0)
+    t.eq_int("no measuring for a pie", jv.len(calls6), 0)
+
+    // donut labels follow labelPosition: the ring's middle is at 70, the
+    // first label at 30 degrees.
+    first_label_near("inside (the default)", "", 70.0)
+    first_label_near("inside", "labelPosition: 'inside'", 70.0)
+    first_label_near("outside", "labelPosition: 'outside'", 100.0)
+    first_label_near("outside with donutWidth 20", "labelPosition: 'outside', donutWidth: 20", 100.0)
+    cen = cn.find_first(pie_root("[1, 2, 3]", "donut: true, labelPosition: 'center'", ""), "label")
+    t.is_true("center puts them in the middle", cn.attr_num(cen, "dx") == 100.0 && cn.attr_num(cen, "dy") == 100.0)
+    first_label_near("center moved by labelOffset", "labelPosition: 'center', labelOffset: 10", 10.0)
+
+    apart = label_positions("['1', '1']", "")
+    t.is_true("measures the drawn text when there are no labels", jv.equals(label_positions("", ""), apart))
+    t.is_false("the length of 'undefined' would move the label", jv.equals(label_positions("['undefined', 'undefined']", ""), apart))
+    cp = chart.pie_chart("{labels: ['A long label', 'A long label'], series: [1, 1]}", "{chartPadding: 0, preventOverlappingLabelOffset: 12}")
+    chart.label_pie(cp) callback |v: ptr, i: int| { return jv.str(string.substring(jv.js_string(v as *jv.JsValue), 0, 1)) }
+    t.is_true("measures the formatted text", jv.equals(positions_of(chart.built_root(chart.build(cp, 200.0, 200.0))), apart))
+
+    one = cn.find_first(pie_root("[5]", "", ""), "label")
+    t.is_true("a single value labels the centre", cn.attr_num(one, "dx") == 100.0 && cn.attr_num(one, "dy") == 100.0)
+
+    single = cn.find_all(pie_root("[60, 40]", "", "['Apples', 'Pears']"), "label", -1, -1)
+    two = cn.find_all(pie_root("[60, 40]", "", "['Apples\\n60%', 'Pears\\n40%']"), "label", -1, -1)
+    li = 0
+    while li < 2 {
+        o1 = nth(single, li)
+        l2 = nth(two, li)
+        t.eq_str("line breaks: text ${li}", l2.name, "text")
+        t.eq_str("line breaks: class ${li}", cn.class_string(l2), "ct-label")
+        exp = jv.obj()
+        jv.put(exp, "x", jv.get(o1.attrs, "dx"))
+        jv.put(exp, "y", jv.get(o1.attrs, "dy"))
+        jv.put(exp, "text-anchor", jv.get(o1.attrs, "text-anchor"))
+        t.is_true("line breaks: anchored where one line is ${li}", jv.equals(l2.attrs, exp))
+        t.eq_int("line breaks: no own text ${li}", cn.has_text(l2), 0)
+        w0 = "Apples"
+        w1 = "60%"
+        if li == 1 {
+            w0 = "Pears"
+            w1 = "40%"
+        }
+        s0 = cn.child_at(l2, 0)
+        s1 = cn.child_at(l2, 1)
+        t.is_true("line breaks: first tspan ${li}", string.equals(s0.name, "tspan") == 1 && string.equals(cn.attr_str(s0, "dy"), "-0.6em") == 1 && string.equals(cn.text_of(s0), w0) == 1 && cn.attr_num(s0, "x") == cn.attr_num(o1, "dx"))
+        t.is_true("line breaks: second tspan ${li}", string.equals(cn.attr_str(s1, "dy"), "1.2em") == 1 && string.equals(cn.text_of(s1), w1) == 1)
+        li = li + 1
+    }
+    t.eq_str("line breaks: context text", jv.string_of(cn.ctx_get(nth(two, 0), "text")), "Apples\n60%")
+    t.eq_num("line breaks: context x", cn.ctx_num(nth(two, 0), "x"), cn.ctx_num(nth(single, 0), "x"))
+    abc = cn.find_first(pie_root("[60, 40]", "", "['A\\nB\\nC', 'D']"), "label")
+    t.eq_str("a longer block moves up by half", "${cn.attr_str(cn.child_at(abc, 0), "dy")} ${cn.attr_str(cn.child_at(abc, 1), "dy")} ${cn.attr_str(cn.child_at(abc, 2), "dy")}", "-1.2em 1.2em 1.2em")
+    cs = chart.pie_chart("{labels: ['Apples', 'Pears'], series: [60, 40]}", "{chartPadding: 0}")
+    chart.label_pie(cs) callback |v: ptr, i: int| { return jv.str("${jv.js_string(v as *jv.JsValue)}\n${i}") }
+    sp1 = cn.find_first(chart.built_root(chart.build(cs, 200.0, 200.0)), "label")
+    t.eq_str("splits what the label function returns", "${cn.text_of(cn.child_at(sp1, 0))} ${cn.text_of(cn.child_at(sp1, 1))}", "Apples 0")
+    t.eq_int("no line break: no tspans", cn.child_count(nth(single, 0)), 0)
+    t.eq_str("no line break: own text", cn.text_of(nth(single, 0)), "Apples")
+    t.eq_str("no line break: dx, dy, text-anchor", "${cn.attr_name_at(nth(single, 0), 0)} ${cn.attr_name_at(nth(single, 0), 1)} ${cn.attr_name_at(nth(single, 0), 2)}", "dx dy text-anchor")
+
+    iev = pie_root("[1, 0, 2]", "ignoreEmptyValues: true", "")
+    t.eq_int("ignoreEmptyValues: two slices", cn.count_role(iev, "slice"), 2)
+    t.eq_int("ignoreEmptyValues: four children", cn.child_count(iev), 4)
+    t.eq_int("ignoreEmptyValues: an empty group", cn.child_count(cn.child_at(iev, 1)), 0)
+    t.eq_str("anchor explode right", chart.determine_anchor_position(0.0, 1.0, "explode"), "start")
+    t.eq_str("anchor explode left", chart.determine_anchor_position(0.0, -1.0, "explode"), "end")
+    t.eq_str("anchor neutral", chart.determine_anchor_position(0.0, 1.0, "neutral"), "middle")
+    lp = core.polar_to_cartesian(10.0, 10.0, 0.0, 0.0)
+    chart.move_label(lp, 10.0, 10.0, 5.0, 2)
+    t.is_true("moveLabel shifts up and left", lp.x == 5.0 && lp.y == 5.0)
+    t.is_false("negative control: anchors differ by side", string.equals(chart.determine_anchor_position(0.0, -1.0, "explode"), "start"))
+}
+
+label_positions(labels: string, options: string) -> *jv.JsValue {
+    o = "preventOverlappingLabelOffset: 12"
+    if string.length(options) > 0 { o = "${o}, ${options}" }
+    return positions_of(pie_root("[1, 1]", o, labels))
+}
+
+positions_of(root: *cn.CtNode) -> *jv.JsValue {
+    out = jv.arr()
+    ls = cn.find_all(root, "label", -1, -1)
+    i = 0
+    while i < list.size(ls) {
+        p = jv.arr()
+        jv.push(p, jv.get(nth(ls, i).attrs, "dx"))
+        jv.push(p, jv.get(nth(ls, i).attrs, "dy"))
+        jv.push(out, p)
+        i = i + 1
+    }
+    return out
+}
+
+first_label_near(label: string, options: string, radius: float) {
+    o = "donut: true"
+    if string.length(options) > 0 { o = "donut: true, ${options}" }
+    l = cn.find_first(pie_root("[1, 2, 3]", o, ""), "label")
+    // 100 + r sin 30°, 100 - r cos 30°
+    t.near("${label}: x", cn.attr_num(l, "dx"), 100.0 + radius * 0.5, 2)
+    t.near("${label}: y", cn.attr_num(l, "dy"), 100.0 - radius * 0.8660254037844387, 2)
+}
+
+// The centre of each arc of a pie path, from its end points (rx = ry).
+centres_ok(slice: *cn.CtNode, label: string) {
+    p = sp.path_parse(sp.path_new_with(0, -1), cn.attr_str(slice, "d"))
+    x = 0.0
+    y = 0.0
+    arcs = 0
+    i = 0
+    while i < sp.path_len(p) {
+        e = sp.path_el(p, i)
+        if string.equals(e.command, "A") == 1 {
+            half = jv_hypot(e.x - x, e.y - y) / 2.0
+            hh = e.rx * e.rx - half * half
+            if hh < 0.0 { hh = 0.0 }
+            h = sqrt(hh)
+            sign = 1.0
+            if e.laf == e.sf { sign = -1.0 }
+            cxx = (x + e.x) / 2.0 + (sign * h * (0.0 - (e.y - y))) / (2.0 * half)
+            cyy = (y + e.y) / 2.0 + (sign * h * (e.x - x)) / (2.0 * half)
+            t.is_true("${label}: arc ${arcs} centred", jv_abs(cxx - 100.0) < 0.01 && jv_abs(cyy - 100.0) < 0.01)
+            arcs = arcs + 1
+        }
+        x = e.x
+        y = e.y
+        i = i + 1
+    }
+    t.eq_int("${label}: two arcs", arcs, 2)
+}
+
+extern sqrt(x: float) -> float
+jv_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+jv_hypot(a: float, b: float) -> float { return sqrt(a * a + b * b) }
+
+label_spec() {
+    println("label transform")
+    c = chart.line_chart("{labels: ['Mon', 'Tue', 'Wed'], series: [[1, 5, 3]]}", "")
+    chart.label_y(c) callback |v: ptr, i: int| { return jv.str("${jv.js_string(v as *jv.JsValue)} °C") }
+    ys = axis_label_texts(chart.built_root(chart.build(c, 400.0, 300.0)), "y")
+    ok = jv.len(ys) > 0
+    i = 0
+    while i < jv.len(ys) {
+        if string.ends_with(jv.string_of(jv.at(ys, i)), " °C") == 0 { ok = false }
+        i = i + 1
+    }
+    t.is_true("formats axis labels with the label function", ok)
+    c2 = chart.line_chart("{labels: ['Mon', 'Tue', 'Wed'], series: [[1, 5, 3]]}", "")
+    chart.label_x(c2) callback |v: ptr, i: int| { return jv.str(string.to_upper(jv.js_string(v as *jv.JsValue))) }
+    eq_jv("the X label function on its own", axis_label_texts(chart.built_root(chart.build(c2, 400.0, 300.0)), "x"), "['MON', 'TUE', 'WED']")
+    c3 = chart.pie_chart("{labels: ['A', 'B'], series: [1, 2]}", "")
+    chart.label_pie(c3) callback |v: ptr, i: int| { return jv.str("${jv.js_string(v as *jv.JsValue)} (${i})") }
+    pl = cn.find_all(chart.built_root(chart.build(c3, 400.0, 300.0)), "label", -1, -1)
+    t.eq_str("formats pie labels", "${jv.js_string(cn.ctx_get(nth(pl, 0), "text"))}|${jv.js_string(cn.ctx_get(nth(pl, 1), "text"))}", "A (0)|B (1)")
+    t.is_false("negative control: unformatted labels differ", jv.equals(axis_label_texts(line("{labels: ['Mon', 'Tue', 'Wed'], series: [[1, 5, 3]]}", ""), "x"), jv.parse("['MON', 'TUE', 'WED']")))
+}
+
+axis_label_texts(root: *cn.CtNode, dim: string) -> *jv.JsValue {
+    out = jv.arr()
+    ls = cn.find_all(root, "label", -1, -1)
+    i = 0
+    while i < list.size(ls) {
+        l = nth(ls, i)
+        if string.equals(jv.str_path(l.ctx, "kind"), "axis") == 1 && string.equals(ax.axis_dimension(l.axis as *ax.CtAxis), dim) == 1 {
+            jv.push(out, jv.str(jv.js_string(cn.ctx_get(l, "text"))))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// ─── axes and scales ─────────────────────────────────────────────
+
+const CLS: string = "{label: 'ct-label', labelGroup: 'ct-labels', grid: 'ct-grid', gridGroup: 'ct-grids', vertical: 'ct-vertical', horizontal: 'ct-horizontal', start: 'ct-start', end: 'ct-end'}"
+const AX_OPTS: string = "{offset: 30, position: 'end', labelOffset: {x: 0, y: 0}, showLabel: true, showGrid: true}"
+
+axis_counts(label_fn: fn, grids: ptr, labels: ptr) {
+    area = ax.area_new(50.0, 250.0, 450.0, 15.0)
+    pad = ax.padding_new(15.0, 15.0, 5.0, 10.0)
+    axis = ax.axis_linear("x", area, jv.parse("[1, 2]"), 0.0, 1.0)
+    ax.axis_nodes(axis, area, pad, jv.parse(AX_OPTS), jv.parse(AX_OPTS), jv.parse(CLS), label_fn, "line", grids, labels)
+}
+
+axes_spec() {
+    println("Axes > Axis")
+    g1 = list.new()
+    l1 = list.new()
+    axis_counts(|v: *jv.JsValue, i: int| {
+        if i == 0 { return jv.null_v() }
+        return v
+    }, g1, l1)
+    t.eq_int("null label: skips a grid line", list.size(g1), 1)
+    t.eq_int("null label: skips a label", list.size(l1), 1)
+    g2 = list.new()
+    l2 = list.new()
+    axis_counts(|v: *jv.JsValue, i: int| {
+        if i == 0 { return jv.undef() }
+        return v
+    }, g2, l2)
+    t.eq_int("undefined label: skips a grid line", list.size(g2), 1)
+    t.eq_int("undefined label: skips a label", list.size(l2), 1)
+    g3 = list.new()
+    l3 = list.new()
+    axis_counts(|v: *jv.JsValue, i: int| {
+        if i == 0 { return jv.str("") }
+        return v
+    }, g3, l3)
+    t.eq_int("empty string label: keeps the grid lines", list.size(g3), 2)
+    t.eq_int("empty string label: keeps the box (no text drawn)", list.size(l3), 1)
+    // #1471: the first tick below the range, the next at its start.
+    area = ax.area_new(50.0, 250.0, 450.0, 15.0)
+    pad = ax.padding_new(15.0, 15.0, 5.0, 10.0)
+    oa = ax.axis_linear("x", area, jv.parse("[0, 10, 20, 30]"), 10.0, 20.0)
+    gl = list.new()
+    ll = list.new()
+    ax.axis_nodes(oa, area, pad, jv.parse(AX_OPTS), jv.parse(AX_OPTS), jv.parse(CLS), null, "line", gl, ll)
+    widths = jv.arr()
+    i = 0
+    while i < list.size(ll) { jv.push(widths, cn.ctx_get(nth(ll, i), "width")); i = i + 1 }
+    eq_jv("a next tick at position 0 sizes a label (#1471)", widths, "[200, 200, 200, 100]")
+
+    println("Axes > FixedScaleAxis")
+    r = ax.area_new(50.0, 141.0, 269.0, 15.0)
+    fs = ax.axis_fixed("y", r, jv.parse("[[{x: 1, y: 10}, {x: 2, y: 5}, {x: 3, y: -5}]]"), jv.parse("{offset: 40, position: 'start', labelOffset: {x: 0, y: 0}, showLabel: true, showGrid: true, scaleMinSpace: 20, onlyInteger: false, ticks: [10, 5, 0, -5, -10]}"), 0, 0.0, 0.0)
+    eq_jv("orders the ticks", ax.axis_ticks(fs), "[-10, -5, 0, 5, 10]")
+    fd = ax.axis_fixed("y", r, jv.parse("[[{x: 1, y: 10}]]"), jv.parse("{low: 0, high: 10, divisor: 5}"), 0, 0.0, 0.0)
+    eq_jv("a tick at both ends with divisor (#1022)", ax.axis_ticks(fd), "[0, 2, 4, 6, 8, 10]")
+
+    println("Axes > StepAxis")
+    st = ax.axis_step("y", ax.area_new(50.0, 15.0, 100.0, 0.0), jv.arr(), jv.parse("{ticks: [1]}"))
+    t.eq_num("one tick: the whole length", st.step, 15.0)
+
+    println("scales")
+    sq = ax.area_new(0.0, 100.0, 100.0, 0.0)
+    s1 = ax.axis_step("x", sq, jv.arr(), jv.parse("{ticks: ['a'], stretch: true}"))
+    t.is_true("step kind and stretch", string.equals(ax.axis_kind(s1), "step") == 1 && s1.stretch == 1)
+    t.eq_str("autoScale kind", ax.axis_kind(ax.axis_auto("y", sq, jv.arr(), jv.obj(), 0, 0.0, 0.0)), "autoScale")
+    t.eq_str("fixedScale kind", ax.axis_kind(ax.axis_fixed("y", sq, jv.arr(), jv.parse("{ticks: [0, 1]}"), 0, 0.0, 0.0)), "fixedScale")
+    f4 = ax.axis_fixed("y", sq, jv.arr(), jv.parse("{low: 0, high: 100, divisor: 4}"), 0, 0.0, 0.0)
+    eq_jv("divisor 4: five ticks", ax.axis_ticks(f4), "[0, 25, 50, 75, 100]")
+    t.eq_num("high projects to the axis end", ax.axis_project(f4, jv.num(100.0), 0), f4.length)
+    eq_jv("no divisor: low and high", ax.axis_ticks(ax.axis_fixed("y", sq, jv.arr(), jv.parse("{low: 2, high: 8}"), 0, 0.0, 0.0)), "[2, 8]")
+    // Upstream compares cartesianAxes' normalization with 1.x normalizeData;
+    // here both are normalize_data, so this pins what that gives: distributed
+    // series padded to the two labels.
+    eq_jv("normalizes like 1.x: flat and distributed", core.normalize_data(jv.parse("{labels: ['a', 'b'], series: [3, 4]}"), 0, "x", 1),
+        "{labels: ['a', 'b'], series: [[{x: 3, y: undefined}, undefined], [{x: 4, y: undefined}, undefined]]}")
+    eq_jv("normalizes like 1.x: nested", jv.get(core.normalize_data(jv.parse("{labels: ['a'], series: [[3, 4]]}"), 0, "x", 1), "series"),
+        "[[{x: 3, y: undefined}, {x: 4, y: undefined}]]")
+
+    println("scales/grid")
+    garea = ax.area_new(50.0, 165.0, 385.0, 15.0)
+    gpad = ax.padding_new(15.0, 15.0, 5.0, 10.0)
+    gx = ax.axis_step("x", garea, jv.arr(), jv.parse("{ticks: ['a', 'b']}"))
+    gg = list.new()
+    gll = list.new()
+    ax.axis_nodes(gx, garea, gpad, jv.parse(AX_OPTS), jv.parse(AX_OPTS), jv.parse(CLS), null, "line", gg, gll)
+    t.is_true("grid nodes carry role, index and axis", string.equals(nth(gg, 0).role, "grid") == 1 && cn.ctx_int(nth(gg, 0), "index") == 0 && nth(gg, 1).axis == gx && cn.ctx_int(nth(gg, 1), "index") == 1)
+    t.is_true("label nodes carry role and text", string.equals(nth(gll, 0).role, "label") == 1 && string.equals(jv.js_string(cn.ctx_get(nth(gll, 0), "text")), "a") == 1 && string.equals(jv.js_string(cn.ctx_get(nth(gll, 1), "text")), "b") == 1)
+    bg = ax.grid_background(garea, "ct-grid-background")
+    eq_jv("gridBackground geometry", bg.attrs, "{x: 50, y: 15, width: 335, height: 150}")
+    t.eq_str("gridBackground role", bg.role, "gridBackground")
+
+    println("scales/axisArea (1.x createChartRect)")
+    p = ax.padding_new(15.0, 15.0, 5.0, 10.0)
+    a1 = ax.chart_area_axes(400.0, 300.0, p, 30.0, 0, 40.0, 0)
+    t.is_true("end/start defaults", a1.x1 == 50.0 && a1.x2 == 385.0 && a1.y2 == 15.0 && a1.y1 == 265.0 && a1.width == 335.0 && a1.height == 250.0)
+    a2 = ax.chart_area_axes(400.0, 300.0, p, 30.0, 1, 40.0, 1)
+    t.is_true("x start, y end", a2.x1 == 10.0 && a2.x2 == 345.0 && a2.y2 == 45.0 && a2.y1 == 295.0)
+    a3 = ax.chart_area_axes(200.0, 100.0, p, 0.0, 0, 0.0, 0)
+    t.is_true("no offsets", a3.x1 == 10.0 && a3.x2 == 185.0 && a3.y2 == 15.0 && a3.y1 == 95.0)
+    a4 = ax.chart_area_axes(20.0, 10.0, p, 30.0, 0, 40.0, 0)
+    t.is_true("too small: a 1 px area", a4.width == 1.0 && a4.height == 1.0 && a4.x1 == 50.0 && a4.y2 == 15.0)
+    t.is_false("negative control: wrong area", a1.x1 == 10.0)
+}
+
+svg_labels_spec() {
+    println("svgLabels")
+    // 6 px a glyph at a 10 px font: Chartist's spec measure.
+    eq_jv("fills lines greedily", ax.wrap_text("Quarterly revenue in thousands", 60.0, 10.0), "['Quarterly', 'revenue in', 'thousands']")
+    eq_jv("a wide word on its own line", ax.wrap_text("a supercalifragilistic b", 30.0, 10.0), "['a', 'supercalifragilistic', 'b']")
+    eq_jv("short text on one line", ax.wrap_text("Mon", 60.0, 10.0), "['Mon']")
+    eq_jv("empty text has no lines", ax.wrap_text("  ", 60.0, 10.0), "[]")
+    t.is_true("no node for empty text", ax.svg_label("", 0.0, 0.0, 50.0, 20.0, "l", "line", "x", 0, "", "", 10.0) == null)
+    rows = jv.parse("[['line', 'x', true, 'bottom', 'start'], ['line', 'x', false, 'top', 'start'], ['line', 'y', true, 'bottom', 'end'], ['line', 'y', false, 'bottom', 'start'], ['bar', 'x', true, 'bottom', 'middle'], ['bar', 'x', false, 'top', 'middle'], ['bar', 'y', true, 'bottom', 'end'], ['horizontalBar', 'x', true, 'bottom', 'start'], ['horizontalBar', 'x', false, 'top', 'start'], ['horizontalBar', 'y', true, 'middle', 'end'], ['horizontalBar', 'y', false, 'middle', 'start']]")
+    i = 0
+    while i < jv.len(rows) {
+        rw = jv.at(rows, i)
+        k = jv.string_of(jv.at(rw, 0))
+        d = jv.string_of(jv.at(rw, 1))
+        st = jv.truthy(jv.at(rw, 2))
+        want = "${jv.string_of(jv.at(rw, 4))} ${jv.string_of(jv.at(rw, 3))}"
+        t.eq_str("align ${k} ${d} start=${st}", ax.label_align(k, d, st), want)
+        i = i + 1
+    }
+    top = ax.svg_label("Quarterly revenue", 100.0, 50.0, 60.0, 40.0, "ct-label", "line", "x", 0, "", "", 10.0)
+    t.eq_str("box: a text node", top.name, "text")
+    t.eq_str("box: its classes", cn.class_string(top), "ct-label")
+    t.eq_str("box: start anchor", cn.attr_str(top, "text-anchor"), "start")
+    spans = jv.arr()
+    j = 0
+    while j < cn.child_count(top) {
+        sx = cn.child_at(top, j)
+        e = jv.arr()
+        jv.push(e, jv.get(sx.attrs, "x"))
+        jv.push(e, jv.get(sx.attrs, "y"))
+        jv.push(e, jv.str(cn.text_of(sx)))
+        jv.push(spans, e)
+        j = j + 1
+    }
+    eq_jv("box: lines placed by the alignment", spans, "[[100, 58.5, 'Quarterly'], [100, 68.5, 'revenue']]")
+    centred = ax.svg_label("Mon", 100.0, 50.0, 60.0, 40.0, "l", "bar", "x", 0, "", "", 10.0)
+    t.is_true("bar labels centred", cn.attr_num(centred, "x") == 130.0 && string.equals(cn.attr_str(centred, "text-anchor"), "middle") == 1)
+    bottom = ax.svg_label("1 2", 100.0, 50.0, 60.0, 40.0, "l", "line", "y", 1, "", "", 10.0)
+    t.is_true("bottom: end anchored", cn.attr_num(bottom, "x") == 160.0 && string.equals(cn.attr_str(bottom, "text-anchor"), "end") == 1)
+    t.eq_num("bottom: the last line ends at the box bottom", cn.attr_num(cn.child_at(bottom, 0), "y"), 50.0 + 40.0 - 10.0 + 8.5)
+    ovr = ax.svg_label("Mon", 0.0, 0.0, 60.0, 40.0, "l", "line", "x", 0, "middle", "middle", 10.0)
+    t.is_true("alignment overrides", cn.attr_num(ovr, "x") == 30.0 && cn.attr_num(ovr, "y") == 15.0 + 8.5 && string.equals(cn.attr_str(ovr, "text-anchor"), "middle") == 1)
+    t.is_false("negative control: a different alignment", string.equals(ax.label_align("bar", "x", 0), "start top"))
+}
+
+responsive_spec() {
+    println("responsive (against the chart's width)")
+    c = chart.line_chart("{series: [[1]]}", "")
+    chart.responsive(c, "(min-width: 1px)", "{area: true, points: true}")
+    chart.responsive(c, "(width < 400px)", "{area: false}")
+    chart.responsive(c, "(max-width: 1px)", "{points: false}")
+    o = chart.current_options(c, 300.0)
+    t.is_true("matching entries merge in order", jv.bool_path(o, "points") == 1 && jv.bool_path(o, "area") == 0)
+    o2 = chart.current_options(c, 500.0)
+    t.is_true("an entry stops matching at another width", jv.bool_path(o2, "area") == 1)
+    t.eq_int("screen and min/max width", chart.query_matches("screen and (min-width: 641px) and (max-width: 1024px)", 800.0), 1)
+    t.eq_int("outside the range", chart.query_matches("screen and (min-width: 641px) and (max-width: 1024px)", 600.0), 0)
+    t.eq_int("an unknown condition does not match", chart.query_matches("(orientation: portrait)", 600.0), 0)
+    t.is_false("negative control: max-width above the width", chart.query_matches("(max-width: 100px)", 600.0) == 1)
+}
+
+main() {
+    println("=== test_chart_charts ===")
+    line_chart_spec()
+    bar_chart_spec()
+    pie_chart_spec()
+    line_layer_spec()
+    bar_layer_spec()
+    pie_layer_spec()
+    label_spec()
+    axes_spec()
+    svg_labels_spec()
+    responsive_spec()
+    t.done("test_chart_charts")
+}

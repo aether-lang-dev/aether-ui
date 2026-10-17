@@ -1,0 +1,1353 @@
+// vg/chart/module.ae (import vg.chart) — Chartist's line, bar and pie/donut
+// charts as functions of data and options that return a declarative node tree.
+//
+// Ported from Chartist v2.0.0 (github.com/chartist-js/chartist, commit
+// cf181279cf60a9c89cc0b19bb05e82b48f9ebcdf), maintained in Aether from here on.
+// Chartist is dual-licensed MIT OR WTFPL; this port takes it under MIT:
+//
+//   Copyright (c) 2013 Gion Kunz <gion.kunz@gmail.com>
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a
+//   copy of this software and associated documentation files (the
+//   "Software"), to deal in the Software without restriction, including
+//   without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit
+//   persons to whom the Software is furnished to do so, subject to the
+//   following conditions:
+//
+//   The above copyright notice and this permission notice shall be included
+//   in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+//   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+//   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+//   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+//   USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// See vg/chart/LICENSE-chartist.
+//
+// From Chartist: presets/{lineDefaults,barDefaults,pieDefaults}.ts (the
+// default options), presets/{lineChart,barChart,pieChart}.ts (how each chart
+// sets up its axes and layers), presets/preset.ts (the 1.x option merge, the
+// grid and label layers, the series group), layers/line.ts, layers/bar.ts
+// (stackedExtent included), layers/pie.ts (determineAnchorPosition,
+// moveLabel, the slice paths and label positions), layers/label.ts
+// (labelTransformOf), layers/path.ts (seriesPath, centerShift),
+// pipeline/phases.ts (resolve, prepare, layout, compose, scene) and
+// responsive/responsive.ts (applyResponsive).
+//
+// What is replaced rather than ported:
+//   - the DOM: a chart is `build(chart, width, height)`, which returns a
+//     tree of vg.chart.node records (svg > g.ct-grids, g > g.ct-series-a >
+//     path.ct-line …, g.ct-labels); vg.chart.render draws it with vg.
+//   - responsive options: media queries are matched against the chart's
+//     own width, not a window's, when it is built (see `responsive`).
+//   - the event / "draw" pipeline and plugins: `on_compose` hooks walk and
+//     change the data nodes (Chartist's compose phase), `on_scene` the whole
+//     tree; nothing is emitted.
+//   - animation: vg's own (vg.chart.render's draw hook hands each drawn
+//     element over, for vg.animate / tween_* / bind_* / on_hover).
+//
+// Usage:
+//   c = chart.line_chart("{labels: ['Mon', 'Tue', 'Wed'], series: [[5, 2, 4]]}",
+//                        "{low: 0, showArea: true}")
+//   chart.responsive(c, "(max-width: 400px)", "{showPoint: false}")
+//   b = chart.build(c, 600.0, 300.0)
+//   tree = chart.built_root(b)          // a *node.CtNode: the svg
+
+exports (
+    CtChart, CtBuilt,
+    line_chart, bar_chart, pie_chart, line_chart_v, bar_chart_v, pie_chart_v,
+    chart_kind, chart_data, chart_options, set_data, set_options,
+    responsive, query_matches, current_options,
+    label_x, label_y, label_pie, line_smooth, series_line_smooth,
+    on_compose, on_scene, measure_style,
+    build, built_root, built_area, built_axis_x, built_axis_y, built_options,
+    built_width, built_height, built_error,
+    line_defaults, bar_defaults, pie_defaults,
+    stacked_extent, determine_anchor_position, move_label
+)
+
+import std.string
+import std.list
+import std.math
+import vg.chart.value as jv
+import vg.chart.core
+import vg.chart.node as cn
+import vg.chart.svgpath as sp
+import vg.chart.interpolation as ip
+import vg.chart.axis as ax
+
+// ─── default options (presets/*Defaults.ts) ─────────────────────────
+
+line_defaults() -> string {
+    return "{axisX: {offset: 30, position: 'end', labelOffset: {x: 0, y: 0}, showLabel: true, showGrid: true},
+ axisY: {offset: 40, position: 'start', labelOffset: {x: 0, y: 0}, showLabel: true, showGrid: true, scaleMinSpace: 20, onlyInteger: false},
+ showLine: true, showPoint: true, showArea: false, areaBase: 0, lineSmooth: true, showGridBackground: false,
+ chartPadding: {top: 15, right: 15, bottom: 5, left: 10}, fullWidth: false, reverseData: false,
+ classNames: {chart: 'ct-chart-line', label: 'ct-label', labelGroup: 'ct-labels', series: 'ct-series', line: 'ct-line',
+  point: 'ct-point', area: 'ct-area', grid: 'ct-grid', gridGroup: 'ct-grids', gridBackground: 'ct-grid-background',
+  vertical: 'ct-vertical', horizontal: 'ct-horizontal', start: 'ct-start', end: 'ct-end'}}"
+}
+
+bar_defaults() -> string {
+    return "{axisX: {offset: 30, position: 'end', labelOffset: {x: 0, y: 0}, showLabel: true, showGrid: true, scaleMinSpace: 30, onlyInteger: false},
+ axisY: {offset: 40, position: 'start', labelOffset: {x: 0, y: 0}, showLabel: true, showGrid: true, scaleMinSpace: 20, onlyInteger: false},
+ referenceValue: 0, chartPadding: {top: 15, right: 15, bottom: 5, left: 10}, seriesBarDistance: 15, stackBars: false,
+ stackMode: 'accumulate', horizontalBars: false, distributeSeries: false, reverseData: false, showGridBackground: false,
+ classNames: {chart: 'ct-chart-bar', horizontalBars: 'ct-horizontal-bars', label: 'ct-label', labelGroup: 'ct-labels',
+  series: 'ct-series', bar: 'ct-bar', grid: 'ct-grid', gridGroup: 'ct-grids', gridBackground: 'ct-grid-background',
+  vertical: 'ct-vertical', horizontal: 'ct-horizontal', start: 'ct-start', end: 'ct-end'}}"
+}
+
+pie_defaults() -> string {
+    return "{chartPadding: {top: 5, right: 5, bottom: 5, left: 5},
+ classNames: {chartPie: 'ct-chart-pie', chartDonut: 'ct-chart-donut', series: 'ct-series', slicePie: 'ct-slice-pie',
+  sliceDonut: 'ct-slice-donut', label: 'ct-label'},
+ startAngle: 0, donut: false, showLabel: true, labelOffset: 0, labelPosition: 'inside', labelDirection: 'neutral',
+ ignoreEmptyValues: false, preventOverlappingLabelOffset: 0}"
+}
+
+// ─── the chart config ────────────────────────────────────────────
+
+struct CtResponsive {
+    query: string
+    options: *jv.JsValue
+}
+
+struct CtSmooth {
+    series: string      // "" = the chart's lineSmooth
+    interp: *ip.CtInterp
+}
+
+struct CtChart {
+    kind: string        // line | bar | pie
+    data: *jv.JsValue
+    options: *jv.JsValue     // as given; merged over the defaults at build
+    responsive: ptr     // std.list of *CtResponsive
+    label_x: ptr        // closures |value: ptr, index: int| -> ptr (a Jv label)
+    label_y: ptr
+    label_pie: ptr
+    smooth: ptr         // std.list of *CtSmooth
+    compose_hooks: ptr  // std.list of closures |n: ptr| -> ptr
+    scene_hooks: ptr    // std.list of closures |root: ptr| -> ptr
+    measure_style: ptr  // closure |property: string, classes: string| -> string, or null
+}
+
+struct CtBuilt {
+    root: *cn.CtNode
+    area: *ax.CtArea
+    axis_x: *ax.CtAxis    // null for a pie
+    axis_y: *ax.CtAxis
+    options: *jv.JsValue     // the options the chart was built with
+    width: float
+    height: float
+    error: string       // what Chartist would have thrown, "" when nothing
+}
+
+new_chart(kind: string, data: *jv.JsValue, options: *jv.JsValue) -> *CtChart {
+    c = heap.new(CtChart)
+    c.kind = kind
+    c.data = data
+    c.options = options
+    if jv.is_object(c.options) == 0 { c.options = jv.obj() }
+    c.responsive = list.new()
+    c.label_x = null
+    c.label_y = null
+    c.label_pie = null
+    c.smooth = list.new()
+    c.compose_hooks = list.new()
+    c.scene_hooks = list.new()
+    c.measure_style = null
+    return c
+}
+
+lit(s: string) -> *jv.JsValue {
+    if string.length(string.trim(s)) == 0 { return jv.obj() }
+    return jv.parse(s)
+}
+
+// lineChart(data, options): data and options as JS literals.
+line_chart(data: string, options: string) -> *CtChart { return new_chart("line", lit(data), lit(options)) }
+bar_chart(data: string, options: string) -> *CtChart { return new_chart("bar", lit(data), lit(options)) }
+pie_chart(data: string, options: string) -> *CtChart { return new_chart("pie", lit(data), lit(options)) }
+line_chart_v(data: *jv.JsValue, options: *jv.JsValue) -> *CtChart { return new_chart("line", data, options) }
+bar_chart_v(data: *jv.JsValue, options: *jv.JsValue) -> *CtChart { return new_chart("bar", data, options) }
+pie_chart_v(data: *jv.JsValue, options: *jv.JsValue) -> *CtChart { return new_chart("pie", data, options) }
+
+chart_kind(c: *CtChart) -> string { return c.kind }
+chart_data(c: *CtChart) -> *jv.JsValue { return c.data }
+chart_options(c: *CtChart) -> *jv.JsValue { return c.options }
+set_data(c: *CtChart, data: *jv.JsValue) { c.data = data }
+
+// setOptions(options): extend the current options (replace = 0), or start
+// again from the defaults (replace = 1).
+set_options(c: *CtChart, options: *jv.JsValue, replace: int) {
+    if replace == 1 {
+        c.options = jv.extend(jv.obj(), options)
+        return
+    }
+    c.options = jv.extend(c.options, options)
+}
+
+// responsive(chart, query, options): overrides that apply while the query
+// matches the chart's width; matching entries extend the options in order.
+responsive(c: *CtChart, query: string, options: string) {
+    r = heap.new(CtResponsive)
+    r.query = query
+    r.options = lit(options)
+    _a = list.add(c.responsive, r)
+}
+
+label_x(c: *CtChart, f: fn) { c.label_x = f }
+label_y(c: *CtChart, f: fn) { c.label_y = f }
+label_pie(c: *CtChart, f: fn) { c.label_pie = f }
+
+// lineSmooth as an interpolation value (custom ones included): for the chart,
+// or with series_line_smooth for the series of that name.
+line_smooth(c: *CtChart, interp: *ip.CtInterp) { series_line_smooth(c, "", interp) }
+
+series_line_smooth(c: *CtChart, series: string, interp: *ip.CtInterp) {
+    o = heap.new(CtSmooth)
+    o.series = series
+    o.interp = interp
+    _a = list.add(c.smooth, o)
+}
+
+on_compose(c: *CtChart, f: fn) { _a = list.add(c.compose_hooks, f) }
+on_scene(c: *CtChart, f: fn) { _a = list.add(c.scene_hooks, f) }
+measure_style(c: *CtChart, f: fn) { c.measure_style = f }
+
+// ─── responsive queries, against the chart's width ────────────────
+
+// One query: media features joined by "and": (min-width: Npx),
+// (max-width: Npx), (width < N), (width <= N), (width > N), (width >= N),
+// and the media types screen / all (print never matches). Anything else
+// does not match.
+query_matches(query: string, width: float) -> int {
+    q = string.to_lower(query)
+    parts = string.split(q, " and ")
+    n = string.array_size(parts)
+    ok = 1
+    i = 0
+    while i < n {
+        if feature_matches(string.trim(string.copy(string.array_get(parts, i))), width) == 0 { ok = 0 }
+        i = i + 1
+    }
+    string.array_free(parts)
+    return ok
+}
+
+px_value(s: string) -> float {
+    t = string.trim(s)
+    if string.ends_with(t, "px") == 1 { t = string.substring(t, 0, string.length(t) - 2) }
+    v, err = string.to_double(string.trim(t))
+    if string.length(err) > 0 { return jv.nan() }
+    return v
+}
+
+feature_matches(f: string, width: float) -> int {
+    if string.equals(f, "screen") == 1 || string.equals(f, "all") == 1 || string.equals(f, "only screen") == 1 { return 1 }
+    if string.starts_with(f, "(") == 0 || string.ends_with(f, ")") == 0 { return 0 }
+    inner = string.trim(string.substring(f, 1, string.length(f) - 1))
+    if string.starts_with(inner, "min-width:") == 1 {
+        v = px_value(string.substring(inner, 10, string.length(inner)))
+        if width >= v { return 1 }
+        return 0
+    }
+    if string.starts_with(inner, "max-width:") == 1 {
+        v2 = px_value(string.substring(inner, 10, string.length(inner)))
+        if width <= v2 { return 1 }
+        return 0
+    }
+    if string.starts_with(inner, "width") == 1 {
+        rest = string.trim(string.substring(inner, 5, string.length(inner)))
+        if string.starts_with(rest, "<=") == 1 { if width <= px_value(string.substring(rest, 2, string.length(rest))) { return 1 } return 0 }
+        if string.starts_with(rest, ">=") == 1 { if width >= px_value(string.substring(rest, 2, string.length(rest))) { return 1 } return 0 }
+        if string.starts_with(rest, "<") == 1 { if width < px_value(string.substring(rest, 1, string.length(rest))) { return 1 } return 0 }
+        if string.starts_with(rest, ">") == 1 { if width > px_value(string.substring(rest, 1, string.length(rest))) { return 1 } return 0 }
+    }
+    return 0
+}
+
+defaults_of(kind: string) -> string {
+    if string.equals(kind, "bar") == 1 { return bar_defaults() }
+    if string.equals(kind, "pie") == 1 { return pie_defaults() }
+    return line_defaults()
+}
+
+// The options a chart of this width is built with: the given ones over the
+// defaults (1.x extend), then every matching responsive entry, in order.
+current_options(c: *CtChart, width: float) -> *jv.JsValue {
+    o = jv.extend(jv.extend(jv.obj(), jv.parse(defaults_of(c.kind))), c.options)
+    i = 0
+    while i < list.size(c.responsive) {
+        it, _e = list.get(c.responsive, i)
+        r = it as *CtResponsive
+        if query_matches(r.query, width) == 1 { o = jv.extend(o, r.options) }
+        i = i + 1
+    }
+    return o
+}
+
+// ─── build ───────────────────────────────────────────────────────
+
+built_root(b: *CtBuilt) -> *cn.CtNode { return b.root }
+built_area(b: *CtBuilt) -> *ax.CtArea { return b.area }
+built_axis_x(b: *CtBuilt) -> *ax.CtAxis { return b.axis_x }
+built_axis_y(b: *CtBuilt) -> *ax.CtAxis { return b.axis_y }
+built_options(b: *CtBuilt) -> *jv.JsValue { return b.options }
+built_width(b: *CtBuilt) -> float { return b.width }
+built_height(b: *CtBuilt) -> float { return b.height }
+built_error(b: *CtBuilt) -> string { return b.error }
+
+// A numeric width/height option fixes the layout size (the svg is that
+// size in a container); otherwise the size given.
+size_of(options: *jv.JsValue, key: string, given: float) -> float {
+    v = jv.get(options, key)
+    if jv.is_number(v) == 1 { return jv.number_of(v) }
+    return given
+}
+
+// build(chart, width, height): the chart's tree for that size.
+build(c: *CtChart, width: float, height: float) -> *CtBuilt {
+    options = current_options(c, width)
+    data = jv.clone(c.data)
+    if jv.is_object(data) == 0 { data = jv.obj() }
+    if jv.is_array(jv.get(data, "labels")) == 0 { jv.put(data, "labels", jv.arr()) }
+    if jv.is_array(jv.get(data, "series")) == 0 { jv.put(data, "series", jv.arr()) }
+    w = size_of(options, "width", width)
+    h = size_of(options, "height", height)
+    b = heap.new(CtBuilt)
+    b.options = options
+    b.width = w
+    b.height = h
+    b.error = ""
+    b.axis_x = null
+    b.axis_y = null
+    layers = list.new()     // std.list of top-level *CtNode lists, per layer
+    if string.equals(c.kind, "pie") == 1 {
+        build_pie(c, b, data, options, layers)
+    } else {
+        build_cartesian(c, b, data, options, layers)
+    }
+    class_name = jv.str_path(options, "classNames.chart")
+    if string.equals(c.kind, "bar") == 1 && jv.bool_path(options, "horizontalBars") == 1 {
+        class_name = "${class_name} ${jv.str_path(options, "classNames.horizontalBars")}"
+    }
+    if string.equals(c.kind, "pie") == 1 {
+        class_name = jv.str_path(options, "classNames.chartPie")
+        if jv.bool_path(options, "donut") == 1 { class_name = jv.str_path(options, "classNames.chartDonut") }
+    }
+    root = cn.node("svg", "", class_name)
+    cn.attr(root, "width", jv.num(w))
+    cn.attr(root, "height", jv.num(h))
+    li = 0
+    while li < list.size(layers) {
+        lp, _e = list.get(layers, li)
+        tops = lp as ptr
+        ti = 0
+        while ti < list.size(tops) {
+            tp, _e2 = list.get(tops, ti)
+            top = tp as *cn.CtNode
+            cn.assign_keys(top, li)
+            mapped = run_compose(c, top)
+            if mapped != null { cn.append(root, mapped) }
+            ti = ti + 1
+        }
+        li = li + 1
+    }
+    si = 0
+    while si < list.size(c.scene_hooks) {
+        hp, _e3 = list.get(c.scene_hooks, si)
+        nr = call_node_hook(hp, root)
+        if nr != null { root = nr }
+        si = si + 1
+    }
+    b.root = root
+    return b
+}
+
+call_node_hook(f: fn, n: *cn.CtNode) -> *cn.CtNode {
+    ptr r = call(f, n)
+    return r as *cn.CtNode
+}
+
+// The compose phase: every hook sees each node with a role, bottom-up; it
+// returns the node (changed or not), a replacement, or null to drop it.
+run_compose(c: *CtChart, top: *cn.CtNode) -> *cn.CtNode {
+    if list.size(c.compose_hooks) == 0 { return top }
+    return compose_node(c, top)
+}
+
+compose_node(c: *CtChart, n: *cn.CtNode) -> *cn.CtNode {
+    i = 0
+    while i < cn.child_count(n) {
+        ch = cn.child_at(n, i)
+        r = compose_node(c, ch)
+        if r == null { cn.remove_child(n, ch) } else {
+            if r != ch { cn.replace_child(n, ch, r) }
+            i = i + 1
+        }
+    }
+    if string.length(cn.node_role(n)) == 0 { return n }
+    cur = n
+    k = 0
+    while k < list.size(c.compose_hooks) && cur != null {
+        hp, _e = list.get(c.compose_hooks, k)
+        cur = call_node_hook(hp, cur)
+        k = k + 1
+    }
+    return cur
+}
+
+group(class_name: string, children: ptr) -> *cn.CtNode {
+    g = cn.node("g", "", class_name)
+    i = 0
+    while i < list.size(children) {
+        it, _e = list.get(children, i)
+        cn.append(g, it as *cn.CtNode)
+        i = i + 1
+    }
+    return g
+}
+
+one(n: *cn.CtNode) -> ptr {
+    l = list.new()
+    _a = list.add(l, n)
+    return l
+}
+
+// prepare: series as {values, name, className, meta}; a flat series (pie
+// data, distributed bars) is one series holding every value.
+is_flat(series: *jv.JsValue) -> int {
+    n = jv.len(series)
+    if n == 0 { return 0 }
+    i = 0
+    while i < n {
+        e = jv.at(series, i)
+        if jv.is_array(e) == 1 || jv.has(e, "data") == 1 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// The raw series as 1.x reads names and meta: arrays stay arrays.
+raw_series(s: *jv.JsValue) -> *jv.JsValue {
+    if jv.is_array(s) == 1 {
+        o = jv.obj()
+        jv.put(o, "data", s)
+        return o
+    }
+    return s
+}
+
+series_option(options: *jv.JsValue, series: *jv.JsValue, key: string) -> *jv.JsValue {
+    fallback = jv.get(options, key)
+    name = jv.get(series, "name")
+    if jv.truthy(name) == 1 {
+        ov = jv.get(jv.get(options, "series"), jv.js_string(name))
+        if jv.is_object(ov) == 1 {
+            v = jv.get(ov, key)
+            if v != null && jv.is_undefined(v) == 0 { return v }
+        }
+    }
+    return fallback
+}
+
+smoothing_for(c: *CtChart, options: *jv.JsValue, series: *jv.JsValue) -> *ip.CtInterp {
+    name = jv.get(series, "name")
+    nm = ""
+    if jv.truthy(name) == 1 { nm = jv.js_string(name) }
+    found = null
+    chart_level = null
+    i = 0
+    while i < list.size(c.smooth) {
+        it, _e = list.get(c.smooth, i)
+        o = it as *CtSmooth
+        if string.length(o.series) == 0 { chart_level = o.interp } else {
+            if string.length(nm) > 0 && string.equals(o.series, nm) == 1 { found = o.interp }
+        }
+        i = i + 1
+    }
+    if found != null { return found as *ip.CtInterp }
+    // A series-level lineSmooth option beats a chart-level interpolation value.
+    if string.length(nm) > 0 {
+        ov = jv.get(jv.get(jv.get(options, "series"), nm), "lineSmooth")
+        if ov != null && jv.is_undefined(ov) == 0 { return ip.interp_of_option(ov) }
+    }
+    if chart_level != null { return chart_level as *ip.CtInterp }
+    return ip.interp_of_option(jv.get(options, "lineSmooth"))
+}
+
+// An axis's options with its type removed, for the layers' frames.
+axis_opts(options: *jv.JsValue, key: string) -> *jv.JsValue {
+    return jv.extend(jv.obj(), jv.get(options, key))
+}
+
+// ct:value of a multi value: x and y that are numeric, joined by ",".
+ct_value(value: *jv.JsValue, vx: *jv.JsValue, vy: *jv.JsValue) -> string {
+    s = ""
+    if jv.is_numeric(vx) == 1 { s = jv.js_string(vx) }
+    if jv.is_numeric(vy) == 1 {
+        if string.length(s) > 0 { s = string.concat(s, ",") }
+        s = string.concat(s, jv.js_string(vy))
+    }
+    return s
+}
+
+series_group(cls: *jv.JsValue, series: *jv.JsValue, series_index: int) -> *cn.CtNode {
+    name = jv.get(series, "name")
+    cname = jv.get(series, "className")
+    meta = jv.get(series, "meta")
+    letter = "${jv.str_path(cls, "series")}-${core.alpha_numerate(series_index)}"
+    if jv.truthy(cname) == 1 { letter = jv.js_string(cname) }
+    g = cn.node("g", "", "${jv.str_path(cls, "series")} ${letter}")
+    if jv.truthy(name) == 1 { cn.attr(g, "ct:series-name", name) }
+    if jv.truthy(meta) == 1 { cn.attr(g, "ct:meta", core.serialize(meta)) }
+    cn.set_role(g, "series")
+    cn.ctx_put(g, "seriesIndex", jv.num(series_index / 1.0))
+    cn.ctx_put(g, "series", series)
+    cn.ctx_put(g, "meta", meta)
+    return g
+}
+
+type_of(axis_options: *jv.JsValue) -> string {
+    t = jv.str_path(axis_options, "type")
+    if string.equals(t, "AutoScaleAxis") == 1 || string.equals(t, "autoScaleAxis") == 1 { return "autoScale" }
+    if string.equals(t, "FixedScaleAxis") == 1 || string.equals(t, "fixedScaleAxis") == 1 { return "fixedScale" }
+    if string.equals(t, "StepAxis") == 1 || string.equals(t, "stepAxis") == 1 { return "step" }
+    return t
+}
+
+make_axis(kind: string, dim: string, area: *ax.CtArea, labels: *jv.JsValue, series: *jv.JsValue, options: *jv.JsValue, has_ext: int, ext_low: float, ext_high: float) -> *ax.CtAxis {
+    if string.equals(kind, "step") == 1 { return ax.axis_step(dim, area, labels, options) }
+    if string.equals(kind, "fixedScale") == 1 { return ax.axis_fixed(dim, area, series, options, has_ext, ext_low, ext_high) }
+    return ax.axis_auto(dim, area, series, options, has_ext, ext_low, ext_high)
+}
+
+// ─── line and bar charts ─────────────────────────────────────────
+
+build_cartesian(c: *CtChart, b: *CtBuilt, data: *jv.JsValue, options: *jv.JsValue, layers: ptr) {
+    is_bar = string.equals(c.kind, "bar")
+    horizontal = 0
+    if is_bar == 1 { horizontal = jv.bool_path(options, "horizontalBars") }
+    axis_x = axis_opts(options, "axisX")
+    axis_y = axis_opts(options, "axisY")
+    pad = ax.padding_of(jv.get(options, "chartPadding"), 15.0, 15.0, 5.0, 10.0)
+    x_off = jv.num_path_or(axis_x, "offset", 0.0)
+    y_off = jv.num_path_or(axis_y, "offset", 0.0)
+    x_start = 0
+    if string.equals(jv.str_path(axis_x, "position"), "start") == 1 { x_start = 1 }
+    y_end = 0
+    if string.equals(jv.str_path(axis_y, "position"), "end") == 1 { y_end = 1 }
+    area = ax.chart_area_axes(b.width, b.height, pad, x_off, x_start, y_off, y_end)
+    b.area = area
+
+    // normalizeForAxes: multi values (bars: single values to the value
+    // dimension, flat series distributed), reversed with reverseData.
+    series_in = jv.get(data, "series")
+    flat = is_flat(series_in)
+    multi = "true"
+    distributed = 0
+    if is_bar == 1 {
+        multi = "y"
+        if horizontal == 1 { multi = "x" }
+        distributed = 1
+    }
+    reverse = jv.bool_path(options, "reverseData")
+    normalized = core.normalize_data(data, reverse, multi, distributed)
+    labels = jv.get(normalized, "labels")
+    nseries = jv.get(normalized, "series")
+
+    // Stacked bars report the sums they reach, which the value axis fits.
+    has_ext = 0
+    ext_low = 0.0
+    ext_high = 0.0
+    stack_mode = jv.get(options, "stackMode")
+    sm = "accumulate"
+    if jv.is_string(stack_mode) == 1 { sm = jv.string_of(stack_mode) }
+    if jv.is_bool(stack_mode) == 1 {
+        sm = "true"
+        if jv.truthy(stack_mode) == 0 { sm = "false" }
+    }
+    if is_bar == 1 && jv.bool_path(options, "stackBars") == 1 && string.equals(sm, "true") == 0 {
+        vdim = "y"
+        if horizontal == 1 { vdim = "x" }
+        rel = 0
+        if string.equals(sm, "accumulate-relative") == 1 { rel = 1 }
+        e = stacked_extent(nseries, vdim, rel)
+        if e != null {
+            has_ext = 1
+            ext_low = e.low
+            ext_high = e.high
+        }
+    }
+
+    if is_bar == 0 {
+        // lineChart: a step X axis over the labels (fullWidth stretches it)
+        // unless axisX.type says otherwise; an auto-scaled Y axis with the
+        // chart's high, low and referenceValue unless axisY.type is set.
+        tx = type_of(axis_x)
+        if string.length(tx) == 0 {
+            xo = jv.extend(jv.obj(), axis_x)
+            jv.put(xo, "ticks", labels)
+            jv.put(xo, "stretch", jv.bool_v(jv.bool_path(options, "fullWidth")))
+            b.axis_x = ax.axis_step("x", area, labels, xo)
+        } else {
+            b.axis_x = make_axis(tx, "x", area, labels, nseries, axis_x, 0, 0.0, 0.0)
+        }
+        ty = type_of(axis_y)
+        if string.length(ty) == 0 {
+            yo = jv.extend(jv.obj(), axis_y)
+            if jv.is_numeric(jv.get(options, "high")) == 1 { jv.put(yo, "high", jv.get(options, "high")) }
+            if jv.is_numeric(jv.get(options, "low")) == 1 { jv.put(yo, "low", jv.get(options, "low")) }
+            rv = jv.get(axis_y, "referenceValue")
+            if rv == null || jv.is_nullish(rv) == 1 { rv = jv.get(options, "referenceValue") }
+            jv.put(yo, "referenceValue", rv)
+            b.axis_y = ax.axis_auto("y", area, nseries, yo, 0, 0.0, 0.0)
+        } else {
+            b.axis_y = make_axis(ty, "y", area, labels, nseries, axis_y, 0, 0.0, 0.0)
+        }
+    } else {
+        // barChart: the value axis from the data, the stacks and the chart's
+        // high/low (which win, but may empty the range again, #1057), with
+        // referenceValue 0; the label axis a step per label (only the first
+        // for stacked distributed bars).
+        vdim2 = "y"
+        if horizontal == 1 { vdim2 = "x" }
+        vopts = axis_y
+        lopts = axis_x
+        if horizontal == 1 {
+            vopts = axis_x
+            lopts = axis_y
+        }
+        found = core.get_high_low_ext(nseries, options, vdim2, has_ext, ext_low, ext_high)
+        hh = found.high
+        ll = found.low
+        if jv.is_number(jv.get(options, "high")) == 1 { hh = jv.num_path(options, "high") }
+        if jv.is_number(jv.get(options, "low")) == 1 { ll = jv.num_path(options, "low") }
+        hl = core.non_empty_range(hh, ll)
+        vo = jv.extend(jv.obj(), vopts)
+        hlo = jv.obj()
+        jv.put(hlo, "high", jv.num(hl.high))
+        jv.put(hlo, "low", jv.num(hl.low))
+        jv.put(vo, "highLow", hlo)
+        jv.put(vo, "referenceValue", jv.num(0.0))
+        vkind = type_of(vopts)
+        if string.length(vkind) == 0 { vkind = "autoScale" }
+        vaxis = make_axis(vkind, vdim2, area, labels, nseries, vo, has_ext, ext_low, ext_high)
+        ldim = "x"
+        if horizontal == 1 { ldim = "y" }
+        lkind = type_of(lopts)
+        laxis = null
+        if string.length(lkind) == 0 {
+            lo = jv.obj()
+            lt = labels
+            if jv.bool_path(options, "distributeSeries") == 1 && jv.bool_path(options, "stackBars") == 1 {
+                lt = jv.arr()
+                if jv.len(labels) > 0 { jv.push(lt, jv.at(labels, 0)) }
+            }
+            jv.put(lo, "ticks", lt)
+            laxis = ax.axis_step(ldim, area, labels, lo)
+        } else {
+            laxis = make_axis(lkind, ldim, area, labels, nseries, lopts, 0, 0.0, 0.0)
+        }
+        if horizontal == 1 {
+            b.axis_x = vaxis
+            b.axis_y = laxis as *ax.CtAxis
+        } else {
+            b.axis_x = laxis as *ax.CtAxis
+            b.axis_y = vaxis
+        }
+    }
+    if string.length(b.axis_y.error) > 0 { b.error = b.axis_y.error }
+    if string.length(b.axis_x.error) > 0 { b.error = b.axis_x.error }
+
+    cls = jv.get(options, "classNames")
+    // 1.x draws the label axis's grid and labels before the value axis's.
+    first = b.axis_x
+    second = b.axis_y
+    first_fn = c.label_x
+    second_fn = c.label_y
+    if horizontal == 1 {
+        first = b.axis_y
+        second = b.axis_x
+        first_fn = c.label_y
+        second_fn = c.label_x
+    }
+    label_kind = "line"
+    if is_bar == 1 {
+        label_kind = "bar"
+        if horizontal == 1 { label_kind = "horizontalBar" }
+    }
+    grids1 = list.new()
+    labs1 = list.new()
+    grids2 = list.new()
+    labs2 = list.new()
+    ax.axis_nodes(first, area, pad, axis_x, axis_y, cls, first_fn, label_kind, grids1, labs1)
+    ax.axis_nodes(second, area, pad, axis_x, axis_y, cls, second_fn, label_kind, grids2, labs2)
+    grid_list = list.new()
+    if jv.bool_path(options, "showGridBackground") == 1 {
+        _bg = list.add(grid_list, ax.grid_background(area, jv.str_path(cls, "gridBackground")))
+    }
+    append_all(grid_list, grids1)
+    append_all(grid_list, grids2)
+    _l0 = list.add(layers, one(group(jv.str_path(cls, "gridGroup"), grid_list)))
+
+    // The series layer: one unclassed group around the series groups.
+    series_nodes = list.new()
+    prepared = prepare_series(series_in, flat)
+    if is_bar == 0 {
+        line_layer(c, b, options, prepared, nseries, cls, series_nodes)
+    } else {
+        bar_layer(b, options, prepared, flat, nseries, cls, horizontal, sm, series_nodes)
+    }
+    _l1 = list.add(layers, one(group("", series_nodes)))
+
+    label_list = list.new()
+    append_all(label_list, labs1)
+    append_all(label_list, labs2)
+    _l2 = list.add(layers, one(group(jv.str_path(cls, "labelGroup"), label_list)))
+}
+
+append_all(dst: ptr, src: ptr) {
+    i = 0
+    while i < list.size(src) {
+        it, _e = list.get(src, i)
+        _a = list.add(dst, it)
+        i = i + 1
+    }
+}
+
+// The prepared series, as raw 1.x series objects ({data, name, className,
+// meta}); a flat series is one series holding all values.
+prepare_series(series: *jv.JsValue, flat: int) -> *jv.JsValue {
+    out = jv.arr()
+    if flat == 1 {
+        o = jv.obj()
+        jv.put(o, "data", series)
+        jv.push(out, o)
+        return out
+    }
+    i = 0
+    while i < jv.len(series) {
+        jv.push(out, raw_series(jv.at(series, i)))
+        i = i + 1
+    }
+    return out
+}
+
+line_layer(c: *CtChart, b: *CtBuilt, options: *jv.JsValue, prepared: *jv.JsValue, nseries: *jv.JsValue, cls: *jv.JsValue, out: ptr) {
+    area = b.area
+    axx = b.axis_x
+    axy = b.axis_y
+    n = jv.len(prepared)
+    reverse = jv.bool_path(options, "reverseData")
+    local = 0
+    while local < n {
+        data_index = local
+        if reverse == 1 { data_index = n - 1 - local }
+        series_index = local
+        series = jv.at(prepared, data_index)
+        values = jv.at(nseries, local)
+        smoothing = smoothing_for(c, options, series)
+        coords = core.nums_new()
+        vdata = list.new()
+        vi = 0
+        while vi < jv.len(values) {
+            value = jv.at(values, vi)
+            core.nums_push(coords, area.x1 + ax.axis_project(axx, value, vi))
+            core.nums_push(coords, area.y1 - ax.axis_project(axy, value, vi))
+            _d = list.add(vdata, core.seg_data(value, vi, core.get_meta_data(series, vi)))
+            vi = vi + 1
+        }
+        path = ip.interpolate(smoothing, coords, vdata)
+        g = series_group(cls, series, series_index)
+        children = list.new()
+        if jv.truthy(series_option(options, series, "showPoint")) == 1 {
+            pi = 0
+            while pi < sp.path_len(path) {
+                e = sp.path_el(path, pi)
+                pt = cn.node("line", "", jv.str_path(cls, "point"))
+                cn.attr(pt, "x1", jv.num(e.x))
+                cn.attr(pt, "y1", jv.num(e.y))
+                cn.attr(pt, "x2", jv.num(e.x + 0.01))
+                cn.attr(pt, "y2", jv.num(e.y))
+                d = e.data
+                vx = jv.undef()
+                vy = jv.undef()
+                if d != null {
+                    if jv.has(d.value, "x") == 1 { vx = jv.get(d.value, "x") }
+                    if jv.has(d.value, "y") == 1 { vy = jv.get(d.value, "y") }
+                    cn.attr(pt, "ct:value", jv.str(ct_value(d.value, vx, vy)))
+                    cn.attr(pt, "ct:meta", core.serialize(d.meta))
+                }
+                cn.set_role(pt, "point")
+                cn.ctx_put(pt, "seriesIndex", jv.num(series_index / 1.0))
+                cn.ctx_put(pt, "series", series)
+                vidx = 0
+                if d != null {
+                    vidx = d.value_index
+                    cn.ctx_put(pt, "value", d.value)
+                    cn.ctx_put(pt, "meta", d.meta)
+                }
+                cn.ctx_put(pt, "valueIndex", jv.num(vidx / 1.0))
+                cn.ctx_put(pt, "x", jv.num(e.x))
+                cn.ctx_put(pt, "y", jv.num(e.y))
+                _p = list.add(children, pt)
+                pi = pi + 1
+            }
+        }
+        if jv.truthy(series_option(options, series, "showLine")) == 1 {
+            ln = cn.node("path", "", jv.str_path(cls, "line"))
+            cn.attr(ln, "d", jv.str(sp.path_stringify(path)))
+            cn.set_role(ln, "line")
+            cn.ctx_put(ln, "seriesIndex", jv.num(series_index / 1.0))
+            cn.ctx_put(ln, "series", series)
+            cn.ctx_put(ln, "values", values)
+            ln.path = sp.path_clone(path, 0)
+            children = prepend_list(children, ln)
+        }
+        if jv.truthy(series_option(options, series, "showArea")) == 1 && axy.has_range == 1 {
+            ab = jv.to_number(series_option(options, series, "areaBase"))
+            area_base = math.max_float(math.min_float(ab, axy.range_max), axy.range_min)
+            base_px = area.y1 - ax.axis_project(axy, jv.num(area_base), 0)
+            pieces = sp.path_split_by_command(path, "M")
+            k = 0
+            while k < list.size(pieces) {
+                pp, _e = list.get(pieces, k)
+                seg = pp as *sp.CtSvgPath
+                m = sp.path_len(seg)
+                if m > 1 {
+                    first = sp.path_el(seg, 0)
+                    last = sp.path_el(seg, m - 1)
+                    ap = sp.path_clone(seg, 1)
+                    _q = sp.path_set_pos(ap, 0)
+                    _r = sp.path_remove(ap, 1)
+                    _s = sp.path_move(ap, first.x, base_px, 0)
+                    _t = sp.path_line_d(ap, first.x, first.y, 0, first.data)
+                    _u = sp.path_set_pos(ap, m + 1)
+                    _v = sp.path_line(ap, last.x, base_px, 0)
+                    an = cn.node("path", "", jv.str_path(cls, "area"))
+                    cn.attr(an, "d", jv.str(sp.path_stringify(ap)))
+                    cn.set_role(an, "area")
+                    cn.ctx_put(an, "seriesIndex", jv.num(series_index / 1.0))
+                    cn.ctx_put(an, "series", series)
+                    cn.ctx_put(an, "values", values)
+                    an.path = sp.path_clone(ap, 0)
+                    children = prepend_list(children, an)
+                }
+                k = k + 1
+            }
+        }
+        ci = 0
+        while ci < list.size(children) {
+            it, _e2 = list.get(children, ci)
+            cn.append(g, it as *cn.CtNode)
+            ci = ci + 1
+        }
+        _g = list.add(out, g)
+        local = local + 1
+    }
+}
+
+prepend_list(l: ptr, n: *cn.CtNode) -> ptr {
+    out = list.new()
+    _a = list.add(out, n)
+    append_all(out, l)
+    return out
+}
+
+struct CtExtent {
+    low: float
+    high: float
+}
+
+value_along(value: *jv.JsValue, dim: string) -> float {
+    raw = value
+    if jv.is_object(value) == 1 { raw = jv.get(value, dim) }
+    if jv.is_numeric(raw) == 1 { return jv.to_number(raw) }
+    return 0.0
+}
+
+// stackedExtent(series, dimension, relative): the running sums per index
+// (positive and negative apart when relative); null without values.
+stacked_extent(series: *jv.JsValue, dim: string, relative: int) -> *CtExtent {
+    pos = jv.arr()
+    neg = jv.arr()
+    low = jv.infinity()
+    high = 0.0 - jv.infinity()
+    n = jv.len(series)
+    i = 0
+    while i < n {
+        values = jv.at(series, i)
+        m = jv.len(values)
+        k = 0
+        while k < m {
+            amount = value_along(jv.at(values, k), dim)
+            sums = pos
+            if relative == 1 && amount < 0.0 { sums = neg }
+            cur = jv.at(sums, k)
+            base = 0.0
+            if jv.is_number(cur) == 1 { base = jv.number_of(cur) }
+            s = base + amount
+            jv.set_at(sums, k, jv.num(s))
+            low = math.min_float(low, s)
+            high = math.max_float(high, s)
+            k = k + 1
+        }
+        i = i + 1
+    }
+    if low <= high {
+        e = heap.new(CtExtent)
+        e.low = low
+        e.high = high
+        return e
+    }
+    return null
+}
+
+clamp(v: float, lo: float, hi: float) -> float {
+    return math.min_float(math.max_float(v, lo), hi)
+}
+
+bar_layer(b: *CtBuilt, options: *jv.JsValue, prepared: *jv.JsValue, flat: int, nseries: *jv.JsValue, cls: *jv.JsValue, horizontal: int, sm: string, out: ptr) {
+    area = b.area
+    vaxis = b.axis_y
+    laxis = b.axis_x
+    if horizontal == 1 {
+        vaxis = b.axis_x
+        laxis = b.axis_y
+    }
+    sbd = jv.num_path_or(options, "seriesBarDistance", 15.0)
+    stack_bars = jv.bool_path(options, "stackBars")
+    distribute = jv.bool_path(options, "distributeSeries")
+    // A flat (distributed) series iterates its values as series.
+    raw = prepared
+    if flat == 1 {
+        raw = jv.arr()
+        vals = jv.get(jv.at(prepared, 0), "data")
+        i = 0
+        while i < jv.len(vals) { jv.push(raw, jv.at(vals, i)); i = i + 1 }
+    }
+    nraw = jv.len(raw)
+    zero = area.y1 - ax.axis_project(vaxis, jv.num(0.0), 0)
+    if horizontal == 1 { zero = area.x1 + ax.axis_project(vaxis, jv.num(0.0), 0) }
+    is_acc = string.equals(sm, "accumulate")
+    is_rel = string.equals(sm, "accumulate-relative")
+    pos_stack = jv.arr()
+    neg_stack = jv.arr()
+    stack = pos_stack
+    reverse = jv.bool_path(options, "reverseData")
+    local = 0
+    while local < nraw {
+        data_index = local
+        if reverse == 1 { data_index = nraw - 1 - local }
+        series_index = local
+        current = jv.at(raw, data_index)
+        bipol = local - (nraw - 1) / 2.0
+        period_half = 0.0
+        if distribute == 1 && stack_bars == 0 {
+            period_half = laxis.length / jv.len(nseries) / 2.0
+        } else {
+            if distribute == 1 && stack_bars == 1 { period_half = laxis.length / 2.0 } else {
+                period_half = laxis.length / jv.len(jv.at(nseries, local)) / 2.0
+            }
+        }
+        g = series_group(cls, current, series_index)
+        values = jv.at(nseries, local)
+        vi = 0
+        while vi < jv.len(values) {
+            value = jv.at(values, vi)
+            vx = jv.bool_v(0)
+            vy = jv.bool_v(0)
+            if jv.has(value, "x") == 1 { vx = jv.get(value, "x") }
+            if jv.has(value, "y") == 1 { vy = jv.get(value, "y") }
+            label_index = vi
+            if distribute == 1 && stack_bars == 0 { label_index = local }
+            if distribute == 1 && stack_bars == 1 { label_index = 0 }
+            vx0 = vx
+            if jv.truthy(vx) == 0 { vx0 = jv.num(0.0) }
+            vy0 = vy
+            if jv.truthy(vy) == 0 { vy0 = jv.num(0.0) }
+            px = 0.0
+            py = 0.0
+            if horizontal == 1 {
+                px = area.x1 + ax.axis_project(vaxis, vx0, vi)
+                py = area.y1 - ax.axis_project(laxis, vy0, label_index)
+            } else {
+                px = area.x1 + ax.axis_project(laxis, vx0, label_index)
+                py = area.y1 - ax.axis_project(vaxis, vy0, vi)
+            }
+            lp = px
+            cp = py
+            if horizontal == 1 {
+                lp = py
+                cp = px
+            }
+            if string.equals(laxis.kind, "step") == 1 {
+                if laxis.stretch == 0 {
+                    if horizontal == 1 { lp = lp - period_half } else { lp = lp + period_half }
+                }
+                if stack_bars == 0 && distribute == 0 {
+                    if horizontal == 1 { lp = lp - bipol * sbd } else { lp = lp + bipol * sbd }
+                }
+            }
+            if is_rel == 1 {
+                stack = pos_stack
+                along = vy
+                if horizontal == 1 { along = vx }
+                if jv.to_number(along) < 0.0 { stack = neg_stack }
+            }
+            prev = zero
+            sv = jv.at(stack, vi)
+            if jv.truthy(sv) == 1 { prev = jv.number_of(sv) }
+            nv = prev - (zero - cp)
+            jv.set_at(stack, vi, jv.num(nv))
+            if jv.is_undefined(value) == 0 {
+                l1 = lp
+                l2 = lp
+                c1 = zero
+                c2 = cp
+                if stack_bars == 1 && (is_acc == 1 || is_rel == 1 || string.equals(sm, "false") == 1) {
+                    c1 = prev
+                    c2 = nv
+                }
+                x1 = l1
+                x2 = l2
+                y1 = c1
+                y2 = c2
+                if horizontal == 1 {
+                    x1 = c1
+                    x2 = c2
+                    y1 = l1
+                    y2 = l2
+                }
+                x1 = clamp(x1, area.x1, area.x2)
+                x2 = clamp(x2, area.x1, area.x2)
+                y1 = clamp(y1, area.y2, area.y1)
+                y2 = clamp(y2, area.y2, area.y1)
+                bar = cn.node("line", "", jv.str_path(cls, "bar"))
+                cn.attr(bar, "x1", jv.num(x1))
+                cn.attr(bar, "y1", jv.num(y1))
+                cn.attr(bar, "x2", jv.num(x2))
+                cn.attr(bar, "y2", jv.num(y2))
+                // The 1.x order: the label axis coordinates first.
+                if horizontal == 1 { reorder_bar_attrs(bar) }
+                cn.attr(bar, "ct:value", jv.str(ct_value(value, vx, vy)))
+                meta = core.get_meta_data(current, vi)
+                cn.attr(bar, "ct:meta", core.serialize(meta))
+                cn.set_role(bar, "bar")
+                cn.ctx_put(bar, "series", current)
+                cn.ctx_put(bar, "seriesIndex", jv.num(series_index / 1.0))
+                cn.ctx_put(bar, "valueIndex", jv.num(vi / 1.0))
+                cn.ctx_put(bar, "value", value)
+                cn.ctx_put(bar, "meta", meta)
+                cn.ctx_put(bar, "x1", jv.num(x1))
+                cn.ctx_put(bar, "y1", jv.num(y1))
+                cn.ctx_put(bar, "x2", jv.num(x2))
+                cn.ctx_put(bar, "y2", jv.num(y2))
+                cn.append(g, bar)
+            }
+            vi = vi + 1
+        }
+        _g = list.add(out, g)
+        local = local + 1
+    }
+}
+
+reorder_bar_attrs(bar: *cn.CtNode) {
+    x1 = cn.attr_num(bar, "x1")
+    x2 = cn.attr_num(bar, "x2")
+    y1 = cn.attr_num(bar, "y1")
+    y2 = cn.attr_num(bar, "y2")
+    cn.remove_attr(bar, "x1")
+    cn.remove_attr(bar, "x2")
+    cn.remove_attr(bar, "y1")
+    cn.remove_attr(bar, "y2")
+    cn.attr(bar, "y1", jv.num(y1))
+    cn.attr(bar, "y2", jv.num(y2))
+    cn.attr(bar, "x1", jv.num(x1))
+    cn.attr(bar, "x2", jv.num(x2))
+}
+
+// ─── pie and donut ───────────────────────────────────────────────
+
+// determineAnchorPosition: start / middle / end by the label's side of the
+// center and the direction (implode, neutral, explode).
+determine_anchor_position(cx: float, lx: float, direction: string) -> string {
+    right = 0
+    if lx > cx { right = 1 }
+    if (right == 1 && string.equals(direction, "explode") == 1) || (right == 0 && string.equals(direction, "implode") == 1) { return "start" }
+    if (right == 1 && string.equals(direction, "implode") == 1) || (right == 0 && string.equals(direction, "explode") == 1) { return "end" }
+    return "middle"
+}
+
+// moveLabel: moves a label up and left until it no longer overlaps one
+// already placed (judged by the text length).
+move_label(pos: *core.CtPoint, ex: float, ey: float, offset: float, length: int) {
+    going = 1
+    while going == 1 {
+        if pos.y > ey - offset && pos.y < ey + offset && pos.x > ex - length * offset && pos.x < ex + length * offset {
+            pos.y = pos.y - offset
+            pos.x = pos.x - offset
+        } else { going = 0 }
+    }
+}
+
+call_style(f: fn, prop: string, classes: string) -> string {
+    string r = call(f, prop, classes)
+    return r
+}
+
+// The stroke width the stylesheet gives a donut slice (measure_style), when
+// it is a plain px value.
+css_width(c: *CtChart, slice_class: string) -> *jv.JsValue {
+    if c.measure_style == null { return jv.undef() }
+    w = call_style(c.measure_style, "stroke-width", slice_class)
+    if string.ends_with(w, "px") == 0 { return jv.undef() }
+    body = string.substring(w, 0, string.length(w) - 2)
+    i = 0
+    if string.length(body) == 0 { return jv.undef() }
+    while i < string.length(body) {
+        ch = string.char_at(body, i)
+        if (ch < 48 || ch > 57) && ch != 46 { return jv.undef() }
+        i = i + 1
+    }
+    v, _e = string.to_double(body)
+    return jv.num(v)
+}
+
+build_pie(c: *CtChart, b: *CtBuilt, data: *jv.JsValue, options: *jv.JsValue, layers: ptr) {
+    pad = ax.padding_of(jv.get(options, "chartPadding"), 15.0, 15.0, 5.0, 10.0)
+    area = ax.chart_area(b.width, b.height, pad)
+    b.area = area
+    cls = jv.get(options, "classNames")
+    series_in = jv.get(data, "series")
+    flat = is_flat(series_in)
+    raw = jv.arr()
+    if flat == 1 {
+        i = 0
+        while i < jv.len(series_in) { jv.push(raw, jv.at(series_in, i)); i = i + 1 }
+    } else {
+        k = 0
+        while k < jv.len(series_in) {
+            s = raw_series(jv.at(series_in, k))
+            o = jv.obj()
+            jv.put(o, "name", jv.get(s, "name"))
+            jv.put(o, "className", jv.get(s, "className"))
+            jv.put(o, "meta", jv.get(s, "meta"))
+            jv.put(o, "value", jv.at(jv.get(s, "data"), 0))
+            jv.push(raw, o)
+            k = k + 1
+        }
+    }
+    nd = jv.obj()
+    jv.put(nd, "labels", jv.get(data, "labels"))
+    jv.put(nd, "series", raw)
+    normalized = core.normalize_data(nd, 0, "", 0)
+    values = jv.get(normalized, "series")
+    labels = jv.get(normalized, "labels")
+    donut = jv.bool_path(options, "donut")
+    start_angle = jv.num_path_or(options, "startAngle", 0.0)
+    radius = math.min_float(area.width / 2.0, area.height / 2.0)
+    total = jv.num_path(options, "total")
+    if jv.truthy(jv.get(options, "total")) == 0 {
+        total = 0.0
+        i = 0
+        while i < jv.len(values) {
+            vv = jv.at(values, i)
+            if jv.truthy(vv) == 1 { total = total + jv.to_number(vv) }
+            i = i + 1
+        }
+    }
+    slice_class = jv.str_path(cls, "slicePie")
+    if donut == 1 { slice_class = jv.str_path(cls, "sliceDonut") }
+    dw_opt = jv.get(options, "donutWidth")
+    dw_src = dw_opt
+    if dw_src == null || jv.is_undefined(dw_src) == 1 {
+        if donut == 1 { dw_src = css_width(c, slice_class) }
+    }
+    if dw_src == null || jv.is_nullish(dw_src) == 1 { dw_src = jv.num(60.0) }
+    dq = core.quantity(dw_src)
+    dw = dq.value
+    if dq.has_unit == 1 && string.equals(dq.unit, "%") == 1 { dw = dw * (radius / 100.0) }
+    if donut == 1 { radius = radius - dw / 2.0 }
+    label_position = jv.str_path(options, "labelPosition")
+    label_radius = radius / 2.0
+    if donut == 1 { label_radius = radius }
+    if string.equals(label_position, "center") == 1 { label_radius = 0.0 }
+    if string.equals(label_position, "outside") == 1 {
+        label_radius = radius
+        if donut == 1 { label_radius = radius + dw / 2.0 }
+    }
+    lo = jv.num_path_or(options, "labelOffset", 0.0)
+    if lo != 0.0 { label_radius = label_radius + lo }
+    cx = area.x1 + area.width / 2.0
+    cy = area.y2 + area.height / 2.0
+    nonzero = 0
+    i = 0
+    while i < jv.len(raw) {
+        rv = jv.at(raw, i)
+        if jv.has(rv, "value") == 1 {
+            vvv = jv.get(rv, "value")
+            if jv.is_number(vvv) == 0 || jv.number_of(vvv) != 0.0 { nonzero = nonzero + 1 }
+        } else {
+            if jv.is_number(rv) == 0 || jv.number_of(rv) != 0.0 { nonzero = nonzero + 1 }
+        }
+        i = i + 1
+    }
+    single = 0
+    if nonzero == 1 { single = 1 }
+    show_label = 1
+    if jv.has(options, "showLabel") == 1 && jv.is_undefined(jv.get(options, "showLabel")) == 0 { show_label = jv.bool_path(options, "showLabel") }
+    ignore_empty = jv.bool_path(options, "ignoreEmptyValues")
+    prevent = jv.num_path_or(options, "preventOverlappingLabelOffset", 0.0)
+    direction = jv.str_path(options, "labelDirection")
+    if string.length(direction) == 0 { direction = "neutral" }
+    groups = list.new()
+    label_nodes = list.new()
+    placed = list.new()
+    n = jv.len(raw)
+    idx = 0
+    while idx < n {
+        value = jv.to_number(jv.at(values, idx))
+        series = jv.at(raw, idx)
+        if value == 0.0 && ignore_empty == 1 {
+            _e0 = list.add(groups, cn.node("g", "", ""))
+        } else {
+            end_angle = 0.0
+            if total > 0.0 { end_angle = start_angle + (value / total) * 360.0 }
+            ovl = 0.2
+            if idx == 0 || single == 1 { ovl = 0.0 }
+            overlap_start = math.max_float(0.0, start_angle - ovl)
+            full_circle = 0
+            if end_angle - start_angle >= 359.99 { full_circle = 1 }
+            if end_angle - overlap_start >= 359.99 { end_angle = overlap_start + 359.99 }
+            start = core.polar_to_cartesian(cx, cy, radius, overlap_start)
+            close = 1
+            if donut == 1 { close = 0 }
+            path = sp.path_new(close)
+            if full_circle == 1 {
+                opp = core.polar_to_cartesian(cx, cy, radius, overlap_start + 180.0)
+                _m = sp.path_arc(sp.path_move(path, start.x, start.y, 0), radius, radius, 0.0, 0.0, 0.0, opp.x, opp.y, 0)
+            } else {
+                endp = core.polar_to_cartesian(cx, cy, radius, end_angle)
+                _m2 = sp.path_move(path, endp.x, endp.y, 0)
+            }
+            large = 0.0
+            if full_circle == 0 && end_angle - start_angle > 180.0 { large = 1.0 }
+            _a = sp.path_arc(path, radius, radius, 0.0, large, 0.0, start.x, start.y, 0)
+            if donut == 0 { _l = sp.path_line(path, cx, cy, 0) }
+            meta = jv.get(series, "meta")
+            slice = cn.node("path", "", slice_class)
+            cn.attr(slice, "d", jv.str(sp.path_stringify(path)))
+            cn.attr(slice, "ct:value", jv.num(value))
+            cn.attr(slice, "ct:meta", core.serialize(meta))
+            if donut == 1 && dw_opt != null && jv.is_undefined(dw_opt) == 0 {
+                cn.attr(slice, "style", jv.str("stroke-width: ${jv.js_number(dw)}px"))
+            }
+            cn.set_role(slice, "slice")
+            cn.ctx_put(slice, "value", jv.num(value))
+            cn.ctx_put(slice, "totalDataSum", jv.num(total))
+            cn.ctx_put(slice, "index", jv.num(idx / 1.0))
+            cn.ctx_put(slice, "seriesIndex", jv.num(idx / 1.0))
+            cn.ctx_put(slice, "valueIndex", jv.num(0.0))
+            cn.ctx_put(slice, "meta", meta)
+            cn.ctx_put(slice, "series", series)
+            cn.ctx_put(slice, "radius", jv.num(radius))
+            cn.ctx_put(slice, "startAngle", jv.num(start_angle))
+            cn.ctx_put(slice, "endAngle", jv.num(end_angle))
+            cen = jv.obj()
+            jv.put(cen, "x", jv.num(cx))
+            jv.put(cen, "y", jv.num(cy))
+            cn.ctx_put(slice, "center", cen)
+            slice.path = sp.path_clone(path, 0)
+            g = series_group(cls, series, idx)
+            cn.remove_attr(g, "ct:meta")
+            cn.ctx_put(g, "seriesIndex", jv.num(idx / 1.0))
+            cn.append(g, slice)
+            _g = list.add(groups, g)
+
+            if show_label == 1 {
+                lp = core.polar_to_cartesian(cx, cy, label_radius, start_angle + (end_angle - start_angle) / 2.0)
+                if n == 1 {
+                    lp.x = cx
+                    lp.y = cy
+                }
+                raw_label = jv.at(labels, idx)
+                if labels == null || jv.is_falsey_but_zero(raw_label) == 1 { raw_label = jv.num(value) }
+                interpolated = ax.label_text_of(c.label_pie, raw_label, idx)
+                if jv.truthy(interpolated) == 1 || (jv.is_number(interpolated) == 1 && jv.number_of(interpolated) == 0.0) {
+                    text = jv.js_string(interpolated)
+                    if prevent != 0.0 {
+                        tl = string.length(text)
+                        pk = 0
+                        while pk < list.size(placed) {
+                            pq, _e2 = list.get(placed, pk)
+                            other = pq as *core.CtPoint
+                            move_label(lp, other.x, other.y, prevent, tl)
+                            pk = pk + 1
+                        }
+                        _pl = list.add(placed, lp)
+                    }
+                    anchor = determine_anchor_position(cx, lp.x, direction)
+                    lab = label_text(text, lp.x, lp.y, anchor, jv.str_path(cls, "label"))
+                    cn.set_role(lab, "label")
+                    cn.ctx_put(lab, "kind", jv.str("pie"))
+                    cn.ctx_put(lab, "index", jv.num(idx / 1.0))
+                    cn.ctx_put(lab, "seriesIndex", jv.num(idx / 1.0))
+                    cn.ctx_put(lab, "valueIndex", jv.num(0.0))
+                    cn.ctx_put(lab, "text", jv.str(text))
+                    cn.ctx_put(lab, "series", series)
+                    cn.ctx_put(lab, "meta", meta)
+                    cn.ctx_put(lab, "x", jv.num(lp.x))
+                    cn.ctx_put(lab, "y", jv.num(lp.y))
+                    _lb = list.add(label_nodes, lab)
+                }
+            }
+            start_angle = end_angle
+        }
+        idx = idx + 1
+    }
+    tops = list.new()
+    append_all(tops, groups)
+    if show_label == 1 { _t = list.add(tops, group("", label_nodes)) }
+    _l = list.add(layers, tops)
+}
+
+// A pie label: one line placed with dx/dy (1.x); a label with line breaks a
+// tspan per line, 1.2 em apart, the block centred on the anchor (#546).
+label_text(text: string, x: float, y: float, anchor: string, class_name: string) -> *cn.CtNode {
+    lines = string.split(text, "\n")
+    nl = string.array_size(lines)
+    t = cn.node("text", "", class_name)
+    if nl <= 1 {
+        string.array_free(lines)
+        cn.attr(t, "dx", jv.num(x))
+        cn.attr(t, "dy", jv.num(y))
+        cn.attr(t, "text-anchor", jv.str(anchor))
+        cn.set_text(t, text)
+        return t
+    }
+    cn.attr(t, "x", jv.num(x))
+    cn.attr(t, "y", jv.num(y))
+    cn.attr(t, "text-anchor", jv.str(anchor))
+    shift = jv.js_round(0.0 - (nl - 1) * 1.2 * 50.0) / 100.0
+    i = 0
+    while i < nl {
+        sp2 = cn.node("tspan", "", "")
+        cn.attr(sp2, "x", jv.num(x))
+        dy = "${jv.js_number(shift)}em"
+        if i > 0 { dy = "1.2em" }
+        cn.attr(sp2, "dy", jv.str(dy))
+        cn.set_text(sp2, string.copy(string.array_get(lines, i)))
+        cn.append(t, sp2)
+        i = i + 1
+    }
+    string.array_free(lines)
+    return t
+}
