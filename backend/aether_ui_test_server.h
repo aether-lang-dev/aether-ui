@@ -231,4 +231,9 @@ int  aether_ui_test_server_is_sealed(int handle);
 }
 #endif
 
+/* 1 while the driver performs an action a request asked for as real
+ * input (?real=1 on /widget/{id}/click and /window/key): a backend that can
+ * make real events (AppKit: NSEvents through NSApp) makes them. */
+extern int aether_ui_driver_real_events_now;
+
 #endif

@@ -9327,6 +9327,15 @@ static int aeui_tab_move(int backward) {
 // ---------------------------------------------------------------------------
 static int aeui_mac_menu_native_activate(int menu_handle, const char* label);
 
+// AETHER_UI_DRIVER_REAL_EVENTS: the driver's clicks and window keys made as
+// real events through NSApplication, not closures called (a spec run so
+// meets what a person's input meets: ci.sh runs the datagrid spec so).
+static int aeui_driver_real_events(void) {
+    if (aether_ui_driver_real_events_now) return 1;   // ?real=1, this action
+    const char* e = getenv("AETHER_UI_DRIVER_REAL_EVENTS");
+    return e && e[0] && strcmp(e, "0") != 0;
+}
+
 static void driver_perform(AetherDriverActionCtx* ctx) {
     // Actions with no widget subject, handled before the registry lookup.
     switch (ctx->action) {
@@ -9379,6 +9388,45 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_WIN_KEY: {
+            if (aeui_driver_real_events() && primary_window && ctx->sval[0]) {
+                // A real key down and up, through NSApplication (its key
+                // monitor, the first responder), as a person types it: the
+                // combo's key as its virtual key code and the characters
+                // AppKit gives it, its modifiers as the event's flags.
+                char canonical[64], kname[64];
+                combo_normalize(ctx->sval, canonical, sizeof(canonical));
+                int kmods = aeui_combo_split(canonical, kname, sizeof(kname));
+                static const struct { const char* n; unsigned short code; unichar ch; } K[] = {
+                    {"Return", 36, '\r'}, {"Tab", 48, '\t'}, {"Escape", 53, 0x1b}, {"BackSpace", 51, 0x7f},
+                    {"space", 49, ' '}, {"Delete", 117, NSDeleteFunctionKey}, {"Home", 115, NSHomeFunctionKey},
+                    {"End", 119, NSEndFunctionKey}, {"Page_Up", 116, NSPageUpFunctionKey}, {"Page_Down", 121, NSPageDownFunctionKey},
+                    {"Left", 123, NSLeftArrowFunctionKey}, {"Right", 124, NSRightArrowFunctionKey},
+                    {"Down", 125, NSDownArrowFunctionKey}, {"Up", 126, NSUpArrowFunctionKey},
+                    {"F2", 120, NSF2FunctionKey}, {"F4", 118, NSF4FunctionKey}, {"F6", 97, NSF6FunctionKey},
+                };
+                unsigned short code = 0;
+                NSString* ch = nil;
+                for (size_t i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
+                    if (strcasecmp(kname, K[i].n) == 0) { code = K[i].code; unichar u = K[i].ch; ch = [NSString stringWithCharacters:&u length:1]; break; }
+                }
+                if (!ch) {
+                    ch = [NSString stringWithUTF8String:kname];
+                    if ([ch length] == 1 && (kmods & 1)) ch = [ch uppercaseString];
+                }
+                NSEventModifierFlags f = 0;
+                if (kmods & 1) f |= NSEventModifierFlagShift;
+                if (kmods & 2) f |= NSEventModifierFlagControl;
+                if (kmods & 4) f |= NSEventModifierFlagOption;
+                if (kmods & 8) f |= NSEventModifierFlagCommand;
+                if (code >= 115 && code <= 126) f |= NSEventModifierFlagFunction | NSEventModifierFlagNumericPad;
+                for (int j = 0; j < 2; j++) {
+                    NSEvent* e = [NSEvent keyEventWithType:(j ? NSEventTypeKeyUp : NSEventTypeKeyDown) location:NSZeroPoint modifierFlags:f timestamp:[[NSProcessInfo processInfo] systemUptime] windowNumber:[primary_window windowNumber] context:nil characters:ch charactersIgnoringModifiers:ch isARepeat:NO keyCode:code];
+                    [NSApp sendEvent:e];
+                }
+                ctx->retval = 1;
+                ctx->result = 0;
+                return;
+            }
             // Registered accelerators win first; only then the built-ins.
             char canonical[64];
             combo_normalize(ctx->sval, canonical, sizeof(canonical));
@@ -9580,6 +9628,19 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             break;
         }
         case AETHER_DRV_CLICK:
+            if (aeui_driver_real_events() && [v window]) {
+                // AETHER_UI_DRIVER_REAL_EVENTS: a real press and release at the
+                // widget's centre, through NSApplication's own dispatch (hit
+                // testing, the first responder, the key monitor) rather than
+                // its closure called: what a person's click does.
+                NSWindow* w = [v window];
+                NSPoint c = [v convertPoint:NSMakePoint(NSMidX([v bounds]), NSMidY([v bounds])) toView:nil];
+                for (int k = 0; k < 2; k++) {
+                    NSEvent* e = [NSEvent mouseEventWithType:(k ? NSEventTypeLeftMouseUp : NSEventTypeLeftMouseDown) location:c modifierFlags:0 timestamp:[[NSProcessInfo processInfo] systemUptime] windowNumber:[w windowNumber] context:nil eventNumber:0 clickCount:1 pressure:(k ? 0.0f : 1.0f)];
+                    [NSApp sendEvent:e];
+                }
+                break;
+            }
             if ([v isKindOfClass:[NSButton class]]) {
                 [(NSButton*)v performClick:nil];
             } else {

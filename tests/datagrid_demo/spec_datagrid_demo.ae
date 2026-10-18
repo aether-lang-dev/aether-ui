@@ -12,6 +12,7 @@ import std.spec
 import uidriver
 import std.string
 import std.json
+import std.os
 
 // How many widgets of `type` /widgets lists.
 count_of(type: string) -> int {
@@ -247,6 +248,33 @@ press(label: string) {
     uidriver.post_ok("/widget/${uidriver.widget_id_of("button", label)}/click", label)
 }
 
+// What is on the screen at a step: GET /screenshot saved as
+// target/datagrid-snapshots/<name>.png (to be looked at), and its size from
+// the PNG's header, "WxH" ("" where there is no screenshot, or no python3).
+snapshot(name: string) -> string {
+    dir = "${os.os_getenv("PWD")}/target/datagrid-snapshots"
+    _m, _me = os.exec("mkdir -p ${dir}")
+    out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
+    if string.contains(out, "200") == 0 { return "" }
+    dims, _de = os.exec("python3 -c \"import struct,sys; b=open(sys.argv[1],'rb').read(24); print('%dx%d' % struct.unpack('>II', b[16:24]))\" ${dir}/${name}.png")
+    return string.trim(dims)
+}
+
+// The two scrollbars' values ("v,h"): the grid's scroll position.
+scroll_at() -> string {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return "" }
+    out = ""
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "slider") == 1 { out = "${out}${uidriver.get_body("/widget/${uidriver.field_int(w, "id")}")}" }
+        i = i + 1
+    }
+    json.json_free(v)
+    return out
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -258,6 +286,38 @@ main() {
             spec.assert_true(shows("R0C1") == 1, "the top-left cell")
             spec.assert_true(shows("R19C6") == 1, "the bottom-right shown cell")
             spec.assert_true(shows("20") == 1, "row number 20 in the frozen column")
+        }
+        spec.it("a click on a fresh grid's cell, then typing, as a person does (real input where the platform makes it): the screen not moved, an editor with the focus, the key in it, Return stores it") callback {
+            c = uidriver.widget_id_by_text("R5C4")
+            spec.assert_gt(c, 0, "R5C4 shown")
+            x0 = uidriver.widget_int_field_by_id(c, "x")
+            y0 = uidriver.widget_int_field_by_id(c, "y")
+            hdr = uidriver.widget_id_by_text("A")
+            hx0 = uidriver.widget_int_field_by_id(hdr, "x")
+            s0 = scroll_at()
+            d0 = snapshot("1-before-click")
+            // ?real=1: a real press and release, and real keys, through the
+            // platform's event dispatch where the backend makes them (AppKit).
+            uidriver.post_ok("/widget/${c}/click?real=1", "click R5C4")
+            sleep(400)
+            d1 = snapshot("2-after-click")
+            spec.assert_eq(uidriver.widget_id_by_text("R5C4"), c, "the same cell shows R5C4")
+            spec.assert_true(uidriver.widget_int_field_by_id(c, "x") == x0 && uidriver.widget_int_field_by_id(c, "y") == y0, "on the screen: the cell where it was (${x0},${y0})")
+            spec.assert_eq(uidriver.widget_int_field_by_id(hdr, "x"), hx0, "on the screen: header A where it was")
+            spec.assert_str_eq(scroll_at(), s0, "the scrollbars where they were")
+            spec.assert_str_eq(d1, d0, "the window's snapshot the same size (${d0})")
+            uidriver.post_ok("/window/key?combo=7&real=1", "type 7")
+            spec.assert_true(editor_open(1) == 1, "typing opened an editor")
+            d2 = snapshot("3-after-typing")
+            spec.assert_eq(uidriver.focused_widget(), editor(), "the editor has the focus")
+            spec.assert_str_eq(uidriver.widget_text_by_id(editor()), "7", "holding 7")
+            spec.assert_true(uidriver.widget_int_field_by_id(editor(), "x") == x0 && uidriver.widget_int_field_by_id(editor(), "y") == y0, "the editor over the cell (${x0},${y0})")
+            spec.assert_str_eq(scroll_at(), s0, "still not scrolled")
+            spec.assert_str_eq(d2, d0, "the snapshot the same size")
+            uidriver.post_ok("/widget/${editor()}/submit", "Return")
+            spec.assert_true(shows("edited: 5,4 = 7") == 1, "stored")
+            _d3 = snapshot("4-after-return")
+            spec.assert_true(uidriver.widget_int_field_by_id(c, "x") == x0 && uidriver.widget_int_field_by_id(c, "y") == y0, "the cell still where it was")
         }
         spec.it("only the shown cells exist: 7 header + 20 x 7 cells, of 5,000,000 (and ten labels)") callback {
             // 1 caption + 7 header + 140 cells + the clicked, selection,

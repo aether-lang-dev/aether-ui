@@ -47,9 +47,10 @@ jobs:
           sudo apt-get update
           # Do NOT add packages to this line casually. Adding gdb hung this
           # step for 45 minutes, twice, including with DEBIAN_FRONTEND set,
-          # and cost the whole Linux leg both times. These two install in
-          # about two minutes and are what the pipeline actually needs.
-          sudo -E apt-get install -y --no-install-recommends libgtk-4-dev xvfb
+          # and cost the whole Linux leg both times. These install in
+          # about two minutes and are what the pipeline actually needs (xdotool:
+          # real X11 input for Phase 5e9g2).
+          sudo -E apt-get install -y --no-install-recommends libgtk-4-dev xvfb xdotool
           # A driver spec that dies takes its diagnosis with it: the spec only
           # sees POSTs that stopped being answered. Cores go somewhere ci.sh
           # can find, and it prints a backtrace when a debugger is present.

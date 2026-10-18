@@ -1515,6 +1515,20 @@ if [ "$SPEC_OK" -eq 1 ]; then
                     "$SCRIPT_DIR/tests/run_spec.sh" datagrid_demo || FAIL=$((FAIL + 1))
 fi
 
+if [ "$PLATFORM" = "linux" ] && [ "$SPEC_OK" -eq 1 ] && [ "$LAUNCH_PREFIX" != "SKIP_RUNTIME" ]; then
+    echo "-- Phase 5e9g2: the datagrid under real X11 input (xdotool) --"
+    # The driver's clicks and keys call closures; a person's go through
+    # GTK's event dispatch, where a click on a grid once scrolled the page to
+    # its far corner and real keys reached no handler. xdotool's are real.
+    if [ -n "$LAUNCH_PREFIX" ]; then
+        $LAUNCH_PREFIX sh "$SCRIPT_DIR/tests/datagrid_demo/real_input_x11.sh" "$(EX_BIN datagrid_demo)" 9388
+    else
+        sh "$SCRIPT_DIR/tests/datagrid_demo/real_input_x11.sh" "$(EX_BIN datagrid_demo)" 9388
+    fi
+    rc=$?
+    [ $rc -eq 0 ] || [ $rc -eq 77 ] || FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "=== Phase 5e10: AetherUIDriver sheet spec ==="
 # The sheet verbs had NO coverage, in C or over the driver, and two things

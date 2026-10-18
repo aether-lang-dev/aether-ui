@@ -25,6 +25,7 @@ void aether_ui_test_server_start(int port, const AetherDriverHooks* hooks) {
     (void)port; (void)hooks;
 }
 void aether_ui_test_server_set_banner(int handle) { (void)handle; }
+int  aether_ui_driver_real_events_now = 0;   // no driver: never set
 int  aether_ui_test_server_banner_handle(void) { return 0; }
 void aether_ui_test_server_seal_widget(int handle) { (void)handle; }
 int  aether_ui_test_server_is_sealed(int handle) { (void)handle; return 0; }

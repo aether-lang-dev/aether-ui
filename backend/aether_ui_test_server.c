@@ -185,6 +185,9 @@ static int extract_id_from_path(const char* path, const char* prefix) {
 // to atoi/atof, which stop at the '&'. A STRING parameter must go through
 // query_param_decoded instead -- reading it raw is how a label like
 // "Save As..." (sent as Save+As...) failed to match anything.
+// Set for the one action a request with ?real=1 asks for (see /click).
+int aether_ui_driver_real_events_now = 0;
+
 static const char* extract_query_param(const char* path, const char* key) {
     const char* q = strchr(path, '?');
     if (!q) return NULL;
@@ -1022,7 +1025,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.handle = extract_id_from_path(path, "/widget/");
         const char* mq = extract_query_param(path, "mods");
         if (mq) aether_ui_modifiers_override_set(atoi(mq));
+        // ?real=1: a real press and release through the platform's own
+        // event dispatch, where the backend can make one (AppKit), rather
+        // than the widget's click closure called.
+        const char* rq = extract_query_param(path, "real");
+        aether_ui_driver_real_events_now = rq && atoi(rq) ? 1 : 0;
         dispatch_and_reply(client_fd, h, &ctx, "clicked");
+        aether_ui_driver_real_events_now = 0;
         if (mq) aether_ui_modifiers_override_set(-1);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/hover")) {
@@ -1199,7 +1208,10 @@ static void handle_request_inner(aether_sock_t client_fd,
         // '+' stays literal: "Ctrl+B" must survive the round trip, and
         // form-style decoding would hand the backend "Ctrl B".
         query_param_decoded(path, "combo", ctx.sval, sizeof(ctx.sval), 0);
+        const char* rk = extract_query_param(path, "real");
+        aether_ui_driver_real_events_now = rk && atoi(rk) ? 1 : 0;   // as /click's
         h->dispatch_action(&ctx);
+        aether_ui_driver_real_events_now = 0;
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}",
                  ctx.retval ? "true" : "false");
