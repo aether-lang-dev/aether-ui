@@ -4825,8 +4825,12 @@ static gboolean on_window_any_key(GtkEventControllerKey* ctl, guint keyval,
     if (state & GDK_CONTROL_MASK) mods |= 2;
     if (state & GDK_ALT_MASK)     mods |= 4;
     if (state & GDK_SUPER_MASK)   mods |= 8;
+    aether_ui_key_claim_take();
     aether_ui_window_key_deliver(name ? name : "", mods);
-    return FALSE;   // never swallow: the focused widget still gets the key
+    // A handler that used the key claims it (key_claim): GTK then does not
+    // also act on it (an arrow's move-focus, Tab's focus chain). Otherwise
+    // the focused widget's own handling stands.
+    return aether_ui_key_claim_take() ? TRUE : FALSE;
 }
 
 // Files dropped on the window. A GtkDropTarget over GDK_TYPE_FILE_LIST on the

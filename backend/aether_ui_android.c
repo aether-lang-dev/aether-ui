@@ -6384,7 +6384,12 @@ static int aeui_focus_step(JNIEnv* env, int backward) {
 static int aeui_key_route(const char* canonical, const char* name, int abi_mods, int* consumed) {
     *consumed = 0;
     if (shortcut_dispatch(canonical)) { *consumed = 1; return 1; }
-    return aether_ui_window_key_deliver(name, abi_mods);
+    aether_ui_key_claim_take();
+    int r = aether_ui_window_key_deliver(name, abi_mods);
+    // A handler that used the key claims it (key_claim): the View system
+    // then does not also act on it (D-pad and arrow focus moves, Tab).
+    if (aether_ui_key_claim_take()) *consumed = 1;
+    return r;
 }
 
 // Android key codes -> the key names the DSL speaks (GDK's, as every

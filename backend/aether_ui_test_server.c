@@ -1130,6 +1130,16 @@ static void handle_request_inner(aether_sock_t client_fd,
                      ctx.retval ? "true" : "false", ctx.retval ? aether_ui_last_popup_menu : 0);
             send_http(client_fd, ctx.retval ? 200 : 404, ctx.retval ? "OK" : "Not Found", "application/json", body);
         }
+    } else if (method == 1 && strcmp(path, "/window/front") == 0) {
+        // POST /window/front -- the app's window brought to the front and
+        // made key, as a person clicking it does: what a key window does
+        // with keys (AppKit) differs from what an inactive one does.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_WIN_FRONT;
+        if (h->dispatch_action) h->dispatch_action(&ctx);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"key\":%s,\"active\":%s}", ctx.retval >= 1 ? "true" : "false", ctx.retval >= 2 ? "true" : "false");
+        send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 0 && strcmp(path, "/popup") == 0) {
         // GET /popup -- the last menu menu_popup popped, and for which widget.
         char body[96];

@@ -244,4 +244,9 @@ void aeui_tooltip_note(int handle, const char* text);
 void aether_ui_modifiers_override_set(int mods);
 int aether_ui_modifiers_override(void);
 
+// key_claim: a handler that used a key says so; the backend consumes the
+// event (see aether_ui_system_extras.c). take returns the claim and resets it.
+void aether_ui_key_claim_impl(void);
+int  aether_ui_key_claim_take(void);
+
 #endif

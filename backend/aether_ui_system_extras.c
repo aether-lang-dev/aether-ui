@@ -1414,3 +1414,14 @@ int aether_ui_textfield_caret_impl(int handle) {
 static volatile int g_mod_override = -1;
 void aether_ui_modifiers_override_set(int mods) { g_mod_override = mods; }
 int aether_ui_modifiers_override(void) { return g_mod_override; }
+
+// ---------------------------------------------------------------------------
+// A key a handler used (key_claim): a window key handler that acts on a key
+// claims it, and the backend's key path then consumes the event, so the
+// platform does not also act on it (an arrow moving the focus to the next
+// control, Tab leaving a grid, Return pressing a default button). Each
+// backend resets the claim before it delivers a key and takes it after.
+// ---------------------------------------------------------------------------
+static int g_key_claimed = 0;
+void aether_ui_key_claim_impl(void) { g_key_claimed = 1; }
+int aether_ui_key_claim_take(void) { int c = g_key_claimed; g_key_claimed = 0; return c; }

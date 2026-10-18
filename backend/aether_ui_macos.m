@@ -1831,7 +1831,12 @@ static void ensure_shortcut_monitor(void) {
                 if (f & NSEventModifierFlagControl) mods |= 2;
                 if (f & NSEventModifierFlagOption)  mods |= 4;
                 if (f & NSEventModifierFlagCommand) mods |= 8;
+                aether_ui_key_claim_take();
                 aether_ui_window_key_deliver(name, mods);
+                // A handler that used the key claims it (key_claim): AppKit
+                // then does not also act on it (the key view loop, a scroll
+                // view's arrows, a default button's Return).
+                if (aether_ui_key_claim_take()) return nil;
             }
             return ev;
         }];
@@ -9517,6 +9522,15 @@ static int aeui_driver_real_events(void) {
 static void driver_perform(AetherDriverActionCtx* ctx) {
     // Actions with no widget subject, handled before the registry lookup.
     switch (ctx->action) {
+        case AETHER_DRV_WIN_FRONT:
+            [NSApp activateIgnoringOtherApps:YES];
+            if (primary_window) {
+                [primary_window makeKeyAndOrderFront:nil];
+                [primary_window orderFrontRegardless];
+            }
+            ctx->retval = primary_window && primary_window.isKeyWindow ? ([NSApp isActive] ? 2 : 1) : 0;
+            ctx->result = 0;
+            return;
         case AETHER_DRV_SET_STATE: {
             switch (aether_ui_state_type(ctx->handle)) {
                 case 1: aether_ui_state_set_i(ctx->handle, atoi(ctx->sval)); break;
@@ -9943,6 +9957,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_SECONDARY:
             ctx->retval = aether_ui_secondary_drive(ctx->handle, ctx->dval, ctx->dval2);
             break;
+
         case AETHER_DRV_SET_VALUE:
             if ([v isKindOfClass:[NSSlider class]]) {
                 aether_ui_slider_set_value(ctx->handle, ctx->dval);

@@ -3629,8 +3629,12 @@ void aether_ui_app_run_raw(int app_handle) {
                 }
                 // Not bound: offer it to the any-key handler and let the key
                 // carry on, so a focused control still receives what was
-                // typed.
+                // typed -- unless a handler used it and claimed it
+                // (key_claim): then neither the dialog manager (Tab, Return)
+                // nor the control acts on it too.
+                aether_ui_key_claim_take();
                 aether_ui_window_key_deliver(w32_name, w32_mods);
+                if (aether_ui_key_claim_take()) continue;
             }
         }
         // Return in a field with on_submit: its callback, before the dialog

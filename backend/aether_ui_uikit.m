@@ -859,7 +859,11 @@ static void aeui_equalize_spacers(UIStackView* sv) {
             char name[64];
             int r = aeui_press_key_name(press, name, sizeof(name));
             if (!r) continue;
-            if (aether_ui_window_key_deliver(name, r >> 1)) handled = YES;
+            // A handler that used the key claims it (key_claim): UIKit then
+            // does not pass it on (a focus move); otherwise it goes on.
+            aether_ui_key_claim_take();
+            aether_ui_window_key_deliver(name, r >> 1);
+            if (aether_ui_key_claim_take()) handled = YES;
         }
     }
     if (!handled) [super pressesBegan:presses withEvent:event];
@@ -4917,6 +4921,10 @@ int aether_ui_window_key_deliver(const char* key_name, int mods) {
         fired = aeui_try_fire_shortcut(combo);
     }
     if (!fired) fired = aeui_try_fire_shortcut(k);
+    // A shortcut that took the key is the key's end, as on the desktops (a
+    // shortcut consumes it there before any key handler hears it): the
+    // grid's editor's Tab moved twice, its shortcut's and the key handler's.
+    if (fired) { aether_ui_key_claim_impl(); return 1; }
     for (int i = 0, n = g_window_key_count; i < n; i++) {
         AeClosure* c = g_window_key_closures[i];
         if (!c || !c->fn) continue;

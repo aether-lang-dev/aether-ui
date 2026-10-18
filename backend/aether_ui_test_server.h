@@ -92,7 +92,8 @@ typedef enum {
     // A scrollbar moved as a person moves it: dval the new value, set
     // (clamped) and its on_change told (aether_ui_scrollbar_user_set).
     AETHER_DRV_SCROLLBAR_SET = 30,
-    AETHER_DRV_SECONDARY = 31,   /* a widget's secondary click at (dval, dval2): retval 1 if it had one */
+    AETHER_DRV_SECONDARY = 31,
+    AETHER_DRV_WIN_FRONT = 32,   /* the window brought to the front and made key: retval 1 key, 2 key and the app active */   /* a widget's secondary click at (dval, dval2): retval 1 if it had one */
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a
