@@ -9794,30 +9794,41 @@ static int screenshot_from_canvas_surface(void) {
 }
 
 // GtkWidgetPaintable (GTK 4.6, Ubuntu 22.04's) snapshots the widget's CACHED
-// render node, the last frame's. gtk_widget_queue_draw clears that cache on
-// the widget and its ancestors, and only the frame clock's next paint refills
-// it, so a screenshot taken between a change to the UI (an editor opened by a
-// key, say) and the paint after it saw an empty tree: no node, no PNG, a 500
-// from /screenshot. (GTK 4.22 does not do this.) Waits, driving the main loop,
-// for the frame clock's next paint (at most a second) so the cache is there.
-static void screenshot_after_paint(GdkFrameClock* clock, gpointer flag) {
+// render node, the last frame's, and a change to the UI is not in a frame until
+// the frame clock's next cycle: its style update, layout and paint. So a
+// screenshot taken between a change (an editor opened by a key, a style set)
+// and that cycle was the picture before it, or, where gtk_widget_queue_draw
+// had already cleared the cache, no node at all: no PNG, a 500 from
+// /screenshot. (GTK 4.22 does not do this.) Drives the main loop until a whole
+// cycle has run, update to paint, since the call (at most a second), so the
+// cache holds what the UI is now.
+typedef struct { volatile int updated; volatile int painted; } AeuiShotWait;
+
+static void screenshot_on_update(GdkFrameClock* clock, gpointer data) {
     (void)clock;
-    *(int*)flag = 1;
+    ((AeuiShotWait*)data)->updated = 1;
+}
+
+static void screenshot_after_paint(GdkFrameClock* clock, gpointer data) {
+    (void)clock;
+    AeuiShotWait* w = (AeuiShotWait*)data;
+    if (w->updated) w->painted = 1;
 }
 
 static void screenshot_wait_for_paint(GtkWidget* toplevel) {
     GdkFrameClock* clock = gtk_widget_get_frame_clock(toplevel);
     if (!clock) return;
-    int painted = 0;
-    gulong id = g_signal_connect(clock, "after-paint",
-                                 G_CALLBACK(screenshot_after_paint), &painted);
-    gtk_widget_queue_draw(toplevel);   // nothing to do when a draw is pending
-    gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_PAINT);
+    AeuiShotWait w = { 0, 0 };
+    gulong a = g_signal_connect(clock, "update", G_CALLBACK(screenshot_on_update), &w);
+    gulong b = g_signal_connect(clock, "after-paint", G_CALLBACK(screenshot_after_paint), &w);
+    gtk_widget_queue_draw(toplevel);
+    gdk_frame_clock_request_phase(clock, GDK_FRAME_CLOCK_PHASE_UPDATE);
     gint64 t0 = g_get_monotonic_time();
-    while (!painted && g_get_monotonic_time() - t0 < 1000000) {
+    while (!w.painted && g_get_monotonic_time() - t0 < 1000000) {
         if (!g_main_context_iteration(NULL, FALSE)) g_usleep(2000);
     }
-    g_signal_handler_disconnect(clock, id);
+    g_signal_handler_disconnect(clock, a);
+    g_signal_handler_disconnect(clock, b);
 }
 
 static gboolean screenshot_idle_cb(gpointer data) {
@@ -9844,11 +9855,13 @@ static gboolean screenshot_idle_cb(gpointer data) {
     GdkPaintable* paintable = NULL;
     int w = 0, h = 0;
     GskRenderNode* node = NULL;
+    // What the UI is now is in the toplevel's last frame only once a frame
+    // has run since the last change (see screenshot_wait_for_paint).
+    screenshot_wait_for_paint(toplevel);
     for (int attempt = 0; attempt < 2 && !node; attempt++) {
         if (attempt == 1) {
-            // The toplevel's last frame was invalidated (see
-            // screenshot_wait_for_paint): let the next one paint, then look
-            // again, with a new paintable (the old one holds an empty image).
+            // Still no node: once more, then look again with a new paintable
+            // (the old one holds an empty image).
             screenshot_wait_for_paint(toplevel);
         }
         if (paintable) g_object_unref(paintable);
