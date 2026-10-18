@@ -14,6 +14,7 @@ import std.spec
 import uidriver
 import std.string
 import std.os
+import std.fs
 
 hbar() -> int { return uidriver.widget_id_of("scrollbar", "") }
 vbar() -> int { return uidriver.widget_id_last_of("scrollbar", "") }
@@ -23,8 +24,8 @@ field(id: int, f: string) -> int { return uidriver.widget_int_field_by_id(id, f)
 // The window as a PNG under target/scrollbar-snapshots; "WxH", or "" when
 // the backend has no /screenshot.
 snapshot(name: string) -> string {
-    dir = "${os.os_getenv("PWD")}/target/scrollbar-snapshots"
-    _m, _me = os.exec("mkdir -p ${dir}")
+    dir = "target/scrollbar-snapshots"
+    _mk = fs.mkdir_p(dir)
     // A capture can miss a frame in flight (GTK under Xvfb): try again.
     tries = 0
     dims = ""
@@ -58,7 +59,7 @@ snapshot_like_first(name: string) -> string {
 // The first snapshot's "WxH" (each case's closure has its own copy of
 // main's locals, so it is read back from the file).
 first_snapshot() -> string {
-    dir = "${os.os_getenv("PWD")}/target/scrollbar-snapshots"
+    dir = "target/scrollbar-snapshots"
     dims, _de = os.exec("python3 -c \"import struct,sys; b=open(sys.argv[1],'rb').read(24); print('%dx%d' % struct.unpack('>II', b[16:24]))\" ${dir}/01-start.png 2>/dev/null")
     return string.trim(dims)
 }

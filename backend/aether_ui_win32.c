@@ -76,6 +76,8 @@ typedef struct {
 #include "aether_ui_scrollbar.h"
 // on_secondary_click's closures (a right click on any widget).
 #include "aether_ui_secondary.h"
+// Labels' typography beyond the font's (applied by aeui_typo_apply below).
+#include "aether_ui_typo.h"
 // Menu items' accelerators (menu_item_accel): Primary is Ctrl here.
 #define AEUI_PRIMARY_IS_CMD 0
 #include "aether_ui_accel.h"
@@ -261,6 +263,7 @@ typedef struct {
     int dec_bar_rgb;
     int dec_corner;
     int dec_any;
+    int typo_subclassed;  // WK_TEXT: w32_typo_proc draws it (aether_ui_typo.h)
     int dec_subclassed;
     wchar_t* font_family;     // face name for apply_font (owned; NULL default)
     char* font_family_u8;     // utf8 twin for driver readback (owned)
@@ -5886,6 +5889,104 @@ static LRESULT CALLBACK w32_decor_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         ReleaseDC(hwnd, dc);
     }
     return res;
+}
+
+// A label with typography (aether_ui_typo.h) draws itself: a STATIC
+// draws neither super- or subscript, a double underline, an indent, a
+// placement in its height, nor turned text. Its ground and its text colour
+// are the parent's answer to WM_CTLCOLORSTATIC, as the STATIC's own paint
+// asks; its font the label's, a third smaller for a script and turned by
+// its escapement for a rotation (about the box's centre); its decoration's
+// lines and corner over it, as w32_decor_proc puts them.
+static void w32_typo_paint(HWND hwnd, Widget* w, const AeuiTypo* t, HDC hdc) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    HBRUSH br = (HBRUSH)SendMessageW(GetParent(hwnd), WM_CTLCOLORSTATIC, (WPARAM)hdc, (LPARAM)hwnd);
+    if (br && br != (HBRUSH)GetStockObject(NULL_BRUSH)) FillRect(hdc, &rc, br);
+    SetBkMode(hdc, TRANSPARENT);
+    wchar_t text[1024];
+    int n = GetWindowTextW(hwnd, text, 1024);
+    HFONT base = w->custom_font ? w->custom_font : (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    LOGFONTW lf;
+    memset(&lf, 0, sizeof(lf));
+    if (base) GetObjectW(base, sizeof(lf), &lf);
+    LONG line_h = lf.lfHeight < 0 ? -lf.lfHeight : lf.lfHeight;
+    if (t->script) lf.lfHeight = lf.lfHeight * 2 / 3;
+    if (t->underline == 2) lf.lfUnderline = FALSE;
+    lf.lfEscapement = lf.lfOrientation = (LONG)(t->rotation * 10.0);
+    HFONT f = CreateFontIndirectW(&lf);
+    HGDIOBJ old = SelectObject(hdc, f ? (HGDIOBJ)f : (HGDIOBJ)base);
+    SIZE ts = {0, 0};
+    if (n > 0) GetTextExtentPoint32W(hdc, text, n, &ts);
+    int saved = SaveDC(hdc);
+    IntersectClipRect(hdc, rc.left, rc.top, rc.right, rc.bottom);
+    int bw = rc.right - rc.left, bh = rc.bottom - rc.top;
+    if (t->rotation != 0.0) {
+        double a = t->rotation * 3.14159265358979 / 180.0;
+        double cx = bw / 2.0, cy = bh / 2.0;
+        int x = (int)(cx - ts.cx / 2.0 * cos(a) - ts.cy / 2.0 * sin(a));
+        int y = (int)(cy + ts.cx / 2.0 * sin(a) - ts.cy / 2.0 * cos(a));
+        TextOutW(hdc, x, y, text, n);
+    } else {
+        int ind = w32_px(hwnd, t->indent);
+        int room = bw - ind;
+        int x = ind;
+        if (w->text_anchor == 1) x = ind + (room - ts.cx) / 2;
+        else if (w->text_anchor == 2) x = bw - ts.cx;
+        // The line's box: the label's font's height; a STATIC puts it at the top.
+        int lh = line_h > 0 ? (int)line_h : ts.cy;
+        if (lh < ts.cy) lh = ts.cy;
+        int ly = t->valign == 2 ? (bh - lh) / 2 : t->valign == 3 ? bh - lh : 0;
+        // A superscript at the top of the line; a subscript at its foot, a
+        // fifth of the line below it, as the other backends drop it.
+        int y = t->script == 2 ? ly + lh - ts.cy + lh / 5 : t->script == 1 ? ly : ly + (lh - ts.cy) / 2;
+        TextOutW(hdc, x, y, text, n);
+        if (t->underline == 2 && n > 0) {
+            TEXTMETRICW tm;
+            GetTextMetricsW(hdc, &tm);
+            int u = w32_px(hwnd, 1);
+            if (u < 1) u = 1;
+            RECT l1 = { x, y + tm.tmAscent + u, x + ts.cx, y + tm.tmAscent + 2 * u };
+            RECT l2 = { x, y + tm.tmAscent + 3 * u, x + ts.cx, y + tm.tmAscent + 4 * u };
+            HBRUSH tb = CreateSolidBrush(GetTextColor(hdc));
+            FillRect(hdc, &l1, tb);
+            FillRect(hdc, &l2, tb);
+            DeleteObject(tb);
+        }
+    }
+    RestoreDC(hdc, saved);
+    SelectObject(hdc, old);
+    if (f) DeleteObject(f);
+    if (w->dec_any) w32_decor_draw(hwnd, w, hdc);
+}
+
+static LRESULT CALLBACK w32_typo_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                      UINT_PTR id, DWORD_PTR ref) {
+    (void)id; (void)ref;
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, w32_typo_proc, 9);
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    if (msg != WM_PAINT && msg != WM_PRINTCLIENT) return DefSubclassProc(hwnd, msg, wp, lp);
+    int h = handle_for_hwnd(hwnd);
+    Widget* w = widget_at(h);
+    AeuiTypo* t = aeui_typo_of(h);
+    if (!w || !t || (t->underline == 0 && t->script == 0 && t->valign == 0 && t->indent == 0 && t->rotation == 0.0))
+        return DefSubclassProc(hwnd, msg, wp, lp);
+    if (msg == WM_PRINTCLIENT) { w32_typo_paint(hwnd, w, t, (HDC)wp); return 0; }
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hwnd, &ps);
+    w32_typo_paint(hwnd, w, t, hdc);
+    EndPaint(hwnd, &ps);
+    return 0;
+}
+
+static void aeui_typo_apply(int handle, const AeuiTypo* t) {
+    (void)t;
+    Widget* w = widget_at(handle);
+    if (!w || w->kind != WK_TEXT || !w->hwnd) return;
+    if (!w->typo_subclassed && SetWindowSubclass(w->hwnd, w32_typo_proc, 9, 0)) w->typo_subclassed = 1;
+    InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
 void aether_ui_text_set_decor(int handle, int top, int top_rgb, int right, int right_rgb,

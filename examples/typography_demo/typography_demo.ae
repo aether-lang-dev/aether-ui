@@ -1,0 +1,59 @@
+// Aether UI typography example: a label's typography beyond its font
+// (style_typography): a double underline, super- and subscript, its
+// vertical placement in its box, an indent, and a rotation. Each label sits
+// in a 160 x 56 box, black on white, so a spec can measure where its ink
+// falls in a screenshot.
+
+import ui
+import ui (content_inset, window, vstack, hstack, text, width, height, style_bg_color,
+    style_text_color, style_font_size, style_typography, enable_test_server)
+import std.os (os_getenv)
+
+// A label in its box, the ink black on white.
+boxed(_ctx: ptr, s: string) -> int {
+    h = text(_ctx, s)
+    _w = width(h, 160)
+    _h = height(h, 56)
+    _b = style_bg_color(h, 1.0, 1.0, 1.0, 1.0)
+    _c = style_text_color(h, 0.0, 0.0, 0.0)
+    _s = style_font_size(h, 18.0)
+    return h
+}
+
+main() {
+    window("typography demo", 400, 420) {
+        // Two boxes a row: a phone has room for two.
+        root = vstack(8) {
+            hstack(8) {
+                plain = boxed("Plain")
+                dbl = boxed("Double")
+                _d = style_typography(dbl, 2, 0, 0, 0, 0.0)
+            }
+            hstack(8) {
+                sup = boxed("Super")
+                _p = style_typography(sup, 0, 1, 0, 0, 0.0)
+                sub = boxed("Sub")
+                _q = style_typography(sub, 0, 2, 0, 0, 0.0)
+            }
+            hstack(8) {
+                ind = boxed("Indent")
+                _i = style_typography(ind, 0, 0, 0, 40, 0.0)
+                top = boxed("Top")
+                _t = style_typography(top, 0, 0, 1, 0, 0.0)
+            }
+            hstack(8) {
+                bot = boxed("Bottom")
+                _b = style_typography(bot, 0, 0, 3, 0, 0.0)
+                turn = boxed("Turned")
+                _r = style_typography(turn, 0, 0, 0, 0, 90.0)
+            }
+            hstack(8) {
+                back = boxed("Back to plain")
+                _x = style_typography(back, 2, 1, 1, 20, 45.0)
+                _y = style_typography(back, 0, 0, 0, 0, 0.0)
+            }
+        }
+        _ci = content_inset(root)
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

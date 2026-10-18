@@ -254,6 +254,8 @@ typedef struct {
 // Menu items' accelerators (menu_item_accel): Primary is Ctrl here.
 #define AEUI_PRIMARY_IS_CMD 0
 #include "aether_ui_accel.h"
+// Labels' typography beyond the font's (applied by aeui_typo_apply below).
+#include "aether_ui_typo.h"
 
 static void aeui_call0(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
@@ -1652,6 +1654,8 @@ static jclass g_scroll_class = NULL, g_host_class = NULL;
 static jclass g_vseek_class = NULL;   // AetherVSeekBar (ui.vslider)
 static jmethodID g_vseek_init = NULL;
 static jclass g_sbar_class = NULL;     // AetherScrollbar (ui.scrollbar)
+static jclass g_atext_class = NULL;    // AetherText (labels, with typography)
+static jmethodID g_atext_init = NULL, g_atext_typo = NULL;
 static jmethodID g_sbar_init = NULL, g_sbar_set = NULL;
 static jmethodID g_scroll_init = NULL, g_host_init = NULL;
 
@@ -1803,7 +1807,14 @@ static int make_text(const char* text, int wrap_width) {
     JNIEnv* env = aeui_frame(8);
     if (!env) return 0;
     int h = 0;
-    jobject tv = g_activity ? JNEW(M_TV_init, g_activity) : NULL;
+    // AetherText, the label with typography (aether_ui_typo.h); a TextView
+    // where the class is not there.
+    jobject tv = NULL;
+    if (g_activity && g_atext_init) {
+        tv = (*env)->NewObject(env, g_atext_class, g_atext_init, g_activity);
+        if (aeui_check(env, "new AetherText")) tv = NULL;
+    }
+    if (!tv && g_activity) tv = JNEW(M_TV_init, g_activity);
     if (tv) {
         set_text_on(env, tv, text);
         h = register_widget_typed(env, tv, AUI_TEXT);
@@ -1817,6 +1828,22 @@ static int make_text(const char* text, int wrap_width) {
     }
     aeui_unframe(env);
     return h;
+}
+
+// A label's typography (aether_ui_typo.h): AetherText draws it (its
+// indent in dp, as the rest of a label's geometry here).
+static void aeui_typo_apply(int handle, const AeuiTypo* t) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !aeui_is_textview(w->type) || !g_atext_typo) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    if ((*env)->IsInstanceOf(env, w->view, g_atext_class)) {
+        float d = g_density;
+        (*env)->CallVoidMethod(env, w->view, g_atext_typo, (jint)t->underline, (jint)t->script,
+                               (jint)t->valign, (jint)(t->indent * d + 0.5f), (jfloat)t->rotation);
+        aeui_check(env, "AetherText.typography");
+    }
+    aeui_unframe(env);
 }
 
 int aether_ui_text_create(const char* text) { return make_text(text, -1); }
@@ -10115,6 +10142,11 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_print_class = aeui_find_class(env, "dev/aether/ui/AetherPrint");
     if (g_print_class) g_print_method = (*env)->GetStaticMethodID(env, g_print_class, "print",
         "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)Z");
+    g_atext_class = aeui_find_class(env, "dev/aether/ui/AetherText");
+    if (g_atext_class) {
+        g_atext_init = M(g_atext_class, "<init>", "(Landroid/content/Context;)V");
+        g_atext_typo = M(g_atext_class, "typography", "(IIIIF)V");
+    }
     g_sbar_class = aeui_find_class(env, "dev/aether/ui/AetherScrollbar");
     if (g_sbar_class) {
         g_sbar_init = M(g_sbar_class, "<init>", "(Landroid/content/Context;IZ)V");

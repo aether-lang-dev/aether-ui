@@ -50,6 +50,8 @@ typedef struct {
 // Menu items' accelerators (menu_item_accel): Primary is Command here.
 #define AEUI_PRIMARY_IS_CMD 1
 #include "aether_ui_accel.h"
+// Labels' typography beyond the font's (applied by aeui_typo_apply below).
+#include "aether_ui_typo.h"
 
 /* Runtime: reclaim a closure env through its own destructor
  * (aether_runtime.h). Declared rather than included, as the other runtime
@@ -1080,15 +1082,67 @@ static NSColor* aeui_rgb_color(int rgb) {
                                 blue:(rgb & 255) / 255.0 alpha:1.0];
 }
 
+// A label's cell: the text placed in its box by typography's vertical
+// placement and indent (aether_ui_typo.h), as the cell's own drawing rect;
+// with neither, where NSTextFieldCell puts it.
+@interface AetherLabelCell : NSTextFieldCell
+@property (assign) int aeuiValign;    // 0 the cell's, 1 top, 2 middle, 3 bottom
+@property (assign) int aeuiIndent;    // px
+@end
+
+@implementation AetherLabelCell
+- (NSRect)drawingRectForBounds:(NSRect)b {
+    NSRect r = [super drawingRectForBounds:b];
+    if (self.aeuiIndent > 0) { r.origin.x += self.aeuiIndent; r.size.width -= self.aeuiIndent; if (r.size.width < 0) r.size.width = 0; }
+    if (self.aeuiValign > 0) {
+        CGFloat th = [self cellSizeForBounds:r].height;
+        if (th < r.size.height) {
+            BOOL flipped = [[self controlView] isFlipped];
+            CGFloat room = r.size.height - th;
+            CGFloat down = self.aeuiValign == 1 ? 0 : self.aeuiValign == 2 ? room / 2 : room;   // from the top
+            r.origin.y += flipped ? down : room - down;
+            r.size.height = th;
+        }
+    }
+    return r;
+}
+@end
+
 @interface AetherLabel : NSTextField
 - (AeuiLabelDecor*)aeuiDecor;
+@property (assign) CGFloat aeuiRotation;   // degrees, counter-clockwise
 @end
 
 @implementation AetherLabel {
     AeuiLabelDecor _decor;
 }
++ (Class)cellClass { return [AetherLabelCell class]; }
 - (AeuiLabelDecor*)aeuiDecor { return &_decor; }
 - (void)drawRect:(NSRect)dirty {
+    if (self.aeuiRotation != 0.0) {
+        // Its text turned about the box's centre (typography's rotation).
+        CGFloat r = self.aeuiRotation;
+        self.aeuiRotation = 0.0;
+        [NSGraphicsContext saveGraphicsState];
+        // About the text's own centre, brought to the box's: turned text sits
+        // in the middle of its box (where the cell draws it, top left, it
+        // would turn out of the box).
+        NSRect tr = [self.cell drawingRectForBounds:self.bounds];
+        NSSize ts = [self.cell cellSizeForBounds:tr];
+        CGFloat tx = tr.origin.x + (self.alignment == NSTextAlignmentCenter ? tr.size.width / 2
+                     : self.alignment == NSTextAlignmentRight ? tr.size.width - ts.width / 2 : ts.width / 2);
+        CGFloat ty = [self isFlipped] ? tr.origin.y + ts.height / 2 : NSMaxY(tr) - ts.height / 2;
+        NSAffineTransform* t = [NSAffineTransform transform];
+        NSPoint c = NSMakePoint(NSMidX(self.bounds), NSMidY(self.bounds));
+        [t translateXBy:c.x yBy:c.y];
+        [t rotateByDegrees:[self isFlipped] ? -r : r];
+        [t translateXBy:-tx yBy:-ty];
+        [t concat];
+        [self drawRect:dirty];
+        [NSGraphicsContext restoreGraphicsState];
+        self.aeuiRotation = r;
+        return;
+    }
     NSRect b = self.bounds;
     AeuiLabelDecor* d = &_decor;
     BOOL flipped = [self isFlipped];
@@ -1175,7 +1229,9 @@ static void aeui_label_redecorate(NSTextField* tf) {
     NSNumber* ts = objc_getAssociatedObject(tf, "aeui_text_style");
     int v = ts ? ts.intValue : 0;
     NSNumber* had = objc_getAssociatedObject(tf, "aeui_decorated");
-    if (!(v & 6)) {
+    AeuiTypo* ty = aeui_typo_of(handle_for_view(tf));
+    int dbl = ty && ty->underline == 2, script = ty ? ty->script : 0;
+    if (!(v & 6) && !dbl && !script) {
         if (had.boolValue) {
             NSString* plain = [tf stringValue];
             [tf setStringValue:plain];
@@ -1190,10 +1246,34 @@ static void aeui_label_redecorate(NSTextField* tf) {
     if (tf.font) at[NSFontAttributeName] = tf.font;
     if (tf.textColor) at[NSForegroundColorAttributeName] = tf.textColor;
     at[NSParagraphStyleAttributeName] = ps;
-    if (v & 2) at[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+    if (v & 2) at[NSUnderlineStyleAttributeName] = @(dbl ? NSUnderlineStyleDouble : NSUnderlineStyleSingle);
+    else if (dbl) at[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleDouble);
+    if (script && tf.font) {
+        // Super- or subscript: the font at two thirds, its baseline moved by
+        // a third of the size, up or down.
+        CGFloat sz = tf.font.pointSize;
+        at[NSFontAttributeName] = [NSFont fontWithDescriptor:tf.font.fontDescriptor size:sz * 0.66] ?: tf.font;
+        at[NSBaselineOffsetAttributeName] = @(script == 1 ? sz * 0.33 : -sz * 0.2);
+    }
     if (v & 4) at[NSStrikethroughStyleAttributeName] = @(NSUnderlineStyleSingle);
     [tf setAttributedStringValue:[[NSAttributedString alloc] initWithString:[tf stringValue] attributes:at]];
     objc_setAssociatedObject(tf, "aeui_decorated", @YES, OBJC_ASSOCIATION_RETAIN);
+}
+
+// A label's typography (aether_ui_typo.h): the double underline and the
+// script in its attributed string (aeui_label_redecorate), the vertical
+// placement and the indent in its cell, the rotation as it draws.
+static void aeui_typo_apply(int handle, const AeuiTypo* t) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[AetherLabel class]]) return;
+    AetherLabel* l = (AetherLabel*)v;
+    if ([l.cell isKindOfClass:[AetherLabelCell class]]) {
+        ((AetherLabelCell*)l.cell).aeuiValign = t->valign;
+        ((AetherLabelCell*)l.cell).aeuiIndent = t->indent;
+    }
+    l.aeuiRotation = t->rotation;
+    aeui_label_redecorate(l);
+    [l setNeedsDisplay:YES];
 }
 
 int aether_ui_text_create(const char* text) {

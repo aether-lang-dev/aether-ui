@@ -750,6 +750,39 @@ void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
     aeui_focus_watch_add(handle, boxed_closure);
 }
 
+// A label's text turned inside its box (typography's rotation, "aeui-rot"
+// on the label: degrees counter-clockwise). GTK 4.6 offers no way to turn a
+// label's text alone: a CSS transform turns its box, background and all,
+// over its neighbours; a Pango context matrix is not drawn; GtkLabel is a
+// final type, so it cannot be subclassed. GTK draws a widget's CSS
+// background and border outside its class's snapshot, and GtkLabel's
+// snapshot draws only its text, so the label class's snapshot is wrapped,
+// once: a label with a rotation draws its text turned about the box's
+// centre, clipped to the box; every other label is drawn by GTK's own,
+// untouched.
+static void (*aeui_label_snapshot_orig)(GtkWidget*, GtkSnapshot*) = NULL;
+
+static void aeui_label_snapshot(GtkWidget* w, GtkSnapshot* snap) {
+    double* rot = (double*)g_object_get_data(G_OBJECT(w), "aeui-rot");
+    if (!rot || *rot == 0.0) { aeui_label_snapshot_orig(w, snap); return; }
+    float bw = (float)gtk_widget_get_width(w), bh = (float)gtk_widget_get_height(w);
+    gtk_snapshot_push_clip(snap, &GRAPHENE_RECT_INIT(0, 0, bw, bh));
+    gtk_snapshot_save(snap);
+    gtk_snapshot_translate(snap, &GRAPHENE_POINT_INIT(bw / 2, bh / 2));
+    gtk_snapshot_rotate(snap, (float)-*rot);
+    gtk_snapshot_translate(snap, &GRAPHENE_POINT_INIT(-bw / 2, -bh / 2));
+    aeui_label_snapshot_orig(w, snap);
+    gtk_snapshot_restore(snap);
+    gtk_snapshot_pop(snap);
+}
+
+static void aeui_label_hook_snapshot(void) {
+    if (aeui_label_snapshot_orig) return;
+    GtkWidgetClass* k = GTK_WIDGET_CLASS(g_type_class_ref(GTK_TYPE_LABEL));
+    aeui_label_snapshot_orig = k->snapshot;
+    k->snapshot = aeui_label_snapshot;
+}
+
 int aether_ui_text_create(const char* text) {
     ensure_gtk_init();
     GtkAccessibleRole nr;
@@ -3125,6 +3158,95 @@ void aether_ui_set_text_decoration(int handle, int underline, int strike) {
     int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
     ts = (ts & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
     g_object_set_data(G_OBJECT(w), "aeui-text-style", GINT_TO_POINTER(ts));
+}
+
+// A label's typography beyond the font's (aether_ui_typo.h): a double
+// underline as CSS (text-decoration-style), super- and subscript as Pango's
+// own (a baseline shift and its smaller size), the vertical placement as the
+// label's yalign, the indent as its leading padding, and the rotation as a
+// CSS transform about its centre, which GTK applies as it allocates.
+#include "aether_ui_typo.h"
+
+static gboolean aeui_script_attr(PangoAttribute* a, gpointer data) {
+    (void)data;
+    PangoAttrType ty = a->klass->type;
+    return ty == PANGO_ATTR_SCALE;
+}
+
+static void aeui_typo_apply(int handle, const AeuiTypo* t) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w || !GTK_IS_LABEL(w)) return;
+    char cls[32], rule[320];
+    snprintf(cls, sizeof(cls), "aui-ty-%d", handle);
+    gtk_widget_add_css_class(w, cls);
+    char parts[256] = "";
+    if (t->underline == 2) {
+        // A double underline, the label's strike kept (set_text_decoration's
+        // rule names the lines; this one comes after it).
+        int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
+        strncat(parts, (ts & 4) ? " text-decoration-line: underline line-through;" : " text-decoration-line: underline;", sizeof(parts) - strlen(parts) - 1);
+        strncat(parts, " text-decoration-style: double;", sizeof(parts) - strlen(parts) - 1);
+    }
+    if (t->indent > 0) {
+        char x[48];
+        snprintf(x, sizeof(x), " padding-left: %dpx;", t->indent);
+        strncat(parts, x, sizeof(parts) - strlen(parts) - 1);
+    }
+
+    snprintf(rule, sizeof(rule), "label.%s {%s }", cls, parts);
+    global_css_set_keyed(cls, rule);
+    // The label's other attributes (weight, size, italic ...) kept; its
+    // script's replaced.
+    PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+    attrs = attrs ? pango_attr_list_copy(attrs) : pango_attr_list_new();
+    PangoAttrList* gone = pango_attr_list_filter(attrs, aeui_script_attr, NULL);
+    if (gone) pango_attr_list_unref(gone);
+    if (t->script) {
+        // Two thirds the size, the baseline a third of it up or a fifth down.
+        double px = 13.0;
+        PangoAttrList* cur = gtk_label_get_attributes(GTK_LABEL(w));
+        PangoAttrIterator* it = cur ? pango_attr_list_get_iterator(cur) : NULL;
+        if (it) {
+            PangoAttribute* sz = pango_attr_iterator_get(it, PANGO_ATTR_SIZE);
+            if (!sz) sz = pango_attr_iterator_get(it, PANGO_ATTR_ABSOLUTE_SIZE);
+            if (sz) px = ((PangoAttrSize*)sz)->size / (double)PANGO_SCALE;
+            pango_attr_iterator_destroy(it);
+        }
+        // The size as Pango's scale; the baseline moved by padding the
+        // other side (GTK 4.6 draws Pango's rise nowhere): padding below a
+        // centred label lifts its text by half of it.
+        pango_attr_list_insert(attrs, pango_attr_scale_new(0.66));
+        char pad[64];
+        snprintf(pad, sizeof(pad), "label.%s.aui-ty-script { %s: %dpx; }", cls,
+                 t->script == 1 ? "padding-bottom" : "padding-top", (int)(px * (t->script == 1 ? 0.66 : 0.4) + 0.5));
+        char key[48];
+        snprintf(key, sizeof(key), "%s-script", cls);
+        gtk_widget_add_css_class(w, "aui-ty-script");
+        global_css_set_keyed(key, pad);
+    } else if (gtk_widget_has_css_class(w, "aui-ty-script")) {
+        gtk_widget_remove_css_class(w, "aui-ty-script");
+    }
+    gtk_label_set_attributes(GTK_LABEL(w), attrs);
+    pango_attr_list_unref(attrs);
+    gtk_label_set_yalign(GTK_LABEL(w), t->valign == 1 ? 0.0f : t->valign == 3 ? 1.0f : 0.5f);
+    // The rotation: the text turned as it is drawn (aeui_label_snapshot),
+    // centred in its box first so that it turns about its own middle.
+    aeui_label_hook_snapshot();
+    double* rot = (double*)g_object_get_data(G_OBJECT(w), "aeui-rot");
+    if (!rot) {
+        rot = g_new0(double, 1);
+        g_object_set_data_full(G_OBJECT(w), "aeui-rot", rot, g_free);
+    }
+    if (t->rotation != 0.0 && *rot == 0.0) {
+        g_object_set_data(G_OBJECT(w), "aeui-rot-xalign", GINT_TO_POINTER((int)(gtk_label_get_xalign(GTK_LABEL(w)) * 1000) + 1));
+        gtk_label_set_xalign(GTK_LABEL(w), 0.5f);
+        gtk_label_set_yalign(GTK_LABEL(w), 0.5f);
+    } else if (t->rotation == 0.0 && *rot != 0.0) {
+        int xa = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-rot-xalign"));
+        if (xa > 0) gtk_label_set_xalign(GTK_LABEL(w), (xa - 1) / 1000.0f);
+    }
+    *rot = t->rotation;
+    gtk_widget_queue_draw(w);
 }
 
 int aether_ui_styled_text_style_impl(int handle) {

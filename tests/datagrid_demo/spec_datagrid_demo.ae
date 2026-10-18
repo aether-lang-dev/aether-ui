@@ -13,6 +13,7 @@ import uidriver
 import std.string
 import std.json
 import std.os
+import std.fs
 
 // How many widgets of `type` /widgets lists.
 count_of(type: string) -> int {
@@ -252,8 +253,8 @@ press(label: string) {
 // target/datagrid-snapshots/<name>.png (to be looked at), and its size from
 // the PNG's header, "WxH" ("" where there is no screenshot, or no python3).
 snapshot(name: string) -> string {
-    dir = "${os.os_getenv("PWD")}/target/datagrid-snapshots"
-    _m, _me = os.exec("mkdir -p ${dir}")
+    dir = "target/datagrid-snapshots"
+    _mk = fs.mkdir_p(dir)
     out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
     if string.contains(out, "200") == 0 { return "" }
     dims, _de = os.exec("python3 -c \"import struct,sys; b=open(sys.argv[1],'rb').read(24); print('%dx%d' % struct.unpack('>II', b[16:24]))\" ${dir}/${name}.png")

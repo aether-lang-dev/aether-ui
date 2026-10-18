@@ -304,6 +304,13 @@ void aether_ui_set_font_bold(int handle, int bold);
 // never set.
 void aether_ui_set_font_italic(int handle, int italic);
 void aether_ui_set_text_decoration(int handle, int underline, int strike);
+/* A label's typography beyond the calls above (aether_ui_typo.h): underline
+   2 a double one (with set_text_decoration's underline on), script 1 super-
+   and 2 subscript, valign 1 top 2 middle 3 bottom (0 the platform's), an
+   indent in px, a rotation in degrees counter-clockwise (-90 to 90). */
+void aether_ui_text_set_typography(int handle, int underline, int script, int valign,
+                                   int indent, double rotation);
+const char* aether_ui_text_typography_impl(int handle);
 int aether_ui_styled_text_style_impl(int handle);
 // A text label's cell decorations, drawn inside its box: a line on any of
 // its four edges (width in px, 0 for none; rgb 0xRRGGBB), over the

@@ -1,0 +1,106 @@
+// spec_typography_demo.ae — a label's typography (style_typography), read
+// back and DRAWN: /widgets reports each label's "typography", and a
+// /screenshot is measured (ink.py) for where each label's ink falls in its
+// 160 x 56 box: a double underline is two rows of ink across the word, a
+// superscript sits higher and smaller than a subscript, an indent moves the
+// ink right, top and bottom move it up and down, a 90° turn makes it
+// taller than wide, and typography taken off draws as plain again.
+import std.spec
+import uidriver
+import std.string
+import std.os
+import std.fs
+
+box_of(t: string) -> string {
+    id = uidriver.widget_id_by_text(t)
+    return "${string.string_replace_all(t, " ", "_")}:${uidriver.widget_int_field_by_id(id, "x")}:${uidriver.widget_int_field_by_id(id, "y")}:160:56"
+}
+
+// "top bottom left right rows" for the label showing t, from one
+// screenshot's measures, or "".
+measure(all: string, t: string) -> string {
+    at = string.index_of(all, "${string.string_replace_all(t, " ", "_")} ")
+    if at < 0 { return "" }
+    rest = string.substring(all, at + string.length(t) + 1, string.length(all))   // the name, spaces as _
+    nl = string.index_of(rest, "\n")
+    if nl >= 0 { rest = string.substring(rest, 0, nl) }
+    return string.trim(rest)
+}
+
+// The n-th number of a measure (0 top, 1 bottom, 2 left, 3 right, 4 rows).
+num(m: string, n: int) -> float {
+    parts = string.string_split(m, " ")
+    v = 0.0
+    if string.string_array_size(parts) > n {
+        f, _e = string.to_float(string.string_array_get(parts, n))
+        v = f
+    }
+    string.string_array_free(parts)
+    return v
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    uidriver.resize_window(400, 420)
+    dir = "target/typography-snapshots"
+    _mk = fs.mkdir_p(dir)
+
+    spec.describe(fw, "a label's typography, read back and drawn") {
+        spec.it("each label reports its typography; one taken off reports none") callback {
+            b = uidriver.get_body("/widgets")
+            spec.assert_contains(b, "\"typography\":\"u2 s0 v0 i0 r0\"", "Double: a double underline")
+            spec.assert_contains(b, "\"typography\":\"u0 s1 v0 i0 r0\"", "Super")
+            spec.assert_contains(b, "\"typography\":\"u0 s2 v0 i0 r0\"", "Sub")
+            spec.assert_contains(b, "\"typography\":\"u0 s0 v0 i40 r0\"", "Indent 40")
+            spec.assert_contains(b, "\"typography\":\"u0 s0 v1 i0 r0\"", "Top")
+            spec.assert_contains(b, "\"typography\":\"u0 s0 v3 i0 r0\"", "Bottom")
+            spec.assert_contains(b, "\"typography\":\"u0 s0 v0 i0 r90\"", "Turned 90")
+            back = uidriver.get_body("/widget/${uidriver.widget_id_by_text("Back to plain")}")
+            spec.assert_false(string.contains(back, "typography") == 1, "Back to plain has none")
+        }
+        spec.it("and each is drawn so") callback {
+            sleep(500)
+            png = "${dir}/typography.png"
+            out, _ce = os.exec("curl -s -o ${png} -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
+            if string.contains(out, "200") == 0 {
+                println("      (no /screenshot on this backend: drawn checks skipped)")
+                return
+            }
+            // The driver's banner, where /widgets puts it: ink.py finds it
+            // in the picture for the scale and the offset.
+            bn = uidriver.widget_id_by_text("Under Remote Control")
+            banner = "${uidriver.widget_int_field_by_id(bn, "x")}:${uidriver.widget_int_field_by_id(bn, "y")}:${uidriver.widget_int_field_by_id(bn, "w")}:${uidriver.widget_int_field_by_id(1, "w")}"
+            boxes = "${box_of("Plain")} ${box_of("Double")} ${box_of("Super")} ${box_of("Sub")} ${box_of("Indent")} ${box_of("Top")} ${box_of("Bottom")} ${box_of("Turned")} ${box_of("Back to plain")}"
+            all, _ie = os.exec("python3 ink.py ${png} ${banner} ${boxes}")
+            println("      ink: ${string.string_replace_all(string.trim(all), "\n", " | ")}")
+            plain = measure(all, "Plain")
+            spec.assert_true(string.length(plain) > 0 && string.contains(plain, "none") == 0, "Plain has ink")
+            dbl = measure(all, "Double")
+            spec.assert_true(num(dbl, 4) >= 2.0, "Double: two rows of ink across it (${dbl})")
+            spec.assert_true(num(plain, 4) < 1.0, "Plain: none (${plain})")
+            sup = measure(all, "Super")
+            sub = measure(all, "Sub")
+            // Their tops (capitals both): Super's descender and Sub's ascender
+            // would skew their middles.
+            spec.assert_true(num(sup, 0) + 2.0 < num(sub, 0), "Super sits higher than Sub (top ${num(sup, 0)} vs ${num(sub, 0)})")
+            spec.assert_true(num(sup, 1) - num(sup, 0) < num(plain, 1) - num(plain, 0), "and smaller than Plain")
+            ind = measure(all, "Indent")
+            spec.assert_true(num(ind, 2) > num(plain, 2) + 25.0, "Indent: the ink 40 to the right (${num(ind, 2)} vs ${num(plain, 2)})")
+            top = measure(all, "Top")
+            bot = measure(all, "Bottom")
+            // The platform's own placement (Plain's) is the top on AppKit and
+            // the middle on GTK: Top is no lower than it, Bottom well below.
+            spec.assert_true(num(top, 0) <= num(plain, 0) + 1.5, "Top: at the top (${num(top, 0)} vs Plain's ${num(plain, 0)})")
+            spec.assert_true(num(top, 0) < 12.0, "within the box's top fifth")
+            spec.assert_true(num(bot, 1) > 44.0, "Bottom: at the bottom (${num(bot, 1)} of 56)")
+            turn = measure(all, "Turned")
+            spec.assert_true(num(turn, 1) - num(turn, 0) > num(turn, 3) - num(turn, 2), "Turned: taller than wide (${turn})")
+            back = measure(all, "Back to plain")
+            d = num(back, 0) - num(plain, 0)
+            if d < 0.0 { d = 0.0 - d }
+            spec.assert_true(d < 4.0 && num(back, 4) < 1.0 && num(back, 2) < num(plain, 2) + 4.0, "Back to plain: drawn plain (${back})")
+        }
+    }
+    return spec.run_summary(fw)
+}

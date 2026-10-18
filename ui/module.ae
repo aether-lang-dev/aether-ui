@@ -57,7 +57,7 @@ exports (
     style_bg_color, style_text_color, style_font_size, style_font_bold,
     styled_bg, styled_fg,
     style_bg_gradient, style_corner_radius, style_flat, style_disclosure,
-    style_opacity, style_border, style_italic, style_text_decoration, style_cell_decor,
+    style_opacity, style_border, style_italic, style_text_decoration, style_typography, style_cell_decor,
     style_hover, style_active,
     style_enabled, style_tooltip,
     create_styles, st_color, st_bg, st_font_size, st_bold, st_weight,
@@ -376,6 +376,7 @@ extern aether_ui_set_font_size(handle: int, size: float)
 extern aether_ui_set_font_bold(handle: int, bold: int)
 extern aether_ui_set_font_italic(handle: int, italic: int)
 extern aether_ui_set_text_decoration(handle: int, underline: int, strike: int)
+extern aether_ui_text_set_typography(handle: int, underline: int, script: int, valign: int, indent: int, rotation: float)
 extern aether_ui_text_set_decor(handle: int, top: int, top_rgb: int, right: int, right_rgb: int, bottom: int, bottom_rgb: int, left: int, left_rgb: int, bar: float, bar_rgb: int, corner_rgb: int)
 extern aether_ui_set_font_family(handle: int, family: string)
 extern aether_ui_set_corner_radius(handle: int, radius: float)
@@ -2547,6 +2548,18 @@ style_italic(handle: int, on: int) -> int {
 }
 style_text_decoration(handle: int, underline: int, strike: int) -> int {
     aether_ui_set_text_decoration(handle, underline, strike)
+    return handle
+}
+
+// style_typography(handle, underline, script, valign, indent, rotation): a
+// label's typography beyond its font: underline 2 a double one (a single
+// one, and strike, are style_text_decoration's; a strike is kept), script 1 superscript and 2 subscript,
+// valign 1 top 2 middle 3 bottom in its box (0 the platform's), an indent
+// in px from the leading edge, a rotation in degrees counter-clockwise (-90
+// to 90, about its centre). Each keeps through later text changes; all 0
+// returns it to plain. /widgets reports it as "typography".
+style_typography(handle: int, underline: int, script: int, valign: int, indent: int, rotation: float) -> int {
+    aether_ui_text_set_typography(handle, underline, script, valign, indent, rotation)
     return handle
 }
 
@@ -8425,7 +8438,10 @@ _datagrid_hash(s: string) -> long {
 // text-align: font-style (italic), text-decoration (underline,
 // line-through), font-size (px), border and border-top/right/bottom/left
 // ("1px solid #000"; the width and the colour are read, the line is solid),
-// --fill and --fill-color (a data bar), and --corner (a comment marker).
+// --fill and --fill-color (a data bar), --corner (a comment marker), and
+// typography: text-decoration-style: double, vertical-align (super, sub;
+// top, middle, bottom), padding-left or text-indent (px), and --rotate
+// (degrees, counter-clockwise).
 _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     bg = 0 - 1
     fg = 0 - 1
@@ -8445,6 +8461,11 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     wrap = 0
     fill_rgb = DATAGRID_FILL_COLOUR
     corner = 0 - 1
+    dbl = 0
+    script = 0
+    valign = 0
+    indent = 0
+    rot = 0.0
     parts = string.string_split(st, ";")
     np = string.string_array_size(parts)
     k = 0
@@ -8471,6 +8492,26 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
                 if string.contains(val, "line-through") == 1 { strike = 1 }
             }
             if string.equals(name, "font-size") == 1 { size = _datagrid_px(val) }
+            if string.equals(name, "text-decoration-style") == 1 && string.equals(val, "double") == 1 { dbl = 1 }
+            if string.equals(name, "text-decoration") == 1 && string.contains(val, "double") == 1 { dbl = 1 }
+            if string.equals(name, "vertical-align") == 1 {
+                if string.equals(val, "super") == 1 { script = 1 }
+                if string.equals(val, "sub") == 1 { script = 2 }
+                if string.equals(val, "top") == 1 { valign = 1 }
+                if string.equals(val, "middle") == 1 { valign = 2 }
+                if string.equals(val, "bottom") == 1 { valign = 3 }
+            }
+            if string.equals(name, "padding-left") == 1 || string.equals(name, "text-indent") == 1 { indent = (_datagrid_px(val) + 0.5) as int }
+            if string.equals(name, "--rotate") == 1 {
+                neg = 0
+                rv = val
+                if string.length(rv) > 0 && string.char_at(rv, 0) == 45 {
+                    neg = 1
+                    rv = string.substring(rv, 1, string.length(rv))
+                }
+                rot = _datagrid_px(rv)
+                if neg == 1 { rot = 0.0 - rot }
+            }
             side = 0 - 1
             if string.equals(name, "border") == 1 { side = 4 }
             if string.equals(name, "border-top") == 1 { side = 0 }
@@ -8542,8 +8583,15 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     }
     if hasdec == 1 { fx = fx + 8 }
     if wrap == 1 { fx = fx + 16 }
+    if dbl == 1 || script > 0 || valign > 0 || indent > 0 || rot != 0.0 { fx = fx + 32 }
     if italic == 1 || (was % 2) == 1 { aether_ui_set_font_italic(h, italic) }
-    if fx / 2 % 2 == 1 || (was / 2) % 2 == 1 { aether_ui_set_text_decoration(h, under, strike) }
+    if dbl == 1 { under = 1 }
+    if fx / 2 % 2 == 1 || (was / 2) % 2 == 1 || dbl == 1 { aether_ui_set_text_decoration(h, under, strike) }
+    // A double underline, super- or subscript, the vertical placement, an
+    // indent and a rotation (--rotate: 45deg, counter-clockwise).
+    ul = 0
+    if dbl == 1 { ul = 2 }
+    if fx / 32 % 2 == 1 || (was / 32) % 2 == 1 { aether_ui_text_set_typography(h, ul, script, valign, indent, rot) }
     // Size 0 is the platform's own.
     if fx / 4 % 2 == 1 || (was / 4) % 2 == 1 { aether_ui_set_font_size(h, size) }
     if hasdec == 1 || (was / 8) % 2 == 1 {

@@ -106,6 +106,8 @@ typedef struct {
 // Menu items' accelerators (menu_item_accel): Primary is Command here.
 #define AEUI_PRIMARY_IS_CMD 1
 #include "aether_ui_accel.h"
+// Labels' typography beyond the font's (applied by aeui_typo_apply below).
+#include "aether_ui_typo.h"
 
 // Adopted by every helper that holds a boxed closure for its widget (a
 // control's target, a tap target, a delegate, a layout hook, the picker),
@@ -1017,13 +1019,53 @@ static UIColor* aeui_rgb_uicolor(int rgb) {
 
 @interface AetherUILabel : UILabel
 - (AeuiLabelDecor*)aeuiDecor;
+@property (assign) int aeuiValign;        // 0 UILabel's (centred), 1 top, 2 middle, 3 bottom
+@property (assign) int aeuiIndent;        // pt
+@property (assign) CGFloat aeuiRotation;  // degrees, counter-clockwise
 @end
 
 @implementation AetherUILabel {
     AeuiLabelDecor _decor;
 }
 - (AeuiLabelDecor*)aeuiDecor { return &_decor; }
+// Typography's indent and vertical placement (aether_ui_typo.h), as the
+// rect the text is drawn in.
+- (CGRect)aeuiTextRect:(CGRect)b {
+    CGRect r = b;
+    if (self.aeuiIndent > 0) { r.origin.x += self.aeuiIndent; r.size.width = MAX(0, r.size.width - self.aeuiIndent); }
+    if (self.aeuiValign > 0) {
+        CGRect t = [self textRectForBounds:r limitedToNumberOfLines:self.numberOfLines];
+        CGFloat room = r.size.height - t.size.height;
+        if (room > 0) {
+            r.origin.y += self.aeuiValign == 1 ? 0 : self.aeuiValign == 2 ? room / 2 : room;
+            r.size.height = t.size.height;
+        }
+    }
+    return r;
+}
+- (void)drawTextInRect:(CGRect)rect {
+    if (self.aeuiValign == 0 && self.aeuiIndent == 0) { [super drawTextInRect:rect]; return; }
+    [super drawTextInRect:[self aeuiTextRect:rect]];
+}
 - (void)drawRect:(CGRect)rect {
+    if (self.aeuiRotation != 0.0) {
+        // Turned about its own centre, brought to the box's, clipped to it.
+        CGFloat r = self.aeuiRotation;
+        self.aeuiRotation = 0.0;
+        CGContextRef c = UIGraphicsGetCurrentContext();
+        CGContextSaveGState(c);
+        CGContextClipToRect(c, self.bounds);
+        CGRect tr = [self textRectForBounds:self.bounds limitedToNumberOfLines:self.numberOfLines];
+        CGFloat tx = CGRectGetMidX(tr), ty = CGRectGetMidY(tr);
+        if (self.textAlignment == NSTextAlignmentLeft || self.textAlignment == NSTextAlignmentNatural) tx = tr.origin.x + tr.size.width / 2;
+        CGContextTranslateCTM(c, CGRectGetMidX(self.bounds), CGRectGetMidY(self.bounds));
+        CGContextRotateCTM(c, -r * M_PI / 180.0);
+        CGContextTranslateCTM(c, -tx, -ty);
+        [self drawRect:rect];
+        CGContextRestoreGState(c);
+        self.aeuiRotation = r;
+        return;
+    }
     CGRect b = self.bounds;
     AeuiLabelDecor* d = &_decor;
     BOOL rtl = self.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft;
@@ -1067,7 +1109,9 @@ static UIColor* aeui_rgb_uicolor(int rgb) {
 static void aeui_uilabel_redecorate(UILabel* l) {
     NSNumber* ts = objc_getAssociatedObject(l, "aeui_text_style");
     int v = ts ? ts.intValue : 0;
-    if (!(v & 6)) {
+    AeuiTypo* ty = aeui_typo_of(aether_ui_handle_for_widget((__bridge void*)l));
+    int dbl = ty && ty->underline == 2, script = ty ? ty->script : 0;
+    if (!(v & 6) && !dbl && !script) {
         NSNumber* had = objc_getAssociatedObject(l, "aeui_decorated");
         if (had.boolValue) {
             NSString* plain = l.text ?: @"";
@@ -1084,14 +1128,35 @@ static void aeui_uilabel_redecorate(UILabel* l) {
     if (l.font) at[NSFontAttributeName] = l.font;
     if (l.textColor) at[NSForegroundColorAttributeName] = l.textColor;
     at[NSParagraphStyleAttributeName] = ps;
-    if (v & 2) at[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+    if (v & 2 || dbl) at[NSUnderlineStyleAttributeName] = @(dbl ? NSUnderlineStyleDouble : NSUnderlineStyleSingle);
     if (v & 4) at[NSStrikethroughStyleAttributeName] = @(NSUnderlineStyleSingle);
+    if (script && l.font) {
+        // Super- or subscript: two thirds the size, the baseline a third of
+        // it up or a fifth down.
+        CGFloat sz = l.font.pointSize;
+        at[NSFontAttributeName] = [l.font fontWithSize:sz * 0.66];
+        at[NSBaselineOffsetAttributeName] = @(script == 1 ? sz * 0.33 : -sz * 0.2);
+    }
     l.attributedText = [[NSAttributedString alloc] initWithString:(l.text ?: @"") attributes:at];
     objc_setAssociatedObject(l, "aeui_decorated", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 static void aeui_view_redecorate(UIView* v) {
     if ([v isKindOfClass:[UILabel class]]) aeui_uilabel_redecorate((UILabel*)v);
+}
+
+// A label's typography (aether_ui_typo.h): the double underline and the
+// script in its attributed string, the placement and indent where its text
+// is drawn, the rotation as it draws.
+static void aeui_typo_apply(int handle, const AeuiTypo* t) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (![v isKindOfClass:[AetherUILabel class]]) return;
+    AetherUILabel* l = (AetherUILabel*)v;
+    l.aeuiValign = t->valign;
+    l.aeuiIndent = t->indent;
+    l.aeuiRotation = t->rotation;
+    aeui_uilabel_redecorate(l);
+    [l setNeedsDisplay];
 }
 
 int aether_ui_text_create(const char* text) {

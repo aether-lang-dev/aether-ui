@@ -482,6 +482,9 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
                       ",\"wrap\":%s,\"anchor\":\"%s\",\"truncate\":\"%s\"",
                       aether_ui_text_get_wrap(handle) ? "true" : "false",
                       an[a], tr[t]);
+        // Its typography beyond the font's (aether_ui_typo.h), when it has any.
+        const char* ty = aether_ui_text_typography_impl(handle);
+        if (ty && ty[0]) n += snprintf(buf + n, bufsize - n, ",\"typography\":\"%s\"", ty);
     } else if (strcmp(type, "image") == 0) {
         static const char* fm[] = {"original", "contain", "cover", "stretch"};
         int f = aether_ui_image_get_fill(handle);
