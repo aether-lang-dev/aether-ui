@@ -2884,8 +2884,13 @@ void aether_ui_navstack_pop(int handle) {
 // Apply CSS scoped to a single widget via a unique class name.
 // Each widget gets "aui-{handle}" as a CSS class, and the CSS rule
 // targets that class specifically — no global side effects.
-// Single global CSS provider — every styling rule, in one sheet.
-static GtkCssProvider* global_css_provider = NULL;
+// Every styling rule, in a few sheets: a widget's rules go in the sheet its
+// handle's number picks (css_bucket), so one big sheet is not parsed whole
+// (see global_css_reload).
+#define AEUI_CSS_BUCKETS 64
+static GtkCssProvider* css_provider[AEUI_CSS_BUCKETS];
+static char* css_loaded[AEUI_CSS_BUCKETS];       // the text each was last given
+static GString* css_text[AEUI_CSS_BUCKETS];      // and what it is to be
 
 // A widget's own rules (aether_ui_apply_css: one property each; its hover
 // and pressed looks), one per key, each replaced where it stands and kept in
@@ -2907,7 +2912,6 @@ static GHashTable* widget_css_index = NULL;   // key -> position + 1
 static GPtrArray* widget_css_rules = NULL;    // rule text in order; NULL a hole
 static GHashTable* widget_css_keys = NULL;    // handle -> GPtrArray of its keys
 static guint widget_css_holes = 0;
-static GString* css_sheet_text = NULL;
 
 static void global_css_reload(void);
 
@@ -2995,12 +2999,6 @@ static void css_forget_handle(int handle) {
 // the sheet without end. Loaded after the widget rules above.
 static GHashTable* keyed_css = NULL;   // declared above, for css_forget_handle
 
-static void keyed_css_collect(gpointer k, gpointer v, gpointer data) {
-    (void)k;
-    g_string_append((GString*)data, (const char*)v);
-    g_string_append_c((GString*)data, '\n');
-}
-
 static void global_css_set_keyed(const char* key, const char* rule) {
     if (!keyed_css) keyed_css = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     const char* was = g_hash_table_lookup(keyed_css, key);
@@ -3009,27 +3007,69 @@ static void global_css_set_keyed(const char* key, const char* rule) {
     global_css_reload();
 }
 
+// The sheet a rule belongs in: the number of the widget it is for (the
+// first digits after its "aui-": .aui-12, button.flat.aui-bg-12:hover,
+// label.aui-ty-12-script), modulo the sheets. A widget's rules, the base and
+// the hover, stay together, so which of them wins is as it was in one sheet.
+static unsigned css_bucket(const char* text) {
+    const char* p = text ? strstr(text, "aui-") : NULL;
+    if (!p) return 0;
+    for (p += 4; *p && (*p < '0' || *p > '9'); p++) {
+        if (*p == ' ' || *p == '{' || *p == ':' || *p == '\n') return 0;
+    }
+    unsigned long n = 0;
+    for (; *p >= '0' && *p <= '9'; p++) n = n * 10 + (unsigned long)(*p - '0');
+    return (unsigned)(n % AEUI_CSS_BUCKETS);
+}
+
+// The rules, widget by widget and keyed, in AEUI_CSS_BUCKETS sheets, each
+// loaded only when its text changed. One sheet of them all was parsed whole
+// on every rule set: slow with a thousand widgets styled (a page's dark mode
+// styles each one), and on GTK 4.6 (Ubuntu 22.04), whose selector-tree
+// builder recurses once for about each class, a stack overflow inside
+// gtk_css_provider_load_from_data: sae's spreadsheet crashed in dark mode on
+// aether-linux, 1,400 widgets in. A sheet holds a sixty-fourth of them.
 static void global_css_reload(void) {
     if (!widget_css_rules && !keyed_css) return;
     ensure_gtk_init();
     GdkDisplay* display = gdk_display_get_default();
     if (!display) return;
-    if (!global_css_provider) {
-        global_css_provider = gtk_css_provider_new();
-        gtk_style_context_add_provider_for_display(
-            display, GTK_STYLE_PROVIDER(global_css_provider),
-            GTK_STYLE_PROVIDER_PRIORITY_USER);
+    for (int b = 0; b < AEUI_CSS_BUCKETS; b++) {
+        if (!css_text[b]) css_text[b] = g_string_new(NULL);
+        g_string_truncate(css_text[b], 0);
     }
-    if (!css_sheet_text) css_sheet_text = g_string_new(NULL);
-    g_string_truncate(css_sheet_text, 0);
     for (guint i = 0; widget_css_rules && i < widget_css_rules->len; i++) {
         const gchar* rule = g_ptr_array_index(widget_css_rules, i);
         if (!rule) continue;
-        g_string_append(css_sheet_text, rule);
-        g_string_append_c(css_sheet_text, '\n');
+        GString* sheet = css_text[css_bucket(rule)];
+        g_string_append(sheet, rule);
+        g_string_append_c(sheet, '\n');
     }
-    if (keyed_css) g_hash_table_foreach(keyed_css, keyed_css_collect, css_sheet_text);
-    gtk_css_provider_load_from_data(global_css_provider, css_sheet_text->str, -1);
+    if (keyed_css) {
+        GHashTableIter it;
+        gpointer key, rule;
+        g_hash_table_iter_init(&it, keyed_css);
+        while (g_hash_table_iter_next(&it, &key, &rule)) {
+            // A key is its class's name (aui-bg-12, aui-ty-12-script): the
+            // rule names the class too, and says the same number.
+            GString* sheet = css_text[css_bucket((const char*)key)];
+            g_string_append(sheet, (const char*)rule);
+            g_string_append_c(sheet, '\n');
+        }
+    }
+    for (int b = 0; b < AEUI_CSS_BUCKETS; b++) {
+        const char* now = css_text[b]->str;
+        if (css_loaded[b] ? strcmp(css_loaded[b], now) == 0 : now[0] == 0) continue;
+        if (!css_provider[b]) {
+            css_provider[b] = gtk_css_provider_new();
+            gtk_style_context_add_provider_for_display(
+                display, GTK_STYLE_PROVIDER(css_provider[b]),
+                GTK_STYLE_PROVIDER_PRIORITY_USER);
+        }
+        gtk_css_provider_load_from_data(css_provider[b], now, -1);
+        g_free(css_loaded[b]);
+        css_loaded[b] = g_strdup(now);
+    }
 }
 
 static void aether_ui_apply_css(int handle, GtkWidget* widget, const char* property_css) {
