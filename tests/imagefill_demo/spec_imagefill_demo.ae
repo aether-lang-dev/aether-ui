@@ -15,6 +15,35 @@
 import std.spec
 import uidriver
 import std.string
+import std.os
+
+// The window as a PNG; "" when the backend has no /screenshot. A capture
+// can miss a frame in flight (GTK under Xvfb), so it is taken again.
+snapshot(name: string) -> string {
+    dir = "${os.os_getenv("PWD")}/target/imagefill-snapshots"
+    _m, _me = os.exec("mkdir -p ${dir}")
+    tries = 0
+    while tries < 5 {
+        out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
+        if string.contains(out, "200") == 1 { return "${dir}/${name}.png" }
+        tries = tries + 1
+        _w, _we = os.exec("sleep 0.3")
+    }
+    return ""
+}
+
+// "r,g,b" of the PNG's pixel (x, y), in the PNG's own pixels.
+px(png: string, x: int, y: int) -> string {
+    out, _e = os.exec("python3 -I ../lib/png_pixel.py ${png} ${x} ${y}")
+    return string.trim(out)
+}
+
+// The image shown beside a label: the label's row is the image's parent.
+image_beside(label: string) -> int {
+    lid = uidriver.widget_id_by_text(label)
+    row = uidriver.widget_int_field_by_id(lid, "parent")
+    return uidriver.widget_id_of_parent("image", row)
+}
 
 main() {
     fw = spec.init()
@@ -48,6 +77,39 @@ main() {
                 "one original")
             spec.assert_eq(uidriver.count_occurrences(b, "\"fill\":\"contain\""), 1,
                 "one contain")
+        }
+
+        // The reported mode is only worth what is on screen: the picture
+        // is 4x2 in a 96x96 box, so the strip across the TOP of the box is
+        // empty (window background) for original and contain, which leave
+        // bands, and painted for cover and stretch, which fill the box.
+        // GTK 4.6 has no content-fit, so this is what pins its own scaling.
+        spec.it("what is drawn matches the mode reported") callback {
+            png = snapshot("modes")
+            if string.length(png) == 0 { return }
+            root = uidriver.widget_int_field_by_id(1, "w")
+            sw, _se = os.exec("python3 -I ../lib/png_pixel.py ${png} width")
+            pw, _pe = string.to_int(string.trim(sw))
+            labels = ["original", "contain", "cover", "stretch"]
+            i = 0
+            while i < 4 {
+                lab = labels[i]
+                img = image_beside(lab)
+                spec.assert_gt(img, 0, "image beside ${lab}")
+                // Points to PNG pixels (a retina capture is 2x).
+                x = uidriver.widget_int_field_by_id(img, "x") * pw / root
+                y = uidriver.widget_int_field_by_id(img, "y") * pw / root
+                w = uidriver.widget_int_field_by_id(img, "w") * pw / root
+                top = px(png, x + w / 2, y + 3 * pw / root)
+                bg = px(png, pw - 6, y + 3 * pw / root)
+                mode = uidriver.widget_str_field_by_id(img, "fill")
+                if mode == "cover" || mode == "stretch" {
+                    spec.assert_true(string.equals(top, bg) == 0, "${lab} (${mode}) paints the top of the box: ${top} vs ${bg}")
+                } else {
+                    spec.assert_str_eq(top, bg, "${lab} (${mode}) leaves the top of the box empty")
+                }
+                i = i + 1
+            }
         }
     }
     return spec.run_summary(fw)

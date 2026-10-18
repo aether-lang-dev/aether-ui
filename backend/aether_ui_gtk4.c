@@ -30,10 +30,9 @@
 // change:
 //   G_APPLICATION_DEFAULT_FLAGS (GLib 2.74) -> G_APPLICATION_FLAGS_NONE, the
 //       same value under its pre-2.74 (deprecated since) name.
-//   GtkContentFit (GTK 4.8) -> keep-aspect-ratio. Only CONTAIN (aspect kept)
-//       and FILL (stretched) are expressible on 4.6, so ORIGINAL and COVER
-//       apply as CONTAIN and image_get_fill REPORTS contain -- the effective
-//       mode, never the requested one (AGENTS.md).
+//   GtkContentFit (GTK 4.8) -> a wrapping GdkPaintable (AeuiFitPaintable)
+//       that places the picture itself, so all four image_fill modes are
+//       real on 4.6 too; see aeui_picture_set_fill.
 //   gtk_check_button_set_child (GTK 4.8) -> none. A 4.6 check button has no
 //       child slot, so a chrome-drawn toggle keeps its native face and label.
 // ---------------------------------------------------------------------------
@@ -5370,7 +5369,101 @@ void aether_ui_sheet_dismiss_impl(int handle) {
 }
 
 // image_fill mode (0 original, 1 contain, 2 cover, 3 stretch) <-> GtkPicture.
-// On GTK < 4.8 there is no content-fit: see the version-floor note at the top.
+//
+// GTK >= 4.8 maps the four modes onto GtkContentFit directly (original is
+// SCALE_DOWN: the picture's own size, shrunk to fit, never enlarged). GTK 4.6
+// has only keep-aspect-ratio (contain or fill), which left ORIGINAL and COVER
+// unexpressible and the getter reporting contain for both. There the picture
+// shows an AeuiFitPaintable instead: a GdkPaintable that wraps the real one
+// and places it in whatever box the picture hands it, per mode, with the
+// picture's own aspect-keeping turned off so the whole box arrives here.
+#if !AEUI_HAVE_CONTENT_FIT
+#define AEUI_TYPE_FIT_PAINTABLE (aeui_fit_paintable_get_type())
+G_DECLARE_FINAL_TYPE(AeuiFitPaintable, aeui_fit_paintable, AEUI, FIT_PAINTABLE, GObject)
+struct _AeuiFitPaintable {
+    GObject parent_instance;
+    GdkPaintable* child;
+    int mode;
+    gulong id_contents, id_size;
+};
+static void aeui_fit_snapshot(GdkPaintable* self_p, GdkSnapshot* snap, double w, double h) {
+    AeuiFitPaintable* self = (AeuiFitPaintable*)self_p;
+    if (!self->child || w <= 0 || h <= 0) return;
+    double iw = gdk_paintable_get_intrinsic_width(self->child);
+    double ih = gdk_paintable_get_intrinsic_height(self->child);
+    if (iw <= 0 || ih <= 0) {            // no natural size: it fills the box
+        gdk_paintable_snapshot(self->child, snap, w, h);
+        return;
+    }
+    double dw = w, dh = h;
+    if (self->mode != 3) {
+        double sx = w / iw, sy = h / ih;
+        double s = self->mode == 2 ? (sx > sy ? sx : sy)           // cover
+                 : (sx < sy ? sx : sy);                            // contain, original
+        if (self->mode == 0 && s > 1.0) s = 1.0;                   // original: never enlarged
+        dw = iw * s; dh = ih * s;
+    }
+    graphene_rect_t clip = GRAPHENE_RECT_INIT(0, 0, (float)w, (float)h);
+    graphene_point_t off = GRAPHENE_POINT_INIT((float)((w - dw) / 2), (float)((h - dh) / 2));
+    gtk_snapshot_push_clip(GTK_SNAPSHOT(snap), &clip);
+    gtk_snapshot_translate(GTK_SNAPSHOT(snap), &off);
+    gdk_paintable_snapshot(self->child, snap, dw, dh);
+    gtk_snapshot_pop(GTK_SNAPSHOT(snap));
+}
+static int aeui_fit_iw(GdkPaintable* p) { AeuiFitPaintable* s = (AeuiFitPaintable*)p; return s->child ? gdk_paintable_get_intrinsic_width(s->child) : 0; }
+static int aeui_fit_ih(GdkPaintable* p) { AeuiFitPaintable* s = (AeuiFitPaintable*)p; return s->child ? gdk_paintable_get_intrinsic_height(s->child) : 0; }
+static double aeui_fit_ar(GdkPaintable* p) { AeuiFitPaintable* s = (AeuiFitPaintable*)p; return s->child ? gdk_paintable_get_intrinsic_aspect_ratio(s->child) : 0.0; }
+static GdkPaintableFlags aeui_fit_flags(GdkPaintable* p) {
+    AeuiFitPaintable* s = (AeuiFitPaintable*)p;
+    return s->child ? (gdk_paintable_get_flags(s->child) & GDK_PAINTABLE_STATIC_CONTENTS) : 0;
+}
+static void aeui_fit_paintable_iface_init(GdkPaintableInterface* i) {
+    i->snapshot = aeui_fit_snapshot;
+    i->get_intrinsic_width = aeui_fit_iw;
+    i->get_intrinsic_height = aeui_fit_ih;
+    i->get_intrinsic_aspect_ratio = aeui_fit_ar;
+    i->get_flags = aeui_fit_flags;
+}
+G_DEFINE_TYPE_WITH_CODE(AeuiFitPaintable, aeui_fit_paintable, G_TYPE_OBJECT,
+    G_IMPLEMENT_INTERFACE(GDK_TYPE_PAINTABLE, aeui_fit_paintable_iface_init))
+static void aeui_fit_forward_contents(GdkPaintable* c, gpointer d) { (void)c; gdk_paintable_invalidate_contents(GDK_PAINTABLE(d)); }
+static void aeui_fit_forward_size(GdkPaintable* c, gpointer d) { (void)c; gdk_paintable_invalidate_size(GDK_PAINTABLE(d)); }
+static void aeui_fit_paintable_dispose(GObject* o) {
+    AeuiFitPaintable* self = (AeuiFitPaintable*)o;
+    if (self->child) {
+        g_signal_handler_disconnect(self->child, self->id_contents);
+        g_signal_handler_disconnect(self->child, self->id_size);
+        g_clear_object(&self->child);
+    }
+    G_OBJECT_CLASS(aeui_fit_paintable_parent_class)->dispose(o);
+}
+static void aeui_fit_paintable_class_init(AeuiFitPaintableClass* k) { G_OBJECT_CLASS(k)->dispose = aeui_fit_paintable_dispose; }
+static void aeui_fit_paintable_init(AeuiFitPaintable* self) { (void)self; }
+
+static AeuiFitPaintable* aeui_fit_wrap(GdkPaintable* child, int mode) {
+    AeuiFitPaintable* w = g_object_new(AEUI_TYPE_FIT_PAINTABLE, NULL);
+    w->child = g_object_ref(child);
+    w->mode = mode;
+    w->id_contents = g_signal_connect(child, "invalidate-contents", G_CALLBACK(aeui_fit_forward_contents), w);
+    w->id_size = g_signal_connect(child, "invalidate-size", G_CALLBACK(aeui_fit_forward_size), w);
+    return w;
+}
+#endif
+
+// Give a picture a paintable. On 4.6 it goes in wrapped, so any later fill
+// change only has to retarget the wrapper.
+static void aeui_picture_set_paintable(GtkPicture* p, GdkPaintable* pt) {
+#if AEUI_HAVE_CONTENT_FIT
+    gtk_picture_set_paintable(p, pt);
+#else
+    if (!pt) { gtk_picture_set_paintable(p, NULL); return; }
+    int mode = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(p), "aeui-fill"));
+    AeuiFitPaintable* w = aeui_fit_wrap(pt, mode);
+    gtk_picture_set_paintable(p, GDK_PAINTABLE(w));
+    g_object_unref(w);
+#endif
+}
+
 static void aeui_picture_set_fill(GtkPicture* p, int mode) {
 #if AEUI_HAVE_CONTENT_FIT
     GtkContentFit fit = GTK_CONTENT_FIT_SCALE_DOWN;
@@ -5379,7 +5472,17 @@ static void aeui_picture_set_fill(GtkPicture* p, int mode) {
     else if (mode == 3) fit = GTK_CONTENT_FIT_FILL;
     gtk_picture_set_content_fit(p, fit);
 #else
-    gtk_picture_set_keep_aspect_ratio(p, mode != 3);
+    g_object_set_data(G_OBJECT(p), "aeui-fill", GINT_TO_POINTER(mode));
+    // The wrapper places the picture in the whole box, so the widget itself
+    // must not also letterbox it.
+    gtk_picture_set_keep_aspect_ratio(p, FALSE);
+    GdkPaintable* cur = gtk_picture_get_paintable(p);
+    if (cur && AEUI_IS_FIT_PAINTABLE(cur)) {
+        ((AeuiFitPaintable*)cur)->mode = mode;
+        gdk_paintable_invalidate_contents(cur);
+    } else if (cur) {
+        aeui_picture_set_paintable(p, cur);   // wraps; reads the mode stored above
+    }
 #endif
 }
 
@@ -5392,7 +5495,7 @@ static int aeui_picture_get_fill(GtkPicture* p) {
         default:                      return 0;
     }
 #else
-    return gtk_picture_get_keep_aspect_ratio(p) ? 1 : 3;
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(p), "aeui-fill"));
 #endif
 }
 
@@ -5479,7 +5582,7 @@ int aether_ui_image_from_bytes(const char* data, int length) {
         GdkTexture* tex = gdk_texture_new_from_bytes(bytes, &err);
         g_bytes_unref(bytes);
         if (tex) {
-            gtk_picture_set_paintable(GTK_PICTURE(img), GDK_PAINTABLE(tex));
+            aeui_picture_set_paintable(GTK_PICTURE(img), GDK_PAINTABLE(tex));
             g_object_unref(tex);
         } else if (err) {
             g_clear_error(&err);   // stays an empty picture on decode failure

@@ -21,7 +21,7 @@ exports(
     window_key, focus_widget, focused_widget,
     set_state, state_value_int,
     widget_id_by_text, widget_id_of, widget_id_of_parent, widget_id_last_of, widget_text_by_id, widget_bool_by_text,
-    widget_bool_by_id, widget_int_field_by_id, field_str, field_int,
+    widget_bool_by_id, widget_int_field_by_id, widget_str_field_by_id, field_str, field_int,
     canvas_w, canvas_h, canvas_widget_id, canvas_debug_area, canvas_debug_commands,
     canvas_debug_w, canvas_debug_h, canvas_painted_pixels,
     wait_server, wait_body_contains, count_occurrences,
@@ -348,6 +348,16 @@ widget_int_field_by_id(id: int, fieldname: string) -> int {
     v, _jerr = json.parse(body)
     if v == null { return 0 }
     r = field_int(v, fieldname)
+    json.json_free(v)
+    return r
+}
+
+// A string field ("fill", "role", "text") of widget `id`; "" when absent.
+widget_str_field_by_id(id: int, fieldname: string) -> string {
+    body = get_body("/widget/${id}")
+    v, _jerr = json.parse(body)
+    if v == null { return "" }
+    r = string.concat(field_str(v, fieldname), "")
     json.json_free(v)
     return r
 }
