@@ -504,6 +504,14 @@ static int widget_to_json(const AetherDriverHooks* h, int handle,
     } else if (strcmp(type, "slider") == 0) {
         n += snprintf(buf + n, bufsize - n, ",\"value\":%.2f",
                       h->slider_value(handle));
+    } else if (strcmp(type, "scrollbar") == 0) {
+        // The value, the range and the window (the thumb's share), and
+        // the steps an arrow and the track take.
+        n += snprintf(buf + n, bufsize - n,
+                      ",\"value\":%.2f,\"min\":%.2f,\"max\":%.2f,\"page\":%.2f,\"step\":%.2f,\"page_step\":%.2f",
+                      aether_ui_scrollbar_info(handle, 0), aether_ui_scrollbar_info(handle, 1),
+                      aether_ui_scrollbar_info(handle, 2), aether_ui_scrollbar_info(handle, 3),
+                      aether_ui_scrollbar_info(handle, 4), aether_ui_scrollbar_info(handle, 5));
     } else if (strcmp(type, "progressbar") == 0) {
         n += snprintf(buf + n, bufsize - n, ",\"value\":%.2f",
                       h->progressbar_fraction(handle));
@@ -1007,7 +1015,8 @@ static void handle_request_inner(aether_sock_t client_fd,
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
         send_http(client_fd, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
-               && strstr(path, "/scroll")) {
+               && strstr(path, "/scroll") && !extract_query_param(path, "by")) {
+        // (?by= is a scrollbar's, below.)
         // POST /widget/{id}/scroll?dy=N — scroll a vlist container by N rows
         // (dy>0 toward the end). Fires the container's on_scroll(N) headlessly.
         int id = extract_id_from_path(path, "/widget/");
@@ -1071,6 +1080,27 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.dval2 = ys ? atof(ys) : 0.0;
         ctx.ival = dxs ? atoi(dxs) : 0;
         ctx.ival2 = dys ? atoi(dys) : 0;
+        // A scrollbar's thumb dragged by (dx, dy): the value moves by the
+        // drag's share of the room the thumb moves in (the track less the
+        // thumb, the window's share of it), as a person's drag does.
+        const char* ty = ctx.handle > 0 ? h->widget_type(ctx.handle) : "";
+        int rx = 0, ry = 0, rw = 0, rh = 0;
+        if (ty && strcmp(ty, "scrollbar") == 0 && h->widget_rect
+            && h->widget_rect(ctx.handle, &rx, &ry, &rw, &rh) == 0) {
+            int vertical = rh > rw;
+            double min = aether_ui_scrollbar_info(ctx.handle, 1);
+            double max = aether_ui_scrollbar_info(ctx.handle, 2);
+            double page = aether_ui_scrollbar_info(ctx.handle, 3);
+            double track = vertical ? rh : rw;
+            double share = max > min ? page / (max - min) : 1.0;
+            if (share > 1.0) share = 1.0;
+            double room = track * (1.0 - share);
+            double top = max - page < min ? min : max - page;
+            double d = vertical ? ctx.ival2 : ctx.ival;
+            ctx.action = AETHER_DRV_SCROLLBAR_SET;
+            ctx.dval = aether_ui_scrollbar_info(ctx.handle, 0)
+                     + (room > 0 ? d / room * (top - min) : 0.0);
+        }
         dispatch_and_reply(client_fd, h, &ctx, "dragged");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/submit")) {
@@ -1099,7 +1129,30 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.handle = extract_id_from_path(path, "/widget/");
         const char* v = extract_query_param(path, "v");
         if (v) ctx.dval = atof(v);
+        // A scrollbar's value is set as a person moves it (on_change told).
+        const char* ty = ctx.handle > 0 ? h->widget_type(ctx.handle) : "";
+        if (ty && strcmp(ty, "scrollbar") == 0) ctx.action = AETHER_DRV_SCROLLBAR_SET;
         dispatch_and_reply(client_fd, h, &ctx, "set");
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/scroll?")) {
+        // POST /widget/{id}/scroll?by=step|-step|page|-page: a scrollbar
+        // moved by an arrow's step or a track click's page, as a person's.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_SCROLLBAR_SET;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        const char* ty = ctx.handle > 0 ? h->widget_type(ctx.handle) : "";
+        const char* by = extract_query_param(path, "by");
+        if (!ty || strcmp(ty, "scrollbar") != 0 || !by) {
+            send_http(client_fd, 400, "Bad Request", "text/plain", "/scroll: a scrollbar, and by=step|-step|page|-page");
+        } else {
+            double d = 0;
+            if (strncmp(by, "-step", 5) == 0) d = -aether_ui_scrollbar_info(ctx.handle, 4);
+            else if (strncmp(by, "step", 4) == 0) d = aether_ui_scrollbar_info(ctx.handle, 4);
+            else if (strncmp(by, "-page", 5) == 0) d = -aether_ui_scrollbar_info(ctx.handle, 5);
+            else if (strncmp(by, "page", 4) == 0) d = aether_ui_scrollbar_info(ctx.handle, 5);
+            ctx.dval = aether_ui_scrollbar_info(ctx.handle, 0) + d;
+            dispatch_and_reply(client_fd, h, &ctx, "scrolled");
+        }
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/context_menu")) {
         // POST /widget/{id}/context_menu          → {"mapped":1}

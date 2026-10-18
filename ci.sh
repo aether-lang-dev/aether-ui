@@ -75,7 +75,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(aecs_dark_demo disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo frametick_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo reorderable_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
+EXAMPLES=(aecs_dark_demo disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo keyhandler_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo bindings_demo tabs_demo scrollbar_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo frametick_demo background_demo canvasscroll_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo quit_demo panelsize_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo reorderable_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -917,7 +917,7 @@ else
     # virtualised grid, with a vslider: a rotated UISlider in a box),
     # a11y_demo (roles, names, and a11y_announce through UIAccessibility),
     # vg_chart_demo (vg/chart's charts on UIKit's vg scenes).
-    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo a11y_demo vg_chart_demo; do
+    for SIM_EX in listbox_demo frametick_demo vg_image_demo vgpaint_demo spacercanvas_demo pixelated_demo submit_demo datagrid_demo a11y_demo vg_chart_demo scrollbar_demo; do
         [ "$sim_fail" -eq 0 ] || break
         SIM_FRAME_SOURCE=""
         if [ "$SIM_EX" = frametick_demo ]; then SIM_FRAME_SOURCE=cadisplaylink; fi
@@ -1818,6 +1818,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=bindings_demo/spec_bindings_demo \
     run_server_test "$(EX_BIN bindings_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" bindings_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5k0: AetherUIDriver scrollbar spec ==="
+# scrollbar: the windowing slider. Type "scrollbar" with value, range,
+# window and steps; set_value and /scroll?by= move it as a person would
+# (on_change, clamped to min..max-page); scrollbar_set/_steps from code;
+# a scrollbar's thickness across, its run along; snapshots at each step.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=scrollbar_demo/spec_scrollbar_demo \
+    run_server_test "$(EX_BIN scrollbar_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" scrollbar_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

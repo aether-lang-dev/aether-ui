@@ -1,0 +1,180 @@
+// spec_scrollbar_demo.ae — drives the scrollbar (windowing slider) example
+// over the AetherUIDriver. The two scrollbars are real native widgets of
+// type "scrollbar" reporting value, range, window and steps; set_value and
+// the /scroll?by= route move them as a person would (on_change fires, the
+// value clamps to min..max-page); the app-side scrollbar_set and
+// scrollbar_steps change them without a callback; geometry shows each one
+// a scrollbar's thickness across and its row's (column's) length along;
+// /screenshot snapshots are taken at each step.
+//
+// Run via ci.sh Phase 5k2, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/scrollbar_demo/bin/scrollbar_demo &
+//   UI_SPEC=scrollbar_demo/spec_scrollbar_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+hbar() -> int { return uidriver.widget_id_of("scrollbar", "") }
+vbar() -> int { return uidriver.widget_id_last_of("scrollbar", "") }
+shows(t: string) -> int { return uidriver.widget_id_by_text(t) > 0 }
+field(id: int, f: string) -> int { return uidriver.widget_int_field_by_id(id, f) }
+
+// The window as a PNG under target/scrollbar-snapshots; "WxH", or "" when
+// the backend has no /screenshot.
+snapshot(name: string) -> string {
+    dir = "${os.os_getenv("PWD")}/target/scrollbar-snapshots"
+    _m, _me = os.exec("mkdir -p ${dir}")
+    // A capture can miss a frame in flight (GTK under Xvfb): try again.
+    tries = 0
+    dims = ""
+    while tries < 5 && string.length(dims) == 0 {
+        out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
+        if string.contains(out, "200") == 1 {
+            d, _de = os.exec("python3 -c \"import struct,sys; b=open(sys.argv[1],'rb').read(24); print('%dx%d' % struct.unpack('>II', b[16:24]))\" ${dir}/${name}.png 2>/dev/null")
+            dims = string.trim(d)
+        }
+        tries = tries + 1
+        if string.length(dims) == 0 { _w, _we = os.exec("sleep 0.3") }
+    }
+    return dims
+}
+
+// The first snapshot's "WxH" (each case's closure has its own copy of
+// main's locals, so it is read back from the file).
+first_snapshot() -> string {
+    dir = "${os.os_getenv("PWD")}/target/scrollbar-snapshots"
+    dims, _de = os.exec("python3 -c \"import struct,sys; b=open(sys.argv[1],'rb').read(24); print('%dx%d' % struct.unpack('>II', b[16:24]))\" ${dir}/01-start.png 2>/dev/null")
+    return string.trim(dims)
+}
+
+at(id: int, needle: string) -> int {
+    return uidriver.wait_body_contains("/widget/${id}", needle, 20)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a scrollbar: a windowing slider") {
+        spec.it("both are scrollbars with their range, window and steps") callback {
+            uidriver.resize_window(520, 360)
+            h = hbar()
+            v = vbar()
+            spec.assert_gt(h, 0, "the horizontal scrollbar")
+            spec.assert_true(v != h, "and a second, the vertical")
+            b = uidriver.get_body("/widget/${h}")
+            spec.assert_contains(b, "\"type\":\"scrollbar\"", "type scrollbar")
+            spec.assert_contains(b, "\"value\":0.00", "value 0")
+            spec.assert_contains(b, "\"max\":100.00", "max 100")
+            spec.assert_contains(b, "\"page\":10.00", "a 10-column window")
+            spec.assert_contains(b, "\"step\":1.00", "an arrow steps 1")
+            spec.assert_contains(b, "\"page_step\":10.00", "the track pages a window")
+            spec.assert_true(at(v, "\"max\":1000.00") == 1, "the vertical's 1,000 rows")
+            _s = snapshot("01-start")
+        }
+
+        spec.it("each is a scrollbar's thickness across and its run along") callback {
+            h = hbar()
+            v = vbar()
+            hw = field(h, "w")
+            hh = field(h, "h")
+            vw = field(v, "w")
+            vh = field(v, "h")
+            spec.assert_gt(hh, 5, "the horizontal one shows")
+            spec.assert_true(hh <= 24, "the horizontal one is thin (${hh})")
+            spec.assert_gt(hw, 300, "and takes its row's width (${hw})")
+            spec.assert_true(vw <= 24, "the vertical one is thin (${vw})")
+            spec.assert_gt(vh, 100, "and takes its column's height (${vh})")
+            spec.assert_gt(field(v, "x"), field(h, "x") + hw - 1, "the vertical sits right of the view")
+        }
+
+        spec.it("set_value moves it as a person would, clamped to the last window") callback {
+            h = hbar()
+            uidriver.post_ok("/widget/${h}/set_value?v=40", "set 40")
+            spec.assert_true(at(h, "\"value\":40.00") == 1, "value 40")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "columns from 40", 20) == 1, "on_change told 40")
+            uidriver.post_ok("/widget/${h}/set_value?v=500", "set past the end")
+            spec.assert_true(at(h, "\"value\":90.00") == 1, "clamped to max - page = 90")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "columns from 90", 20) == 1, "on_change told 90")
+            uidriver.post_ok("/widget/${h}/set_value?v=-5", "set before the start")
+            spec.assert_true(at(h, "\"value\":0.00") == 1, "clamped to min")
+            uidriver.post_ok("/widget/${h}/set_value?v=90", "back to the end")
+            spec.assert_true(at(h, "\"value\":90.00") == 1, "at the end again")
+            s = snapshot("02-h-at-end")
+            spec.assert_str_eq(s, first_snapshot(), "the window keeps its size (${s})")
+        }
+
+        spec.it("an arrow steps and the track pages") callback {
+            v = vbar()
+            uidriver.post_ok("/widget/${v}/scroll?by=page", "page down")
+            spec.assert_true(at(v, "\"value\":50.00") == 1, "a page is the window: 50")
+            uidriver.post_ok("/widget/${v}/scroll?by=step", "step down")
+            spec.assert_true(at(v, "\"value\":51.00") == 1, "a step is 1")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "rows from 51", 20) == 1, "on_change told 51")
+            uidriver.post_ok("/widget/${v}/scroll?by=-step", "step up")
+            uidriver.post_ok("/widget/${v}/scroll?by=-page", "page up")
+            spec.assert_true(at(v, "\"value\":0.00") == 1, "back at the top")
+            uidriver.post_ok("/widget/${v}/scroll?by=-page", "page up at the top")
+            spec.assert_true(at(v, "\"value\":0.00") == 1, "stays at the top")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "rows from 0", 20) == 1, "rows from 0")
+            spec.assert_eq(uidriver.post_status("/widget/${v}/scroll?by=sideways"), 200, "an unknown by= moves nothing")
+            spec.assert_true(at(v, "\"value\":0.00") == 1, "still at the top")
+        }
+
+        spec.it("scrollbar_steps sets the arrow's step and the track's page") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Steps 5/25")}/click", "steps 5/25")
+            v = vbar()
+            spec.assert_true(at(v, "\"page_step\":25.00") == 1, "page step 25")
+            spec.assert_true(at(v, "\"step\":5.00") == 1, "step 5")
+            uidriver.post_ok("/widget/${v}/scroll?by=page", "page down")
+            spec.assert_true(at(v, "\"value\":25.00") == 1, "paged 25")
+            uidriver.post_ok("/widget/${v}/scroll?by=step", "step down")
+            spec.assert_true(at(v, "\"value\":30.00") == 1, "stepped 5")
+            uidriver.post_ok("/widget/${v}/scroll?by=-step", "step up")
+            spec.assert_true(at(v, "\"value\":25.00") == 1, "back to 25")
+        }
+
+        spec.it("scrollbar_set changes range, window and value without on_change") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Shrink range")}/click", "shrink")
+            h = hbar()
+            spec.assert_true(at(h, "\"max\":20.00") == 1, "max 20")
+            spec.assert_true(at(h, "\"value\":10.00") == 1, "15 clamped to the last window's start, 10")
+            spec.assert_true(shows("columns from 90") == 1, "no on_change for code's own set")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Read")}/click", "read")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "read: h 10/20 v 25+50", 20) == 1,
+                             "the getters read what the driver sees")
+            s = snapshot("03-shrunk")
+            spec.assert_str_eq(s, first_snapshot(), "the window keeps its size (${s})")
+        }
+
+        spec.it("a range the window covers leaves nothing to scroll") callback {
+            h = hbar()
+            uidriver.post_ok("/widget/${h}/set_value?v=0", "to the start")
+            spec.assert_true(at(h, "\"value\":0.00") == 1, "at 0")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "columns from 0", 20) == 1, "told 0")
+            uidriver.post_ok("/widget/${h}/scroll?by=page", "page")
+            spec.assert_true(at(h, "\"value\":10.00") == 1, "one page to the end of 20")
+            uidriver.post_ok("/widget/${h}/scroll?by=page", "page again")
+            spec.assert_true(at(h, "\"value\":10.00") == 1, "no further")
+        }
+
+        spec.it("a drag on the thumb moves it by the drag's share of the track") callback {
+            v = vbar()
+            spec.assert_true(at(v, "\"value\":25.00") == 1, "starts at 25")
+            // The thumb moves in the track less itself: 950 of 1,000 rows'
+            // worth. Half that room is half of 0..950.
+            room = field(v, "h") * 95 / 100
+            uidriver.post_ok("/widget/${v}/drag?x=5&y=5&dx=0&dy=${room / 2}", "drag down half the room")
+            got = field(v, "value")
+            spec.assert_true(got >= 480 && got <= 520, "about 25 + 475 = 500 (${got})")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "rows from ${got}", 20) == 1, "on_change told")
+            uidriver.post_ok("/widget/${v}/drag?x=5&y=5&dx=0&dy=-${room * 2}", "drag far up")
+            spec.assert_true(at(v, "\"value\":0.00") == 1, "stops at the top")
+            s = snapshot("04-dragged")
+            spec.assert_str_eq(s, first_snapshot(), "the window keeps its size (${s})")
+        }
+    }
+
+    return spec.run_summary(fw)
+}

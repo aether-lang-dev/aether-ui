@@ -72,6 +72,9 @@ typedef struct {
     void* env;
 } AeClosure;
 
+// The scrollbar's (windowing slider's) shared state and rules.
+#include "aether_ui_scrollbar.h"
+
 static inline void invoke_closure(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
 }
@@ -188,6 +191,7 @@ typedef enum {
     WK_SPLITVIEW, // two panes + draggable divider (real since 2026-07-20)
     WK_WRAP,      // flow layout — children wrap to new rows (real 2026-07-20)
     WK_NATIVE_VIEW, // a child window an engine presents into (#193)
+    WK_SCROLLBAR, // a windowing slider: the SCROLLBAR control (u.slider.vertical)
 } WidgetKind;
 
 typedef struct {
@@ -1103,6 +1107,18 @@ static void measure_widget_intrinsic(Widget* w, int* out_w, int* out_h) {
         *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 26);
         return;
     }
+    if (w->kind == WK_SCROLLBAR) {
+        int thick_v = GetSystemMetricsForDpi(SM_CXVSCROLL, w32_dpi_for(dh));
+        int thick_h = GetSystemMetricsForDpi(SM_CYHSCROLL, w32_dpi_for(dh));
+        if (w->u.slider.vertical) {
+            *out_w = w->pref_width > 0 ? w->pref_width : thick_v;
+            *out_h = w->pref_height > 0 ? w->pref_height : w32_px(dh, 60);
+        } else {
+            *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 60);
+            *out_h = w->pref_height > 0 ? w->pref_height : thick_h;
+        }
+        return;
+    }
     if (w->kind == WK_SLIDER) {
         if (w->u.slider.vertical) {
             *out_w = w->pref_width > 0 ? w->pref_width : w32_px(dh, 28);
@@ -1230,6 +1246,7 @@ static int w32_subtree_greedy(Widget* w, int orientation) {
     if (orientation == 1 && w->pref_height == -1) return 1;
     if (orientation != 1 && w->pref_width  == -1) return 1;
     if (w->kind == WK_SPLITVIEW || w->kind == WK_SCROLLVIEW) return 1;
+    if (w->kind == WK_SCROLLBAR) return (orientation == 1) == (w->u.slider.vertical != 0);
     if (w->kind == WK_CANVAS || w->kind == WK_NATIVE_VIEW) return 1;
                                           // GTK4 canvases hexpand/vexpand
                                           // regardless of their initial dims
@@ -1721,7 +1738,11 @@ static void stack_do_layout(HWND stack_hwnd) {
             mc[i].margin_l = cw->margin_left;
             mc[i].weight = cw->weight;
             mc[i].kind = (int)cw->kind;
-            mc[i].spans_cross = w32_text_spans_cross(cw);
+            mc[i].spans_cross = w32_text_spans_cross(cw)
+                // A scrollbar spans its run across a stack of the other
+                // orientation: a horizontal one fills a column's width.
+                || (cw->kind == WK_SCROLLBAR
+                    && (orientation == 1) != (cw->u.slider.vertical != 0));
             // Greedy children expand along the primary axis by default —
             // splitview/scrolled (GTK's paned/scrolled semantics), unpinned
             // canvases (GTK's hexpand/vexpand=true), AND any container with
@@ -1880,6 +1901,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             h = avail_h - mc[i].margin_t - mc[i].margin_b;
             if (mc[i].measured_h > 0 && mc[i].measured_h < h
                 && !mc[i].is_spacer && mc[i].weight == 0
+                && !(mc[i].kind == WK_SCROLLBAR && mc[i].spans_cross)
                 && (!w32_fills_cross(mc[i].kind) || W32_CROSS_PINNED(i, 0))) {
                 if (sl->alignment == 1)
                     y = sl->padding_top + mc[i].margin_t + (h - mc[i].measured_h) / 2;
@@ -2490,6 +2512,32 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                     }
                     w32_scrollview_to(sv, pos);
                 }
+                return 0;
+            }
+            if (cw && cw->kind == WK_SCROLLBAR) {
+                AeuiScrollbar* sb = aeui_sb_get(ch);
+                if (!sb) return 0;
+                double v = sb->value;
+                switch (LOWORD(wp)) {
+                    case SB_LINEUP:   v -= sb->step; break;
+                    case SB_LINEDOWN: v += sb->step; break;
+                    case SB_PAGEUP:   v -= aeui_sb_page_step(sb); break;
+                    case SB_PAGEDOWN: v += aeui_sb_page_step(sb); break;
+                    case SB_TOP:      v = sb->min; break;
+                    case SB_BOTTOM:   v = aeui_sb_top(sb); break;
+                    case SB_THUMBTRACK:
+                    case SB_THUMBPOSITION: {
+                        SCROLLINFO si;
+                        memset(&si, 0, sizeof(si));
+                        si.cbSize = sizeof(si);
+                        si.fMask = SIF_TRACKPOS;
+                        GetScrollInfo(child, SB_CTL, &si);
+                        v = sb->min + (sb->max - sb->min) * (si.nTrackPos / (double)AEUI_SB_UNITS);
+                        break;
+                    }
+                    default: return 0;
+                }
+                if (!cw->sealed) aether_ui_scrollbar_user_set(ch, v);
                 return 0;
             }
             if (cw && cw->kind == WK_SLIDER) {
@@ -4883,6 +4931,45 @@ double aether_ui_slider_get_value(int handle) {
     return w ? w->u.slider.cur_v : 0.0;
 }
 
+// Scrollbar -- a windowing slider: the SCROLLBAR control, its range in
+// AEUI_SB_UNITS so a fractional range keeps its precision, its thumb
+// (nPage) the window's share. The state and its rules are shared
+// (aether_ui_scrollbar.h); a person's move comes in as WM_HSCROLL/WM_VSCROLL
+// on the parent stack.
+static void aeui_sb_render(AeuiScrollbar* s) {
+    Widget* w = widget_at(s->handle);
+    if (!w || w->kind != WK_SCROLLBAR || !w->hwnd) return;
+    double span = s->max - s->min;
+    SCROLLINFO si;
+    memset(&si, 0, sizeof(si));
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL;
+    si.nMin = 0;
+    si.nMax = AEUI_SB_UNITS;
+    si.nPage = (UINT)(aeui_sb_proportion(s) * AEUI_SB_UNITS + 0.5);
+    si.nPos = span > 0 ? (int)((s->value - s->min) / span * AEUI_SB_UNITS + 0.5) : 0;
+    SetScrollInfo(w->hwnd, SB_CTL, &si, TRUE);
+    EnableWindow(w->hwnd, aeui_sb_proportion(s) < 1.0);
+}
+
+int aether_ui_scrollbar_create(int vertical, double min, double max, double page,
+                               double value, void* boxed_closure) {
+    ensure_win_init();
+    AeuiScrollbar* s = aeui_sb_new(vertical, min, max, page, value, boxed_closure);
+    if (!s) return 0;
+    HWND h = CreateWindowExW(0, L"SCROLLBAR", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | (vertical ? SBS_VERT : SBS_HORZ),
+        0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
+    if (!h) return 0;
+    w32_system_dark_control(h);
+    int handle = register_widget_typed(h, WK_SCROLLBAR);
+    Widget* w = widget_at(handle);
+    if (w) w->u.slider.vertical = vertical ? 1 : 0;
+    s->handle = handle;
+    aeui_sb_render(s);
+    return handle;
+}
+
 // TBS_VERT: a trackbar reads its orientation from its style as it paints and
 // tracks, so switching the style is enough; its minimum is already at the
 // top. Its natural size turns on its side too.
@@ -6510,6 +6597,7 @@ static long w32_msaa_role(const char* role) {
     if (!strcmp(role, "alert"))       return ROLE_SYSTEM_ALERT;
     if (!strcmp(role, "textbox"))     return ROLE_SYSTEM_TEXT;
     if (!strcmp(role, "slider"))      return ROLE_SYSTEM_SLIDER;
+    if (!strcmp(role, "scrollbar"))   return ROLE_SYSTEM_SCROLLBAR;
     if (!strcmp(role, "progressbar")) return ROLE_SYSTEM_PROGRESSBAR;
     return 0;
 }
@@ -6980,6 +7068,7 @@ static const char* w32_auto_role(WidgetKind k) {
         case WK_TOGGLE:      return "checkbox";
         case WK_TEXTFIELD:   return "textbox";
         case WK_SLIDER:      return "slider";
+        case WK_SCROLLBAR:   return "scrollbar";
         case WK_PROGRESSBAR: return "progressbar";
         // WK_TEXT is a plain static label — its auto role stays unset (empty)
         // rather than "heading", which is only correct for a11y_role-tagged
@@ -13542,6 +13631,7 @@ static const char* widget_kind_name(WidgetKind k) {
         case WK_TEXTAREA: return "textarea";
         case WK_TOGGLE: return "toggle";
         case WK_SLIDER: return "slider";
+        case WK_SCROLLBAR: return "scrollbar";
         case WK_PICKER: return "picker";
         case WK_PROGRESSBAR: return "progressbar";
         case WK_IMAGE: return "image";
@@ -14237,6 +14327,10 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 } else {
                     ctx->retval = 0;
                 }
+                break;
+            case AETHER_DRV_SCROLLBAR_SET:
+                aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
+                ctx->retval = 1;
                 break;
             case AETHER_DRV_SET_VALUE:
                 if (w->kind == WK_SLIDER) {

@@ -1,3 +1,4 @@
+import os
 import re, io, sys
 
 DEF_START = re.compile(r"^[A-Za-z_][A-Za-z0-9_ \t\*]*?\b(aether_ui_[a-z0-9_]+)\s*\(", re.M)
@@ -47,6 +48,8 @@ BACKENDS = {
 SHARED = ("backend/aether_ui_system_extras.c",
           "backend/aether_ui_test_server.c",
           "backend/aether_ui_sni.c")
+# Headers of shared definitions, counted for a backend only if it includes one.
+SHARED_HEADERS = ("backend/aether_ui_scrollbar.h",)
 
 # Entry points that are the backend's OWN platform work and must not be
 # satisfied by a shared source: the frame clock's native display clock (GTK4's
@@ -67,6 +70,14 @@ def main():
     for f in SHARED:
         shared |= defined_in(f)
     have = {b: defined_in(p) for b, p in BACKENDS.items()}
+    # A shared header of definitions (aether_ui_scrollbar.h) is compiled into
+    # each backend that includes it: what it defines, that backend has.
+    for b, p in BACKENDS.items():
+        with open(p) as fh:
+            src = fh.read()
+        for hdr in SHARED_HEADERS:
+            if '#include "%s"' % os.path.basename(hdr) in src:
+                have[b] |= defined_in(hdr)
     gaps = []
     for name in sorted(decl):
         if name in shared:

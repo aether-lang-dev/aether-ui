@@ -2117,6 +2117,47 @@ void aether_ui_slider_set_value(int handle, double value) {
     }
 }
 
+// Scrollbar -- a windowing slider: a GtkScrollbar over a GtkAdjustment
+// whose page_size is the window. The state and its rules are shared
+// (aether_ui_scrollbar.h); the adjustment shows them, and a person's move
+// comes back through aether_ui_scrollbar_user_set.
+#include "aether_ui_scrollbar.h"
+
+static int aeui_sb_rendering = 0;
+
+static void aeui_sb_render(AeuiScrollbar* s) {
+    GtkWidget* w = aether_ui_get_widget(s->handle);
+    if (!w || !GTK_IS_SCROLLBAR(w)) return;
+    GtkAdjustment* a = gtk_scrollbar_get_adjustment(GTK_SCROLLBAR(w));
+    aeui_sb_rendering = 1;
+    gtk_adjustment_configure(a, s->value, s->min, s->max < s->min + s->page ? s->min + s->page : s->max,
+                             s->step, aeui_sb_page_step(s), s->page);
+    aeui_sb_rendering = 0;
+    gtk_widget_set_sensitive(w, aeui_sb_proportion(s) < 1.0);
+}
+
+static void on_scrollbar_changed(GtkAdjustment* a, gpointer data) {
+    if (aeui_sb_rendering) return;
+    aether_ui_scrollbar_user_set(GPOINTER_TO_INT(data), gtk_adjustment_get_value(a));
+}
+
+int aether_ui_scrollbar_create(int vertical, double min, double max, double page,
+                               double value, void* boxed_closure) {
+    ensure_gtk_init();
+    AeuiScrollbar* s = aeui_sb_new(vertical, min, max, page, value, boxed_closure);
+    if (!s) return 0;
+    GtkAdjustment* adj = gtk_adjustment_new(0, 0, 1, 1, 1, 0);
+    GtkWidget* sb = gtk_scrollbar_new(vertical ? GTK_ORIENTATION_VERTICAL
+                                               : GTK_ORIENTATION_HORIZONTAL, adj);
+    if (vertical) gtk_widget_set_vexpand(sb, TRUE);
+    else gtk_widget_set_hexpand(sb, TRUE);
+    int h = aether_ui_register_widget(sb);
+    s->handle = h;
+    aeui_sb_render(s);
+    g_signal_connect(adj, "value-changed", G_CALLBACK(on_scrollbar_changed), GINT_TO_POINTER(h));
+    return h;
+}
+
 // A vertical GtkScale already has its minimum at the top.
 static void aeui_slider_set_vertical(int handle, int on) {
     GtkWidget* w = aether_ui_get_widget(handle);
@@ -3401,6 +3442,7 @@ static const struct { const char* name; GtkAccessibleRole role; } aeui_a11y_role
     {"alert", GTK_ACCESSIBLE_ROLE_ALERT},
     {"textbox", GTK_ACCESSIBLE_ROLE_TEXT_BOX},
     {"slider", GTK_ACCESSIBLE_ROLE_SLIDER},
+    {"scrollbar", GTK_ACCESSIBLE_ROLE_SCROLLBAR},
     {"progressbar", GTK_ACCESSIBLE_ROLE_PROGRESS_BAR},
     {"none", GTK_ACCESSIBLE_ROLE_PRESENTATION},
 };
@@ -8476,6 +8518,7 @@ static const char* widget_type_name(GtkWidget* w) {
     if (GTK_IS_PASSWORD_ENTRY(w)) return "securefield";
     if (GTK_IS_CHECK_BUTTON(w)) return "toggle";
     if (GTK_IS_SCALE(w)) return "slider";
+    if (GTK_IS_SCROLLBAR(w)) return "scrollbar";
     if (GTK_IS_DROP_DOWN(w)) return "picker";
     if (GTK_IS_TEXT_VIEW(w)) return "textarea";
     if (GTK_IS_PROGRESS_BAR(w)) return "progressbar";
@@ -9774,6 +9817,10 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
            yes, and then waited out its teardown budget for an exit that never
            came -- ~96s wall for a suite doing 0.4s of work. Already on the
            GTK thread here, so call the handlers' bodies directly. */
+        case AETHER_DRV_SCROLLBAR_SET:
+            aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
+            ctx->result = 0; ctx->done = 1;
+            return;
         case AETHER_DRV_DRAG: {
             /* A press, two moves and a release through on_drag's closure. */
             GtkWidget* w = aether_ui_get_widget(ctx->handle);

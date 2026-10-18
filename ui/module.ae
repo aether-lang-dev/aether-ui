@@ -39,6 +39,7 @@ exports (
     datagrid_merge, datagrid_unmerge, datagrid_merge_of, datagrid_set_row_height,
     datagrid_row_height, datagrid_fit_row, datagrid_on_edit_change, datagrid_edit_insert,
     on_cell_edit_change, toggle, toggle_group, slider, picker, picker_add,
+    scrollbar, scrollbar_set, scrollbar_steps, scrollbar_value, scrollbar_page, scrollbar_min, scrollbar_max,
     textarea, textarea_bound, textarea_set_text, textarea_get_text, progressbar,
     ui_state, ui_get, ui_set, text_bound,
     ui_state_s, ui_get_s, ui_set_s, ui_state_i, ui_get_i, ui_set_i,
@@ -317,6 +318,10 @@ extern aether_ui_toggle_get_active(handle: int) -> int
 extern aether_ui_toggle_set_group(handle: int, group_with: int)
 
 extern aether_ui_vslider_create(min_val: float, max_val: float, initial: float, boxed_closure: ptr) -> int
+extern aether_ui_scrollbar_create(vertical: int, min: float, max: float, page: float, value: float, boxed_closure: ptr) -> int
+extern aether_ui_scrollbar_configure(handle: int, min: float, max: float, page: float, value: float)
+extern aether_ui_scrollbar_set_steps(handle: int, step: float, page_step: float)
+extern aether_ui_scrollbar_info(handle: int, what: int) -> float
 extern aether_ui_slider_create(min_val: float, max_val: float,
                                initial: float, boxed_closure: ptr) -> int
 extern aether_ui_slider_set_value(handle: int, value: float)
@@ -1634,6 +1639,44 @@ vslider(_ctx: ptr, min_val: float, max_val: float, initial: float, on_change: fn
     _style_on_create(handle)   // use_styles: arrive themed
     return handle
 }
+
+// scrollbar(vertical, min, max, page, value, on_change): a windowing slider,
+// a value over [min, max] with a visible window of `page` (the thumb is
+// that share of the track; the value runs from min to max - page), as a
+// list's or a grid's scrollbar shows where it is and how much is in view.
+// Horizontal (vertical 0) or vertical (1: min at the top). on_change(value)
+// when a person moves it: the thumb dragged, an arrow (a step), the track
+// clicked (a page). Native where the platform has one (NSScroller,
+// GtkScrollbar over a GtkAdjustment, Win32's SCROLLBAR); drawn on UIKit and
+// Android, which have no free-standing scrollbar. scrollbar_set sets range,
+// window and value at once without a callback; scrollbar_steps the arrow's
+// and the track's steps (page step 0: the page). The driver reads value,
+// min, max and page in /widgets and moves it with set_value and
+// POST /widget/{id}/scroll?by=step|-step|page|-page.
+scrollbar(_ctx: ptr, vertical: int, min: float, max: float, page: float, value: float, on_change: fn) {
+    boxed = box_closure(on_change)
+    handle = aether_ui_scrollbar_create(vertical, min, max, page, value, boxed)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    _style_on_create(handle)   // use_styles: arrive themed
+    return handle
+}
+
+scrollbar_set(handle: int, min: float, max: float, page: float, value: float) -> int {
+    aether_ui_scrollbar_configure(handle, min, max, page, value)
+    return handle
+}
+
+scrollbar_steps(handle: int, step: float, page_step: float) -> int {
+    aether_ui_scrollbar_set_steps(handle, step, page_step)
+    return handle
+}
+
+scrollbar_value(handle: int) -> float { return aether_ui_scrollbar_info(handle, 0) }
+scrollbar_min(handle: int) -> float { return aether_ui_scrollbar_info(handle, 1) }
+scrollbar_max(handle: int) -> float { return aether_ui_scrollbar_info(handle, 2) }
+scrollbar_page(handle: int) -> float { return aether_ui_scrollbar_info(handle, 3) }
 
 picker(_ctx: ptr, on_change: fn) {
     boxed = box_closure(on_change)

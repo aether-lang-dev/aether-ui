@@ -1,0 +1,73 @@
+// Aether UI scrollbar example: the windowing slider.
+//
+// ui.scrollbar(vertical, min, max, page, value) callback |v| {…}: a native
+// scrollbar (NSScroller, GtkScrollbar, the Win32 SCROLLBAR control; drawn
+// on UIKit and Android, which have none a person can hold by itself). Its
+// thumb is the window's share of the range: here a 10-column window onto
+// 100 columns, and a 50-row window onto 1,000 rows. The value is the
+// window's start, so it runs from min to max - page. on_change fires for a
+// person's move (drag, arrow, track click) and the driver's; scrollbar_set
+// changes range, window and value at once without it; scrollbar_steps sets
+// the arrow's step and the track click's page.
+
+import ui
+import ui (content_inset, window, vstack, hstack, text, btn, divider, scrollbar,
+    scrollbar_set, scrollbar_steps, scrollbar_value, scrollbar_page,
+    scrollbar_max, enable_test_server)
+import vg.live (vg)
+import vg
+import vg (view_box, rect, fill)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    hs = 0
+    vs = 0
+    window("scrollbar demo", 520, 360) {
+        root = vstack(8) {
+            hstat = text("columns from 0")
+            vstat = text("rows from 0")
+            readout = text("read: ?")
+            divider()
+            _body = hstack(4) {
+                // The view the scrollbars are a window onto: a canvas, which
+                // takes the room it is given on every backend.
+                _left = vstack(4) {
+                    vg(view_box(0, 0, 200, 100), 200, 100) {
+                        rect(0, 0, 200, 100) { fill("#dde6f5") }
+                    }
+                    hs = scrollbar(0, 0.0, 100.0, 10.0, 0.0) callback |v: float| {
+                        iv = v as int
+                        aether_ui_text_set_string(hstat, "columns from ${iv}")
+                    }
+                }
+                vs = scrollbar(1, 0.0, 1000.0, 50.0, 0.0) callback |v: float| {
+                    iv = v as int
+                    aether_ui_text_set_string(vstat, "rows from ${iv}")
+                }
+            }
+            divider()
+            hstack(6) {
+                _b0 = btn("Shrink range") callback {
+                    // 20 columns, the window still 10: the value 15 is past
+                    // the last window's start (10), so it is clamped there.
+                    scrollbar_set(hs, 0.0, 20.0, 10.0, 15.0)
+                }
+                _b1 = btn("Steps 5/25") callback {
+                    scrollbar_steps(vs, 5.0, 25.0)
+                }
+                _b2 = btn("Read") callback {
+                    hv = scrollbar_value(hs) as int
+                    hm = scrollbar_max(hs) as int
+                    vv = scrollbar_value(vs) as int
+                    vp = scrollbar_page(vs) as int
+                    aether_ui_text_set_string(readout, "read: h ${hv}/${hm} v ${vv}+${vp}")
+                }
+            }
+        }
+        _ci = content_inset(root)
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

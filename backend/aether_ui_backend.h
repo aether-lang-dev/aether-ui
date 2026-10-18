@@ -159,6 +159,25 @@ int aether_ui_slider_create(double min_val, double max_val,
 void aether_ui_slider_set_value(int handle, double value);
 double aether_ui_slider_get_value(int handle);
 
+/* A scrollbar: a windowing slider, a value over [min, max] with a visible
+ * window of `page` (the thumb that share of the track), the value from min
+ * to max - page. Horizontal, or vertical (vertical 1: min at the top). The
+ * closure gets the new value, a double, whenever a person (or the driver)
+ * moves it: the thumb dragged, an arrow, the track clicked a page. Native
+ * where the platform has one (NSScroller, GtkScrollbar, Win32's SCROLLBAR),
+ * drawn on UIKit and Android, which have no free-standing scrollbar. */
+int aether_ui_scrollbar_create(int vertical, double min, double max, double page,
+                               double value, void* boxed_closure);
+/* Range, window and value at once (value clamped into [min, max - page]);
+ * no callback. */
+void aether_ui_scrollbar_configure(int handle, double min, double max, double page, double value);
+/* An arrow's step and a track click's (page_step 0: the page). */
+void aether_ui_scrollbar_set_steps(int handle, double step, double page_step);
+/* 0 value, 1 min, 2 max, 3 page, 4 step, 5 page step. */
+double aether_ui_scrollbar_info(int handle, int what);
+/* As a person's move: the value set (clamped) and the closure told. */
+void aether_ui_scrollbar_user_set(int handle, double value);
+
 int aether_ui_picker_create(void* boxed_closure);
 void aether_ui_picker_add_item(int handle, const char* item);
 void aether_ui_picker_set_selected(int handle, int index);

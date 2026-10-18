@@ -247,6 +247,9 @@ typedef struct {
     void* env;
 } AeClosure;
 
+// The scrollbar's (windowing slider's) shared state and rules.
+#include "aether_ui_scrollbar.h"
+
 static void aeui_call0(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
 }
@@ -625,7 +628,8 @@ enum {
     AUI_SCRIM,          // a modal overlay's scrim (registered, as on AppKit)
     AUI_LIST,           // a native list (ListView); reported as a vstack, as AppKit's is
     AUI_NATIVE_VIEW,    // a native view (SurfaceView)
-    AUI_GPUVIEW         // a GPU view (SurfaceView + EGL); "widget", as GTK4's GtkGLArea reports
+    AUI_GPUVIEW,        // a GPU view (SurfaceView + EGL); "widget", as GTK4's GtkGLArea reports
+    AUI_SCROLLBAR       // a windowing slider: AetherScrollbar, drawn
 };
 
 // Which Java listeners a View already carries (one of each per View).
@@ -864,6 +868,7 @@ static const char* aeui_kind_name(int type) {
         case AUI_BUTTON:      return "button";
         case AUI_TOGGLE:      return "toggle";
         case AUI_SLIDER:      return "slider";
+        case AUI_SCROLLBAR:   return "scrollbar";
         case AUI_PICKER:      return "picker";
         case AUI_TEXTFIELD:   return "textfield";
         case AUI_SECUREFIELD: return "securefield";
@@ -1641,6 +1646,8 @@ int aether_ui_form_section_create(const char* title) {
 static jclass g_scroll_class = NULL, g_host_class = NULL;
 static jclass g_vseek_class = NULL;   // AetherVSeekBar (ui.vslider)
 static jmethodID g_vseek_init = NULL;
+static jclass g_sbar_class = NULL;     // AetherScrollbar (ui.scrollbar)
+static jmethodID g_sbar_init = NULL, g_sbar_set = NULL;
 static jmethodID g_scroll_init = NULL, g_host_init = NULL;
 
 int aether_ui_scrollview_create(void) {
@@ -2268,6 +2275,60 @@ int aether_ui_slider_create(double min_val, double max_val, double initial,
 int aether_ui_vslider_create(double min_val, double max_val, double initial,
                              void* boxed_closure) {
     return make_slider(min_val, max_val, initial, boxed_closure, 1);
+}
+
+// Scrollbar -- a windowing slider, drawn (AetherScrollbar): native code
+// keeps the state (aether_ui_scrollbar.h) and tells the view the thumb's
+// share and place; the view reports a person's drag or page back.
+static void aeui_sb_render(AeuiScrollbar* s) {
+    AeuiWidget* w = live_widget(s->handle);
+    if (!w || w->type != AUI_SCROLLBAR || !g_sbar_set) return;
+    JNIEnv* env = aeui_frame(4);
+    if (!env) return;
+    (*env)->CallVoidMethod(env, w->view, g_sbar_set,
+                           (jdouble)aeui_sb_proportion(s), (jdouble)aeui_sb_fraction(s));
+    aeui_check(env, "AetherScrollbar.set");
+    aeui_unframe(env);
+}
+
+static void JNICALL native_scrollbar(JNIEnv* env, jclass cls, jint handle, jint kind,
+                                     jdouble fraction) {
+    (void)env; (void)cls;
+    AeuiScrollbar* s = aeui_sb_get(handle);
+    AeuiWidget* w = live_widget(handle);
+    if (!s || !w || w->disabled) return;
+    double v = s->value;
+    if (kind == 0) v = s->min + fraction * (aeui_sb_top(s) - s->min);
+    else v += kind < 0 ? -aeui_sb_page_step(s) : aeui_sb_page_step(s);
+    aether_ui_scrollbar_user_set(handle, v);
+}
+
+int aether_ui_scrollbar_create(int vertical, double min, double max, double page,
+                               double value, void* boxed_closure) {
+    if (!g_activity || !g_sbar_init) return 0;
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return 0;
+    int h = 0;
+    int next = widget_count + 1;   // the handle register_widget_typed gives
+    jobject v = (*env)->NewObject(env, g_sbar_class, g_sbar_init, g_activity,
+                                  (jint)next, (jboolean)(vertical ? JNI_TRUE : JNI_FALSE));
+    if (aeui_check(env, "new AetherScrollbar")) v = NULL;
+    if (v) {
+        AeuiScrollbar* s = aeui_sb_new(vertical, min, max, page, value, boxed_closure);
+        h = s ? register_widget_typed(env, v, AUI_SCROLLBAR) : 0;
+        AeuiWidget* w = widget_at(h);
+        if (w && s && h == next) {
+            // Its run takes the row's width (a column's height), as GTK's does.
+            if (vertical) w->own_vexp = w->vexp = 1;
+            else w->own_hexp = w->hexp = 1;
+            s->handle = h;
+            aeui_unframe(env);
+            aeui_sb_render(s);
+            return h;
+        }
+    }
+    aeui_unframe(env);
+    return h;
 }
 
 // Programmatic: no on_change (the SeekBar reports it as not from the user,
@@ -3527,6 +3588,7 @@ static const char* aeui_role_class(const char* role) {
         {"grid", "android.widget.GridView"},
         {"list", "android.widget.ListView"}, {"tablist", "android.widget.TabWidget"},
         {"textbox", "android.widget.EditText"}, {"slider", "android.widget.SeekBar"},
+        {"scrollbar", "android.widget.AbsSeekBar"},
         {"progressbar", "android.widget.ProgressBar"}, {"menu", "android.widget.ListView"},
     };
     for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
@@ -3668,6 +3730,7 @@ static const char* aeui_auto_role(int type) {
         case AUI_SECUREFIELD:
         case AUI_TEXTAREA:    return "textbox";
         case AUI_SLIDER:      return "slider";
+        case AUI_SCROLLBAR:   return "scrollbar";
         case AUI_PROGRESSBAR: return "progressbar";
         case AUI_IMAGE:       return "image";
         default:              return "";
@@ -9331,6 +9394,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_SET_TEXT:
         case AETHER_DRV_TOGGLE:
         case AETHER_DRV_SET_VALUE:
+        case AETHER_DRV_SCROLLBAR_SET:
         case AETHER_DRV_FOCUS:
         case AETHER_DRV_HOVER:
         case AETHER_DRV_PRESS:
@@ -9414,6 +9478,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             } else if (w->type == AUI_TEXT || w->type == AUI_BUTTON) {
                 aether_ui_text_set_string(ctx->handle, ctx->sval);
             }
+            break;
+        case AETHER_DRV_SCROLLBAR_SET:
+            aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
             break;
         case AETHER_DRV_SET_VALUE:
             if (w->type == AUI_SLIDER) {
@@ -9975,6 +10042,16 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_print_class = aeui_find_class(env, "dev/aether/ui/AetherPrint");
     if (g_print_class) g_print_method = (*env)->GetStaticMethodID(env, g_print_class, "print",
         "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)Z");
+    g_sbar_class = aeui_find_class(env, "dev/aether/ui/AetherScrollbar");
+    if (g_sbar_class) {
+        g_sbar_init = M(g_sbar_class, "<init>", "(Landroid/content/Context;IZ)V");
+        g_sbar_set = M(g_sbar_class, "set", "(DD)V");
+        static const JNINativeMethod sbar_natives[] = {
+            { "nativeScrollbar", "(IID)V", (void*)native_scrollbar },
+        };
+        if ((*env)->RegisterNatives(env, g_sbar_class, sbar_natives, 1) != JNI_OK)
+            aeui_check(env, "RegisterNatives(AetherScrollbar)");
+    }
     g_wrap_class = aeui_find_class(env, "dev/aether/ui/AetherWrap");
     if (g_wrap_class) g_wrap_init = M(g_wrap_class, "<init>", "(Landroid/content/Context;II)V");
     g_adapter_class = aeui_find_class(env, "dev/aether/ui/AetherListAdapter");

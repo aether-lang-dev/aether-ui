@@ -89,6 +89,9 @@ typedef enum {
     // dval2) widget-local, moves to half and all of (ival, ival2), then the
     // release there. result 3 when the widget has no on_drag.
     AETHER_DRV_DRAG = 29,          // handle, dval=x, dval2=y, ival=dx, ival2=dy
+    // A scrollbar moved as a person moves it: dval the new value, set
+    // (clamped) and its on_change told (aether_ui_scrollbar_user_set).
+    AETHER_DRV_SCROLLBAR_SET = 30,
 } AetherDriverActionKind;
 
 /* Interaction-state readback (QE): report whether the pointer is over a

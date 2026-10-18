@@ -149,7 +149,7 @@ enum {
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
     AUI_CANVAS, AUI_IMAGE,
     AUI_TABS, AUI_NAVSTACK, AUI_SPLITVIEW, AUI_WRAP, AUI_GRID, AUI_FORM,
-    AUI_BANNER
+    AUI_BANNER, AUI_SCROLLBAR
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +201,7 @@ static const char* aeui_kind_name(int type) {
         case AUI_BUTTON:      return "button";
         case AUI_TOGGLE:      return "toggle";
         case AUI_SLIDER:      return "slider";
+        case AUI_SCROLLBAR:   return "scrollbar";
         case AUI_PICKER:      return "picker";
         case AUI_TEXTFIELD:   return "textfield";
         case AUI_SECUREFIELD: return "securefield";
@@ -1364,6 +1365,117 @@ int aether_ui_vslider_create(double min_val, double max_val, double initial,
     [box addSubview:s];
     [box setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     return register_widget_typed((__bridge void*)box, AUI_SLIDER);
+}
+
+// Scrollbar -- a windowing slider. UIKit has no scrollbar control of its
+// own (a UIScrollView's indicator cannot be held or dragged by itself), so
+// this one is drawn: a track and a thumb the window's share of it, the
+// thumb dragged, the track tapped to page, VoiceOver's adjust to step. The
+// state and its rules are shared (aether_ui_scrollbar.h).
+#include "aether_ui_scrollbar.h"
+
+@interface AeuiScrollbarView : UIView
+@property (assign) int aeuiHandle;
+@property (assign) BOOL vertical;
+@property (strong) UIView* thumb;
+@property (assign) double dragStartValue;
+@end
+
+static const CGFloat AEUI_SB_THICK = 14;
+
+@implementation AeuiScrollbarView
+- (instancetype)initVertical:(BOOL)vertical {
+    self = [super initWithFrame:CGRectZero];
+    if (!self) return nil;
+    _vertical = vertical;
+    self.translatesAutoresizingMaskIntoConstraints = NO;
+    self.backgroundColor = [UIColor tertiarySystemFillColor];
+    self.layer.cornerRadius = AEUI_SB_THICK / 2;
+    _thumb = [[UIView alloc] initWithFrame:CGRectZero];
+    _thumb.backgroundColor = [UIColor secondaryLabelColor];
+    _thumb.layer.cornerRadius = (AEUI_SB_THICK - 4) / 2;
+    _thumb.userInteractionEnabled = NO;
+    [self addSubview:_thumb];
+    [self addGestureRecognizer:[[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(aeuiPan:)]];
+    [self addGestureRecognizer:[[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(aeuiTap:)]];
+    self.isAccessibilityElement = YES;
+    self.accessibilityTraits = UIAccessibilityTraitAdjustable;
+    [self setContentHuggingPriority:UILayoutPriorityRequired
+                            forAxis:vertical ? UILayoutConstraintAxisHorizontal : UILayoutConstraintAxisVertical];
+    // Along its run it takes what its row (column) has: below the stack's
+    // slack (AEUI_SLACK_HUG), which is how a UIKit stack here expands.
+    [self setContentHuggingPriority:1
+                            forAxis:vertical ? UILayoutConstraintAxisVertical : UILayoutConstraintAxisHorizontal];
+    return self;
+}
+- (CGSize)intrinsicContentSize {
+    return _vertical ? CGSizeMake(AEUI_SB_THICK, UIViewNoIntrinsicMetric)
+                     : CGSizeMake(UIViewNoIntrinsicMetric, AEUI_SB_THICK);
+}
+- (CGFloat)aeuiLength { return _vertical ? self.bounds.size.height : self.bounds.size.width; }
+- (CGFloat)aeuiThumbLength:(AeuiScrollbar*)s {
+    CGFloat len = [self aeuiLength] - 4;
+    CGFloat t = (CGFloat)(aeui_sb_proportion(s) * len);
+    return t < AEUI_SB_THICK ? (len < AEUI_SB_THICK ? len : AEUI_SB_THICK) : t;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    AeuiScrollbar* s = aeui_sb_get(_aeuiHandle);
+    if (!s) return;
+    CGFloat len = [self aeuiLength] - 4, t = [self aeuiThumbLength:s];
+    CGFloat at = 2 + (CGFloat)(aeui_sb_fraction(s) * (len - t));
+    _thumb.frame = _vertical ? CGRectMake(2, at, AEUI_SB_THICK - 4, t)
+                             : CGRectMake(at, 2, t, AEUI_SB_THICK - 4);
+    _thumb.hidden = aeui_sb_proportion(s) >= 1.0;
+    self.accessibilityValue = [NSString stringWithFormat:@"%.0f%%", aeui_sb_fraction(s) * 100];
+}
+- (void)aeuiPan:(UIPanGestureRecognizer*)g {
+    AeuiScrollbar* s = aeui_sb_get(_aeuiHandle);
+    if (!s) return;
+    if (g.state == UIGestureRecognizerStateBegan) _dragStartValue = s->value;
+    CGPoint d = [g translationInView:self];
+    CGFloat room = [self aeuiLength] - 4 - [self aeuiThumbLength:s];
+    if (room <= 0) return;
+    double moved = (_vertical ? d.y : d.x) / room * (aeui_sb_top(s) - s->min);
+    aether_ui_scrollbar_user_set(_aeuiHandle, _dragStartValue + moved);
+}
+- (void)aeuiTap:(UITapGestureRecognizer*)g {
+    AeuiScrollbar* s = aeui_sb_get(_aeuiHandle);
+    if (!s) return;
+    CGPoint p = [g locationInView:self];
+    CGFloat at = _vertical ? p.y : p.x;
+    CGFloat start = _vertical ? _thumb.frame.origin.y : _thumb.frame.origin.x;
+    double ps = aeui_sb_page_step(s);
+    aether_ui_scrollbar_user_set(_aeuiHandle, s->value + (at < start ? -ps : ps));
+}
+- (void)accessibilityIncrement {
+    AeuiScrollbar* s = aeui_sb_get(_aeuiHandle);
+    if (s) aether_ui_scrollbar_user_set(_aeuiHandle, s->value + aeui_sb_page_step(s));
+}
+- (void)accessibilityDecrement {
+    AeuiScrollbar* s = aeui_sb_get(_aeuiHandle);
+    if (s) aether_ui_scrollbar_user_set(_aeuiHandle, s->value - aeui_sb_page_step(s));
+}
+@end
+
+static void aeui_sb_render(AeuiScrollbar* s) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(s->handle);
+    if (![v isKindOfClass:[AeuiScrollbarView class]]) return;
+    [v setNeedsLayout];
+}
+
+int aether_ui_scrollbar_create(int vertical, double min, double max, double page,
+                               double value, void* boxed_closure) {
+    AeuiScrollbar* s = aeui_sb_new(vertical, min, max, page, value, boxed_closure);
+    if (!s) return 0;
+    AeuiScrollbarView* v = [[AeuiScrollbarView alloc] initVertical:vertical != 0];
+    int h = register_widget_typed((__bridge void*)v, AUI_SCROLLBAR);
+    s->handle = h;
+    v.aeuiHandle = h;
+    aeui_sb_render(s);
+    return h;
 }
 
 void aether_ui_slider_set_value(int handle, double value) {
@@ -6698,6 +6810,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 [(UISwitch*)v setOn:![(UISwitch*)v isOn] animated:NO];
                 [(UISwitch*)v sendActionsForControlEvents:UIControlEventValueChanged];
             }
+            break;
+        case AETHER_DRV_SCROLLBAR_SET:
+            aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
             break;
         case AETHER_DRV_SET_VALUE:
             if (aeui_slider_in(v)) {

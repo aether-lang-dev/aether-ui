@@ -113,7 +113,7 @@ enum {
     AUI_VSTACK, AUI_HSTACK, AUI_ZSTACK, AUI_SPACER,
     AUI_CANVAS, AUI_IMAGE, AUI_FORM_SECTION, AUI_FORM_SECTION_INNER,
     AUI_NAVSTACK, AUI_BANNER,
-    AUI_SPLITVIEW, AUI_WRAP, AUI_SCRIM, AUI_TABS
+    AUI_SPLITVIEW, AUI_WRAP, AUI_SCRIM, AUI_TABS, AUI_SCROLLBAR
 };
 
 // ---------------------------------------------------------------------------
@@ -3357,6 +3357,75 @@ int aether_ui_vslider_create(double min_val, double max_val, double initial,
     return h;
 }
 
+// Scrollbar -- a windowing slider: an NSScroller in the legacy style (its
+// track always shown, as a scrollbar the person drags must be), its knob
+// the window's share of the range. The state and its rules are shared
+// (aether_ui_scrollbar.h); this shows them and reports a person's moves.
+#include "aether_ui_scrollbar.h"
+
+@interface AetherScroller : NSScroller
+@property (assign) int aeuiHandle;
+- (void)aeuiScrolled:(id)sender;
+@end
+
+@implementation AetherScroller
+- (void)aeuiScrolled:(id)sender {
+    (void)sender;
+    AeuiScrollbar* s = aeui_sb_get(self.aeuiHandle);
+    if (!s) return;
+    double v = s->value;
+    switch ([self hitPart]) {
+        case NSScrollerKnob:
+        case NSScrollerKnobSlot:
+            v = s->min + [self doubleValue] * (aeui_sb_top(s) - s->min);
+            break;
+        case NSScrollerDecrementPage: v -= aeui_sb_page_step(s); break;
+        case NSScrollerIncrementPage: v += aeui_sb_page_step(s); break;
+        default: return;
+    }
+    aether_ui_scrollbar_user_set(self.aeuiHandle, v);
+}
+@end
+
+static void aeui_sb_render(AeuiScrollbar* s) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(s->handle);
+    if (!v || ![v isKindOfClass:[NSScroller class]]) return;
+    NSScroller* sc = (NSScroller*)v;
+    double p = aeui_sb_proportion(s);
+    [sc setKnobProportion:(CGFloat)p];
+    [sc setDoubleValue:aeui_sb_fraction(s)];
+    [sc setEnabled:p < 1.0];
+}
+
+int aether_ui_scrollbar_create(int vertical, double min, double max, double page,
+                               double value, void* boxed_closure) {
+    AeuiScrollbar* s = aeui_sb_new(vertical, min, max, page, value, boxed_closure);
+    if (!s) return 0;
+    CGFloat thick = [NSScroller scrollerWidthForControlSize:NSControlSizeRegular scrollerStyle:NSScrollerStyleLegacy];
+    NSRect f = vertical ? NSMakeRect(0, 0, thick, 100) : NSMakeRect(0, 0, 100, thick);
+    AetherScroller* sc = [[AetherScroller alloc] initWithFrame:f];
+    [sc setScrollerStyle:NSScrollerStyleLegacy];
+    [sc setTranslatesAutoresizingMaskIntoConstraints:NO];
+    [sc setTarget:sc];
+    [sc setAction:@selector(aeuiScrolled:)];
+    // As thick as the platform's scrollbars; along its length it takes
+    // what its row (or column) has.
+    if (vertical) {
+        [[sc.widthAnchor constraintEqualToConstant:thick] setActive:YES];
+        [sc setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+        [sc setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    } else {
+        [[sc.heightAnchor constraintEqualToConstant:thick] setActive:YES];
+        [sc setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [sc setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    }
+    int h = register_widget_typed((__bridge void*)sc, AUI_SCROLLBAR);
+    s->handle = h;
+    sc.aeuiHandle = h;
+    aeui_sb_render(s);
+    return h;
+}
+
 // Picker — NSPopUpButton; target invokes closure with selected index.
 @interface AetherPickerTarget : NSObject
 @property (assign) AeClosure* closure;
@@ -4375,6 +4444,7 @@ static const char* aeui_auto_role_for_type(int t) {
         case AUI_TEXT:        return "heading";   // a static label
         case AUI_TEXTFIELD:   return "textbox";
         case AUI_SLIDER:      return "slider";
+        case AUI_SCROLLBAR:   return "scrollbar";
         case AUI_PROGRESSBAR: return "progressbar";
         default:              return "";
     }
@@ -8986,6 +9056,7 @@ static const char* widget_type_name_for(int handle) {
         case AUI_BUTTON: return "button";
         case AUI_TOGGLE: return "toggle";
         case AUI_SLIDER: return "slider";
+        case AUI_SCROLLBAR: return "scrollbar";
         case AUI_PICKER: return "picker";
         case AUI_TEXTFIELD: return "textfield";
         case AUI_SECUREFIELD: return "securefield";
@@ -9741,6 +9812,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                              ? NSControlStateValueOff : NSControlStateValueOn];
                 [b sendAction:[b action] to:[b target]];
             }
+            break;
+        case AETHER_DRV_SCROLLBAR_SET:
+            aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
             break;
         case AETHER_DRV_SET_VALUE:
             if ([v isKindOfClass:[NSSlider class]]) {
