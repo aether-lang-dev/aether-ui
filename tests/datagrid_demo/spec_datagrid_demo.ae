@@ -276,9 +276,140 @@ scroll_at() -> string {
     return out
 }
 
+// The red box floating over the grid (the demo's 40 x 30 vstack): its id.
+float_id() -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "type"), "vstack") == 1 && uidriver.field_int(w, "w") == 40 && uidriver.field_int(w, "h") == 30 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
+
+// 1 once widget id's field is `want` (a layout lands a frame after the call
+// that caused it on some backends).
+field_is(id: int, field: string, want: int) -> int {
+    i = 0
+    while i < 60 {
+        if uidriver.widget_int_field_by_id(id, field) == want { return 1 }
+        sleep(50)
+        i = i + 1
+    }
+    return 0
+}
+
+// What a real hit-test at window point (x, y) answers: its handle.
+pick_at(x: int, y: int) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/window/pick?x=${x}&y=${y}"))
+    if v == null { return 0 }
+    h = uidriver.field_int(v, "handle")
+    json.json_free(v)
+    return h
+}
+
+// How many red pixels of the floating box a snapshot has in each of the
+// boxes (x:y:w:h, points), one a line ("" without a screenshot).
+reds(name: string, boxes: string) -> string {
+    dims = snapshot(name)
+    if string.length(dims) == 0 { return "" }
+    // Only a window drawn whole at a whole scale (a desktop's): a phone's
+    // screenshot is the screen with the window inset in it.
+    xw = string.index_of(dims, "x")
+    pw, _pe = string.to_int(string.substring(dims, 0, xw))
+    rw = uidriver.widget_int_field_by_id(1, "w")
+    if rw <= 0 || pw % rw != 0 {
+        println("      (screenshot not at a whole scale of the window: drawn checks skipped)")
+        return ""
+    }
+    bn = uidriver.widget_id_by_text("Under Remote Control")
+    banner = "${uidriver.widget_int_field_by_id(bn, "x")}:${uidriver.widget_int_field_by_id(bn, "y")}:${uidriver.widget_int_field_by_id(bn, "w")}:${uidriver.widget_int_field_by_id(1, "w")}"
+    out, _e = os.exec("python3 redbox.py target/datagrid-snapshots/${name}.png ${banner} ${boxes}")
+    return string.trim(out)
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
+
+    spec.describe(fw, "a widget floating over the grid") {
+        spec.it("sits at its cell and scrolls with the cells, clipped to the grid, and moves to another") callback {
+            vs = nth_of("scrollbar", 0)
+            hs = nth_of("scrollbar", 1)
+            uidriver.post_ok("/widget/${vs}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "and the left")
+            spec.assert_true(shows("R9C1") == 1, "its cell shown")
+            c = uidriver.widget_id_by_text("R9C1")
+            f = float_id()
+            i = 0
+            while f == 0 && i < 50 {
+                sleep(100)
+                f = float_id()
+                i = i + 1
+            }
+            spec.assert_gt(f, 0, "the float exists")
+            cx = uidriver.widget_int_field_by_id(c, "x")
+            cy = uidriver.widget_int_field_by_id(c, "y")
+            spec.assert_true(field_is(f, "x", cx + 3) == 1, "3 right of its cell's corner (${uidriver.widget_int_field_by_id(f, "x")} for ${cx})")
+            spec.assert_true(field_is(f, "y", cy + 3) == 1, "and 3 down (${uidriver.widget_int_field_by_id(f, "y")} for ${cy})")
+            spec.assert_eq(uidriver.widget_int_field_by_id(f, "w"), 40, "40 wide")
+            spec.assert_eq(uidriver.widget_int_field_by_id(f, "h"), 30, "30 high")
+            // Six rows down: its cell moved up six rows, the float with it.
+            uidriver.post_ok("/widget/${vs}/set_value?v=6", "scroll six rows")
+            spec.assert_true(shows("R9C1") == 1, "its cell still shown")
+            c = uidriver.widget_id_by_text("R9C1")
+            cy2 = uidriver.widget_int_field_by_id(c, "y")
+            spec.assert_eq(cy2, cy - 6 * 24, "its cell six rows up")
+            spec.assert_true(field_is(f, "y", cy2 + 3) == 1, "the float with it (${uidriver.widget_int_field_by_id(f, "y")} for ${cy2})")
+            // Two columns right: its cell is out to the left of the first
+            // scrolling one (C, 36 wide each), the float with it.
+            uidriver.post_ok("/widget/${hs}/set_value?v=2", "scroll two columns")
+            spec.assert_true(shows("R9C3") == 1, "the first scrolling column shown")
+            c3 = uidriver.widget_id_by_text("R9C3")
+            spec.assert_true(field_is(f, "x", uidriver.widget_int_field_by_id(c3, "x") - 72 + 3) == 1, "two columns left of C (${uidriver.widget_int_field_by_id(f, "x")})")
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "back left")
+            // Clipped to the grid: scrolled so the float's top is under the
+            // header, none of it is drawn there; the rest below is.
+            uidriver.post_ok("/widget/${vs}/set_value?v=10", "scroll so row 9 is out of the top")
+            spec.assert_true(shows("R10C1") == 1, "row 10 first")
+            c = uidriver.widget_id_by_text("R10C1")
+            by = uidriver.widget_int_field_by_id(c, "y")
+            spec.assert_true(field_is(f, "y", by - 24 + 3) == 1, "the float 21 above the body's top (${uidriver.widget_int_field_by_id(f, "y")} for ${by})")
+            sleep(300)
+            r = reds("float-clipped", "39:${by - 22}:40:20 39:${by}:40:9")
+            if string.length(r) > 0 {
+                parts = string.string_split(r, "\n")
+                spec.assert_str_eq(string.trim(string.string_array_get(parts, 0)), "0", "no red above the body's top (${r})")
+                n, _ne = string.to_int(string.trim(string.string_array_get(parts, 1)))
+                spec.assert_gt(n, 20, "red below it, in the body (${r})")
+                string.string_array_free(parts)
+            }
+            uidriver.post_ok("/widget/${vs}/set_value?v=0", "back to the top")
+            press("Move float")
+            spec.assert_true(shows("R11C2") == 1, "R11C2 shown")
+            c = uidriver.widget_id_by_text("R11C2")
+            spec.assert_true(field_is(f, "x", uidriver.widget_int_field_by_id(c, "x")) == 1, "moved to R11C2: left edges together")
+            spec.assert_true(field_is(f, "y", uidriver.widget_int_field_by_id(c, "y")) == 1, "and tops")
+        }
+        spec.it("the pointer passes through it to the cell beneath; take it, and the float has it") callback {
+            f = float_id()
+            fx = uidriver.widget_int_field_by_id(f, "x")
+            fy = uidriver.widget_int_field_by_id(f, "y")
+            under = pick_at(fx + 12, fy + 10)
+            spec.assert_gt(under, 0, "something is under the float's middle")
+            spec.assert_true(under != f, "not the float")
+            spec.assert_true(string.starts_with(uidriver.widget_text_by_id(under), "R") == 1, "a cell: ${uidriver.widget_text_by_id(under)}")
+            press("Float takes clicks")
+            spec.assert_eq(pick_at(fx + 12, fy + 10), f, "taking clicks: the float itself")
+            spec.assert_true(pick_at(fx + 50, fy + 10) != f, "beside it, a cell")
+            press("Float takes clicks")
+            spec.assert_eq(pick_at(fx + 12, fy + 10), under, "and let through again: the same cell")
+        }
+    }
 
     spec.describe(fw, "a virtualised grid") {
         spec.it("shows the first window: header letters, row numbers, cells") callback {
@@ -786,8 +917,8 @@ main() {
             spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "and not italic")
         }
         spec.it("a font family") callback {
-            spec.assert_str_eq(fstr("R13C4", "fontFamily"), "monospace", "R13C4 in the monospace family")
-            spec.assert_str_eq(fstr("R12C4", "fontFamily"), "", "R12C4 in the platform's own")
+            spec.assert_str_eq(fstr("R12C4", "fontFamily"), "monospace", "R12C4 in the monospace family")
+            spec.assert_str_eq(fstr("R13C4", "fontFamily"), "", "R13C4 in the platform's own")
         }
         spec.it("borders on a cell's edges") callback {
             spec.assert_str_eq(fstr("R14C4", "borderTop"), "1 #000000", "a 1px black line on top")
@@ -809,8 +940,7 @@ main() {
             uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=1", "scroll down a row")
             spec.assert_true(shows("R18C4") == 1, "row 18 shown")
             spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "where R12C4 was italic, R13C4 is not")
-            spec.assert_str_eq(fstr("R13C4", "fontFamily"), "monospace", "R13C4 in monospace on the widget that was R12C4's")
-            spec.assert_str_eq(fstr("R14C4", "fontFamily"), "", "R14C4 on the widget that was monospace: the platform's own again")
+            spec.assert_str_eq(fstr("R13C4", "fontFamily"), "", "R13C4 on the widget that was R12C4's (monospace): the platform's own again")
             spec.assert_str_eq(fstr("R17C4", "bar"), "", "where the bar was, none")
             spec.assert_str_eq(fstr("R18C4", "corner"), "", "nor a corner where the marker was")
             spec.assert_str_eq(fstr("R18C4", "tooltip"), "", "nor a tooltip")

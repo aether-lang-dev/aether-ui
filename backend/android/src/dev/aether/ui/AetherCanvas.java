@@ -83,7 +83,12 @@ final class AetherCanvas extends View {
         nativeCanvasEvent(handle, SIZE, 0, w, h, 0, 0, 0);
     }
 
+    // click_through: the touch goes to the view beneath, as a container's does.
+    private boolean passThrough;
+    public void setPassThrough(boolean on) { passThrough = on; }
+
     @Override public boolean onTouchEvent(MotionEvent e) {
+        if (passThrough) return false;
         if (secondaryRelease(e)) return true;
         // A secondary-button press is a right click, not a touch: keep it out
         // of the press/long-press stream.

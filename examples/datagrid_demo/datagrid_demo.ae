@@ -20,7 +20,8 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_merge, datagrid_unmerge, datagrid_merge_of,
     datagrid_set_row_height, datagrid_row_height, datagrid_fit_row, datagrid_set_height, datagrid_freeze_cols,
-    ui_state_s, ui_set_s, text_bound, enable_test_server)
+    ui_state_s, ui_set_s, text_bound, enable_test_server,
+    datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_floats, click_through, style_bg_color)
 import std.os (os_getenv)
 import std.string
 import std.map
@@ -67,6 +68,7 @@ main() {
     hidc = ui_state_i(0)
     typing = ui_state_s("")
     reenter = ui_state_i(0)
+    flclicks = ui_state_i(0)
     window("datagrid", 1000, 640) {
         vstack(4) {
             text("100,000 rows x 50 columns")
@@ -101,8 +103,8 @@ main() {
                         return "text-align: end; background: #ffebee"
                     }
                     // Column D, rows 12 to 17: the rest of what a style draws.
-                    if c == 4 && r == 12 { return "font-style: italic; text-decoration: underline" }
-                    if c == 4 && r == 13 { return "text-decoration: line-through; font-size: 16px; font-family: monospace" }
+                    if c == 4 && r == 12 { return "font-style: italic; text-decoration: underline; font-family: monospace" }
+                    if c == 4 && r == 13 { return "text-decoration: line-through; font-size: 16px" }
                     if c == 4 && r == 14 { return "border-top: 1px solid #000; border-bottom: 2px solid #c00000" }
                     if c == 4 && r == 15 { return "--fill: 0.5; --fill-color: #638ec6" }
                     if c == 4 && r == 16 { return "--fill: -0.25" }
@@ -233,6 +235,19 @@ main() {
             _pc = datagrid_cell_picture(g) callback |r: int, c: int| {
                 if ui_get_i(pics) == 1 && r == 2 && c == 5 { return "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4oaGBFTEMLQkAgl1GAWqNFmsAAAAASUVORK5CYII=" }
                 return ""
+            }
+            // A red box floating over the grid from R9C1 (3 px right, 3 down),
+            // 40 x 30: it scrolls with the cells and lets the pointer through
+            // to them; "Float takes clicks" makes it take them, and back.
+            fl = datagrid_float(g, 9, 1, 3, 3, 40, 30)
+            _flc = style_bg_color(fl, 0.85, 0.15, 0.15, 1.0)
+            _flt = btn("Float takes clicks") callback {
+                taking = 1 - ui_get_i(flclicks)
+                _fk = click_through(fl, 1 - taking)
+                _fs = ui_set_i(flclicks, taking)
+            }
+            _flm = btn("Move float") callback {
+                _fm = datagrid_float_move(g, fl, 11, 2, 0, 0, 40, 30)
             }
             // The cursor's box gliding to a new cell over 1500 ms (slowed, so
             // a driver polling /widgets sees it between cells), and back to

@@ -267,6 +267,9 @@ typedef struct {
     int dec_subclassed;
     wchar_t* font_family;     // face name for apply_font (owned; NULL default)
     char* font_family_u8;     // utf8 twin for driver readback (owned)
+    int placed;               // a zstack's child at place_x, place_y (zstack_place), not filling it
+    int place_x, place_y;
+    int click_through;        // the pointer passes through it (set_click_through)
     char* placeholder_u8;     // hint text, for driver readback (owned)
 
     // Fixed sizing (0 = auto)
@@ -524,6 +527,7 @@ static void w32_settle_owed_opacity(HWND top);
 static void w32_forget_system_dark(void);
 static int  w32_own_visible(HWND hwnd);
 static void w32_request_layout(HWND stack_hwnd);
+static int w32_click_through(HWND hwnd);   // the pointer passes through it (set_click_through)
 static void w32_relayout_parent(Widget* w);
 static void w32_flush_layout(void);
 static void w32_drv_settle_layout(void);
@@ -979,8 +983,10 @@ static void measure_stack_natural(Widget* sw, int* out_w, int* out_h) {
         Widget* cw = widget_at(ch);
         if (!cw || cw->dead) continue;
         // A hidden child is no part of the stack's size, as on GTK and
-        // AppKit, where a hidden widget is not allocated.
+        // AppKit, where a hidden widget is not allocated; nor is a child
+        // placed in a zstack (it floats over it).
         if (!w32_own_visible(c)) continue;
+        if (cw->placed && sw->kind == WK_ZSTACK) continue;
         int mw = 0, mh = 0;
         if (cw->kind == WK_SPACER) { n++; continue; }   // spacers are flex-only
         measure_widget(cw, &mw, &mh);
@@ -1701,6 +1707,16 @@ static void stack_do_layout(HWND stack_hwnd) {
         }
         for (int i = 0; i < nchildren; i++) {
             Widget* cw = widget_at(handle_for_hwnd(children[i]));
+            // A placed child sits at its own offset at the size it asks for
+            // (the zstack's client area clips what is outside it).
+            if (cw && cw->placed) {
+                int pw = 0, ph = 0;
+                measure_widget(cw, &pw, &ph);
+                SetWindowPos(children[i], NULL, cw->place_x, cw->place_y, pw, ph,
+                             SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+                w32_note_layout(children[i], pw, ph);
+                continue;
+            }
             int ml = cw ? cw->margin_left : 0, mt = cw ? cw->margin_top : 0;
             int mr = cw ? cw->margin_right : 0, mb = cw ? cw->margin_bottom : 0;
             int cwid = avail_w - ml - mr, chgt = avail_h - mt - mb;
@@ -2201,6 +2217,9 @@ static Widget* w32_scrollview_under(POINT screen) {
 
 static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_NCHITTEST:
+            if (w32_click_through(hwnd)) return HTTRANSPARENT;
+            break;
         case AE_WM_FLUSH_LAYOUT:
             // The wake w32_request_layout posts reaches the holder (a stack
             // window) while no app window exists yet.
@@ -5199,6 +5218,38 @@ int aether_ui_split_position_impl(int handle) {
    the layout pass reads, so setting it is what holds a panel at a width; the
    getter answers from the actual window rect, i.e. what the widget really
    got rather than what was asked for. */
+// A window the pointer passes through: itself or an ancestor with
+// click_through set. The window procedures of containers, canvases and
+// images answer WM_NCHITTEST with HTTRANSPARENT for it, and the driver's
+// pick skips it, so a press lands on the sibling beneath.
+static int w32_click_through(HWND hwnd) {
+    for (HWND h = hwnd; h; h = GetAncestor(h, GA_PARENT)) {
+        Widget* w = widget_at(handle_for_hwnd(h));
+        if (w && w->click_through) return 1;
+    }
+    return 0;
+}
+
+void aether_ui_set_click_through(int handle, int on) {
+    Widget* w = widget_at(handle);
+    if (!w) return;
+    w->click_through = on ? 1 : 0;
+}
+
+// zstack_place: the child at (x, y) in its zstack, at the size it asks for.
+void aether_ui_zstack_place(int handle, int x, int y) {
+    Widget* w = widget_at(handle);
+    if (!w || !w->hwnd) return;
+    HWND parent = GetAncestor(w->hwnd, GA_PARENT);
+    Widget* pw = widget_at(handle_for_hwnd(parent));
+    if (!pw || pw->kind != WK_ZSTACK) return;
+    if (w->placed && w->place_x == x && w->place_y == y) return;
+    w->placed = 1;
+    w->place_x = x;
+    w->place_y = y;
+    w32_request_layout(parent);
+}
+
 void aether_ui_set_width_impl(int handle, int px) {
     Widget* w = widget_at(handle);
     if (!w) return;
@@ -13502,6 +13553,9 @@ static const char* vk_to_gdk_name(WPARAM vk, char* buf, int buflen) {
 
 static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_NCHITTEST:
+            if (w32_click_through(hwnd)) return HTTRANSPARENT;
+            break;
         case WM_SIZE: {
             // Canvas rescale: record the new size + fire the app's on_resize
             // (which re-flushes the vg scene at the new viewBox->px mapping).
@@ -14322,6 +14376,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                         // reads the whole tree invisible (the documented
                         // win32 lesson) and every pick would return none.
                         if (!w32_own_visible(c)) continue;
+                        if (w32_click_through(c)) continue;   // the pointer passes through it
                         RECT r;
                         GetWindowRect(c, &r);
                         POINT sp = pt;

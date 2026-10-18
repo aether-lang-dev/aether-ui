@@ -3748,6 +3748,63 @@ int aether_ui_zstack_create(void) {
     return register_widget_typed((__bridge void*)container, AUI_ZSTACK);
 }
 
+// zstack_place: the child at (x, y) from its zstack's top-left, at the size it
+// asks for, not filling; what lies outside the zstack is clipped. The fill
+// pins add_child gave it are dropped, a leading and a top constraint at the
+// offset take their place (and are moved by a later call).
+void aether_ui_zstack_place(int handle, int x, int y) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    NSView* p = v ? [v superview] : nil;
+    if (!v || !p || get_widget_type(handle_for_view(p)) != AUI_ZSTACK) return;
+    NSLayoutConstraint* lx = objc_getAssociatedObject(v, "aeui_place_x");
+    NSLayoutConstraint* ly = objc_getAssociatedObject(v, "aeui_place_y");
+    if (!lx || !ly) {
+        for (NSLayoutConstraint* c in [[p constraints] copy]) {
+            if ((c.firstItem == v && c.secondItem == p) || (c.firstItem == p && c.secondItem == v)) c.active = NO;
+        }
+        lx = [v.leadingAnchor constraintEqualToAnchor:p.leadingAnchor constant:x];
+        ly = [v.topAnchor constraintEqualToAnchor:p.topAnchor constant:y];
+        lx.active = YES;
+        ly.active = YES;
+        objc_setAssociatedObject(v, "aeui_place_x", lx, OBJC_ASSOCIATION_RETAIN);
+        objc_setAssociatedObject(v, "aeui_place_y", ly, OBJC_ASSOCIATION_RETAIN);
+        [p setWantsLayer:YES];
+        p.layer.masksToBounds = YES;
+        // (It is above what was added before it, as a zstack's children are.)
+    } else {
+        lx.constant = x;
+        ly.constant = y;
+    }
+}
+
+// click_through: hitTest: answers nil for the view and what is in it, so the
+// press goes to the sibling beneath. The view's class is swapped for a
+// subclass of its own that says so (made once for each class).
+static NSView* aeui_pass_hit(id self, SEL cmd, NSPoint p) {
+    (void)self; (void)cmd; (void)p;
+    return nil;
+}
+
+void aether_ui_set_click_through(int handle, int on) {
+    NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    Class cur = object_getClass(v);
+    NSString* cn = NSStringFromClass(cur);
+    BOOL passing = [cn hasPrefix:@"AeuiPass_"];
+    if (on && !passing) {
+        NSString* name = [@"AeuiPass_" stringByAppendingString:cn];
+        Class sub = NSClassFromString(name);
+        if (!sub) {
+            sub = objc_allocateClassPair(cur, name.UTF8String, 0);
+            class_addMethod(sub, @selector(hitTest:), (IMP)aeui_pass_hit, "@@:{CGPoint=dd}");
+            objc_registerClassPair(sub);
+        }
+        object_setClass(v, sub);
+    } else if (!on && passing) {
+        object_setClass(v, class_getSuperclass(cur));
+    }
+}
+
 int aether_ui_form_create(void) {
     NSStackView* stack = [[NSStackView alloc] init];
     [stack setOrientation:NSUserInterfaceLayoutOrientationVertical];

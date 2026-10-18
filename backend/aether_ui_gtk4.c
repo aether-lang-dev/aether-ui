@@ -2600,6 +2600,53 @@ int aether_ui_zstack_create(void) {
     return aether_ui_register_widget(overlay);
 }
 
+// zstack_place: the child of a GtkOverlay at (x, y) from the overlay's
+// top-left at its natural size (the size it asked for), x and y signed: the
+// overlay asks its "get-child-position" for the allocation of each child, and
+// a placed child answers with its own, clipped to the overlay (clip-overlay).
+static gboolean aeui_overlay_child_position(GtkOverlay* ov, GtkWidget* child,
+                                            GdkRectangle* alloc, gpointer data) {
+    (void)ov; (void)data;
+    int* pl = (int*)g_object_get_data(G_OBJECT(child), "aeui-place");
+    if (!pl) return FALSE;
+    GtkRequisition minimum, natural;
+    gtk_widget_get_preferred_size(child, &minimum, &natural);
+    alloc->x = pl[0];
+    alloc->y = pl[1];
+    alloc->width = natural.width > minimum.width ? natural.width : minimum.width;
+    alloc->height = natural.height > minimum.height ? natural.height : minimum.height;
+    return TRUE;
+}
+
+void aether_ui_zstack_place(int handle, int x, int y) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    GtkWidget* p = w ? gtk_widget_get_parent(w) : NULL;
+    if (!w || !p || !GTK_IS_OVERLAY(p)) return;
+    int* pl = (int*)g_object_get_data(G_OBJECT(w), "aeui-place");
+    if (!pl) {
+        pl = g_new0(int, 2);
+        g_object_set_data_full(G_OBJECT(w), "aeui-place", pl, g_free);
+        if (!g_object_get_data(G_OBJECT(p), "aeui-place-hooked")) {
+            g_signal_connect(p, "get-child-position", G_CALLBACK(aeui_overlay_child_position), NULL);
+            g_object_set_data(G_OBJECT(p), "aeui-place-hooked", GINT_TO_POINTER(1));
+        }
+        gtk_overlay_set_clip_overlay(GTK_OVERLAY(p), w, TRUE);
+        pl[0] = x + 1;   // differs: the first call places
+    }
+    if (pl[0] == x && pl[1] == y) return;
+    pl[0] = x;
+    pl[1] = y;
+    gtk_widget_queue_allocate(p);
+}
+
+// click_through: the pointer passes through the widget and what is in it
+// (GTK picks only widgets that can be targets, a subtree at a time).
+void aether_ui_set_click_through(int handle, int on) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    gtk_widget_set_can_target(w, on ? FALSE : TRUE);
+}
+
 // Form — vertical box with padding, suitable for form layouts.
 int aether_ui_form_create(void) {
     ensure_gtk_init();

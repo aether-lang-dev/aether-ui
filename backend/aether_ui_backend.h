@@ -251,7 +251,14 @@ int aether_ui_styled_fg_impl(int handle);   // packed 0xRRGGBB or -1
 // handed to the platform verbatim — generic CSS families ("monospace",
 // "serif") resolve on GTK4/macOS; on win32 prefer real face names
 // ("Consolas"). styled_* read back what was explicitly set ("" = never).
-void aether_ui_set_font_family(int handle, const char* family);
+void aether_ui_set_font_family(int handle, const char* family);   // "" takes the widget's own back
+/* A zstack's child at (x, y) from the zstack's top-left (either may be
+   negative), at the size it asks for, not filling it; the zstack clips what
+   lies outside it. Above the children before it. */
+void aether_ui_zstack_place(int handle, int x, int y);
+/* The pointer passes through the widget and everything in it to what lies
+   beneath (hit-testing skips it; it is drawn as ever). on=0 takes it back. */
+void aether_ui_set_click_through(int handle, int on);
 const char* aether_ui_styled_font_family_impl(int handle);   // "" unset
 const char* aether_ui_styled_weight_impl(int handle);        // ""/"bold"/"normal"
 int aether_ui_styled_opacity_impl(int handle);               // 0..100, -1 unset

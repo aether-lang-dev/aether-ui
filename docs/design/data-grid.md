@@ -190,3 +190,23 @@ GTK 4.6 and 4.22, ae-x64) before it lands, as the rest of aether-ui does.
   stay fully composed on every backend for one code path.
 - How much of the current `table` API to keep: the grid could become what
   `table` is built on, or `table` stays as the simple form.
+
+## Floating things (2026-10-18)
+
+`datagrid_float(g, row, col, dx, dy, w, h)` returns a container w x h px
+that floats over the body at (dx, dy) from the top-left of the cell at model
+row, model column: a page fills it (a drawing, a chart). The grid works its
+place out from its own column widths and row heights (hidden ones out), so it
+follows scrolling, resizing, hidden rows and moved columns; `datagrid_float_move`
+and `datagrid_float_remove` change and drop it. Underneath are two new
+backend entry points, on all five backends: `zstack_place(h, x, y)` (a
+zstack's child at an offset, signed, at its own size, clipped to the zstack:
+GtkOverlay's get-child-position, constraints on AppKit and UIKit, the layout
+pass on Win32, FrameLayout margins on Android) and `click_through(h, on)` (the
+pointer passes through h and what is in it: can-target on GTK, a hitTest
+override on AppKit, userInteractionEnabled on UIKit, WM_NCHITTEST on Win32,
+non-clickable views and AetherCanvas.setPassThrough on Android; /window/pick
+agrees). A float is click-through as made. Known limits: a float over frozen
+columns or rows is not clipped at the freeze line; a row a platform draws
+taller than its nominal height (GTK, a large font) moves what floats below it
+by the difference.

@@ -4763,6 +4763,41 @@ int aether_ui_zstack_create(void) {
     return register_widget_typed((__bridge void*)v, AUI_ZSTACK);
 }
 
+// zstack_place: the child at (x, y) from its zstack's top-left, at the size it
+// asks for, not filling; what lies outside the zstack is clipped. The fill
+// pins add_child gave it are dropped, a leading and a top constraint at the
+// offset take their place (and are moved by a later call).
+void aether_ui_zstack_place(int handle, int x, int y) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    UIView* p = v ? v.superview : nil;
+    if (!v || !p || get_widget_type(aether_ui_handle_for_widget((__bridge void*)p)) != AUI_ZSTACK) return;
+    NSLayoutConstraint* lx = objc_getAssociatedObject(v, "aeui_place_x");
+    NSLayoutConstraint* ly = objc_getAssociatedObject(v, "aeui_place_y");
+    if (!lx || !ly) {
+        for (NSLayoutConstraint* c in [p.constraints copy]) {
+            if ((c.firstItem == v && c.secondItem == p) || (c.firstItem == p && c.secondItem == v)) c.active = NO;
+        }
+        lx = [v.leadingAnchor constraintEqualToAnchor:p.leadingAnchor constant:x];
+        ly = [v.topAnchor constraintEqualToAnchor:p.topAnchor constant:y];
+        lx.active = YES;
+        ly.active = YES;
+        objc_setAssociatedObject(v, "aeui_place_x", lx, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(v, "aeui_place_y", ly, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        p.clipsToBounds = YES;
+    } else {
+        lx.constant = x;
+        ly.constant = y;
+    }
+}
+
+// click_through: a view that takes no touches, and none of what is in it:
+// hit-testing answers the view beneath.
+void aether_ui_set_click_through(int handle, int on) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    v.userInteractionEnabled = on ? NO : YES;
+}
+
 // --- focus / first responder ------------------------------------------------
 void aether_ui_focus_impl(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);

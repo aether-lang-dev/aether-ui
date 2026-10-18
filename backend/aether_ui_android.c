@@ -677,6 +677,8 @@ typedef struct {
     int styled_bg, styled_fg, styled_opacity, styled_border;
     int bold;                  // -1 never set, else 0/1
     char* family;
+    int placed, place_x, place_y;   // a zstack's child at (place_x, place_y) dp, not filling it (zstack_place)
+    int click_through;         // the pointer passes through it (set_click_through)
     double font_size;          // 0 = theme default
     float orig_text_px;        // the theme's text size, kept the first time a size is set
     int max_lines;             // text_set_lines: > 1 wraps onto at most that many
@@ -1270,10 +1272,20 @@ static void aeui_apply_lp(JNIEnv* env, int handle) {
     } else if (p->type == AUI_ZSTACK || p->type == AUI_TABS || p->type == AUI_NAVSTACK) {
         // Layered: every child fills the frame (a zstack's layers, a tab
         // set's pages, a navigation stack's pages), unless it stated a size.
+        // A placed child (zstack_place) has its own size and sits at its
+        // offset, which may be negative: the margins carry it; the frame
+        // clips what lies outside it.
+        if (c->placed && p->type == AUI_ZSTACK) {
+            lp = JNEW(M_FP_init, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_WRAP_CONTENT),
+                      (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_WRAP_CONTENT));
+            if (!lp) return;
+            JV(lp, M_MP_setMargins, aeui_dp(c->place_x), aeui_dp(c->place_y), 0, 0);
+        } else {
         lp = JNEW(M_FP_init, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_MATCH_PARENT),
                   (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_MATCH_PARENT));
         if (!lp) return;
         JV(lp, M_MP_setMargins, ml, mt, mr, mb);
+        }
     } else if (p->type == AUI_WRAP) {
         lp = JNEW(M_MP_init, (jint)(c->fixed_w > 0 ? aeui_dp(c->fixed_w) : LP_WRAP_CONTENT),
                   (jint)(c->fixed_h > 0 ? aeui_dp(c->fixed_h) : LP_WRAP_CONTENT));
@@ -1655,6 +1667,7 @@ static jclass g_vseek_class = NULL;   // AetherVSeekBar (ui.vslider)
 static jmethodID g_vseek_init = NULL;
 static jclass g_sbar_class = NULL;     // AetherScrollbar (ui.scrollbar)
 static jclass g_atext_class = NULL;    // AetherText (labels, with typography)
+static jmethodID g_canvas_pass = NULL; // AetherCanvas.setPassThrough(boolean)
 static jmethodID g_atext_init = NULL, g_atext_typo = NULL;
 static jmethodID g_sbar_init = NULL, g_sbar_set = NULL;
 static jmethodID g_scroll_init = NULL, g_host_init = NULL;
@@ -4509,6 +4522,47 @@ int aether_ui_zstack_create(void) {
     int h = fl ? register_widget_typed(env, fl, AUI_ZSTACK) : 0;
     aeui_unframe(env);
     return h;
+}
+
+// zstack_place: the child at (x, y) dp from its zstack's top-left at the size
+// it asks for, not filling it (the frame clips what lies outside it).
+void aether_ui_zstack_place(int handle, int x, int y) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || !w->parent) return;
+    AeuiWidget* p = live_widget(w->parent);
+    if (!p || p->type != AUI_ZSTACK) return;
+    if (w->placed && w->place_x == x && w->place_y == y) return;
+    w->placed = 1;
+    w->place_x = x;
+    w->place_y = y;
+    JNIEnv* env = aeui_frame(16);
+    if (!env) return;
+    aeui_apply_lp(env, handle);
+    aeui_unframe(env);
+}
+
+// click_through: the pointer passes through the widget (and what is in it) to
+// what lies beneath. A container takes no touches of its own; a canvas
+// (AetherCanvas) is told to pass them on; the driver's pick skips it.
+void aether_ui_set_click_through(int handle, int on) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w) return;
+    w->click_through = on ? 1 : 0;
+    if (w->type != AUI_CANVAS) {
+        // A container takes the touch when it is clickable, and not when it
+        // is not: it is made the one or the other.
+        JNIEnv* env = aeui_frame(8);
+        if (!env) return;
+        JV(w->view, M_View_setClickable, on ? JNI_FALSE : JNI_TRUE);
+        aeui_unframe(env);
+    }
+    if (w->type == AUI_CANVAS && g_canvas_pass) {
+        JNIEnv* env = aeui_frame(8);
+        if (!env) return;
+        (*env)->CallVoidMethod(env, w->view, g_canvas_pass, (jboolean)(on ? JNI_TRUE : JNI_FALSE));
+        aeui_check(env, "AetherCanvas.setPassThrough");
+        aeui_unframe(env);
+    }
 }
 
 // wrap -- AetherWrap, a flow layout: children left to right, wrapping when
@@ -9207,6 +9261,12 @@ void aether_ui_tray_seal_impl(int tray_id) { (void)tray_id; }
 // dispatch would find it (children last-drawn first).
 static jobject aeui_hit(JNIEnv* env, jobject v, int x, int y, int depth) {
     if (!v || depth > 64 || JI(v, M_View_getVisibility) != 0) return NULL;
+    {
+        // The pointer passes through a click-through widget and what is in it.
+        int hh = aether_ui_handle_for_widget(v);
+        AeuiWidget* hw = hh ? live_widget(hh) : NULL;
+        if (hw && hw->click_through) return NULL;
+    }
     int rx, ry, rw, rh;
     jintArray loc = (*env)->NewIntArray(env, 2);
     if (!loc) return NULL;
@@ -10180,6 +10240,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     }
     // The canvas's View and its natives.
     g_canvas_class = aeui_find_class(env, "dev/aether/ui/AetherCanvas");
+    if (g_canvas_class) g_canvas_pass = M(g_canvas_class, "setPassThrough", "(Z)V");
     if (g_canvas_class) {
         g_canvas_init = M(g_canvas_class, "<init>", "(Landroid/content/Context;I)V");
         static const JNINativeMethod canvas_natives[] = {
