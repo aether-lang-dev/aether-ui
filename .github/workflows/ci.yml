@@ -321,7 +321,12 @@ jobs:
           # family pins with 0.778.0 (verified there: 152/152 + the CI itests).
           # v0.326 (2026-10-10): the aeb released alongside Aether 0.801.0 and
           # the one the family pins with it; moved with the 0.801.0 floor.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.326' }}
+          # v0.327 (2026-10-18): v0.326's tools/aeb-main.ae captures a borrowed
+          # `dst` ptr in a closure, which Aether 0.824's E0902 refuses, so
+          # `make install` failed and both legs were red from the 0.824 bump
+          # (8ca06029's parent) on. v0.327 is the aeb sae pins with 0.824.0 and
+          # what this tree's lanes were verified with.
+          AEB_REF: ${{ vars.AEB_REF || 'v0.327' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh

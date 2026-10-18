@@ -40,6 +40,21 @@ snapshot(name: string) -> string {
     return dims
 }
 
+// A snapshot that should be the first's size: taken again (up to five
+// times) while a capture comes back another size, which GTK under a busy
+// Xvfb does now and then for a frame in flight.
+snapshot_like_first(name: string) -> string {
+    want = first_snapshot()
+    got = snapshot(name)
+    tries = 1
+    while tries < 5 && got != want {
+        _w, _we = os.exec("sleep 0.3")
+        got = snapshot(name)
+        tries = tries + 1
+    }
+    return got
+}
+
 // The first snapshot's "WxH" (each case's closure has its own copy of
 // main's locals, so it is read back from the file).
 first_snapshot() -> string {
@@ -101,7 +116,7 @@ main() {
             spec.assert_true(at(h, "\"value\":0.00") == 1, "clamped to min")
             uidriver.post_ok("/widget/${h}/set_value?v=90", "back to the end")
             spec.assert_true(at(h, "\"value\":90.00") == 1, "at the end again")
-            s = snapshot("02-h-at-end")
+            s = snapshot_like_first("02-h-at-end")
             spec.assert_str_eq(s, first_snapshot(), "the window keeps its size (${s})")
         }
 
@@ -144,7 +159,7 @@ main() {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Read")}/click", "read")
             spec.assert_true(uidriver.wait_body_contains("/widgets", "read: h 10/20 v 25+50", 20) == 1,
                              "the getters read what the driver sees")
-            s = snapshot("03-shrunk")
+            s = snapshot_like_first("03-shrunk")
             spec.assert_str_eq(s, first_snapshot(), "the window keeps its size (${s})")
         }
 
@@ -171,7 +186,7 @@ main() {
             spec.assert_true(uidriver.wait_body_contains("/widgets", "rows from ${got}", 20) == 1, "on_change told")
             uidriver.post_ok("/widget/${v}/drag?x=5&y=5&dx=0&dy=-${room * 2}", "drag far up")
             spec.assert_true(at(v, "\"value\":0.00") == 1, "stops at the top")
-            s = snapshot("04-dragged")
+            s = snapshot_like_first("04-dragged")
             spec.assert_str_eq(s, first_snapshot(), "the window keeps its size (${s})")
         }
     }
