@@ -1608,6 +1608,7 @@ static AeClosure** window_key_closures = NULL;
 static int window_key_closure_count = 0;
 static int window_key_closure_cap = 0;
 
+static void ensure_shortcut_monitor(void);
 static void window_key_closure_add(AeClosure* c) {
     if (!c) return;
     if (window_key_closure_count >= window_key_closure_cap) {
@@ -1632,6 +1633,10 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize);
 
 void aether_ui_window_on_key_impl(void* boxed_closure) {
     window_key_closure_add((AeClosure*)boxed_closure);
+    // The key-down monitor is what delivers a real key to these handlers;
+    // it was installed only by a shortcut, so a program with any-key
+    // handlers and no shortcut heard no real key at all.
+    ensure_shortcut_monitor();
 }
 
 int aether_ui_modifiers_impl(void) {

@@ -4656,11 +4656,19 @@ void aether_ui_window_set_body_impl(int win_handle, int root_handle) {
 }
 
 // --- Window key + file-drop: store the closure, driver delivers it ----------
-static AeClosure* g_window_key_closure = NULL;
+// Every window_on_key handler, each heard (a datagrid's and the program's
+// own: one kept alone, the last registered silenced the rest, the grid's
+// typing among them).
+static AeClosure** g_window_key_closures = NULL;
+static int g_window_key_count = 0;
 static AeClosure* g_window_file_drop_closure = NULL;
 
 void aether_ui_window_on_key_impl(void* boxed_closure) {
-    g_window_key_closure = (AeClosure*)boxed_closure;   // hardware-keyboard pass wires live delivery
+    if (!boxed_closure) return;   // hardware-keyboard pass wires live delivery
+    AeClosure** nk = (AeClosure**)realloc(g_window_key_closures, sizeof(AeClosure*) * (size_t)(g_window_key_count + 1));
+    if (!nk) return;
+    g_window_key_closures = nk;
+    g_window_key_closures[g_window_key_count++] = (AeClosure*)boxed_closure;
 }
 static int aeui_try_fire_shortcut(const char* combo);   // defined in the shortcut section
 
@@ -4679,9 +4687,10 @@ int aether_ui_window_key_deliver(const char* key_name, int mods) {
         fired = aeui_try_fire_shortcut(combo);
     }
     if (!fired) fired = aeui_try_fire_shortcut(k);
-    if (g_window_key_closure && g_window_key_closure->fn) {
-        ((void(*)(void*, const char*, int))g_window_key_closure->fn)(
-            g_window_key_closure->env, k, mods);
+    for (int i = 0, n = g_window_key_count; i < n; i++) {
+        AeClosure* c = g_window_key_closures[i];
+        if (!c || !c->fn) continue;
+        ((void(*)(void*, const char*, int))c->fn)(c->env, k, mods);
         fired = 1;
     }
     return fired;

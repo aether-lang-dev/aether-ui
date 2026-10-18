@@ -586,6 +586,7 @@ int aether_ui_surface_diag_count_impl(int container_handle) {
 
 static void aeui_attach_pending_shortcuts(void);
 static void aeui_attach_pending_menus(GtkApplication* app, GtkWindow* window);
+static void aeui_attach_window_key(void);
 static void aeui_register_primary_window(GtkWindow* w, const char* title);
 
 static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
@@ -594,6 +595,7 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
     gtk_window_set_title(GTK_WINDOW(window), entry->title);
     gtk_window_set_default_size(GTK_WINDOW(window), entry->width, entry->height);
     primary_window = GTK_WINDOW(window);   // overlay layer resolves handle 0 here
+    aeui_attach_window_key();   // handlers registered before the window
     // on_focus_change: the window's focus widget is where focus moved (it
     // does not change when the window merely stops being the active one).
     g_signal_connect(window, "notify::focus-widget", G_CALLBACK(aeui_focus_notify), NULL);
@@ -4705,16 +4707,24 @@ int aether_ui_modifiers_impl(void) {
     return mods;
 }
 
-void aether_ui_window_on_key_impl(void* boxed_closure) {
-    aeui_window_key_closure_add((AeClosure*)boxed_closure);
-    if (!primary_window) return;   // attaches when the window appears
-    static int attached = 0;
-    if (attached) return;
+// The window's any-key controller, once there are handlers and a window.
+// A handler is often registered before the window exists (a datagrid's,
+// made as the tree is built; a sae page's): it attached then only if the
+// window was already there, so on GTK a key really typed reached no
+// handler at all (the driver's keys call them directly, which hid it).
+static int aeui_window_key_attached = 0;
+static void aeui_attach_window_key(void) {
+    if (aeui_window_key_attached || !primary_window || aeui_window_key_closure_count == 0) return;
     GtkEventController* key = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(key, GTK_PHASE_BUBBLE);
     g_signal_connect(key, "key-pressed", G_CALLBACK(on_window_any_key), NULL);
     gtk_widget_add_controller(GTK_WIDGET(primary_window), key);
-    attached = 1;
+    aeui_window_key_attached = 1;
+}
+
+void aether_ui_window_on_key_impl(void* boxed_closure) {
+    aeui_window_key_closure_add((AeClosure*)boxed_closure);
+    aeui_attach_window_key();   // or when the window appears (on_activate)
 }
 
 // Split a normalized trigger ("<Control>a") into modifier bits and bare key,
@@ -4942,7 +4952,24 @@ void aether_ui_set_focusable_impl(int handle, int on) {
 
 void aether_ui_focus_impl(int handle) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (w) gtk_widget_grab_focus(w);
+    if (!w) return;
+    // A viewport scrolls to show the widget given the focus. One bigger than
+    // the viewport (a datagrid's whole body, focused on a click into it)
+    // cannot be shown, and the page jumped to its far corner, the clicked
+    // cell out of view: such viewports keep their scroll for this grab.
+    GtkViewport* held[8];
+    int n = 0;
+    int ww = gtk_widget_get_width(w), wh = gtk_widget_get_height(w);
+    for (GtkWidget* p = gtk_widget_get_parent(w); p && n < 8; p = gtk_widget_get_parent(p)) {
+        if (!GTK_IS_VIEWPORT(p)) continue;
+        GtkViewport* vp = GTK_VIEWPORT(p);
+        if ((ww > gtk_widget_get_width(p) || wh > gtk_widget_get_height(p)) && gtk_viewport_get_scroll_to_focus(vp)) {
+            gtk_viewport_set_scroll_to_focus(vp, FALSE);
+            held[n++] = vp;
+        }
+    }
+    gtk_widget_grab_focus(w);
+    while (n > 0) gtk_viewport_set_scroll_to_focus(held[--n], TRUE);
 }
 
 // Toast — a self-contained styled label opened as a bottom-center overlay,
