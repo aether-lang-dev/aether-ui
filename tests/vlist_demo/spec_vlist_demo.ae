@@ -86,6 +86,18 @@ main() {
             uidriver.post_ok("/widget/${m}/click", "scroll to 500")
             ok = uidriver.wait_body_contains("/widgets", "\"text\":\"row 500\"", 20)
             spec.assert_true(ok, "row 500 realized after scroll")
+            // Realized is not shown: a view can bind rows it has scrolled
+            // past. Row 500 sits inside the scrolling viewport when the
+            // backing has one to measure against.
+            sv = uidriver.widget_id_of("scrollview", "")
+            if sv > 0 {
+                r500 = uidriver.widget_id_by_text("row 500")
+                ry = uidriver.widget_int_field_by_id(r500, "y")
+                vy = uidriver.widget_int_field_by_id(sv, "y")
+                vh = uidriver.widget_int_field_by_id(sv, "h")
+                spec.assert_true(ry >= vy && ry < vy + vh,
+                    "row 500 is inside the viewport (row y ${ry}, viewport ${vy}..${vy + vh})")
+            }
             // Still bounded — the old window's rows were recycled, not added to.
             n2 = row_count()
             // Recycling means the count does not grow WITH the scroll. It is

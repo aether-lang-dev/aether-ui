@@ -6646,6 +6646,31 @@ void aether_ui_native_list_scroll_to_impl(int handle, int index) {
     double maxv = gtk_adjustment_get_upper(adj) - gtk_adjustment_get_page_size(adj);
     if (maxv < 0.0) maxv = 0.0;
     if (target > maxv) target = maxv;
+    /* Setting the adjustment alone is not enough on GTK 4.6: GtkListBase's
+       value-changed handler re-anchors on the row at that offset, but the
+       view only has widgets for the rows near its CURRENT anchor (205 of them
+       here), and a jump past those leaves the viewport scrolled to nothing --
+       no row is bound there, ever, however long it waits (a 40-line GtkListView
+       probe shows the same: binds stay at 205 after set_value(14000), with no
+       warning). The "list.scroll-to-item" action anchors the target row
+       and realizes its neighbourhood, but only brings it into view (aligned
+       to an edge), so it is followed by a synchronous layout of the new rows
+       (their heights are unknown until allocated) and then the exact offset,
+       which now lands on rows that exist. Setting the offset straight after
+       the action, before that layout, scrolls to the end instead. */
+    GtkWidget* list = g_object_get_data(G_OBJECT(w), "aeui-list-view");
+    if (list) {
+        gtk_widget_activate_action(list, "list.scroll-to-item", "u", (guint)i);
+        GtkWidget* parent = gtk_widget_get_parent(w);
+        int sw_w = gtk_widget_get_width(w), sw_h = gtk_widget_get_height(w);
+        if (parent && sw_w > 0 && sw_h > 0) {
+            graphene_point_t zero = GRAPHENE_POINT_INIT(0, 0), at = GRAPHENE_POINT_INIT(0, 0);
+            GskTransform* t = NULL;
+            if (gtk_widget_compute_point(w, parent, &zero, &at))
+                t = gsk_transform_translate(NULL, &at);   // keep its place in the parent
+            gtk_widget_allocate(w, sw_w, sw_h, -1, t);
+        }
+    }
     gtk_adjustment_set_value(adj, target);
     if (getenv("AETHER_UI_LIST_DEBUG")) {
         fprintf(stderr,
