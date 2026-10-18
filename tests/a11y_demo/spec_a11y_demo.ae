@@ -49,6 +49,14 @@ main() {
                 "description is set")
         }
 
+        spec.it("a11y_announce on a grid's box and on a canvas, as on a button") callback {
+            uidriver.click_widget(uidriver.widget_id_by_text("Announce on the grid"))
+            gb = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text("a grid"), "parent")
+            spec.assert_contains(uidriver.get_body("/widget/${gb}/a11y"), "\"announced\":\"Grid said\"", "the grid's")
+            uidriver.click_widget(uidriver.widget_id_by_text("Announce on the canvas"))
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "\"type\":\"button\"", 10), "still answering")
+        }
+
         spec.it("a11y_announce: the screen reader is told, and the driver reads it back") callback {
             g = uidriver.widget_id_by_text("⚙")
             r0 = uidriver.get_body("/widget/${g}/a11y")

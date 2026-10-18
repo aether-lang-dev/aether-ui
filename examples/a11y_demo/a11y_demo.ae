@@ -18,7 +18,8 @@
 
 import ui
 import ui (window, vstack, hstack, text, btn, divider, listbox, listbox_update,
-    a11y_role, a11y_label, a11y_description, a11y_announce, enable_test_server)
+    a11y_role, a11y_label, a11y_description, a11y_announce, a11y_next_role, a11y_grid,
+    canvas_create, canvas_widget, enable_test_server)
 import std.os (os_getenv)
 import std.string
 import std.list
@@ -49,6 +50,20 @@ main() {
 
                 // An announcement, said from the gear without moving focus.
                 _say = btn("Announce") callback { _a = a11y_announce(gear, "Settings saved") }
+            }
+            divider()
+
+            // Announcements made on a box a screen reader reads as a grid
+            // (as datagrid's root is) and on a canvas (as a vg scene is).
+            a11y_next_role("grid")
+            gridbox = vstack(0) {
+                _gt = text("a grid")
+            }
+            _ag = a11y_grid(gridbox, 1, 1)
+            cv = canvas_create(40, 20)
+            hstack(10) {
+                _sg = btn("Announce on the grid") callback { _a = a11y_announce(gridbox, "Grid said") }
+                _sc = btn("Announce on the canvas") callback { _a = a11y_announce(canvas_widget(cv), "Canvas said") }
             }
             divider()
 
