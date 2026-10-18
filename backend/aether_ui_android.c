@@ -249,6 +249,8 @@ typedef struct {
 
 // The scrollbar's (windowing slider's) shared state and rules.
 #include "aether_ui_scrollbar.h"
+// on_secondary_click's closures (a long press or a mouse's secondary click).
+#include "aether_ui_secondary.h"
 
 static void aeui_call0(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
@@ -5769,6 +5771,7 @@ JMETHOD(M_Menu_size, C_Menu, "size", "()I");
 JMETHOD(M_Menu_getItem, C_Menu, "getItem", "(I)Landroid/view/MenuItem;");
 JMETHOD(M_Menu_performIdentifierAction, C_Menu, "performIdentifierAction", "(II)Z");
 JMETHOD(M_MI_getItemId, C_MenuItem, "getItemId", "()I");
+JMETHOD(M_MI_setEnabled, C_MenuItem, "setEnabled", "(Z)Landroid/view/MenuItem;");
 JMETHOD(M_MI_getSubMenu, C_MenuItem, "getSubMenu", "()Landroid/view/SubMenu;");
 JMETHOD(M_MI_getTitle, C_MenuItem, "getTitle", "()Ljava/lang/CharSequence;");
 JMETHOD(M_MI_setAlphabeticShortcut, C_MenuItem, "setAlphabeticShortcut", "(CI)Landroid/view/MenuItem;");
@@ -5831,6 +5834,18 @@ void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_clo
 
 void aether_ui_menu_add_separator(int menu_handle) {
     aeui_menu_push(menu_handle, "", NULL, 1);
+    aether_ui_menu_separator_record(menu_handle);
+    aeui_refresh_options_menu();
+}
+
+// menu_clear: the menu emptied for building again (a context menu made
+// afresh each time it opens).
+void aether_ui_menu_clear(int menu_handle) {
+    AeuiMenuRec* m = menu_rec(menu_handle);
+    if (!m) return;
+    for (int i = 0; i < m->count; i++) free(m->items[i].label);
+    m->count = 0;
+    aether_ui_menu_items_forget(menu_handle);
     aeui_refresh_options_menu();
 }
 
@@ -5866,8 +5881,10 @@ static void aeui_fill_menu(JNIEnv* env, jobject menu, int menu_handle) {
     int group = 0;
     for (int i = 0; i < m->count; i++) {
         if (m->items[i].is_sep) { group++; continue; }
-        JO(menu, M_Menu_add, (jint)group, (jint)AEUI_MENU_ID(menu_handle, i), (jint)i,
+        jobject it = JO(menu, M_Menu_add, (jint)group, (jint)AEUI_MENU_ID(menu_handle, i), (jint)i,
            aeui_jstring(env, m->items[i].label));
+        // No closure: a disabled item.
+        if (it && !m->items[i].closure) JO(it, M_MI_setEnabled, JNI_FALSE);
     }
     if (group) JV(menu, M_Menu_setGroupDividerEnabled, JNI_TRUE);
 }
@@ -5945,6 +5962,7 @@ static void aeui_popup_menu(JNIEnv* env, int menu_handle, jobject anchor) {
 // The menu as a PopupMenu at the widget (a pull-down from it). Headless
 // nothing is shown: there is no one to choose (UIKit does the same).
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (aeui_popup_note(menu_handle, anchor_widget)) return;   // the driver's: recorded
     if (aeui_is_headless()) return;
     JNIEnv* env = aeui_frame(32);
     if (!env) return;
@@ -6038,6 +6056,21 @@ void aether_ui_context_menu_item_impl(int handle, const char* label, void* boxed
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label, const char* accel,
                                             void* boxed_closure) {
     aeui_ctx_add(handle, label, accel, boxed_closure);
+}
+
+// on_secondary_click: the context listener (a long press; a mouse's
+// secondary click, View.OnContextClickListener), as context_menu_item's.
+static void aeui_secondary_attach(int handle) {
+    AeuiWidget* w = live_widget(handle);
+    if (!w || w->nctx > 0) return;   // its context listener is already on
+    JNIEnv* env = aeui_frame(8);
+    if (!env) return;
+    jobject l = aeui_listener(env, handle, AEUI_EV_CONTEXT);
+    if (l) {
+        JV(w->view, M_View_setOnLongClickListener, l);
+        JV(w->view, M_View_setOnContextClickListener, l);
+    }
+    aeui_unframe(env);
 }
 
 static void aeui_ctx_open(JNIEnv* env, int handle) {
@@ -9395,6 +9428,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_TOGGLE:
         case AETHER_DRV_SET_VALUE:
         case AETHER_DRV_SCROLLBAR_SET:
+        case AETHER_DRV_SECONDARY:
         case AETHER_DRV_FOCUS:
         case AETHER_DRV_HOVER:
         case AETHER_DRV_PRESS:
@@ -9481,6 +9515,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             break;
         case AETHER_DRV_SCROLLBAR_SET:
             aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
+            break;
+        case AETHER_DRV_SECONDARY:
+            ctx->retval = aether_ui_secondary_drive(ctx->handle, ctx->dval, ctx->dval2);
             break;
         case AETHER_DRV_SET_VALUE:
             if (w->type == AUI_SLIDER) {
@@ -9918,6 +9955,14 @@ static void JNICALL native_event(JNIEnv* env, jclass cls, jint handle, jint kind
             aether_ui_tabs_select(handle, a);
             break;
         case AEUI_EV_CONTEXT:
+            // A widget's own items first; else its on_secondary_click, at
+            // its centre (a long press reports no point).
+            if (w && w->nctx == 0 && aeui_secondary_of(handle)) {
+                int rx = 0, ry = 0, rw = 0, rh = 0;
+                hook_widget_rect(handle, &rx, &ry, &rw, &rh);
+                aeui_secondary_fire(handle, rw / 2.0, rh / 2.0);
+                break;
+            }
             if ((*env)->PushLocalFrame(env, 32) != 0) break;
             aeui_ctx_open(env, handle);
             (*env)->PopLocalFrame(env, NULL);

@@ -292,28 +292,81 @@ int aether_ui_notif_mark_dismissed(int notif_id) {
 typedef struct {
     int   in_use;
     int   menu_handle;
+    int   sep;          // a separator: no label, not an item
     char  label[128];
-    void* boxed;
+    void* boxed;        // NULL: a disabled item
 } MenuItemRec;
 
 static MenuItemRec g_menu_items[MENU_ITEM_MAX];
 static int         g_menu_item_count = 0;
 
+// A free slot (one a cleared menu left), or a new one.
+static MenuItemRec* menu_item_slot(void) {
+    for (int i = 0; i < g_menu_item_count; i++)
+        if (!g_menu_items[i].in_use) return &g_menu_items[i];
+    if (g_menu_item_count >= MENU_ITEM_MAX) return NULL;
+    return &g_menu_items[g_menu_item_count++];
+}
+
 void aether_ui_menu_item_record(int menu_handle, const char* label,
                                  void* boxed_closure) {
-    if (g_menu_item_count >= MENU_ITEM_MAX) return;
-    MenuItemRec* m = &g_menu_items[g_menu_item_count++];
+    MenuItemRec* m = menu_item_slot();
+    if (!m) return;
     m->in_use = 1;
+    m->sep = 0;
     m->menu_handle = menu_handle;
     copy_str(m->label, sizeof(m->label), label);
     m->boxed = boxed_closure;
+}
+
+void aether_ui_menu_separator_record(int menu_handle) {
+    MenuItemRec* m = menu_item_slot();
+    if (!m) return;
+    m->in_use = 1;
+    m->sep = 1;
+    m->menu_handle = menu_handle;
+    m->label[0] = 0;
+    m->boxed = NULL;
+}
+
+// menu_clear's half here: the menu's records go, and their closures are
+// freed a clear later (an item's own closure may be what is clearing it).
+extern void aether_closure_env_free(void* env);
+static void** g_menu_graveyard = NULL;
+static int g_menu_graveyard_n = 0, g_menu_graveyard_cap = 0;
+
+void aether_ui_menu_items_forget(int menu_handle) {
+    void** old = g_menu_graveyard;
+    int old_n = g_menu_graveyard_n;
+    g_menu_graveyard = NULL; g_menu_graveyard_n = 0; g_menu_graveyard_cap = 0;
+    for (int i = 0; i < g_menu_item_count; i++) {
+        MenuItemRec* m = &g_menu_items[i];
+        if (!m->in_use || m->menu_handle != menu_handle) continue;
+        if (m->boxed) {
+            if (g_menu_graveyard_n >= g_menu_graveyard_cap) {
+                int nc = g_menu_graveyard_cap ? g_menu_graveyard_cap * 2 : 16;
+                void** n = (void**)realloc(g_menu_graveyard, sizeof(void*) * (size_t)nc);
+                if (n) { g_menu_graveyard = n; g_menu_graveyard_cap = nc; }
+            }
+            if (g_menu_graveyard_n < g_menu_graveyard_cap) g_menu_graveyard[g_menu_graveyard_n++] = m->boxed;
+        }
+        m->in_use = 0;
+        m->boxed = NULL;
+    }
+    for (int i = 0; i < old_n; i++) {
+        if (old[i]) {
+            aether_closure_env_free(((void**)old[i])[1]);   // AeClosure {fn, env}
+            free(old[i]);
+        }
+    }
+    free(old);
 }
 
 int aether_ui_menu_item_invoke(int menu_handle, const char* label) {
     if (!label) return 3;
     for (int i = 0; i < g_menu_item_count; i++) {
         MenuItemRec* m = &g_menu_items[i];
-        if (!m->in_use) continue;
+        if (!m->in_use || m->sep) continue;
         if (m->menu_handle != menu_handle) continue;
         if (strcmp(m->label, label) != 0) continue;
         if (!m->boxed) return 4;
@@ -328,7 +381,7 @@ int aether_ui_menu_item_relabel(int menu_handle, const char* old_label,
     if (!old_label || !new_label) return 0;
     for (int i = 0; i < g_menu_item_count; i++) {
         MenuItemRec* m = &g_menu_items[i];
-        if (!m->in_use || m->menu_handle != menu_handle) continue;
+        if (!m->in_use || m->sep || m->menu_handle != menu_handle) continue;
         if (strcmp(m->label, old_label) != 0) continue;
         copy_str(m->label, sizeof(m->label), new_label);
         return 1;
@@ -339,27 +392,49 @@ int aether_ui_menu_item_relabel(int menu_handle, const char* old_label,
 int aether_ui_menu_item_count_for(int menu_handle) {
     int n = 0;
     for (int i = 0; i < g_menu_item_count; i++) {
-        if (g_menu_items[i].in_use && g_menu_items[i].menu_handle == menu_handle)
+        if (g_menu_items[i].in_use && !g_menu_items[i].sep && g_menu_items[i].menu_handle == menu_handle)
             n++;
     }
     return n;
 }
 
-const char* aether_ui_menu_item_label_at(int menu_handle, int index) {
+static MenuItemRec* menu_item_at(int menu_handle, int index) {
     int seen = 0;
     for (int i = 0; i < g_menu_item_count; i++) {
         MenuItemRec* m = &g_menu_items[i];
-        if (!m->in_use || m->menu_handle != menu_handle) continue;
-        if (seen == index) return m->label;
+        if (!m->in_use || m->sep || m->menu_handle != menu_handle) continue;
+        if (seen == index) return m;
         seen++;
     }
-    return "";
+    return NULL;
+}
+
+const char* aether_ui_menu_item_label_at(int menu_handle, int index) {
+    MenuItemRec* m = menu_item_at(menu_handle, index);
+    return m ? m->label : "";
+}
+
+int aether_ui_menu_item_enabled_at(int menu_handle, int index) {
+    MenuItemRec* m = menu_item_at(menu_handle, index);
+    return m && m->boxed ? 1 : 0;
+}
+
+// The separators of a menu, each as the number of items before it.
+int aether_ui_menu_separators(int menu_handle, int* out, int max) {
+    int n = 0, items = 0;
+    for (int i = 0; i < g_menu_item_count; i++) {
+        MenuItemRec* m = &g_menu_items[i];
+        if (!m->in_use || m->menu_handle != menu_handle) continue;
+        if (!m->sep) { items++; continue; }
+        if (n < max) out[n++] = items;
+    }
+    return n;
 }
 
 int aether_ui_menu_handles(int* out, int max) {
     int n = 0;
     for (int i = 0; i < g_menu_item_count; i++) {
-        if (!g_menu_items[i].in_use) continue;
+        if (!g_menu_items[i].in_use || g_menu_items[i].sep) continue;
         int h = g_menu_items[i].menu_handle;
         int dup = 0;
         for (int j = 0; j < n; j++) { if (out[j] == h) { dup = 1; break; } }

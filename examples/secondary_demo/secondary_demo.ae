@@ -1,0 +1,62 @@
+// Aether UI secondary-click example: a context menu built as it opens.
+//
+// on_secondary_click(widget) callback |x, y| {...}: a right click (a long
+// press on touch) on a widget. Here it builds a menu afresh each time
+// (menu_clear, then items: one counting the opens, a separator, a disabled
+// one) and pops it (menu_popup). A shape in a vg canvas does the same from
+// its own on_right_click, and the panel around both has a menu of its own,
+// which a right click on either does not reach: the deepest taker wins.
+
+import ui
+import ui (content_inset, window, vstack, hstack, text, divider, menu, menu_item,
+    menu_item_disabled, menu_separator, menu_clear, menu_popup, on_secondary_click,
+    enable_test_server)
+import vg.live (vg)
+import vg
+import vg (view_box, rect, fill, on_right_click)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    status = 0
+    opens = 0
+    m = menu("context")
+    window("secondary demo", 420, 320) {
+        root = vstack(8) {
+            status = text("chose: nothing")
+            divider()
+            panel = vstack(6) {
+                target = text("Right-click me")
+                on_secondary_click(target) callback |x: float, y: float| {
+                    opens = opens + 1
+                    n = opens
+                    menu_clear(m)
+                    menu_item(m, "Copy") callback { aether_ui_text_set_string(status, "chose: Copy") }
+                    menu_item(m, "Opened ${n}") callback { aether_ui_text_set_string(status, "chose: Opened ${n}") }
+                    menu_separator(m)
+                    menu_item_disabled(m, "Paste")
+                    menu_popup(m, target)
+                }
+                vg(view_box(0, 0, 200, 80), 200, 80) {
+                    rect(0, 0, 200, 80) {
+                        fill("#c8d8f0")
+                        on_right_click() callback |x: float, y: float| {
+                            menu_clear(m)
+                            menu_item(m, "Shape item") callback { aether_ui_text_set_string(status, "chose: Shape item") }
+                            menu_popup(m, target)
+                        }
+                    }
+                }
+                _note = text("the panel's own menu is behind both")
+            }
+            on_secondary_click(panel) callback |x: float, y: float| {
+                menu_clear(m)
+                menu_item(m, "Panel item") callback { aether_ui_text_set_string(status, "chose: Panel item") }
+                menu_popup(m, panel)
+            }
+        }
+        _ci = content_inset(root)
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

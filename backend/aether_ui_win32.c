@@ -74,6 +74,8 @@ typedef struct {
 
 // The scrollbar's (windowing slider's) shared state and rules.
 #include "aether_ui_scrollbar.h"
+// on_secondary_click's closures (a right click on any widget).
+#include "aether_ui_secondary.h"
 
 static inline void invoke_closure(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
@@ -2206,6 +2208,21 @@ static LRESULT CALLBACK stack_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             // Real right-click: find the nearest widget with stored items
             // (the click may land on a child) and pop the native menu.
             HWND target = (HWND)wp;
+            // The nearest widget that takes it: one with an
+            // on_secondary_click fires it (widget-local px); one with
+            // context_menu_item items pops them.
+            for (HWND hh = target ? target : hwnd; hh; hh = GetParent(hh)) {
+                int sh = handle_for_hwnd(hh);
+                Widget* sw = widget_at(sh);
+                if (sw && sw->ctx_count > 0) break;
+                if (sh && aeui_secondary_of(sh)) {
+                    POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                    if (pt.x == -1 && pt.y == -1) { pt.x = 8; pt.y = 8; }
+                    else ScreenToClient(hh, &pt);
+                    aeui_secondary_fire(sh, (double)pt.x, (double)pt.y);
+                    return 0;
+                }
+            }
             Widget* owner = w32_ctx_owner(target ? target : hwnd);
             if (owner) {
                 int sx = GET_X_LPARAM(lp), sy = GET_Y_LPARAM(lp);
@@ -4930,6 +4947,11 @@ double aether_ui_slider_get_value(int handle) {
     Widget* w = widget_at(handle);
     return w ? w->u.slider.cur_v : 0.0;
 }
+
+// on_secondary_click needs nothing per widget: a control's DefWindowProc
+// turns a right click (or the menu key) into WM_CONTEXTMENU for its parent,
+// which stack_wnd_proc walks up from the control under the pointer.
+static void aeui_secondary_attach(int handle) { (void)handle; }
 
 // Scrollbar -- a windowing slider: the SCROLLBAR control, its range in
 // AEUI_SB_UNITS so a fractional range keeps its precision, its thumb
@@ -9454,7 +9476,8 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
     MenuEntry* m = menu_at(menu_handle);
     if (!m) return;
     UINT id = next_menu_id++;
-    AppendMenuW(m->hmenu, MF_STRING, id, utf8_to_wide(label));
+    // No closure: a disabled item, drawn grey and never chosen.
+    AppendMenuW(m->hmenu, MF_STRING | (boxed_closure ? 0 : MF_GRAYED), id, utf8_to_wide(label));
     if (menu_command_count >= menu_command_capacity) {
         menu_command_capacity = menu_command_capacity == 0
                                 ? 32 : menu_command_capacity * 2;
@@ -9520,6 +9543,28 @@ static int menu_native_activate(int menu_handle, const char* label) {
 void aether_ui_menu_add_separator(int menu_handle) {
     MenuEntry* m = menu_at(menu_handle);
     if (m) AppendMenuW(m->hmenu, MF_SEPARATOR, 0, NULL);
+    aether_ui_menu_separator_record(menu_handle);
+}
+
+// menu_clear: the menu emptied for building again (a context menu made
+// afresh each time it opens). Its items' command ids are dropped with it.
+void aether_ui_menu_clear(int menu_handle) {
+    MenuEntry* m = menu_at(menu_handle);
+    if (!m) return;
+    int n = GetMenuItemCount(m->hmenu);
+    for (int i = n - 1; i >= 0; i--) {
+        UINT id = GetMenuItemID(m->hmenu, i);
+        if (id != (UINT)-1 && id != 0) {
+            for (int k = 0; k < menu_command_count; k++) {
+                if (menu_commands[k].id == id) {
+                    menu_commands[k] = menu_commands[--menu_command_count];
+                    break;
+                }
+            }
+        }
+        DeleteMenu(m->hmenu, (UINT)i, MF_BYPOSITION);
+    }
+    aether_ui_menu_items_forget(menu_handle);
 }
 
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
@@ -9558,6 +9603,7 @@ void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     // pump to dismiss. Respect AETHER_UI_HEADLESS and also require a
     // visible ancestor window as a second guard for programming errors
     // that pop a menu from an unmounted widget.
+    if (aeui_popup_note(menu_handle, anchor_widget)) return;   // the driver's: recorded
     if (aeui_is_headless()) return;
     MenuEntry* m = menu_at(menu_handle);
     Widget* w = widget_at(anchor_widget);
@@ -14331,6 +14377,9 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             case AETHER_DRV_SCROLLBAR_SET:
                 aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
                 ctx->retval = 1;
+                break;
+            case AETHER_DRV_SECONDARY:
+                ctx->retval = aether_ui_secondary_drive(ctx->handle, ctx->dval, ctx->dval2);
                 break;
             case AETHER_DRV_SET_VALUE:
                 if (w->kind == WK_SLIDER) {

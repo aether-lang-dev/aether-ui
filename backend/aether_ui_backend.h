@@ -754,6 +754,10 @@ int  aether_ui_menu_create(const char* label);
 void aether_ui_menu_add_item(int menu_handle, const char* label,
                              void* boxed_closure);
 void aether_ui_menu_add_separator(int menu_handle);
+/* Empty a menu, to build it again (a context menu made as it opens). Its
+   items' closures are freed a clear later. An item added with no closure
+   (boxed_closure NULL) is a disabled item, drawn grey and never chosen. */
+void aether_ui_menu_clear(int menu_handle);
 /* Relabel the item on `menu_handle` currently titled `old_label` (the first
    such item). The native item and the driver's menu-item side-store both
    change, so GET /menus and /menu/{h}/activate?label= see the new text. Its
@@ -767,6 +771,16 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle);
 void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle);
 // Context menu: popup a menu at cursor / widget bounds.
 void aether_ui_menu_popup(int menu_handle, int anchor_widget);
+/* A widget's secondary click (a right click; a long press on touch): the
+   closure gets (x, y), widget-local px. The nearest widget under the
+   pointer with one, or with context_menu_item items, takes the click.
+   Shared state in aether_ui_secondary.h. */
+void aether_ui_on_secondary_click_impl(int handle, void* boxed_closure);
+/* The driver's secondary click: the closure runs, and a menu it pops is
+   recorded (aether_ui_last_popup_menu) instead of shown. 1 if it had one. */
+int aether_ui_secondary_drive(int handle, double x, double y);
+extern int aether_ui_last_popup_menu, aether_ui_last_popup_anchor;
+extern int aether_ui_secondary_from_driver;
 
 // Grid layout (Group 3b) — 2D layout container.
 // Children are placed with aether_ui_grid_place() at (row, col) with

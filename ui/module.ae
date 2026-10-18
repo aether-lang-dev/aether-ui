@@ -152,6 +152,7 @@ exports (
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
     menu_entry, menu_entry_accel, separator, menu_entry_command,
     menu_bar_add, attach_menu_bar, attach_menu_bar_to_window, menu_popup,
+    menu_clear, menu_item_disabled, on_secondary_click,
     root_grid, grid, grid_place, equal_cells,
     tray_icon, tray_set_tooltip, tray_set_menu,
     tray_set_icon_for_state, tray_set_icon_template, tray_seal,
@@ -527,6 +528,8 @@ extern aether_ui_menu_bar_attach(app_handle: int, bar_handle: int)
 extern aether_ui_menu_bar_attach_window(win_handle: int, bar_handle: int)
 extern aether_ui_window_set_title_impl(win_handle: int, title: string)
 extern aether_ui_menu_popup(menu_handle: int, anchor_widget: int)
+extern aether_ui_menu_clear(menu_handle: int)
+extern aether_ui_on_secondary_click_impl(handle: int, boxed_closure: ptr)
 
 // Grid layout — 2D container with (row, col) placement.
 extern aether_ui_grid_create(cols: int, row_spacing: int, col_spacing: int) -> int
@@ -10214,6 +10217,34 @@ set_window_title(win_handle: int, title: string) {
 // (used to determine the owner window for keyboard focus).
 menu_popup(menu_handle: int, anchor_widget: int) {
     aether_ui_menu_popup(menu_handle, anchor_widget)
+}
+
+// menu_clear(menu): empty a menu to build it again -- a context menu made
+// afresh each time it opens, from what is true then. Do not clear a menu
+// from inside one of its own items' callbacks.
+menu_clear(menu_handle: int) {
+    aether_ui_menu_clear(menu_handle)
+}
+
+// menu_item_disabled(menu, label): an item shown grey that cannot be
+// chosen (the driver lists it under "disabled" in GET /menus).
+menu_item_disabled(menu_handle: int, label: string) {
+    aether_ui_menu_add_item(menu_handle, label, null)
+}
+
+// on_secondary_click(widget) callback |x: float, y: float| { ... }: a right
+// click on the widget (a long press on touch, a mouse's secondary click on
+// iPad and Android), at widget-local (x, y). The deepest widget under the
+// pointer that takes it wins: one with an on_secondary_click, a canvas with
+// its own right click, or one with context_menu_item items. The usual
+// answer is a menu built then and popped (menu_clear, menu_item,
+// menu_popup). The driver's POST /widget/{id}/secondary_click fires it,
+// and the menu it pops is recorded, not shown ({"popup": handle}, and
+// GET /popup), to be listed by GET /menus and picked by
+// /menu/{h}/activate?label=.
+on_secondary_click(handle: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_on_secondary_click_impl(handle, boxed)
 }
 
 // --- Grid layout ---

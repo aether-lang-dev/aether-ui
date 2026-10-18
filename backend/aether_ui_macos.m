@@ -1355,9 +1355,13 @@ void aether_ui_context_menu_item_impl(int handle, const char* label,
     }
     NSMenuItem* item = [[NSMenuItem alloc]
         initWithTitle:[NSString stringWithUTF8String:(label ? label : "")]
-               action:@selector(fire:) keyEquivalent:@""];
-    [item setTarget:g_menu_target];
-    [item setRepresentedObject:[NSNumber numberWithLongLong:(intptr_t)boxed_closure]];
+               action:(boxed_closure ? @selector(fire:) : NULL) keyEquivalent:@""];
+    if (boxed_closure) {
+        [item setTarget:g_menu_target];
+        [item setRepresentedObject:[NSNumber numberWithLongLong:(intptr_t)boxed_closure]];
+    } else {
+        [item setEnabled:NO];   // no closure: a disabled item (no action, so autoenabling greys it too)
+    }
     [m addItem:item];
 }
 
@@ -9816,6 +9820,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_SCROLLBAR_SET:
             aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
             break;
+        case AETHER_DRV_SECONDARY:
+            ctx->retval = aether_ui_secondary_drive(ctx->handle, ctx->dval, ctx->dval2);
+            break;
         case AETHER_DRV_SET_VALUE:
             if ([v isKindOfClass:[NSSlider class]]) {
                 aether_ui_slider_set_value(ctx->handle, ctx->dval);
@@ -10119,6 +10126,15 @@ static int aeui_mac_menu_native_activate(int menu_handle, const char* label) {
 void aether_ui_menu_add_separator(int menu_handle) {
     if (menu_handle < 1 || menu_handle > mac_menu_count) return;
     [mac_menus[menu_handle - 1].menu addItem:[NSMenuItem separatorItem]];
+    aether_ui_menu_separator_record(menu_handle);
+}
+
+// menu_clear: the menu emptied for building again (a context menu made
+// afresh each time it opens).
+void aether_ui_menu_clear(int menu_handle) {
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    [mac_menus[menu_handle - 1].menu removeAllItems];
+    aether_ui_menu_items_forget(menu_handle);
 }
 
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
@@ -10151,7 +10167,47 @@ void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
     [NSApp setMainMenu:mac_menus[bar_handle - 1].menu];
 }
 
+// --- on_secondary_click: a right click on any widget, the closure kept in
+// aether_ui_secondary.h. AppKit sends a right click to the view under the
+// pointer, and a plain NSView passes it up to nothing we can hook, so one
+// local monitor finds the deepest widget under it that takes it: a widget
+// with an on_secondary_click fires it; a canvas with its own right click,
+// or a view with a context menu of its own (context_menu_item), keeps it.
+#include "aether_ui_secondary.h"
+
+static id aeui_secondary_monitor = nil;
+
+static NSEvent* aeui_secondary_event(NSEvent* e) {
+    NSWindow* win = e.window;
+    NSView* root = win.contentView;
+    if (!root) return e;
+    NSPoint at = [root.superview ?: root convertPoint:e.locationInWindow fromView:nil];
+    for (NSView* v = [root hitTest:at]; v; v = v.superview) {
+        if ([v respondsToSelector:@selector(canvasId)]) {
+            CanvasState* cs = get_canvas_state((int)[(id)v canvasId]);
+            if (cs && cs->on_right_click) return e;
+        }
+        if (v.menu) return e;
+        int h = handle_for_view(v);
+        if (h && aeui_secondary_of(h)) {
+            NSPoint p = [v convertPoint:e.locationInWindow fromView:nil];
+            if (!v.isFlipped) p.y = v.bounds.size.height - p.y;
+            aeui_secondary_fire(h, p.x, p.y);
+            return nil;
+        }
+    }
+    return e;
+}
+
+static void aeui_secondary_attach(int handle) {
+    (void)handle;
+    if (aeui_secondary_monitor) return;
+    aeui_secondary_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown
+        handler:^NSEvent*(NSEvent* e) { return aeui_secondary_event(e); }];
+}
+
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (aeui_popup_note(menu_handle, anchor_widget)) return;   // the driver's: recorded
     if (menu_handle < 1 || menu_handle > mac_menu_count) return;
     // popUpMenuPositioningItem tracks the menu in its own loop until
     // dismissed. With no NSApp run-loop active (widget smoke tests,

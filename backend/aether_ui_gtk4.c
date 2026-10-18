@@ -964,6 +964,35 @@ static int aeui_ctx_use_window(void) {
     return getenv("SOMMELIER_VERSION") != NULL;
 }
 
+// --- on_secondary_click: a right click (a long press on touch) on any
+// widget, the closure kept in aether_ui_secondary.h. The deepest widget with
+// one takes it: the gesture claims the sequence, so no ancestor's fires too.
+#include "aether_ui_secondary.h"
+
+static void on_secondary_pressed(GtkGestureClick* g, int n, double x, double y, gpointer data) {
+    (void)n;
+    if (aeui_secondary_fire(GPOINTER_TO_INT(data), x, y))
+        gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static void on_secondary_long_press(GtkGestureLongPress* g, double x, double y, gpointer data) {
+    if (aeui_secondary_fire(GPOINTER_TO_INT(data), x, y))
+        gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static void aeui_secondary_attach(int handle) {
+    GtkWidget* w = aether_ui_get_widget(handle);
+    if (!w) return;
+    GtkGesture* click = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+    g_signal_connect(click, "pressed", G_CALLBACK(on_secondary_pressed), GINT_TO_POINTER(handle));
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(click));
+    GtkGesture* lp = gtk_gesture_long_press_new();
+    gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(lp), TRUE);
+    g_signal_connect(lp, "pressed", G_CALLBACK(on_secondary_long_press), GINT_TO_POINTER(handle));
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(lp));
+}
+
 static void ctx_menu_close(CtxMenu* cm) {
     if (cm->popover) { gtk_popover_popdown(GTK_POPOVER(cm->popover)); }
     if (cm->menu_win) {
@@ -9821,6 +9850,10 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
             ctx->result = 0; ctx->done = 1;
             return;
+        case AETHER_DRV_SECONDARY:
+            ctx->retval = aether_ui_secondary_drive(ctx->handle, ctx->dval, ctx->dval2);
+            ctx->result = 0; ctx->done = 1;
+            return;
         case AETHER_DRV_DRAG: {
             /* A press, two moves and a release through on_drag's closure. */
             GtkWidget* w = aether_ui_get_widget(ctx->handle);
@@ -10234,6 +10267,12 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
 
     GtkMenuEntry* e = gtk_menu_at(menu_handle);
     if (!e) return;
+    // No closure: a disabled item. Its action is never registered, so GTK
+    // draws it insensitive.
+    if (!boxed_closure) {
+        g_menu_append(e->section, label ? label : "", "app.aeui.disabled");
+        return;
+    }
 
     // Native path: append a GMenuItem bound to a unique per-item action, and
     // queue that action for registration on the app in on_activate.
@@ -10342,6 +10381,7 @@ void aether_ui_menu_add_separator(int menu_handle) {
     // an inter-section divider.
     GtkMenuEntry* e = gtk_menu_at(menu_handle);
     if (!e) return;
+    aether_ui_menu_separator_record(menu_handle);
     e->section = g_menu_new();
     g_menu_append_section(e->model, NULL, G_MENU_MODEL(e->section));
 }
@@ -10428,7 +10468,33 @@ static void aeui_attach_pending_menus(GtkApplication* app, GtkWindow* window) {
     }
 }
 
+// menu_clear: the menu emptied for building again (a context menu made
+// afresh each time it opens): its items, its sections and its actions go.
+void aether_ui_menu_clear(int menu_handle) {
+    GtkMenuEntry* e = gtk_menu_at(menu_handle);
+    if (!e) return;
+    aether_ui_menu_items_forget(menu_handle);
+    g_menu_remove_all(e->model);
+    e->section = g_menu_new();
+    g_menu_append_section(e->model, NULL, G_MENU_MODEL(e->section));
+    char prefix[32];
+    snprintf(prefix, sizeof(prefix), "aeui.m%d.", menu_handle);
+    size_t pl = strlen(prefix);
+    GtkApplication* app = (app_count > 0) ? apps[0].gtk_app : NULL;
+    int keep = 0;
+    for (int i = 0; i < gtk_menu_action_count; i++) {
+        if (strncmp(gtk_menu_actions[i].action_name, prefix, pl) == 0) {
+            if (app) g_action_map_remove_action(G_ACTION_MAP(app), gtk_menu_actions[i].action_name);
+            free(gtk_menu_actions[i].action_name);
+            continue;
+        }
+        gtk_menu_actions[keep++] = gtk_menu_actions[i];
+    }
+    gtk_menu_action_count = keep;
+}
+
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (aeui_popup_note(menu_handle, anchor_widget)) return;   // the driver's: recorded
     // A standalone popup of a menu's GMenu model, anchored under the widget.
     // Like the win32 TrackPopupMenu / macOS popUpMenuPositioningItem paths,
     // this shows real UI, so it's a no-op under headless (CI, smoke tests) —
@@ -10441,6 +10507,9 @@ void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     GtkMenuEntry* e = gtk_menu_at(menu_handle);
     GtkWidget* anchor = aether_ui_get_widget(anchor_widget);
     if (!e || !e->model || !anchor) return;
+    // A menu made after the app started (a context menu built when it
+    // opens): its items' actions registered now, or they would do nothing.
+    aeui_register_menu_actions((app_count > 0) ? apps[0].gtk_app : NULL);
 
     GtkWidget* pop = gtk_popover_menu_new_from_model(G_MENU_MODEL(e->model));
     gtk_widget_set_parent(pop, anchor);

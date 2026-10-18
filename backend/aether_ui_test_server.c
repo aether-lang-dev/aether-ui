@@ -1103,6 +1103,37 @@ static void handle_request_inner(aether_sock_t client_fd,
         }
         dispatch_and_reply(client_fd, h, &ctx, "dragged");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/secondary_click")) {
+        // POST /widget/{id}/secondary_click[?x=&y=] -- a right click (a long
+        // press on touch) at widget-local (x, y), the centre by default:
+        // the widget's on_secondary_click. A menu it pops is recorded, not
+        // shown: {"fired":true,"popup":<menu handle or 0>}, the menu then
+        // listed by GET /menus and picked by /menu/{h}/activate?label=.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_SECONDARY;
+        ctx.handle = extract_id_from_path(path, "/widget/");
+        const char* xs = extract_query_param(path, "x");
+        const char* ys = extract_query_param(path, "y");
+        int rx = 0, ry = 0, rw = 0, rh = 0;
+        if (h->widget_rect) h->widget_rect(ctx.handle, &rx, &ry, &rw, &rh);
+        ctx.dval = xs ? atof(xs) : rw / 2.0;
+        ctx.dval2 = ys ? atof(ys) : rh / 2.0;
+        if (!h->dispatch_action) {
+            send_http(client_fd, 404, "Not Found", "application/json", "{\"error\":\"no action dispatcher\"}");
+        } else {
+            h->dispatch_action(&ctx);
+            char body[96];
+            snprintf(body, sizeof(body), "{\"fired\":%s,\"popup\":%d}",
+                     ctx.retval ? "true" : "false", ctx.retval ? aether_ui_last_popup_menu : 0);
+            send_http(client_fd, ctx.retval ? 200 : 404, ctx.retval ? "OK" : "Not Found", "application/json", body);
+        }
+    } else if (method == 0 && strcmp(path, "/popup") == 0) {
+        // GET /popup -- the last menu menu_popup popped, and for which widget.
+        char body[96];
+        snprintf(body, sizeof(body), "{\"menu\":%d,\"anchor\":%d}",
+                 aether_ui_last_popup_menu, aether_ui_last_popup_anchor);
+        send_http(client_fd, 200, "OK", "application/json", body);
+    } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/submit")) {
         // POST /widget/{id}/submit -- Return in a text field: on_submit.
         AetherDriverActionCtx ctx = {0};
@@ -1402,11 +1433,25 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (dxs) ctx.dval  = atof(dxs);
         if (dys) ctx.dval2 = atof(dys);
         query_param_decoded(path, "name", ctx.sval, sizeof(ctx.sval), 1);
+        // A right click's menu (a vg shape's, a canvas's) is recorded, not
+        // shown, as a widget's secondary click's is: AppKit's and Win32's
+        // popups would hold this reply in their own modal loop.
+        int right = ctx.action == AETHER_DRV_CANVAS_RIGHT_CLICK;
+        if (right) {
+            aether_ui_last_popup_menu = 0;
+            aether_ui_last_popup_anchor = 0;
+            aether_ui_secondary_from_driver = 1;
+        }
         h->dispatch_action(&ctx);
+        if (right) aether_ui_secondary_from_driver = 0;
         if (ctx.result == 3) {
             char err[96];
             snprintf(err, sizeof(err), "{\"error\":\"%s\"}", what);
             send_http(client_fd, 404, "Not Found", "application/json", err);
+        } else if (right) {
+            char body[64];
+            snprintf(body, sizeof(body), "{\"ok\":true,\"popup\":%d}", aether_ui_last_popup_menu);
+            send_http(client_fd, 200, "OK", "application/json", body);
         } else {
             send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
         }
@@ -1505,7 +1550,7 @@ static void handle_request_inner(aether_sock_t client_fd,
     } else if (method == 0 && strcmp(path, "/menus") == 0) {
         int handles[64];
         int nh = aether_ui_menu_handles(handles, 64);
-        char* body = (char*)malloc(64 + nh * 2048);
+        char* body = (char*)malloc(64 + nh * 4096);
         int pos = sprintf(body, "[");
         for (int i = 0; i < nh; i++) {
             if (i > 0) pos += sprintf(body + pos, ",");
@@ -1516,6 +1561,18 @@ static void handle_request_inner(aether_sock_t client_fd,
                 if (k > 0) pos += sprintf(body + pos, ",");
                 pos += snprintf(body + pos, 256, "\"%s\"",
                                 aether_ui_menu_item_label_at(h, k));
+            }
+            // Where its dividers are (each as the items before it), and
+            // which items are disabled (added with no closure).
+            int seps[32];
+            int ns = aether_ui_menu_separators(h, seps, 32);
+            pos += sprintf(body + pos, "],\"separators\":[");
+            for (int k = 0; k < ns; k++) pos += sprintf(body + pos, "%s%d", k ? "," : "", seps[k]);
+            pos += sprintf(body + pos, "],\"disabled\":[");
+            int nd = 0;
+            for (int k = 0; k < ic; k++) {
+                if (aether_ui_menu_item_enabled_at(h, k)) continue;
+                pos += snprintf(body + pos, 256, "%s\"%s\"", nd++ ? "," : "", aether_ui_menu_item_label_at(h, k));
             }
             pos += sprintf(body + pos, "]}");
         }

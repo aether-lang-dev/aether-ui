@@ -1,0 +1,89 @@
+// spec_secondary_demo.ae — a widget's secondary click (on_secondary_click)
+// and a context menu built as it opens, over the AetherUIDriver. The
+// driver's POST /widget/{id}/secondary_click fires the widget's closure;
+// the menu it pops is recorded, not shown ({"popup": h}), and GET /menus
+// lists it (its items, where its separators are, which are disabled) for
+// /menu/{h}/activate?label= to pick. Each open builds it afresh
+// (menu_clear): nothing from the last one is left. A vg shape's right click
+// (POST /canvas/{id}/rightclick) pops its own menu the same way.
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+popup_of(body: string) -> int {
+    v, _e = json.parse(body)
+    if v == null { return 0 }
+    n = uidriver.field_int(v, "popup")
+    json.json_free(v)
+    return n
+}
+
+// GET /menus' entry for menu h, as its JSON text.
+menu_json(h: int) -> string {
+    body = uidriver.get_body("/menus")
+    at = string.index_of(body, "{\"handle\":${h},")
+    if at < 0 { return "" }
+    rest = string.substring(body, at, string.length(body))
+    end = string.index_of(rest, "]}")
+    if end < 0 { return rest }
+    return string.substring(rest, 0, end + 2)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a context menu built as it opens") {
+        spec.it("a secondary click pops a menu: items, a separator, a disabled one") callback {
+            t = uidriver.widget_id_by_text("Right-click me")
+            spec.assert_gt(t, 0, "the target")
+            m = popup_of(uidriver.post_body("/widget/${t}/secondary_click"))
+            spec.assert_gt(m, 0, "it popped a menu (recorded, not shown)")
+            mj = menu_json(m)
+            spec.assert_contains(mj, "\"items\":[\"Copy\",\"Opened 1\",\"Paste\"]", "its items, in order")
+            spec.assert_contains(mj, "\"separators\":[2]", "a separator after the second")
+            spec.assert_contains(mj, "\"disabled\":[\"Paste\"]", "Paste disabled")
+            spec.assert_contains(uidriver.get_body("/popup"), "\"menu\":${m},\"anchor\":${t}", "GET /popup names it and its widget")
+        }
+        spec.it("an item chosen runs; a disabled one cannot be") callback {
+            m = popup_of(uidriver.post_body("/widget/${uidriver.widget_id_by_text("Right-click me")}/secondary_click"))
+            uidriver.post_ok("/menu/${m}/activate?label=Copy", "choose Copy")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "chose: Copy", 20) == 1, "Copy ran")
+            spec.assert_contains(uidriver.post_body("/menu/${m}/activate?label=Paste"), "\"noClosure\":true", "Paste has nothing to run")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "chose: Copy", 5) == 1, "and nothing ran")
+        }
+        spec.it("each open builds it afresh: nothing of the last one is left") callback {
+            m = popup_of(uidriver.post_body("/widget/${uidriver.widget_id_by_text("Right-click me")}/secondary_click"))
+            mj = menu_json(m)
+            spec.assert_contains(mj, "\"items\":[\"Copy\",\"Opened 3\",\"Paste\"]", "the third open's items, and only those")
+            uidriver.post_ok("/menu/${m}/activate?label=Opened%203", "choose Opened 3")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "chose: Opened 3", 20) == 1, "its closure ran")
+            spec.assert_true(uidriver.post_status("/menu/${m}/activate?label=Opened%201") >= 400, "the first open's item is gone")
+        }
+        spec.it("a vg shape's right click pops its own menu") callback {
+            cid = uidriver.canvas_widget_id()
+            spec.assert_gt(cid, 0, "the canvas")
+            // At the canvas's centre: the shape fills its view box, which vg
+            // fits into whatever the canvas is given (centred where the
+            // canvas is taller, as on a phone).
+            cx = uidriver.widget_int_field_by_id(cid, "w") / 2
+            cy = uidriver.widget_int_field_by_id(cid, "h") / 2
+            m = popup_of(uidriver.post_body("/canvas/1/rightclick?x=${cx}&y=${cy}"))
+            spec.assert_gt(m, 0, "a menu popped (recorded)")
+            spec.assert_contains(menu_json(m), "\"items\":[\"Shape item\"]", "the shape's item")
+            uidriver.post_ok("/menu/${m}/activate?label=Shape%20item", "choose it")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "chose: Shape item", 20) == 1, "it ran")
+        }
+        spec.it("the panel around them has a menu of its own") callback {
+            note = uidriver.widget_id_by_text("the panel's own menu is behind both")
+            panel = uidriver.widget_int_field_by_id(note, "parent")
+            m = popup_of(uidriver.post_body("/widget/${panel}/secondary_click"))
+            spec.assert_contains(menu_json(m), "\"items\":[\"Panel item\"]", "the panel's item")
+            uidriver.post_ok("/menu/${m}/activate?label=Panel%20item", "choose it")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "chose: Panel item", 20) == 1, "it ran")
+            spec.assert_true(uidriver.post_status("/widget/${note}/secondary_click") == 404, "a widget with none answers 404")
+        }
+    }
+    return spec.run_summary(fw)
+}

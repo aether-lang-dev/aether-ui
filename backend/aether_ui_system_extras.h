@@ -123,6 +123,15 @@ const char*  aether_ui_menu_item_label_at(int menu_handle, int index);
 // order, written into out[] (up to max). Returns the count. Lets the driver's
 // GET /menus enumerate menus without a separate menu registry.
 int          aether_ui_menu_handles(int* out, int max);
+// A separator's place in the store (each backend's menu_add_separator), so
+// GET /menus shows where a menu's dividers are.
+void         aether_ui_menu_separator_record(int menu_handle);
+int          aether_ui_menu_separators(int menu_handle, int* out, int max);
+// 1 if the index-th item has a closure; an item added with none is disabled.
+int          aether_ui_menu_item_enabled_at(int menu_handle, int index);
+// menu_clear: forget a menu's records; their closures are freed at the next
+// clear (an item's own closure may be the one clearing its menu).
+void         aether_ui_menu_items_forget(int menu_handle);
 
 // ---------------------------------------------------------------------------
 // open_url under AETHER_UI_HEADLESS (toolkit-envy G6): a headless run must

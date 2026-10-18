@@ -2971,6 +2971,55 @@ void aether_ui_canvas_on_right_click_impl(int canvas_id, void* boxed_closure) {
     }
 }
 
+// --- on_secondary_click: a long press (or an iPad pointer's secondary
+// click) on any widget, the closure kept in aether_ui_secondary.h. Every
+// recogniser on the way up sees the touch, so the deepest taker wins: a
+// widget fires only when nothing between the touched view and it takes
+// the press itself (its own on_secondary_click, or a canvas's right click).
+#include "aether_ui_secondary.h"
+
+@interface AeuiSecondaryTarget : NSObject
+@property (assign) int handle;
+- (void)fired:(UIGestureRecognizer*)g;
+@end
+
+@implementation AeuiSecondaryTarget
+- (void)fired:(UIGestureRecognizer*)g {
+    if ([g isKindOfClass:[UILongPressGestureRecognizer class]] && g.state != UIGestureRecognizerStateBegan) return;
+    UIView* v = g.view;
+    CGPoint p = [g locationInView:v];
+    for (UIView* k = [v hitTest:p withEvent:nil]; k && k != v; k = k.superview) {
+        if ([k isKindOfClass:[AetherCanvasView class]]) {
+            CanvasState* cs = get_canvas_state(((AetherCanvasView*)k).canvasId);
+            if (cs && cs->on_right_click) return;
+        }
+        int kh = aether_ui_handle_for_widget((__bridge void*)k);
+        if (kh && aeui_secondary_of(kh)) return;
+    }
+    aeui_secondary_fire(self.handle, p.x, p.y);
+}
+@end
+
+static void aeui_secondary_attach(int handle) {
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
+    if (!v) return;
+    AeuiSecondaryTarget* t = [[AeuiSecondaryTarget alloc] init];
+    t.handle = handle;
+    aeui_own_helper(v, t);
+    v.userInteractionEnabled = YES;
+    UILongPressGestureRecognizer* lp = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:t action:@selector(fired:)];
+    lp.cancelsTouchesInView = NO;
+    [v addGestureRecognizer:lp];
+    if (@available(iOS 13.4, *)) {
+        UITapGestureRecognizer* sec = [[UITapGestureRecognizer alloc]
+            initWithTarget:t action:@selector(fired:)];
+        sec.buttonMaskRequired = UIEventButtonMaskSecondary;
+        sec.cancelsTouchesInView = NO;
+        [v addGestureRecognizer:sec];
+    }
+}
+
 void aether_ui_canvas_on_double_click_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
@@ -5429,9 +5478,21 @@ int aether_ui_menu_create(const char* label) { return menu_new(label, 0); }
 int aether_ui_menu_bar_create(void)          { return menu_new("", 1); }
 void aether_ui_menu_add_item(int menu_handle, const char* label, void* boxed_closure) {
     menu_push_item(menu_handle, label, boxed_closure, 0);
+    // The driver's side-store: GET /menus and /menu/{h}/activate?label=.
+    aether_ui_menu_item_record(menu_handle, label ? label : "", boxed_closure);
 }
 void aether_ui_menu_add_separator(int menu_handle) {
     menu_push_item(menu_handle, "", NULL, 1);
+    aether_ui_menu_separator_record(menu_handle);
+}
+// menu_clear: the menu emptied for building again (a context menu made
+// afresh each time it opens).
+void aether_ui_menu_clear(int menu_handle) {
+    if (menu_handle < 1 || menu_handle > menu_count) return;
+    AeuiMenuRec* m = &menus[menu_handle - 1];
+    for (int i = 0; i < m->count; i++) free(m->items[i].label);
+    m->count = 0;
+    aether_ui_menu_items_forget(menu_handle);
 }
 // The item's label lives in the record menu_popup builds the sheet from, so
 // a relabel there is what the next popup shows.
@@ -5454,6 +5515,7 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) { (void)app_handl
 void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) { (void)win_handle; (void)bar_handle; }
 
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (aeui_popup_note(menu_handle, anchor_widget)) return;   // the driver's: recorded
     if (menu_handle < 1 || menu_handle > menu_count || aeui_is_headless()) return;
     UIViewController* top = aeui_top_vc();
     if (!top) return;
@@ -5464,11 +5526,13 @@ void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     for (int i = 0; i < m->count; i++) {
         if (m->items[i].is_sep) continue;   // action sheets have no separators
         AeClosure* c = m->items[i].closure;
-        [sheet addAction:[UIAlertAction
+        UIAlertAction* act = [UIAlertAction
             actionWithTitle:[NSString stringWithUTF8String:m->items[i].label]
                       style:UIAlertActionStyleDefault
                     handler:^(UIAlertAction* a){ (void)a;
-                        if (c && c->fn) ((void(*)(void*))c->fn)(c->env); }]];
+                        if (c && c->fn) ((void(*)(void*))c->fn)(c->env); }];
+        act.enabled = c != NULL;   // no closure: a disabled item
+        [sheet addAction:act];
     }
     [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
                                               style:UIAlertActionStyleCancel handler:nil]];
@@ -6687,6 +6751,12 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_MENU_ACTIVATE:
+            // A popup's item (a context menu, an action sheet's): by label
+            // through the side-store menu_add_item records into, on this
+            // thread. 0 ran, 4 disabled (no closure), 3 no such item.
+            ctx->retval = aether_ui_menu_item_invoke(ctx->handle, ctx->sval);
+            ctx->result = 0;
+            return;
         case AETHER_DRV_MENU_NATIVE_ACTIVATE:
         case AETHER_DRV_TRAY_ACTIVATE:
             // No menu bar and no tray on iOS; the registry these would
@@ -6813,6 +6883,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             break;
         case AETHER_DRV_SCROLLBAR_SET:
             aether_ui_scrollbar_user_set(ctx->handle, ctx->dval);
+            break;
+        case AETHER_DRV_SECONDARY:
+            ctx->retval = aether_ui_secondary_drive(ctx->handle, ctx->dval, ctx->dval2);
             break;
         case AETHER_DRV_SET_VALUE:
             if (aeui_slider_in(v)) {
