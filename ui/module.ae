@@ -6530,8 +6530,8 @@ vlist_native(vp: ptr) -> int {
 // rewrites their text, never adds or removes widgets. The header row and the
 // `frozen` leading columns stay put (they are not in what scrolls), so the
 // header is sticky and a row-number column stays at the left. Two native
-// sliders are its scrollbars (a vslider beside the body, a slider under it),
-// the way a spreadsheet's are; datagrid_scroll_to moves it from code.
+// scrollbars (ui.scrollbar: the thumb the share in view) scroll it, one
+// beside the body and one under it, the way a spreadsheet's do; datagrid_scroll_to moves it from code.
 //
 // Selection is one rectangle, from an anchor cell to the cursor cell (the
 // one the keys move). A click selects a cell, Shift+click extends to it; the
@@ -6965,18 +6965,19 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     if maxr < 0 { maxr = 0 }
     maxc = cols - fz - vc
     if maxc < 0 { maxc = 0 }
-    // The sliders' ranges are fixed at what the whole grid needs. With rows
-    // or columns hidden there are fewer places to scroll to, and a slider's
-    // value is spread over them in proportion (the same number when none
-    // are hidden).
-    g.vsl = vslider(mid, 0.0, maxr * 1.0, 0.0) callback |v: float| {
+    // The scrollbars: a window of the shown rows (columns) onto the places
+    // there are to scroll to, so the thumb is the share in view. The value
+    // is the index of the first one shown among those not hidden;
+    // _datagrid_scroll_to keeps the range, the window and the value up to
+    // date as rows and columns are hidden, resized or scrolled.
+    g.vsl = scrollbar(mid, 1, 0.0, (maxr + vr) * 1.0, vr * 1.0, 0.0) callback |v: float| {
         gv = gp as *DataGrid
-        _datagrid_scroll_index(gv, _datagrid_vbase(gv) + _datagrid_from_slider(v, gv.rows - gv.vis_rows, _datagrid_vplaces(gv)), 0 - 1)
+        _datagrid_scroll_index(gv, _datagrid_vbase(gv) + ((v + 0.5) as int), 0 - 1)
     }
     _vh = height(g.vsl, vr * g.row_h)
-    g.hsl = slider(root, 0.0, maxc * 1.0, 0.0) callback |v: float| {
+    g.hsl = scrollbar(root, 0, 0.0, (maxc + vc) * 1.0, vc * 1.0, 0.0) callback |v: float| {
         gh = gp as *DataGrid
-        _datagrid_scroll_index(gh, 0 - 1, _datagrid_from_slider(v, gh.cols - gh.frozen - gh.vis_cols, gh.n_scols - gh.vis_cols))
+        _datagrid_scroll_index(gh, 0 - 1, (v + 0.5) as int)
     }
     _hw2 = width(g.hsl, (fz + vc) * g.col_w)
     on_key(root) callback |k: string, m: int| {
@@ -7149,20 +7150,6 @@ _datagrid_col_step(g: *DataGrid, c: int, d: int) -> int {
     if g.n_vcols <= 0 { return 0 - 1 }
     i = _datagrid_index_in(g.vcols, g.n_vcols, _datagrid_col_fix(g, c)) + d
     return intarr_get_raw(g.vcols, _datagrid_clamp(i, g.n_vcols - 1))
-}
-
-// A slider's value over its range (0 to smax) as an index from 0 to n, in
-// proportion; the value itself when the two are the same.
-_datagrid_from_slider(v: float, smax: int, n: int) -> int {
-    if n <= 0 || smax <= 0 { return 0 }
-    if smax == n { return (v + 0.5) as int }
-    return ((v * n) / smax + 0.5) as int
-}
-
-_datagrid_to_slider(i: int, smax: int, n: int) -> float {
-    if n <= 0 || smax <= 0 { return 0.0 }
-    if smax == n { return i * 1.0 }
-    return (i * smax * 1.0) / n
 }
 
 // Scroll so that the row at index ri (among those not hidden) is at the top
@@ -9121,8 +9108,9 @@ datagrid_scroll_to(gp: @keep ptr, row: int, col: int) -> ptr {
     if ci < g.n_scols { c = intarr_get_raw(g.scols, ci) }
     g.first_row = r
     g.first_col = c
-    aether_ui_slider_set_value(g.vsl, _datagrid_to_slider(ri - base, g.rows - g.vis_rows, _datagrid_vplaces(g)))
-    aether_ui_slider_set_value(g.hsl, _datagrid_to_slider(ci, g.cols - g.frozen - g.vis_cols, g.n_scols - g.vis_cols))
+    vpl = _datagrid_vplaces(g)
+    _sv = scrollbar_set(g.vsl, 0.0, (vpl + g.vis_rows) * 1.0, g.vis_rows * 1.0, (ri - base) * 1.0)
+    _sh = scrollbar_set(g.hsl, 0.0, (maxci + g.vis_cols) * 1.0, g.vis_cols * 1.0, ci * 1.0)
     _datagrid_bind(g)
     return gp
 }

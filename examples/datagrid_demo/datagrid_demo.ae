@@ -1,7 +1,7 @@
 // datagrid_demo — a virtualised grid (docs/design/data-grid.md, phases 1-4):
 // 100,000 rows x 50 columns from a function, 20 rows x 6 scrolling columns
 // shown, one frozen column of row numbers, a header of column letters. Only
-// the shown cells exist as widgets; the sliders scroll it. Clicks and keys
+// the shown cells exist as widgets; the scrollbars scroll it. Clicks and keys
 // select; the selection and Return are shown under the grid, and so are
 // column resizes and moves (drag a header's right edge, or the header).
 // Cells are editable (F2, a double click or typing); edits are kept in a map

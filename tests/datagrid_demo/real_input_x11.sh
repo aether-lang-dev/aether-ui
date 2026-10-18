@@ -24,7 +24,7 @@ import json,sys
 W=json.load(sys.stdin)
 c=[w for w in W if w.get("text")=="R5C4" or (w.get("classes") or "").find("aui-grid-cell")>=0 and w.get("a11y_row")==6 and w.get("a11y_col")==4]
 cell="%d %d %d %d"%(c[0]["x"],c[0]["y"],c[0]["w"],c[0]["h"]) if c else "none"
-sl=",".join(str(w.get("value")) for w in W if w["type"]=="slider")
+sl=",".join(str(w.get("value")) for w in W if w["type"]=="scrollbar")
 ed=[w["text"] for w in W if w["type"]=="textfield" and not w.get("placeholder")]
 print(cell+"|"+sl+"|"+(ed[0] if ed else "-"))'
 }

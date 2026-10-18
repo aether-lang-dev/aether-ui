@@ -1,5 +1,5 @@
 // spec_datagrid_demo.ae — the virtualised grid: only the shown cells exist,
-// the sliders scroll it, the header and the frozen column stay put (phase 1);
+// the scrollbars scroll it, the header and the frozen column stay put (phase 1);
 // clicks and keys move a cursor and a range, read back as the demo's
 // "selection:" line and as the cells' colours (phase 2); header drags resize
 // and move columns, read back as geometry and the demo's lines (phase 3);
@@ -35,7 +35,7 @@ count_of(type: string) -> int {
 }
 
 // The id of the first or last widget of a type (the grid's two scrollbars:
-// the vertical slider is made first).
+// the vertical one is made first).
 // How many cells show their R<r>C<c> text now (a row out of the grid's
 // height says nothing).
 cell_texts() -> int {
@@ -268,7 +268,7 @@ scroll_at() -> string {
     i = 0
     while i < json.json_array_size(v) {
         w = json.json_array_get_raw(v, i)
-        if string.equals(uidriver.field_str(w, "type"), "slider") == 1 { out = "${out}${uidriver.get_body("/widget/${uidriver.field_int(w, "id")}")}" }
+        if string.equals(uidriver.field_str(w, "type"), "scrollbar") == 1 { out = "${out}${uidriver.get_body("/widget/${uidriver.field_int(w, "id")}")}" }
         i = i + 1
     }
     json.json_free(v)
@@ -325,9 +325,17 @@ main() {
             spec.assert_eq(count_of("text"), 157, "texts")
         }
         spec.it("the vertical scrollbar stands up") callback {
-            v = nth_of("slider", 0)
+            v = nth_of("scrollbar", 0)
             spec.assert_true(uidriver.widget_int_field_by_id(v, "h") > uidriver.widget_int_field_by_id(v, "w"),
                 "taller than wide")
+        }
+        spec.it("each scrollbar's thumb is the share in view: 20 of 100,000 rows, 6 of 49 columns") callback {
+            v = uidriver.get_body("/widget/${nth_of("scrollbar", 0)}")
+            spec.assert_contains(v, "\"page\":20.00", "a window of the 20 rows shown")
+            spec.assert_contains(v, "\"max\":100000.00", "onto 100,000 rows")
+            h = uidriver.get_body("/widget/${nth_of("scrollbar", 1)}")
+            spec.assert_contains(h, "\"page\":6.00", "a window of the 6 scrolling columns shown")
+            spec.assert_contains(h, "\"max\":49.00", "onto 49 (50 less the frozen one)")
         }
         spec.it("a click names the cell it shows") callback {
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R3C2")}/click", "click R3C2")
@@ -335,7 +343,7 @@ main() {
         }
         spec.it("scrolling to row 90,000 rewrites the cells; the header stays on top") callback {
             hdr_y = field_of_text("A", "y")
-            v = nth_of("slider", 0)
+            v = nth_of("scrollbar", 0)
             uidriver.post_ok("/widget/${v}/set_value?v=90000", "scroll down")
             spec.assert_true(shows("R90000C1") == 1, "row 90,000 at the top")
             spec.assert_true(shows("90001") == 1, "its row number in the frozen column")
@@ -344,7 +352,7 @@ main() {
             spec.assert_eq(count_of("text"), 157, "no widgets added")
         }
         spec.it("scrolling across keeps the frozen column and moves the rest") callback {
-            hs = nth_of("slider", 1)
+            hs = nth_of("scrollbar", 1)
             uidriver.post_ok("/widget/${hs}/set_value?v=39", "scroll right")
             spec.assert_true(shows("R90000C40") == 1, "column 40 first")
             spec.assert_true(shows("AN") == 1, "its header letter, AN")
@@ -356,7 +364,7 @@ main() {
             spec.assert_true(shows("clicked: 90003,41") == 1, "row 90,003, column 41")
         }
         spec.it("scrolling past the end stops at the last window") callback {
-            v = nth_of("slider", 0)
+            v = nth_of("scrollbar", 0)
             uidriver.post_ok("/widget/${v}/set_value?v=200000", "scroll far down")
             spec.assert_true(shows("R99999C40") == 1, "the last row shows, at the bottom")
         }
@@ -455,7 +463,7 @@ main() {
 
     spec.describe(fw, "column resize and reorder") {
         spec.it("back to the first columns") callback {
-            hs = nth_of("slider", 1)
+            hs = nth_of("scrollbar", 1)
             uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll left")
             spec.assert_true(shows("R99980C1") == 1, "column 1 first again")
             spec.assert_eq(header_w("C", 36), 36, "C starts 36 wide (the demo's width)")
@@ -604,7 +612,7 @@ main() {
             spec.assert_eq(field_of_text("B", "a11y_col"), 5, "B, moved to column 5, says 5")
         }
         spec.it("scrolling: the same cell widget names the row it shows now") callback {
-            v = nth_of("slider", 0)
+            v = nth_of("scrollbar", 0)
             uidriver.post_ok("/widget/${v}/set_value?v=0", "scroll to the top")
             spec.assert_true(shows("R0C1") == 1, "row 0 shown")
             spec.assert_eq(field_of_text("R0C1", "a11y_row"), 1, "model row 0 is row 1")
@@ -677,7 +685,7 @@ main() {
 
     spec.describe(fw, "hidden rows and columns") {
         spec.it("hidden rows take no room, and a strip marks where they were") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             spec.assert_true(shows("R4C1") == 1, "row 4 is shown")
             y3 = field_of_text("R3C1", "y")
             spec.assert_eq(settled("R4C1", "y", y3 + 24), y3 + 24, "straight under row 3")
@@ -729,10 +737,10 @@ main() {
 
     spec.describe(fw, "frozen rows") {
         spec.it("frozen rows stay at the top while the rest scroll") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             y0 = field_of_text("R0C1", "y")
             press("Freeze 2 rows")
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=1000", "scroll down")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=1000", "scroll down")
             spec.assert_true(shows("R1002C1") == 1, "the scrolling rows start at row 1,002")
             spec.assert_true(shows("R0C1") == 1, "row 0 stays")
             spec.assert_true(shows("R1C1") == 1, "and row 1")
@@ -756,20 +764,20 @@ main() {
         }
         spec.it("unfrozen, row 0 scrolls again") callback {
             press("Freeze 2 rows")
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             spec.assert_true(shows("R1C3") == 1, "row 1 shown, in the scrolling rows")
             spec.assert_true(uidriver.wait_body_contains("/widget/${uidriver.widget_id_by_text("R1C3")}", "aui-grid-cell", 20), "R1C3 is a plain cell again")
             spec.assert_str_eq(bg_of("R1C3"), "#ffffff", "white")
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=500", "scroll down")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=500", "scroll down")
             spec.assert_true(shows("R500C1") == 1, "row 500 at the top")
             spec.assert_true(gone("R0C1") == 1, "row 0 has scrolled away")
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "and back")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "and back")
         }
     }
 
     spec.describe(fw, "more of a style") {
         spec.it("italic, underline and line-through") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             spec.assert_true(shows("R12C4") == 1, "row 12 shown")
             spec.assert_str_eq(fstr("R12C4", "fontStyle"), "italic", "R12C4 italic")
             spec.assert_str_eq(fstr("R12C4", "textDecoration"), "underline", "and underlined")
@@ -793,19 +801,19 @@ main() {
             spec.assert_str_eq(fstr("R18C4", "tooltip"), "", "a cell without one has none")
         }
         spec.it("a widget that scrolls on to a plain cell loses them") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=1", "scroll down a row")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=1", "scroll down a row")
             spec.assert_true(shows("R18C4") == 1, "row 18 shown")
             spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "where R12C4 was italic, R13C4 is not")
             spec.assert_str_eq(fstr("R17C4", "bar"), "", "where the bar was, none")
             spec.assert_str_eq(fstr("R18C4", "corner"), "", "nor a corner where the marker was")
             spec.assert_str_eq(fstr("R18C4", "tooltip"), "", "nor a tooltip")
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "and back")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "and back")
         }
     }
 
     spec.describe(fw, "merged cells") {
         spec.it("a merge is one cell: its top-left's text across it") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             spec.assert_true(shows("R9C5") == 1, "the four cells are shown")
             w4 = field_of_text("R8C4", "w")
             w5 = field_of_text("R8C5", "w")
@@ -849,7 +857,7 @@ main() {
 
     spec.describe(fw, "row heights and wrapped text") {
         spec.it("a taller row: those under it move down, and fewer rows show") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             spec.assert_true(shows("R19C1") == 1, "twenty rows shown")
             y3 = field_of_text("R3C1", "y")
             press("Tall row 4")
@@ -860,9 +868,9 @@ main() {
             spec.assert_eq(count_of("text"), 157, "no widgets added")
         }
         spec.it("the last rows are still reached at the end") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=200000", "scroll to the end")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=200000", "scroll to the end")
             spec.assert_true(shows("R99999C1") == 1, "the last row")
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "and back")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "and back")
             spec.assert_true(shows("R3C1") == 1, "row 3 again")
         }
         spec.it("a cell styled white-space: normal wraps in a row that holds more than a line") callback {
@@ -886,7 +894,7 @@ main() {
 
     spec.describe(fw, "the editor's text as it is typed") {
         spec.it("on_edit_change hears what an editor opens with, and its caret") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R11C1")}/click", "click R11C1")
             key("equal")
             spec.assert_true(editor_open(1) == 1, "an editor opened holding =")
@@ -904,7 +912,7 @@ main() {
             spec.assert_true(editor_open(0) == 1, "Escape closed it")
         }
         spec.it("an editor opened from on_select while datagrid_edit moves the cursor: one editor, and none once it closes") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C1")}/click", "click R0C1")
             press("Edit R6C2 twice")
             spec.assert_true(editor_open(1) == 1, "an editor opened")
@@ -916,8 +924,8 @@ main() {
     }
     spec.describe(fw, "the selection's glide") {
         spec.it("datagrid_selection_glide: the cursor's box passes the cells between, then rests on the new one; 0 jumps") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
-            uidriver.post_ok("/widget/${nth_of("slider", 1)}/set_value?v=0", "and the left")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 1)}/set_value?v=0", "and the left")
             uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R0C1")}/click", "click R0C1")
             spec.assert_true(boxed_on("R0C1") == 1, "the box on R0C1")
             press("Glide")
@@ -943,8 +951,8 @@ main() {
     }
     spec.describe(fw, "a picture in a cell") {
         spec.it("datagrid_cell_picture: an image over R2C5, fitted to it, and gone again") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
-            uidriver.post_ok("/widget/${nth_of("slider", 1)}/set_value?v=0", "and the left")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 1)}/set_value?v=0", "and the left")
             n0 = count_of("image")
             press("Picture")
             i = 0
@@ -962,7 +970,7 @@ main() {
     }
     spec.describe(fw, "the grid's own row height") {
         spec.it("datagrid_set_row_heights: every row that height, and back") callback {
-            uidriver.post_ok("/widget/${nth_of("slider", 0)}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=0", "scroll to the top")
             c = uidriver.widget_id_by_text("R1C1")
             h0 = uidriver.widget_int_field_by_id(c, "h")
             press("Rows 36")
@@ -981,7 +989,7 @@ main() {
             // grid: on a phone the demo is taller than the screen, and the
             // views Auto Layout squeezed take back some of what the header
             // gives up, so the screen position alone moves only part of it.
-            v = nth_of("slider", 0)
+            v = nth_of("scrollbar", 0)
             cap = uidriver.widget_id_by_text("100,000 rows x 50 columns")
             d0 = below(v, cap)
             press("Headers")
@@ -997,7 +1005,7 @@ main() {
     }
     spec.describe(fw, "a grid given less or more height") {
         spec.it("datagrid_set_height shows the rows that fit, and all of them again") callback {
-            v = nth_of("slider", 0)
+            v = nth_of("scrollbar", 0)
             h0 = uidriver.widget_int_field_by_id(v, "h")
             press("Ten rows high")
             i = 0
@@ -1014,7 +1022,7 @@ main() {
 
     spec.describe(fw, "columns frozen at run time") {
         spec.it("datagrid_freeze_cols keeps A beside the row numbers as the rest scroll") callback {
-            hs = nth_of("slider", 1)
+            hs = nth_of("scrollbar", 1)
             uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll to the left")
             press("Freeze A")
             uidriver.post_ok("/widget/${hs}/set_value?v=20", "scroll right")
