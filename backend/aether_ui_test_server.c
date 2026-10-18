@@ -774,14 +774,40 @@ static void handle_request_inner(aether_sock_t client_fd,
                      role, ne, de, se, nsaid);
             send_http(client_fd, 200, "OK", "application/json", body);
         }
-    } else if (method == 0 && strcmp(path, "/screenshot") == 0) {
+    } else if (method == 0 && (strcmp(path, "/screenshot") == 0 || strcmp(path, "/screenshot?b64=1") == 0)) {
+        // ?b64=1: the PNG as base64 text, for a client that carries text (a
+        // string-typed HTTP client, a control bus's answer).
+        int as_b64 = strchr(path, '?') != NULL;
         if (!h->screenshot_png) {
             send_http(client_fd, 501, "Not Implemented", "text/plain",
                       "/screenshot not supported by this backend");
         } else {
             unsigned char* data = NULL;
             size_t len = 0;
-            if (h->screenshot_png(&data, &len) == 0 && data && len > 0) {
+            int shot = h->screenshot_png(&data, &len) == 0 && data && len > 0;
+            if (shot && as_b64) {
+                static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                size_t olen = ((len + 2) / 3) * 4;
+                char* out = (char*)malloc(olen + 1);
+                if (out) {
+                    size_t o = 0;
+                    for (size_t i = 0; i < len; i += 3) {
+                        unsigned v = (unsigned)data[i] << 16;
+                        if (i + 1 < len) v |= (unsigned)data[i + 1] << 8;
+                        if (i + 2 < len) v |= data[i + 2];
+                        out[o++] = tbl[(v >> 18) & 63];
+                        out[o++] = tbl[(v >> 12) & 63];
+                        out[o++] = (i + 1 < len) ? tbl[(v >> 6) & 63] : '=';
+                        out[o++] = (i + 2 < len) ? tbl[v & 63] : '=';
+                    }
+                    out[o] = 0;
+                    send_http(client_fd, 200, "OK", "text/plain", out);
+                    free(out);
+                } else {
+                    send_http(client_fd, 500, "Error", "text/plain", "out of memory");
+                }
+                free(data);
+            } else if (shot) {
                 char header[256];
                 int hlen = snprintf(header, sizeof(header),
                     "HTTP/1.1 200 OK\r\n"

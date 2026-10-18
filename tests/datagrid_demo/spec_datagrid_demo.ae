@@ -411,6 +411,18 @@ main() {
         }
     }
 
+    spec.describe(fw, "the driver's screenshot as text") {
+        spec.it("/screenshot?b64=1 answers the PNG as base64") callback {
+            body = uidriver.get_body("/screenshot?b64=1")
+            if string.contains(body, "not supported") == 1 {
+                println("      (no /screenshot on this backend: skipped)")
+                return
+            }
+            spec.assert_true(string.starts_with(body, "iVBORw0KGgo") == 1, "a PNG's first bytes in base64")
+            spec.assert_gt(string.length(body), 2000, "and the whole picture")
+        }
+    }
+
     spec.describe(fw, "a virtualised grid") {
         spec.it("shows the first window: header letters, row numbers, cells") callback {
             spec.assert_true(shows("A") == 1, "header A")
