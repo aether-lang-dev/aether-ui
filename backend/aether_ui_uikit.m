@@ -103,6 +103,10 @@ typedef struct {
     void* env;
 } AeClosure;
 
+// Menu items' accelerators (menu_item_accel): Primary is Command here.
+#define AEUI_PRIMARY_IS_CMD 1
+#include "aether_ui_accel.h"
+
 // Adopted by every helper that holds a boxed closure for its widget (a
 // control's target, a tap target, a delegate, a layout hook, the picker),
 // so retiring the widget can give every box back through one question.
@@ -5485,10 +5489,32 @@ void aether_ui_menu_add_separator(int menu_handle) {
     menu_push_item(menu_handle, "", NULL, 1);
     aether_ui_menu_separator_record(menu_handle);
 }
+// menu_item_accel: UIKit has no menu bar to draw an accelerator in, so it
+// is in the label ("Save  ⌘S"), and a hardware keyboard's key runs it
+// through the window's key handling (shortcut).
+void aether_ui_menu_add_item_accel(int menu_handle, const char* label,
+                                   const char* accel, void* boxed_closure) {
+    char text[64], shown[256];
+    aeui_accel_text(accel, text, sizeof(text));
+    if (accel && *accel) snprintf(shown, sizeof(shown), "%s  %s", label ? label : "", text);
+    else snprintf(shown, sizeof(shown), "%s", label ? label : "");
+    menu_push_item(menu_handle, shown, boxed_closure, 0);
+    aether_ui_menu_item_record(menu_handle, label ? label : "", boxed_closure);
+    if (boxed_closure && accel && *accel) {
+        char key[32], combo[64];
+        int mods = aeui_accel_parse(accel, key, sizeof(key));
+        snprintf(combo, sizeof(combo), "%s%s%s%s%s", (mods & AEUI_ACC_CTRL) ? "Ctrl+" : "", (mods & AEUI_ACC_ALT) ? "Alt+" : "",
+                 (mods & AEUI_ACC_SHIFT) ? "Shift+" : "", (mods & AEUI_ACC_CMD) ? "Cmd+" : "", key);
+        aether_ui_shortcut_impl(combo, boxed_closure);
+    }
+    aeui_accel_note(menu_handle, label, accel, boxed_closure);
+}
+
 // menu_clear: the menu emptied for building again (a context menu made
 // afresh each time it opens).
 void aether_ui_menu_clear(int menu_handle) {
     if (menu_handle < 1 || menu_handle > menu_count) return;
+    aeui_accel_forget(menu_handle);
     AeuiMenuRec* m = &menus[menu_handle - 1];
     for (int i = 0; i < m->count; i++) free(m->items[i].label);
     m->count = 0;
@@ -6687,6 +6713,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             ctx->result = 3;
             return;
         case AETHER_DRV_WIN_KEY: {
+            // A menu item's accelerator runs its item first (once: its key
+            // is also in the shortcut table for a hardware keyboard).
+            if (aether_ui_accel_fire(ctx->sval)) { ctx->retval = 1; ctx->result = 0; return; }
             char key[64];
             int mods = aeui_driver_split_combo(ctx->sval, key, sizeof(key));
             ctx->retval = aether_ui_window_key_deliver(key, mods);

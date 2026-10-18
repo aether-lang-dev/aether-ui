@@ -76,6 +76,10 @@ typedef struct {
 #include "aether_ui_scrollbar.h"
 // on_secondary_click's closures (a right click on any widget).
 #include "aether_ui_secondary.h"
+// Menu items' accelerators (menu_item_accel): Primary is Ctrl here.
+#define AEUI_PRIMARY_IS_CMD 0
+#include "aether_ui_accel.h"
+static HACCEL w32_haccel;   // the menu items' accelerator table (menu_item_accel)
 
 static inline void invoke_closure(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
@@ -2991,7 +2995,8 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             // registered closure. Otherwise forward to the stack proc,
             // which handles WM_COMMAND from child controls.
             WORD id = LOWORD(wp);
-            if (lp == 0 && HIWORD(wp) == 0 && id >= AE_MENU_ID_BASE) {
+            // HIWORD 0: a menu click; 1: its accelerator (TranslateAccelerator).
+            if (lp == 0 && (HIWORD(wp) == 0 || HIWORD(wp) == 1) && id >= AE_MENU_ID_BASE) {
                 if (menu_dispatch_command(id)) return 0;
             }
             return stack_wnd_proc(hwnd, msg, wp, lp);
@@ -3604,6 +3609,12 @@ void aether_ui_app_run_raw(int app_handle) {
         // typed into whatever has focus. This is the piece #47 was about, and
         // it deliberately reuses the registry the driver route already fires,
         // so a real key and POST /window/key end in the same closure.
+        // A menu item's accelerator: the accelerator table turns the key
+        // into the item's WM_COMMAND, as a click on it sends.
+        if (w32_haccel && (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN)
+            && TranslateAcceleratorW(e->hwnd, w32_haccel, &msg)) {
+            continue;
+        }
         if (msg.message == WM_KEYDOWN) {
             char w32_combo[64], w32_name[64];
             int w32_mods = w32_key_from_msg(msg.wParam, w32_combo,
@@ -4947,6 +4958,8 @@ double aether_ui_slider_get_value(int handle) {
     Widget* w = widget_at(handle);
     return w ? w->u.slider.cur_v : 0.0;
 }
+
+static void w32_accel_table_rebuild(void);   // fwd (menu_clear)
 
 // on_secondary_click needs nothing per widget: a control's DefWindowProc
 // turns a right click (or the menu key) into WM_CONTEXTMENU for its parent,
@@ -9565,6 +9578,101 @@ void aether_ui_menu_clear(int menu_handle) {
         DeleteMenu(m->hmenu, (UINT)i, MF_BYPOSITION);
     }
     aether_ui_menu_items_forget(menu_handle);
+    aeui_accel_forget(menu_handle);
+    w32_accel_table_rebuild();
+}
+
+// The accelerator table every menu item's accelerator is in, made again as
+// they change; the message loop translates a key through it (a WM_COMMAND
+// with the item's id, the same one a click on the item sends).
+typedef struct { ACCEL a; int menu; } W32Accel;
+static W32Accel* w32_accels = NULL;
+static int w32_accel_count = 0, w32_accel_cap = 0;
+
+static void w32_accel_table_rebuild(void) {
+    // Drop the entries whose command a cleared menu took with it.
+    int k = 0;
+    for (int i = 0; i < w32_accel_count; i++) {
+        int live = 0;
+        for (int j = 0; j < menu_command_count; j++) if (menu_commands[j].id == w32_accels[i].a.cmd) { live = 1; break; }
+        if (live) w32_accels[k++] = w32_accels[i];
+    }
+    w32_accel_count = k;
+    if (w32_haccel) { DestroyAcceleratorTable(w32_haccel); w32_haccel = NULL; }
+    if (w32_accel_count == 0) return;
+    ACCEL* t = (ACCEL*)malloc(sizeof(ACCEL) * (size_t)w32_accel_count);
+    if (!t) return;
+    for (int i = 0; i < w32_accel_count; i++) t[i] = w32_accels[i].a;
+    w32_haccel = CreateAcceleratorTableW(t, w32_accel_count);
+    free(t);
+}
+
+// "Primary+Shift+S" as a virtual key and its flags; 0 when it names no key.
+static WORD w32_accel_vk(const char* accel, BYTE* virt) {
+    char key[32];
+    int mods = aeui_accel_parse(accel, key, sizeof(key));
+    BYTE f = FVIRTKEY;
+    if (mods & AEUI_ACC_CTRL) f |= FCONTROL;
+    if (mods & AEUI_ACC_SHIFT) f |= FSHIFT;
+    if (mods & AEUI_ACC_ALT) f |= FALT;
+    *virt = f;
+    if (strlen(key) == 1) {
+        char c = key[0];
+        if (c >= 'a' && c <= 'z') return (WORD)(c - 'a' + 'A');
+        if (c >= '0' && c <= '9') return (WORD)c;
+        if (c == '+' || c == '=') return VK_OEM_PLUS;
+        if (c == '-') return VK_OEM_MINUS;
+        if (c == ',') return VK_OEM_COMMA;
+        if (c == '.') return VK_OEM_PERIOD;
+        return 0;
+    }
+    if (key[0] == 'f' && key[1] >= '1' && key[1] <= '9') return (WORD)(VK_F1 + atoi(key + 1) - 1);
+    static const struct { const char* n; WORD vk; } K[] = {
+        {"return", VK_RETURN}, {"tab", VK_TAB}, {"escape", VK_ESCAPE}, {"space", VK_SPACE},
+        {"backspace", VK_BACK}, {"delete", VK_DELETE}, {"home", VK_HOME}, {"end", VK_END},
+        {"pageup", VK_PRIOR}, {"pagedown", VK_NEXT}, {"left", VK_LEFT}, {"right", VK_RIGHT},
+        {"up", VK_UP}, {"down", VK_DOWN}, {"insert", VK_INSERT}, {NULL, 0}
+    };
+    for (int i = 0; K[i].n; i++) if (!strcmp(key, K[i].n)) return K[i].vk;
+    return 0;
+}
+
+// menu_item_accel: "Label<TAB>Ctrl+S" (Windows draws the accelerator to
+// the right) and an entry in the accelerator table.
+void aether_ui_menu_add_item_accel(int menu_handle, const char* label,
+                                   const char* accel, void* boxed_closure) {
+    char shown[256], text[64];
+    aeui_accel_text(accel, text, sizeof(text));
+    if (accel && *accel) snprintf(shown, sizeof(shown), "%s\t%s", label ? label : "", text);
+    else snprintf(shown, sizeof(shown), "%s", label ? label : "");
+    MenuEntry* m = menu_at(menu_handle);
+    if (!m) return;
+    UINT id = next_menu_id++;
+    AppendMenuW(m->hmenu, MF_STRING | (boxed_closure ? 0 : MF_GRAYED), id, utf8_to_wide(shown));
+    if (menu_command_count >= menu_command_capacity) {
+        menu_command_capacity = menu_command_capacity == 0 ? 32 : menu_command_capacity * 2;
+        menu_commands = (MenuCommand*)realloc(menu_commands, sizeof(MenuCommand) * menu_command_capacity);
+    }
+    menu_commands[menu_command_count].id = id;
+    menu_commands[menu_command_count].closure = (AeClosure*)boxed_closure;
+    menu_command_count++;
+    // The driver's side-store keeps the label alone, as the other backends.
+    aether_ui_menu_item_record(menu_handle, label, boxed_closure);
+    BYTE virt = 0;
+    WORD vk = boxed_closure ? w32_accel_vk(accel, &virt) : 0;
+    if (vk) {
+        if (w32_accel_count >= w32_accel_cap) {
+            w32_accel_cap = w32_accel_cap ? w32_accel_cap * 2 : 32;
+            w32_accels = (W32Accel*)realloc(w32_accels, sizeof(W32Accel) * (size_t)w32_accel_cap);
+        }
+        w32_accels[w32_accel_count].a.fVirt = virt;
+        w32_accels[w32_accel_count].a.key = vk;
+        w32_accels[w32_accel_count].a.cmd = (WORD)id;
+        w32_accels[w32_accel_count].menu = menu_handle;
+        w32_accel_count++;
+        w32_accel_table_rebuild();
+    }
+    aeui_accel_note(menu_handle, label, accel, boxed_closure);
 }
 
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
@@ -13929,8 +14037,8 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             // Tab / Shift+Tab move REAL focus; Escape dismisses an overlay;
             // any other combo fires a registered shortcut / chord (scoped
             // shortcuts honour their predicate).
-            ctx->retval = 0;
-            if (strcmp(ctx->sval, "Escape") != 0 &&
+            ctx->retval = aether_ui_accel_fire(ctx->sval);   // a menu item's accelerator first
+            if (!ctx->retval && strcmp(ctx->sval, "Escape") != 0 &&
                 strcmp(ctx->sval, "Tab") != 0 &&
                 strcmp(ctx->sval, "Shift+Tab") != 0) {
                 ctx->retval = aeui_win32_fire_shortcut(ctx->sval);

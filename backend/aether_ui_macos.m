@@ -47,6 +47,10 @@ typedef struct {
     void* env;
 } AeClosure;
 
+// Menu items' accelerators (menu_item_accel): Primary is Command here.
+#define AEUI_PRIMARY_IS_CMD 1
+#include "aether_ui_accel.h"
+
 /* Runtime: reclaim a closure env through its own destructor
  * (aether_runtime.h). Declared rather than included, as the other runtime
  * symbols this file reaches for are. */
@@ -915,6 +919,22 @@ void aether_ui_app_set_body(int app_handle, int root_handle) {
     if (app_delegate) app_delegate.rootHandle = root_handle;
 }
 
+// The menu bar the app attached (menu_bar_attach), kept as the main menu.
+static NSMenu* aeui_attached_bar = nil;
+enum { AEUI_APP_MENU_TAG = 0xAE01 };
+
+// macOS shows a bar's first item as the app's own menu, under the app's
+// name: a bar of the app's menus gets one (Quit, Command-Q) first, once.
+static void aeui_bar_with_app_menu(NSMenu* bar) {
+    if ([bar numberOfItems] > 0 && [[bar itemAtIndex:0] tag] == AEUI_APP_MENU_TAG) return;
+    NSMenuItem* appMenuItem = [[NSMenuItem alloc] init];
+    [appMenuItem setTag:AEUI_APP_MENU_TAG];
+    NSMenu* appMenu = [[NSMenu alloc] init];
+    [appMenu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
+    [appMenuItem setSubmenu:appMenu];
+    [bar insertItem:appMenuItem atIndex:0];
+}
+
 void aether_ui_app_run_raw(int app_handle) {
     (void)app_handle;
     @autoreleasepool {
@@ -922,13 +942,16 @@ void aether_ui_app_run_raw(int app_handle) {
         [app setDelegate:app_delegate];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-        NSMenu* menubar = [[NSMenu alloc] init];
-        NSMenuItem* appMenuItem = [[NSMenuItem alloc] init];
-        [menubar addItem:appMenuItem];
-        NSMenu* appMenu = [[NSMenu alloc] init];
-        [appMenu addItemWithTitle:@"Quit" action:@selector(terminate:) keyEquivalent:@"q"];
-        [appMenuItem setSubmenu:appMenu];
-        [app setMainMenu:menubar];
+        // A bar the app attached before starting stays the main menu (it
+        // used to be replaced here by the bare app menu, and its items' key
+        // equivalents went with it); else the app menu alone.
+        if (aeui_attached_bar) {
+            [app setMainMenu:aeui_attached_bar];
+        } else {
+            NSMenu* menubar = [[NSMenu alloc] init];
+            aeui_bar_with_app_menu(menubar);
+            [app setMainMenu:menubar];
+        }
 
         aeui_worker_poster_install(1);   // the loop runs, headless or not
         [app run];
@@ -9463,6 +9486,12 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_WIN_KEY: {
+            // A menu item's accelerator runs its item (a real key, below,
+            // reaches it through the main menu's key equivalents instead).
+            if (!aeui_driver_real_events() && aether_ui_accel_fire(ctx->sval)) {
+                ctx->retval = 1;
+                break;
+            }
             if (aeui_driver_real_events() && primary_window && ctx->sval[0]) {
                 // A real key down and up, through NSApplication (its key
                 // monitor, the first responder), as a person types it: the
@@ -9471,6 +9500,9 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 char canonical[64], kname[64];
                 combo_normalize(ctx->sval, canonical, sizeof(canonical));
                 int kmods = aeui_combo_split(canonical, kname, sizeof(kname));
+                // "Primary" (Command here), which the shortcut syntax does
+                // not name: the accelerator parse's bits are the same.
+                { char akey[32]; kmods |= aeui_accel_parse(ctx->sval, akey, sizeof(akey)); }
                 static const struct { const char* n; unsigned short code; unichar ch; } K[] = {
                     {"Return", 36, '\r'}, {"Tab", 48, '\t'}, {"Escape", 53, 0x1b}, {"BackSpace", 51, 0x7f},
                     {"space", 49, ' '}, {"Delete", 117, NSDeleteFunctionKey}, {"Home", 115, NSHomeFunctionKey},
@@ -9486,6 +9518,14 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 }
                 if (!ch) {
                     ch = [NSString stringWithUTF8String:kname];
+                    // The key's own code on an ANSI keyboard: AppKit matches a
+                    // Command key equivalent by key code through the layout,
+                    // so code 0 (the A key) for every letter matched none.
+                    static const char ansi[] = "asdfhgzxcv\0bqweryt123465=97-80]ou[ip\0lj'k;\\,/nm.";
+                    if ([ch length] == 1) {
+                        char c = (char)tolower([ch characterAtIndex:0]);
+                        for (unsigned short k = 0; k < sizeof(ansi) - 1; k++) if (ansi[k] == c && c) { code = k; break; }
+                    }
                     if ([ch length] == 1 && (kmods & 1)) ch = [ch uppercaseString];
                 }
                 NSEventModifierFlags f = 0;
@@ -10135,6 +10175,43 @@ void aether_ui_menu_clear(int menu_handle) {
     if (menu_handle < 1 || menu_handle > mac_menu_count) return;
     [mac_menus[menu_handle - 1].menu removeAllItems];
     aether_ui_menu_items_forget(menu_handle);
+    aeui_accel_forget(menu_handle);
+}
+
+// menu_item_accel: the item's key equivalent and modifier mask, so AppKit
+// draws the accelerator (⇧⌘S) and runs the item when the key is pressed
+// in the app (the main menu's key equivalents), once.
+void aether_ui_menu_add_item_accel(int menu_handle, const char* label,
+                                   const char* accel, void* boxed_closure) {
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    aether_ui_menu_add_item(menu_handle, label, boxed_closure);
+    NSMenuItem* item = [[mac_menus[menu_handle - 1].menu itemArray] lastObject];
+    char key[32];
+    int mods = aeui_accel_parse(accel, key, sizeof(key));
+    NSString* eq = nil;
+    static const struct { const char* n; unichar c; } K[] = {
+        {"return", '\r'}, {"tab", '\t'}, {"escape", 0x1b}, {"space", ' '}, {"backspace", 0x08},
+        {"delete", NSDeleteFunctionKey}, {"home", NSHomeFunctionKey}, {"end", NSEndFunctionKey},
+        {"pageup", NSPageUpFunctionKey}, {"pagedown", NSPageDownFunctionKey},
+        {"left", NSLeftArrowFunctionKey}, {"right", NSRightArrowFunctionKey},
+        {"up", NSUpArrowFunctionKey}, {"down", NSDownArrowFunctionKey}, {NULL, 0}
+    };
+    for (int i = 0; K[i].n; i++) if (!strcmp(key, K[i].n)) { unichar c = K[i].c; eq = [NSString stringWithCharacters:&c length:1]; }
+    if (!eq && key[0] == 'f' && key[1] >= '1' && key[1] <= '9') {
+        unichar c = (unichar)(NSF1FunctionKey + atoi(key + 1) - 1);
+        eq = [NSString stringWithCharacters:&c length:1];
+    }
+    if (!eq && key[0]) eq = [NSString stringWithUTF8String:key];
+    if (item && eq) {
+        NSEventModifierFlags m = 0;
+        if (mods & AEUI_ACC_CMD) m |= NSEventModifierFlagCommand;
+        if (mods & AEUI_ACC_CTRL) m |= NSEventModifierFlagControl;
+        if (mods & AEUI_ACC_ALT) m |= NSEventModifierFlagOption;
+        if (mods & AEUI_ACC_SHIFT) m |= NSEventModifierFlagShift;
+        [item setKeyEquivalent:eq];
+        [item setKeyEquivalentModifierMask:m];
+    }
+    aeui_accel_note(menu_handle, label, accel, boxed_closure);
 }
 
 void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
@@ -10152,7 +10229,9 @@ void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
 void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
     (void)app_handle;
     if (bar_handle < 1 || bar_handle > mac_menu_count) return;
-    [NSApp setMainMenu:mac_menus[bar_handle - 1].menu];
+    aeui_attached_bar = mac_menus[bar_handle - 1].menu;
+    aeui_bar_with_app_menu(aeui_attached_bar);
+    [[NSApplication sharedApplication] setMainMenu:aeui_attached_bar];
 }
 
 // Per-window menu bar: macOS has ONE OS-level menu bar (the top-of-screen
@@ -10164,7 +10243,9 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
 void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
     (void)win_handle;
     if (bar_handle < 1 || bar_handle > mac_menu_count) return;
-    [NSApp setMainMenu:mac_menus[bar_handle - 1].menu];
+    aeui_attached_bar = mac_menus[bar_handle - 1].menu;
+    aeui_bar_with_app_menu(aeui_attached_bar);
+    [[NSApplication sharedApplication] setMainMenu:aeui_attached_bar];
 }
 
 // --- on_secondary_click: a right click on any widget, the closure kept in
@@ -10174,7 +10255,6 @@ void aether_ui_menu_bar_attach_window(int win_handle, int bar_handle) {
 // with an on_secondary_click fires it; a canvas with its own right click,
 // or a view with a context menu of its own (context_menu_item), keeps it.
 #include "aether_ui_secondary.h"
-
 static id aeui_secondary_monitor = nil;
 
 static NSEvent* aeui_secondary_event(NSEvent* e) {

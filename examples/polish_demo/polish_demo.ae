@@ -29,7 +29,7 @@ main() {
     // Menu with an accelerator-bound Save.
     bar = menu_bar()
     file_menu = menu("File")
-    menu_item_accel(file_menu, "Save", "Ctrl+S") callback {
+    menu_item_accel(file_menu, "Save", "Primary+S") callback {
         saves = saves + 1
         aether_ui_text_set_string(status_h,
             string.concat("saves: ", string.from_int(saves)))

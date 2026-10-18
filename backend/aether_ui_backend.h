@@ -758,6 +758,14 @@ void aether_ui_menu_add_separator(int menu_handle);
    items' closures are freed a clear later. An item added with no closure
    (boxed_closure NULL) is a disabled item, drawn grey and never chosen. */
 void aether_ui_menu_clear(int menu_handle);
+/* A menu item with its accelerator ("Primary+S": Command on macOS and iOS,
+   Ctrl elsewhere, never Super), bound and shown the platform's own way
+   (aether_ui_accel.h): the key runs the item's closure, once. */
+void aether_ui_menu_add_item_accel(int menu_handle, const char* label,
+                                   const char* accel, void* boxed_closure);
+/* The driver's window key: a menu item's accelerator runs its item. */
+int aether_ui_accel_fire(const char* combo);
+const char* aether_ui_menu_item_accel_of(int menu_handle, const char* label);
 /* Relabel the item on `menu_handle` currently titled `old_label` (the first
    such item). The native item and the driver's menu-item side-store both
    change, so GET /menus and /menu/{h}/activate?label= see the new text. Its

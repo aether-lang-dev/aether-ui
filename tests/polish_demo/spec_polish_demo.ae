@@ -1,7 +1,8 @@
 // spec_polish_demo.ae — RTL row layout + auto menu↔shortcut binding.
 //   - rtl(row, 1): children A/B/C lay right-to-left (A rightmost = largest x).
-//   - menu_item_accel: the File→Save item shows its accel AND binds it, so
-//     Ctrl+S fires the same closure the menu item would.
+//   - menu_item_accel: the File→Save item carries its accelerator, the
+//     platform's own (Primary: Command on macOS and iOS, Ctrl elsewhere), so
+//     the key and the menu item run the same closure, once each.
 import std.spec
 import uidriver
 import std.string
@@ -26,21 +27,33 @@ main() {
             spec.assert_true(xb > xc, "B is right of C (${xb} > ${xc})")
         }
 
-        spec.it("menu_item_accel shows the accelerator in the item") callback {
+        spec.it("menu_item_accel: the item keeps its label, its accelerator beside it") callback {
             b = uidriver.menus_body()
-            spec.assert_contains(b, "Save  Ctrl+S", "the item shows its accel")
+            spec.assert_contains(b, "\"items\":[\"Save\"]", "the item is Save")
+            spec.assert_contains(b, "\"accels\":[\"Primary+S\"]", "its accelerator, Primary+S")
         }
 
-        spec.it("the bound accelerator fires the menu action") callback {
-            // The whole point of menu_item_accel: the keystroke runs the same
-            // closure the menu item would, with no separate shortcut wiring.
-            uidriver.window_key("Ctrl+S")
+        spec.it("the key runs the item's closure, once") callback {
+            spec.assert_true(uidriver.window_key("Primary+S") == 1, "Primary+S was taken")
             ok = uidriver.wait_body_contains("/widgets", "saves: 1", 20)
-            spec.assert_true(ok, "Ctrl+S ran the Save closure")
-            // Fires again on a second press (idempotent binding).
-            uidriver.window_key("Ctrl+S")
-            ok2 = uidriver.wait_body_contains("/widgets", "saves: 2", 20)
-            spec.assert_true(ok2, "the accelerator keeps firing")
+            spec.assert_true(ok, "Primary+S ran the Save closure")
+            spec.assert_false(uidriver.wait_body_contains("/widgets", "saves: 2", 3) == 1, "once, not twice")
+        }
+
+        spec.it("the menu item and the key reach the same command") callback {
+            m = uidriver.menu_handle_with("Save")
+            spec.assert_gt(m, 0, "the File menu")
+            uidriver.post_ok("/menu/${m}/activate?label=Save", "choose File > Save")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "saves: 2", 20) == 1, "the menu item ran it")
+            uidriver.window_key("Primary+S")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "saves: 3", 20) == 1, "and the key again")
+        }
+
+        spec.it("a real key reaches it where the driver makes one (AppKit: the menu's key equivalent)") callback {
+            body = uidriver.post_body("/window/key?combo=Primary+S&real=1")
+            spec.assert_contains(body, "\"fired\":true", "sent")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "saves: 4", 30) == 1, "the item ran from the key")
+            spec.assert_false(uidriver.wait_body_contains("/widgets", "saves: 5", 3) == 1, "once: no shortcut of its own runs it again")
         }
     }
     return spec.run_summary(fw)

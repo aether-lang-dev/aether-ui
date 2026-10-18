@@ -49,7 +49,7 @@ SHARED = ("backend/aether_ui_system_extras.c",
           "backend/aether_ui_test_server.c",
           "backend/aether_ui_sni.c")
 # Headers of shared definitions, counted for a backend only if it includes one.
-SHARED_HEADERS = ("backend/aether_ui_scrollbar.h", "backend/aether_ui_secondary.h")
+SHARED_HEADERS = ("backend/aether_ui_scrollbar.h", "backend/aether_ui_secondary.h", "backend/aether_ui_accel.h")
 
 # Entry points that are the backend's OWN platform work and must not be
 # satisfied by a shared source: the frame clock's native display clock (GTK4's

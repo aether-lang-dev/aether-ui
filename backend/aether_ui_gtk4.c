@@ -9038,7 +9038,10 @@ static gboolean test_action_idle(gpointer data) {
     if (ta->action == 9) {
         // Window key — not a widget action; fire the combo through the
         // shortcut dispatch (or Tab/Escape special handling).
-        ta->retval = aeui_window_key_fire(ta->sval);
+        // A menu item's accelerator runs its item first, as GTK's own
+        // accelerator does for a person's key.
+        ta->retval = aether_ui_accel_fire(ta->sval);
+        if (!ta->retval) ta->retval = aeui_window_key_fire(ta->sval);
         ta->result = 0;
         ta->done = 1;
         return G_SOURCE_REMOVE;
@@ -10211,6 +10214,7 @@ static int           gtk_menu_capacity = 0;
 typedef struct {
     char*      action_name;   // "aeui.m2.i0" (no "app." prefix — that's the scope)
     AeClosure* closure;
+    char*      accel;         // its accelerator, GTK's way ("<Control><Shift>s"), or NULL
 } GtkMenuAction;
 
 static GtkMenuAction* gtk_menu_actions = NULL;
@@ -10292,6 +10296,7 @@ void aether_ui_menu_add_item(int menu_handle, const char* label,
     }
     gtk_menu_actions[gtk_menu_action_count].action_name = strdup(action);
     gtk_menu_actions[gtk_menu_action_count].closure = (AeClosure*)boxed_closure;
+    gtk_menu_actions[gtk_menu_action_count].accel = NULL;
     gtk_menu_action_count++;
 }
 
@@ -10400,6 +10405,51 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
     if (bar) gtk_pending_menubar = bar->model;
 }
 
+// Menu items' accelerators (menu_item_accel): Primary is Ctrl here.
+#define AEUI_PRIMARY_IS_CMD 0
+#include "aether_ui_accel.h"
+
+// An item's accelerator on the app: GTK runs the action for the key and
+// draws the accelerator in the menu.
+static void aeui_menu_action_accel(GtkApplication* app, GtkMenuAction* a) {
+    if (!app || !a->accel) return;
+    char detailed[96];
+    snprintf(detailed, sizeof(detailed), "app.%s", a->action_name);
+    const char* accels[] = { a->accel, NULL };
+    gtk_application_set_accels_for_action(app, detailed, accels);
+}
+
+// "Primary+Shift+S" in GTK's accelerator syntax: "<Control><Shift>s".
+static void aeui_gtk_accel(const char* accel, char* out, size_t n) {
+    char key[32];
+    int mods = aeui_accel_parse(accel, key, sizeof(key));
+    static const struct { const char* a; const char* g; } K[] = {
+        {"return", "Return"}, {"tab", "Tab"}, {"escape", "Escape"}, {"space", "space"},
+        {"backspace", "BackSpace"}, {"delete", "Delete"}, {"home", "Home"}, {"end", "End"},
+        {"pageup", "Page_Up"}, {"pagedown", "Page_Down"}, {"left", "Left"}, {"right", "Right"},
+        {"up", "Up"}, {"down", "Down"}, {"+", "plus"}, {"-", "minus"}, {NULL, NULL}
+    };
+    char k[32];
+    snprintf(k, sizeof(k), "%s", key);
+    for (int i = 0; K[i].a; i++) if (!strcmp(key, K[i].a)) snprintf(k, sizeof(k), "%s", K[i].g);
+    if (key[0] == 'f' && key[1] >= '1' && key[1] <= '9') snprintf(k, sizeof(k), "F%s", key + 1);
+    snprintf(out, n, "%s%s%s%s%s", (mods & AEUI_ACC_CTRL) ? "<Control>" : "", (mods & AEUI_ACC_SHIFT) ? "<Shift>" : "",
+             (mods & AEUI_ACC_ALT) ? "<Alt>" : "", (mods & AEUI_ACC_CMD) ? "<Meta>" : "", k);
+}
+
+void aether_ui_menu_add_item_accel(int menu_handle, const char* label,
+                                   const char* accel, void* boxed_closure) {
+    aether_ui_menu_add_item(menu_handle, label, boxed_closure);
+    if (boxed_closure && accel && *accel && gtk_menu_action_count > 0) {
+        char g[64];
+        aeui_gtk_accel(accel, g, sizeof(g));
+        GtkMenuAction* a = &gtk_menu_actions[gtk_menu_action_count - 1];
+        a->accel = strdup(g);
+        aeui_menu_action_accel((app_count > 0) ? apps[0].gtk_app : NULL, a);
+    }
+    aeui_accel_note(menu_handle, label, accel, boxed_closure);
+}
+
 // Register a menu bar's queued item actions on the running app (so its items
 // fire). Idempotent-ish: re-registering the same action name replaces it.
 static void aeui_register_menu_actions(GtkApplication* app) {
@@ -10414,6 +10464,7 @@ static void aeui_register_menu_actions(GtkApplication* app) {
                          gtk_menu_actions[i].closure);
         g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act));
         g_object_unref(act);
+        aeui_menu_action_accel(app, &gtk_menu_actions[i]);
     }
 }
 
@@ -10460,6 +10511,7 @@ static void aeui_attach_pending_menus(GtkApplication* app, GtkWindow* window) {
                          gtk_menu_actions[i].closure);
         g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act));
         g_object_unref(act);
+        aeui_menu_action_accel(app, &gtk_menu_actions[i]);
     }
     if (gtk_pending_menubar) {
         gtk_application_set_menubar(app, G_MENU_MODEL(gtk_pending_menubar));
@@ -10486,11 +10538,13 @@ void aether_ui_menu_clear(int menu_handle) {
         if (strncmp(gtk_menu_actions[i].action_name, prefix, pl) == 0) {
             if (app) g_action_map_remove_action(G_ACTION_MAP(app), gtk_menu_actions[i].action_name);
             free(gtk_menu_actions[i].action_name);
+            free(gtk_menu_actions[i].accel);
             continue;
         }
         gtk_menu_actions[keep++] = gtk_menu_actions[i];
     }
     gtk_menu_action_count = keep;
+    aeui_accel_forget(menu_handle);
 }
 
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {

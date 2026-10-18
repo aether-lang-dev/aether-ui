@@ -251,6 +251,9 @@ typedef struct {
 #include "aether_ui_scrollbar.h"
 // on_secondary_click's closures (a long press or a mouse's secondary click).
 #include "aether_ui_secondary.h"
+// Menu items' accelerators (menu_item_accel): Primary is Ctrl here.
+#define AEUI_PRIMARY_IS_CMD 0
+#include "aether_ui_accel.h"
 
 static void aeui_call0(AeClosure* c) {
     if (c && c->fn) ((void (*)(void*))c->fn)(c->env);
@@ -5778,7 +5781,7 @@ JMETHOD(M_MI_setAlphabeticShortcut, C_MenuItem, "setAlphabeticShortcut", "(CI)La
 
 #define AEUI_MENU_ID(menu, index) ((menu) * 1000 + (index) + 1)
 
-typedef struct { char* label; AeClosure* closure; int is_sep; } AeuiMenuItem;
+typedef struct { char* label; AeClosure* closure; int is_sep; char* accel; } AeuiMenuItem;
 typedef struct {
     char* label;
     AeuiMenuItem* items; int count;
@@ -5812,6 +5815,7 @@ static void aeui_menu_push(int h, const char* label, AeClosure* c, int is_sep) {
     m->items[m->count].label = strdup(label ? label : "");
     m->items[m->count].closure = c;
     m->items[m->count].is_sep = is_sep;
+    m->items[m->count].accel = NULL;
     m->count++;
 }
 
@@ -5838,12 +5842,25 @@ void aether_ui_menu_add_separator(int menu_handle) {
     aeui_refresh_options_menu();
 }
 
+// menu_item_accel: the item with Android's own shortcut on it.
+void aether_ui_menu_add_item_accel(int menu_handle, const char* label, const char* accel,
+                                   void* boxed_closure) {
+    AeuiMenuRec* m = menu_rec(menu_handle);
+    if (!m) return;
+    aeui_menu_push(menu_handle, label, (AeClosure*)boxed_closure, 0);
+    if (accel && *accel) m->items[m->count - 1].accel = strdup(accel);
+    aether_ui_menu_item_record(menu_handle, label ? label : "", boxed_closure);
+    aeui_accel_note(menu_handle, label, accel, boxed_closure);
+    aeui_refresh_options_menu();
+}
+
 // menu_clear: the menu emptied for building again (a context menu made
 // afresh each time it opens).
 void aether_ui_menu_clear(int menu_handle) {
     AeuiMenuRec* m = menu_rec(menu_handle);
     if (!m) return;
-    for (int i = 0; i < m->count; i++) free(m->items[i].label);
+    aeui_accel_forget(menu_handle);
+    for (int i = 0; i < m->count; i++) { free(m->items[i].label); free(m->items[i].accel); }
     m->count = 0;
     aether_ui_menu_items_forget(menu_handle);
     aeui_refresh_options_menu();
@@ -5875,6 +5892,8 @@ void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
 
 // Fill a Menu with one menu's items (ids from AEUI_MENU_ID; a separator
 // starts the next group, drawn with a divider).
+static int aeui_accel_split(const char* accel, char* key);   // fwd (below, with the context menus)
+
 static void aeui_fill_menu(JNIEnv* env, jobject menu, int menu_handle) {
     AeuiMenuRec* m = menu_rec(menu_handle);
     if (!m || !menu) return;
@@ -5885,6 +5904,13 @@ static void aeui_fill_menu(JNIEnv* env, jobject menu, int menu_handle) {
            aeui_jstring(env, m->items[i].label));
         // No closure: a disabled item.
         if (it && !m->items[i].closure) JO(it, M_MI_setEnabled, JNI_FALSE);
+        // Its accelerator: Android's own shortcut (shown in the menu, and
+        // run by Ctrl and the key from a hardware keyboard).
+        if (it && m->items[i].accel) {
+            char key;
+            int meta = aeui_accel_split(m->items[i].accel, &key);
+            if (key) JO(it, M_MI_setAlphabeticShortcut, (jchar)key, (jint)meta);
+        }
     }
     if (group) JV(menu, M_Menu_setGroupDividerEnabled, JNI_TRUE);
 }
@@ -9372,6 +9398,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             return;
         }
         case AETHER_DRV_WIN_KEY: {
+            // A menu item's accelerator runs its item first.
+            if (aether_ui_accel_fire(ctx->sval)) { ctx->retval = 1; ctx->result = 0; return; }
             JNIEnv* env = aeui_frame(32);
             ctx->retval = env ? aeui_driver_key(env, ctx->sval) : 0;
             if (env) aeui_unframe(env);

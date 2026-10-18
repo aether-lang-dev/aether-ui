@@ -529,6 +529,7 @@ extern aether_ui_menu_bar_attach_window(win_handle: int, bar_handle: int)
 extern aether_ui_window_set_title_impl(win_handle: int, title: string)
 extern aether_ui_menu_popup(menu_handle: int, anchor_widget: int)
 extern aether_ui_menu_clear(menu_handle: int)
+extern aether_ui_menu_add_item_accel(menu_handle: int, label: string, accel: string, boxed_closure: ptr)
 extern aether_ui_on_secondary_click_impl(handle: int, boxed_closure: ptr)
 
 // Grid layout — 2D container with (row, col) placement.
@@ -10119,16 +10120,19 @@ menu_item(menu_handle: int, label: string, on_press: fn) {
     aether_ui_menu_add_item(menu_handle, label, boxed)
 }
 
-// menu_item_accel(menu, label, accel, cb): a menu item that ALSO binds its
-// accelerator — one call adds the item (with the accel shown after the label,
-// e.g. "Save  Ctrl+S") and registers shortcut(accel, cb), so the same action
-// fires from the menu OR the keystroke with no separate wiring.
-//   menu_item_accel(file, "Save", "Ctrl+S") callback { save() }
+// menu_item_accel(menu, label, accel, cb): a menu item with its
+// accelerator, the platform's own: AppKit's key equivalent (drawn as ⌘S),
+// GTK's application accelerator (drawn in the menu), Win32's accelerator
+// table and a tab-separated accelerator, Android's MenuItem shortcut; UIKit,
+// with no menu bar, the label ("Save  ⌘S") and a hardware keyboard's key.
+// The key runs the item's closure, once: no separate shortcut to wire.
+// "Primary" is Command on macOS and iOS and Ctrl elsewhere (never Super);
+// "Ctrl" is the Control key everywhere. The item's label stays the label
+// (GET /menus lists the accelerator beside it, under "accels").
+//   menu_item_accel(file, "Save", "Primary+S") callback { save() }
 menu_item_accel(menu_handle: int, label: string, accel: string, on_press: fn) {
-    shown = string.concat(label, string.concat("  ", _accel_shown(accel)))
     boxed = box_closure(on_press)
-    aether_ui_menu_add_item(menu_handle, shown, boxed)
-    aether_ui_shortcut_impl(accel, boxed)
+    aether_ui_menu_add_item_accel(menu_handle, label, accel, boxed)
 }
 
 // ── DECLARATIVE menu scope ──────────────────────────────────────────

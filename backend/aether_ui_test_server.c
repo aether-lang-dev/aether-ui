@@ -1566,6 +1566,13 @@ static void handle_request_inner(aether_sock_t client_fd,
             // which items are disabled (added with no closure).
             int seps[32];
             int ns = aether_ui_menu_separators(h, seps, 32);
+            // Each item's accelerator ("" for none), in the same order.
+            pos += sprintf(body + pos, "],\"accels\":[");
+            for (int k = 0; k < ic; k++) {
+                if (k > 0) pos += sprintf(body + pos, ",");
+                pos += snprintf(body + pos, 128, "\"%s\"",
+                                aether_ui_menu_item_accel_of(h, aether_ui_menu_item_label_at(h, k)));
+            }
             pos += sprintf(body + pos, "],\"separators\":[");
             for (int k = 0; k < ns; k++) pos += sprintf(body + pos, "%s%d", k ? "," : "", seps[k]);
             pos += sprintf(body + pos, "],\"disabled\":[");

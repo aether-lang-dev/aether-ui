@@ -716,7 +716,7 @@ main() {
                 }
             }
         }
-        menu_item_accel(fmenu, "Save", "Ctrl+S") callback {
+        menu_item_accel(fmenu, "Save", "Primary+S") callback {
             save_or_prompt(ed)
         }
         menu_item(fmenu, "Save As...") callback {
