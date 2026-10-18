@@ -23,13 +23,29 @@ main() {
             spec.assert_true(ok2, "hover off-map clears to em-dash")
         }
         spec.it("double-click still drills after a window resize") callback {
+            // A toplevel cannot grow past the screen it is on (GTK clamps the
+            // size to the monitor; no window manager is needed for that), so
+            // on a 1280x1024 display -- xvfb-run's default, a laptop panel --
+            // 1716 wide never happens and the canvas keeps its width while the
+            // height still grows. ci.sh's own xvfb is 3200x2000, where the full
+            // resize is reached. The mapping below is computed from the size
+            // the canvas actually has, so either way the click lands through
+            // the live xMidYMid-meet mapping; what is asserted is that the
+            // window grew as far as the screen lets it.
             uidriver.resize_window(1716, 830)
             sleep(1000)
+            win_w = uidriver.widget_int_field_by_id(1, "w")
             // Recompute sub's tile position through the same xMidYMid-meet
             // mapping the scene uses: px = vb*s + centered offset.
             cw = uidriver.canvas_w()
             ch = uidriver.canvas_h()
-            spec.assert_gt(cw, 1076, "canvas grew with the window")
+            if win_w >= 1716 {
+                spec.assert_gt(cw, 1076, "canvas grew with the window")
+            } else {
+                // Clamped by the screen (window ${win_w} wide): the window
+                // still grew taller, and the canvas must have followed it.
+                spec.assert_gt(ch, 600, "canvas grew taller with the window (screen caps the width at ${win_w})")
+            }
             sx = (cw / 1.0) / 1076.0
             sy = (ch / 1.0) / 600.0
             s = sx
