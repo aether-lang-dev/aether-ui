@@ -365,12 +365,14 @@ main() {
             cy2 = uidriver.widget_int_field_by_id(c, "y")
             spec.assert_eq(cy2, cy - 6 * 24, "its cell six rows up")
             spec.assert_true(field_is(f, "y", cy2 + 3) == 1, "the float with it (${uidriver.widget_int_field_by_id(f, "y")} for ${cy2})")
-            // Two columns right: its cell is out to the left of the first
-            // scrolling one (C, 36 wide each), the float with it.
-            uidriver.post_ok("/widget/${hs}/set_value?v=2", "scroll two columns")
-            spec.assert_true(shows("R9C3") == 1, "the first scrolling column shown")
-            c3 = uidriver.widget_id_by_text("R9C3")
-            spec.assert_true(field_is(f, "x", uidriver.widget_int_field_by_id(c3, "x") - 72 + 3) == 1, "two columns left of C (${uidriver.widget_int_field_by_id(f, "x")})")
+            // A column right: its cell is out to the left of the first
+            // scrolling one (B, 36 wide), the float with it, 7 px of it still
+            // past the freeze line (the rest is under the frozen column, and
+            // is clipped there: the next test).
+            uidriver.post_ok("/widget/${hs}/set_value?v=1", "scroll a column")
+            spec.assert_true(shows("R9C2") == 1, "the first scrolling column shown")
+            c2 = uidriver.widget_id_by_text("R9C2")
+            spec.assert_true(field_is(f, "x", uidriver.widget_int_field_by_id(c2, "x") - 36 + 3) == 1, "a column left of B (${uidriver.widget_int_field_by_id(f, "x")})")
             uidriver.post_ok("/widget/${hs}/set_value?v=0", "back left")
             // Clipped to the grid: scrolled so the float's top is under the
             // header, none of it is drawn there; the rest below is.
@@ -408,6 +410,57 @@ main() {
             spec.assert_true(pick_at(fx + 50, fy + 10) != f, "beside it, a cell")
             press("Float takes clicks")
             spec.assert_eq(pick_at(fx + 12, fy + 10), under, "and let through again: the same cell")
+        }
+        spec.it("is clipped at the freeze line: under the frozen column and the frozen rows as the cells go, none of it drawn over them") callback {
+            vs = nth_of("scrollbar", 0)
+            hs = nth_of("scrollbar", 1)
+            press("Move float")
+            uidriver.post_ok("/widget/${vs}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${hs}/set_value?v=1", "and a column right")
+            spec.assert_true(shows("R9C2") == 1, "its column's neighbour shown")
+            f = float_id()
+            c2 = uidriver.widget_id_by_text("R9C2")
+            fx = uidriver.widget_int_field_by_id(c2, "x")
+            spec.assert_true(field_is(f, "x", fx - 36 + 3) == 1, "the float 33 left of the freeze line, where its cell puts it")
+            fy = uidriver.widget_int_field_by_id(f, "y")
+            sleep(300)
+            r = reds("float-frozen-col", "${fx - 30}:${fy}:30:30 ${fx}:${fy}:7:30")
+            if string.length(r) > 0 {
+                parts = string.string_split(r, "\n")
+                spec.assert_str_eq(string.trim(string.string_array_get(parts, 0)), "0", "no red over the frozen column (${r})")
+                n, _ne = string.to_int(string.trim(string.string_array_get(parts, 1)))
+                spec.assert_gt(n, 100, "its 7 px past the line drawn (${r})")
+                string.string_array_free(parts)
+            }
+            // Two columns: all of it under the frozen column; nothing drawn, and
+            // it is not a thing to pick there.
+            uidriver.post_ok("/widget/${hs}/set_value?v=2", "two columns right")
+            spec.assert_true(shows("R9C3") == 1, "the first scrolling column shown")
+            c3 = uidriver.widget_id_by_text("R9C3")
+            sleep(300)
+            r = reds("float-frozen-col2", "${uidriver.widget_int_field_by_id(c3, "x") - 40}:${fy}:40:30")
+            if string.length(r) > 0 {
+                spec.assert_str_eq(r, "0", "none of it drawn, under the frozen column (${r})")
+            }
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "back left")
+            // Frozen rows: the float's cell scrolled up under them.
+            press("Freeze 2 rows")
+            uidriver.post_ok("/widget/${vs}/set_value?v=8", "scroll so row 9 is out of the top of what scrolls (the scrolling rows begin at 8 + 2)")
+            spec.assert_true(shows("R10C1") == 1, "row 10 first of them")
+            c = uidriver.widget_id_by_text("R10C1")
+            by = uidriver.widget_int_field_by_id(c, "y")
+            spec.assert_true(field_is(f, "y", by - 24 + 3) == 1, "the float 21 above where the scrolling rows begin (${uidriver.widget_int_field_by_id(f, "y")} for ${by})")
+            sleep(300)
+            r = reds("float-frozen-row", "39:${by - 22}:40:20 39:${by}:40:9")
+            if string.length(r) > 0 {
+                parts = string.string_split(r, "\n")
+                spec.assert_str_eq(string.trim(string.string_array_get(parts, 0)), "0", "no red over the frozen rows (${r})")
+                n, _ne = string.to_int(string.trim(string.string_array_get(parts, 1)))
+                spec.assert_gt(n, 20, "red below the line (${r})")
+                string.string_array_free(parts)
+            }
+            press("Freeze 2 rows")
+            uidriver.post_ok("/widget/${vs}/set_value?v=0", "back to the top")
         }
     }
 

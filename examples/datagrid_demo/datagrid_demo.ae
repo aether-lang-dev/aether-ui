@@ -21,7 +21,7 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_merge, datagrid_unmerge, datagrid_merge_of,
     datagrid_set_row_height, datagrid_row_height, datagrid_fit_row, datagrid_set_height, datagrid_freeze_cols,
     ui_state_s, ui_set_s, text_bound, enable_test_server,
-    datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_floats, click_through, style_bg_color)
+    datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, style_bg_color)
 import std.os (os_getenv)
 import std.string
 import std.map
@@ -243,11 +243,18 @@ main() {
             _flc = style_bg_color(fl, 0.85, 0.15, 0.15, 1.0)
             _flt = btn("Float takes clicks") callback {
                 taking = 1 - ui_get_i(flclicks)
-                _fk = click_through(fl, 1 - taking)
+                _fk = datagrid_float_takes_clicks(g, fl, taking)
                 _fs = ui_set_i(flclicks, taking)
             }
+            // Move float: to R11C2, and back to where it was made.
+            flmoved = ui_state_i(0)
             _flm = btn("Move float") callback {
-                _fm = datagrid_float_move(g, fl, 11, 2, 0, 0, 40, 30)
+                if ui_get_i(flmoved) == 0 {
+                    _fm = datagrid_float_move(g, fl, 11, 2, 0, 0, 40, 30)
+                } else {
+                    _fm = datagrid_float_move(g, fl, 9, 1, 3, 3, 40, 30)
+                }
+                _fs = ui_set_i(flmoved, 1 - ui_get_i(flmoved))
             }
             // The cursor's box gliding to a new cell over 1500 ms (slowed, so
             // a driver polling /widgets sees it between cells), and back to

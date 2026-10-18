@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_floats, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6754,6 +6754,10 @@ const DATAGRID_AREAS = 64
 const DATAGRID_MAGIC = 1597463007
 // The most things floating over a grid (datagrid_float).
 const DATAGRID_FLOATS = 256
+// The ints a float keeps: its container (what the page fills), its model row
+// and column, the offset from that cell, its size, its clip box and the size
+// that box was last given.
+const DATAGRID_FLOAT_N = 10
 // Where a float is put when its cell is too far from the window to place.
 const DATAGRID_FAR = 1000000
 
@@ -6931,9 +6935,9 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     mid = hstack(root, 0)
     bodybox = zstack(mid)
     g.bodybox = bodybox
-    g.floats = intarr_new_raw(DATAGRID_FLOATS * 8 + 1)
+    g.floats = intarr_new_raw(DATAGRID_FLOATS * DATAGRID_FLOAT_N + 1)
     fi = 0
-    while fi < DATAGRID_FLOATS * 8 {
+    while fi < DATAGRID_FLOATS * DATAGRID_FLOAT_N {
         intarr_set_raw(g.floats, fi, 0)
         fi = fi + 1
     }
@@ -7939,20 +7943,79 @@ _datagrid_float_y(g: *DataGrid, r: int) -> int {
     return y + gap
 }
 
-// Every float where its cell now is.
+// The height the frozen rows take, from the top of the body.
+_datagrid_frozen_h(g: *DataGrid) -> int {
+    y = 0
+    i = 0
+    while i < g.frozen_rows {
+        y = y + _datagrid_row_unit(g, i)
+        i = i + 1
+    }
+    return y
+}
+
+// Every float where its cell now is, and no further than the freeze line
+// from the pane its cell is in: a float over the scrolling cells goes under
+// the frozen columns and rows as the cells do, and one over a frozen column
+// or row stays within it. The float is in a clip box, a zstack placed at the
+// part of it that shows and sized to it, the float placed in that at the
+// offset that puts it where it belongs (zstack_place clips to the zstack).
 _datagrid_floats(g: *DataGrid) {
     if g.floats == null { return }
+    fzw = _datagrid_frozen_w(g)
+    fzh = _datagrid_frozen_h(g)
     k = 0
     while k < DATAGRID_FLOATS {
-        fh = intarr_get_raw(g.floats, k * 8)
+        fh = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N)
         if fh != 0 {
-            x = _datagrid_float_x(g, intarr_get_raw(g.floats, k * 8 + 2))
-            y = _datagrid_float_y(g, intarr_get_raw(g.floats, k * 8 + 1))
+            cb = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 7)
+            row = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 1)
+            mcol = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 2)
+            x = _datagrid_float_x(g, mcol)
+            y = _datagrid_float_y(g, row)
             if x >= DATAGRID_FAR || y >= DATAGRID_FAR || x <= 0 - DATAGRID_FAR || y <= 0 - DATAGRID_FAR {
-                _fh = set_hidden(fh, 1)
+                _fh = set_hidden(cb, 1)
             } else {
-                _fh = set_hidden(fh, 0)
-                _fp = zstack_place(fh, x + intarr_get_raw(g.floats, k * 8 + 3), y + intarr_get_raw(g.floats, k * 8 + 4))
+                x = x + intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 3)
+                y = y + intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 4)
+                w = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 5)
+                h = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 6)
+                // The pane the cell is in: [x0, x1) across, [y0, y1) down.
+                x0 = fzw
+                x1 = DATAGRID_FAR
+                if _datagrid_view_of(g, mcol) < g.frozen {
+                    x0 = 0
+                    x1 = fzw
+                }
+                y0 = fzh
+                y1 = DATAGRID_FAR
+                if row < g.frozen_rows {
+                    y0 = 0
+                    y1 = fzh
+                }
+                vx0 = x
+                if vx0 < x0 { vx0 = x0 }
+                vx1 = x + w
+                if vx1 > x1 { vx1 = x1 }
+                vy0 = y
+                if vy0 < y0 { vy0 = y0 }
+                vy1 = y + h
+                if vy1 > y1 { vy1 = y1 }
+                if vx1 <= vx0 || vy1 <= vy0 {
+                    _fh = set_hidden(cb, 1)
+                } else {
+                    _fh = set_hidden(cb, 0)
+                    if intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 8) != vx1 - vx0 {
+                        intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 8, vx1 - vx0)
+                        _cw = width(cb, vx1 - vx0)
+                    }
+                    if intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 9) != vy1 - vy0 {
+                        intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 9, vy1 - vy0)
+                        _ch = height(cb, vy1 - vy0)
+                    }
+                    _fp = zstack_place(cb, vx0, vy0)
+                    _ip = zstack_place(fh, x - vx0, y - vy0)
+                }
             }
         }
         k = k + 1
@@ -7963,24 +8026,36 @@ _datagrid_floats(g: *DataGrid) {
 // over the grid at (dx, dy) from the top-left of the cell at model row `row`,
 // model column `col`: the page fills it (ui.into) with what floats, a drawing
 // or a chart. It moves with the cell as the grid scrolls and is clipped to
-// the grid's body; the pointer passes through it to the cells beneath
-// (click_through(h, 0) makes it take the pointer). 0 when 256 float already.
+// the grid's body and at the freeze line (a float over the scrolling cells
+// goes under the frozen columns and rows; one over a frozen column or row
+// stays in it); the pointer passes through it to the cells beneath
+// (datagrid_float_takes_clicks(g, f, 1) makes it take the pointer).
+// 0 when 256 float already.
 datagrid_float(gp: @keep ptr, row: int, col: int, dx: int, dy: int, w: int, h: int) -> int {
     g = gp as *DataGrid
     k = 0
-    while k < DATAGRID_FLOATS && intarr_get_raw(g.floats, k * 8) != 0 { k = k + 1 }
+    while k < DATAGRID_FLOATS && intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N) != 0 { k = k + 1 }
     if k >= DATAGRID_FLOATS { return 0 }
-    fh = vstack(g.bodybox, 0)
+    cb = zstack(g.bodybox)
+    _cc = click_through(cb, 1)
+    // An overlay (GTK's) takes the first child it is given as its own, filling
+    // it: this empty one is that, so that f is placed like any other child.
+    base = vstack(cb, 0)
+    _bw = width(base, 1)
+    _bh = height(base, 1)
+    fh = vstack(cb, 0)
     _fw = width(fh, w)
     _fhh = height(fh, h)
-    _fc = click_through(fh, 1)
-    intarr_set_raw(g.floats, k * 8, fh)
-    intarr_set_raw(g.floats, k * 8 + 1, row)
-    intarr_set_raw(g.floats, k * 8 + 2, col)
-    intarr_set_raw(g.floats, k * 8 + 3, dx)
-    intarr_set_raw(g.floats, k * 8 + 4, dy)
-    intarr_set_raw(g.floats, k * 8 + 5, w)
-    intarr_set_raw(g.floats, k * 8 + 6, h)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N, fh)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 1, row)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 2, col)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 3, dx)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 4, dy)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 5, w)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 6, h)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 7, cb)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 8, 0)
+    intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 9, 0)
     _datagrid_floats(g)
     return fh
 }
@@ -7991,20 +8066,39 @@ datagrid_float_move(gp: @keep ptr, fh: int, row: int, col: int, dx: int, dy: int
     g = gp as *DataGrid
     k = 0
     while k < DATAGRID_FLOATS {
-        if intarr_get_raw(g.floats, k * 8) == fh && fh != 0 {
-            intarr_set_raw(g.floats, k * 8 + 1, row)
-            intarr_set_raw(g.floats, k * 8 + 2, col)
-            intarr_set_raw(g.floats, k * 8 + 3, dx)
-            intarr_set_raw(g.floats, k * 8 + 4, dy)
-            if w != intarr_get_raw(g.floats, k * 8 + 5) {
-                intarr_set_raw(g.floats, k * 8 + 5, w)
+        if intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N) == fh && fh != 0 {
+            intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 1, row)
+            intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 2, col)
+            intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 3, dx)
+            intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 4, dy)
+            if w != intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 5) {
+                intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 5, w)
                 _fw = width(fh, w)
             }
-            if h != intarr_get_raw(g.floats, k * 8 + 6) {
-                intarr_set_raw(g.floats, k * 8 + 6, h)
+            if h != intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 6) {
+                intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N + 6, h)
                 _fhh = height(fh, h)
             }
             _datagrid_floats(g)
+            return 1
+        }
+        k = k + 1
+    }
+    return 0
+}
+
+// datagrid_float_takes_clicks(g, f, on): float f takes the pointer (on = 1)
+// instead of letting it through to the cells beneath, and back (on = 0). Not
+// click_through(f, ...): f is inside a clip box, which lets the pointer through
+// whatever f does. 1 when f is one of the grid's.
+datagrid_float_takes_clicks(gp: @keep ptr, fh: int, on: int) -> int {
+    g = gp as *DataGrid
+    k = 0
+    while k < DATAGRID_FLOATS {
+        if intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N) == fh && fh != 0 {
+            cb = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 7)
+            _a = click_through(cb, 1 - on)
+            _b = click_through(fh, 1 - on)
             return 1
         }
         k = k + 1
@@ -8017,9 +8111,10 @@ datagrid_float_remove(gp: @keep ptr, fh: int) -> int {
     g = gp as *DataGrid
     k = 0
     while k < DATAGRID_FLOATS {
-        if intarr_get_raw(g.floats, k * 8) == fh && fh != 0 {
-            intarr_set_raw(g.floats, k * 8, 0)
-            remove_child(g.bodybox, fh)
+        if intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N) == fh && fh != 0 {
+            cb = intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N + 7)
+            intarr_set_raw(g.floats, k * DATAGRID_FLOAT_N, 0)
+            remove_child(g.bodybox, cb)
             return 1
         }
         k = k + 1
@@ -8033,7 +8128,7 @@ datagrid_floats(gp: ptr) -> int {
     n = 0
     k = 0
     while k < DATAGRID_FLOATS {
-        if intarr_get_raw(g.floats, k * 8) != 0 { n = n + 1 }
+        if intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N) != 0 { n = n + 1 }
         k = k + 1
     }
     return n

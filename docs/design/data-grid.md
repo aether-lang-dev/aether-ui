@@ -206,7 +206,13 @@ pass on Win32, FrameLayout margins on Android) and `click_through(h, on)` (the
 pointer passes through h and what is in it: can-target on GTK, a hitTest
 override on AppKit, userInteractionEnabled on UIKit, WM_NCHITTEST on Win32,
 non-clickable views and AetherCanvas.setPassThrough on Android; /window/pick
-agrees). A float is click-through as made. Known limits: a float over frozen
-columns or rows is not clipped at the freeze line; a row a platform draws
-taller than its nominal height (GTK, a large font) moves what floats below it
-by the difference.
+agrees). A float is click-through as made (`datagrid_float_takes_clicks(g, f, 1)`
+makes it take the pointer: not `click_through(f, ...)`, as f is in a clip box,
+below). It is clipped at the freeze line (2026-10-19): a float whose cell is in
+the scrolling columns and rows goes under the frozen ones as the cells do, one
+whose cell is in a frozen column or row stays within it, and one with none of
+it showing is hidden. f sits in a clip box, a zstack placed at the part of f
+that shows and sized to it, f placed in that at the offset that puts it where
+its cell is (zstack_place clips to the zstack), so no backend has more to do.
+Known limit: a row a platform draws taller than its nominal height (GTK, a
+large font) moves what floats below it by the difference.
