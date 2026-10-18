@@ -5227,12 +5227,21 @@ int aeui_window_key_fire(const char* combo) {
         }
     }
     if (!fired && primary_window) {
-        if (strcmp(want, "Tab") == 0) {
-            fired = gtk_widget_child_focus(GTK_WIDGET(primary_window),
-                                           GTK_DIR_TAB_FORWARD);
-        } else if (strcmp(want, "<Shift>Tab") == 0) {
-            fired = gtk_widget_child_focus(GTK_WIDGET(primary_window),
-                                           GTK_DIR_TAB_BACKWARD);
+        if (strcmp(want, "Tab") == 0 || strcmp(want, "<Shift>Tab") == 0) {
+            // As a person's Tab: the window's key handlers see it first
+            // (on_window_any_key), and one that used it claims it (a grid's
+            // Tab moves its cursor), so GTK's focus chain does not also
+            // move the focus on. Unclaimed, the chain takes it.
+            char kname[64];
+            int kmods = aeui_trigger_split(want, kname, sizeof(kname));
+            aether_ui_key_claim_take();
+            aether_ui_window_key_deliver(kname, kmods);
+            if (aether_ui_key_claim_take()) {
+                fired = 1;
+            } else {
+                fired = gtk_widget_child_focus(GTK_WIDGET(primary_window),
+                    strcmp(want, "Tab") == 0 ? GTK_DIR_TAB_FORWARD : GTK_DIR_TAB_BACKWARD);
+            }
         } else if (strcmp(want, "Escape") == 0) {
             fired = aeui_escape_overlays(NULL, NULL, NULL);
         }
