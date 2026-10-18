@@ -6691,7 +6691,8 @@ struct DataGrid {
     gap_boxes: ptr    // intarr: the coloured box in each strip
     frozen_rows: int  // the leading rows that stay while it scrolls (datagrid_freeze_rows)
     style_fx: ptr     // intarr: what of a style each shown cell has besides colour, weight and
-                      // alignment (1 italic, 2 underline/line-through, 4 a font size, 8 decorations)
+                      // alignment (1 italic, 2 underline/line-through, 4 a font size, 8 decorations,
+                      // 16 wrap, 32 typography, 64 a font family)
     tip: ptr          // boxed |r, c| -> string, or null (datagrid_cell_tooltip)
     tip_hash: ptr     // longarr: the key of the tooltip each shown cell last had
     pic: ptr          // boxed |r, c| -> string (a picture's bytes, base64), or null (datagrid_cell_picture)
@@ -8449,7 +8450,7 @@ _datagrid_hash(s: string) -> long {
 // line-through), font-size (px), border and border-top/right/bottom/left
 // ("1px solid #000"; the width and the colour are read, the line is solid),
 // --fill and --fill-color (a data bar), --corner (a comment marker), and
-// typography: text-decoration-style: double, vertical-align (super, sub;
+// font-family (its first name), and typography: text-decoration-style: double, vertical-align (super, sub;
 // top, middle, bottom), padding-left or text-indent (px), and --rotate
 // (degrees, counter-clockwise).
 _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
@@ -8476,6 +8477,7 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     valign = 0
     indent = 0
     rot = 0.0
+    fam = ""
     parts = string.string_split(st, ";")
     np = string.string_array_size(parts)
     k = 0
@@ -8502,6 +8504,7 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
                 if string.contains(val, "line-through") == 1 { strike = 1 }
             }
             if string.equals(name, "font-size") == 1 { size = _datagrid_px(val) }
+            if string.equals(name, "font-family") == 1 { fam = _datagrid_family(string.trim(string.substring(decl, colon + 1, string.length(decl)))) }
             if string.equals(name, "text-decoration-style") == 1 && string.equals(val, "double") == 1 { dbl = 1 }
             if string.equals(name, "text-decoration") == 1 && string.contains(val, "double") == 1 { dbl = 1 }
             if string.equals(name, "vertical-align") == 1 {
@@ -8594,6 +8597,7 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     if hasdec == 1 { fx = fx + 8 }
     if wrap == 1 { fx = fx + 16 }
     if dbl == 1 || script > 0 || valign > 0 || indent > 0 || rot != 0.0 { fx = fx + 32 }
+    if string.length(fam) > 0 { fx = fx + 64 }
     if italic == 1 || (was % 2) == 1 { aether_ui_set_font_italic(h, italic) }
     if dbl == 1 { under = 1 }
     if fx / 2 % 2 == 1 || (was / 2) % 2 == 1 || dbl == 1 { aether_ui_set_text_decoration(h, under, strike) }
@@ -8602,6 +8606,8 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     ul = 0
     if dbl == 1 { ul = 2 }
     if fx / 32 % 2 == 1 || (was / 32) % 2 == 1 { aether_ui_text_set_typography(h, ul, script, valign, indent, rot) }
+    // A font family (the first of a list, quotes off); "" the platform's own.
+    if fx / 64 % 2 == 1 || (was / 64) % 2 == 1 { aether_ui_set_font_family(h, fam) }
     // Size 0 is the platform's own.
     if fx / 4 % 2 == 1 || (was / 4) % 2 == 1 { aether_ui_set_font_size(h, size) }
     if hasdec == 1 || (was / 8) % 2 == 1 {
@@ -8609,6 +8615,19 @@ _datagrid_apply_style(g: *DataGrid, i: int, st: string) {
     }
     intarr_set_raw(g.style_fx, i, fx)
     intarr_free(ew)
+}
+
+// The first family of a font-family value, its quotes off: "'Times New Roman', serif" is Times New Roman.
+_datagrid_family(v: string) -> string {
+    comma = string.index_of(v, ",")
+    f = v
+    if comma >= 0 { f = string.trim(string.substring(v, 0, comma)) }
+    n = string.length(f)
+    if n >= 2 {
+        q = string.char_at(f, 0)
+        if (q == 34 || q == 39) && string.char_at(f, n - 1) == q { f = string.substring(f, 1, n - 1) }
+    }
+    return f
 }
 
 // The number at the start of "14px", "1px solid #000" or "12pt", in px.

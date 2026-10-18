@@ -3326,9 +3326,31 @@ int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_
 // Widget-level font family (AeCS v1.1). Labels get a Pango family attribute
 // (composes with the size/weight attrs above); everything else goes through
 // per-widget CSS. The family string is stashed for driver readback.
+static gboolean aeui_attr_is_family(PangoAttribute* a, gpointer data) {
+    (void)data;
+    return a->klass->type == PANGO_ATTR_FAMILY;
+}
+
+// An empty family takes the widget's own back (the platform's font).
 void aether_ui_set_font_family(int handle, const char* family) {
     GtkWidget* w = aether_ui_get_widget(handle);
-    if (!w || !family || !family[0]) return;
+    if (!w || !family) return;
+    if (!family[0]) {
+        g_object_set_data(G_OBJECT(w), "aeui-styled-family", NULL);
+        if (GTK_IS_LABEL(w)) {
+            PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+            if (attrs) {
+                attrs = pango_attr_list_copy(attrs);
+                PangoAttrList* gone = pango_attr_list_filter(attrs, aeui_attr_is_family, NULL);
+                if (gone) pango_attr_list_unref(gone);
+                gtk_label_set_attributes(GTK_LABEL(w), attrs);
+                pango_attr_list_unref(attrs);
+            }
+        } else {
+            aether_ui_apply_css(handle, w, "font-family: inherit;");
+        }
+        return;
+    }
     g_object_set_data_full(G_OBJECT(w), "aeui-styled-family",
                            g_strdup(family), g_free);
     if (GTK_IS_LABEL(w)) {

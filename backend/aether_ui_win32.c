@@ -6066,9 +6066,16 @@ static const char* w32_concrete_family(const char* family) {
 
 void aether_ui_set_font_family(int handle, const char* family) {
     Widget* w = widget_at(handle);
-    if (!w || !family || !family[0]) return;
+    if (!w || !family) return;
     free(w->font_family);
     free(w->font_family_u8);
+    // An empty family takes the widget's own back (the system font).
+    if (!family[0]) {
+        w->font_family = NULL;
+        w->font_family_u8 = NULL;
+        apply_font(w);
+        return;
+    }
     w->font_family = _wcsdup(utf8_to_wide(w32_concrete_family(family)));
     w->font_family_u8 = _strdup(family);
     apply_font(w);

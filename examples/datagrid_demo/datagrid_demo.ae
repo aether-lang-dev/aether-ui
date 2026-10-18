@@ -102,7 +102,7 @@ main() {
                     }
                     // Column D, rows 12 to 17: the rest of what a style draws.
                     if c == 4 && r == 12 { return "font-style: italic; text-decoration: underline" }
-                    if c == 4 && r == 13 { return "text-decoration: line-through; font-size: 16px" }
+                    if c == 4 && r == 13 { return "text-decoration: line-through; font-size: 16px; font-family: monospace" }
                     if c == 4 && r == 14 { return "border-top: 1px solid #000; border-bottom: 2px solid #c00000" }
                     if c == 4 && r == 15 { return "--fill: 0.5; --fill-color: #638ec6" }
                     if c == 4 && r == 16 { return "--fill: -0.25" }

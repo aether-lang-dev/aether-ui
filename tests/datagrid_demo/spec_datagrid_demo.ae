@@ -785,6 +785,10 @@ main() {
             spec.assert_str_eq(fstr("R13C4", "textDecoration"), "line-through", "R13C4 struck through")
             spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "and not italic")
         }
+        spec.it("a font family") callback {
+            spec.assert_str_eq(fstr("R13C4", "fontFamily"), "monospace", "R13C4 in the monospace family")
+            spec.assert_str_eq(fstr("R12C4", "fontFamily"), "", "R12C4 in the platform's own")
+        }
         spec.it("borders on a cell's edges") callback {
             spec.assert_str_eq(fstr("R14C4", "borderTop"), "1 #000000", "a 1px black line on top")
             spec.assert_str_eq(fstr("R14C4", "borderBottom"), "2 #c00000", "a 2px red one underneath")
@@ -805,6 +809,8 @@ main() {
             uidriver.post_ok("/widget/${nth_of("scrollbar", 0)}/set_value?v=1", "scroll down a row")
             spec.assert_true(shows("R18C4") == 1, "row 18 shown")
             spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "where R12C4 was italic, R13C4 is not")
+            spec.assert_str_eq(fstr("R13C4", "fontFamily"), "monospace", "R13C4 in monospace on the widget that was R12C4's")
+            spec.assert_str_eq(fstr("R14C4", "fontFamily"), "", "R14C4 on the widget that was monospace: the platform's own again")
             spec.assert_str_eq(fstr("R17C4", "bar"), "", "where the bar was, none")
             spec.assert_str_eq(fstr("R18C4", "corner"), "", "nor a corner where the marker was")
             spec.assert_str_eq(fstr("R18C4", "tooltip"), "", "nor a tooltip")

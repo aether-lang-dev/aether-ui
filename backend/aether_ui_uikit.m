@@ -4034,7 +4034,15 @@ void aether_ui_set_font_bold_ctx(void* ctx, int bold) {
 void aether_ui_set_font_family(int handle, const char* family) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     UIFont* f = aeui_view_font(v);
-    if (!f || !family || !family[0]) return;
+    if (!f || !family) return;
+    // An empty family takes the widget's own back (the system font, its size
+    // and weight kept).
+    if (!family[0]) {
+        BOOL bold = (f.fontDescriptor.symbolicTraits & UIFontDescriptorTraitBold) != 0;
+        aeui_set_view_font(v, [UIFont systemFontOfSize:f.pointSize weight:bold ? UIFontWeightBold : UIFontWeightRegular]);
+        objc_setAssociatedObject(v, "aeui_styled_family", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
     UIFont* nf = [UIFont fontWithName:[NSString stringWithUTF8String:family] size:f.pointSize];
     if (nf) aeui_set_view_font(v, nf);
     objc_setAssociatedObject(v, "aeui_styled_family",

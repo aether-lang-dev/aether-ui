@@ -4007,7 +4007,16 @@ void aether_ui_set_font_bold(int handle, int bold) {
 // generic CSS families map through userFixedPitch/system fallbacks.
 void aether_ui_set_font_family(int handle, const char* family) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (!v || !family || !family[0]) return;
+    if (!v || !family) return;
+    // An empty family takes the widget's own back (the platform's font).
+    if (!family[0]) {
+        objc_setAssociatedObject(v, "aeui_styled_family", nil, OBJC_ASSOCIATION_RETAIN);
+        if ([v isKindOfClass:[NSTextField class]]) {
+            [(NSTextField*)v setFont:aeui_label_font(v)];
+            aeui_label_redecorate((NSTextField*)v);
+        }
+        return;
+    }
     objc_setAssociatedObject(v, "aeui_styled_family",
         [NSString stringWithUTF8String:family], OBJC_ASSOCIATION_RETAIN);
     if ([v isKindOfClass:[NSTextField class]]) {

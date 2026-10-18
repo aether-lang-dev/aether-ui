@@ -3248,11 +3248,12 @@ int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_
 
 void aether_ui_set_font_family(int handle, const char* family) {
     AeuiWidget* w = live_widget(handle);
-    if (!w || !aeui_is_textview(w->type) || !family || !family[0]) return;
+    if (!w || !aeui_is_textview(w->type) || !family) return;
     JNIEnv* env = aeui_frame(8);
     if (!env) return;
     free(w->family);
-    w->family = strdup(family);
+    // An empty family takes the widget's own back (the default typeface).
+    w->family = family[0] ? strdup(family) : NULL;
     aeui_apply_typeface(env, w);
     aeui_unframe(env);
 }
