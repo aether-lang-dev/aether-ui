@@ -785,6 +785,7 @@ when a bind, unbind or register changes it.
 | [`examples/vg_image_demo`](examples/vg_image_demo) | vg.image: a program's RGBA buffer, a decoded PNG, fit modes, opacity and transform in a scene |
 | [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
 | [`examples/scrollwide_demo`](examples/scrollwide_demo) | a row wider than the window in a scroll area: clipped, and no row decides the page's width |
+| [`examples/pinsize_demo`](examples/pinsize_demo) | a stated width is the width given: text fields narrower than the platform's minimum, a canvas pinned below its creation size |
 | [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
 | [`examples/frametick_demo`](examples/frametick_demo) | on_frame (the display-synced frame clock), frame_source, timer_once |
 

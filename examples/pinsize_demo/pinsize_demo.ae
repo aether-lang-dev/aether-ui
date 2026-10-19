@@ -1,0 +1,42 @@
+// A width you state is the width you get, for a text field and a canvas.
+//
+// On GTK4 a size request is only a floor above the widget's own minimum, and
+// two widgets have a minimum well above what an app asks for: a GtkEntry is
+// ~150px wide whatever set_width said (a 60px code field came out 168), and a
+// GtkDrawingArea's content size is its minimum, so a canvas made 200 x 200
+// and then sized to 120 stayed 200 (vg.resize in sae shrinking a scene).
+// Nothing in the toolkit's own specs stated a width below those minimums, so
+// both went unnoticed until a page of sae asked for them.
+//
+// The demo states them and a spec reads back what each widget really got.
+import ui
+import ui (window, vstack, hstack, textfield, button, onclick, canvas_create,
+    canvas_widget, canvas_size, set_width, a11y_label, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("pinned sizes", 700, 400) {
+        vstack(8) {
+            _row = hstack(8) {
+                code = textfield("code") callback |v: string| { }
+                _a = a11y_label(code, "narrow field")
+                _b = set_width(code, 60)
+                tiny = textfield("x") callback |v: string| { }
+                _c = a11y_label(tiny, "tiny field")
+                _d = set_width(tiny, 30)
+                wide = textfield("wide") callback |v: string| { }
+                _e = a11y_label(wide, "wide field")
+                _f = set_width(wide, 300)
+            }
+            cv = canvas_create(200, 200)
+            canvas_size(cv, 120, 120)
+            _g = a11y_label(canvas_widget(cv), "pinned canvas")
+            button("Shrink") {
+                onclick() callback {
+                    canvas_size(cv, 80, 80)
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

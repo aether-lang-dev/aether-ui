@@ -927,6 +927,36 @@ static void aeui_label_pin_width(GtkWidget* w) {
     if (rw > 0 && ellipsizes) gtk_label_set_max_width_chars(GTK_LABEL(w), 1);
 }
 
+// A text field given a width() is that wide, even a narrow one. GtkText's
+// minimum width is a fixed ~150px (MIN_ENTRY_WIDTH, plus the entry's padding:
+// 168 in GTK 4.6) unless width-chars is set, and a size request is only a
+// floor above that minimum, so set_width(60) on a field came out 168. Giving
+// the editable a one-character width-chars lowers its own minimum to nothing
+// and lets the request be the width. Called from both set_width entry points;
+// a field that is never given a width keeps GTK's default.
+static void aeui_editable_pin_width(GtkWidget* w) {
+    if (!w || !GTK_IS_EDITABLE(w)) return;
+    int rw = -1;
+    gtk_widget_get_size_request(w, &rw, NULL);
+    if (rw > 0) {
+        gtk_editable_set_width_chars(GTK_EDITABLE(w), 1);
+        gtk_editable_set_max_width_chars(GTK_EDITABLE(w), 1);
+    }
+}
+
+// A canvas given a width() or height() is that size, smaller than it was made
+// too. A GtkDrawingArea's content size is its minimum (and natural) size, and
+// a size request only raises a minimum, so a canvas made 200 x 200 and then
+// pinned to 120 stayed 200 (GTK 4.6; vg.resize on a scene shrinking it).
+// Moving the content size to the request makes the pinned size the floor.
+static void aeui_drawing_area_pin_size(GtkWidget* w) {
+    if (!w || !GTK_IS_DRAWING_AREA(w)) return;
+    int rw = -1, rh = -1;
+    gtk_widget_get_size_request(w, &rw, &rh);
+    if (rw > 0) gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(w), rw);
+    if (rh > 0) gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(w), rh);
+}
+
 void aether_ui_text_set_truncate(int handle, int mode) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return;
@@ -1969,6 +1999,8 @@ void aether_ui_set_width_impl(int handle, int px) {
     int cur_h = -1;
     gtk_widget_get_size_request(w, NULL, &cur_h);
     gtk_widget_set_size_request(w, px, cur_h);
+    aeui_editable_pin_width(w);
+    aeui_drawing_area_pin_size(w);
     gtk_widget_set_hexpand(w, FALSE);
 }
 
@@ -1978,6 +2010,7 @@ void aether_ui_set_height_impl(int handle, int px) {
     int cur_w = -1;
     gtk_widget_get_size_request(w, &cur_w, NULL);
     gtk_widget_set_size_request(w, cur_w, px);
+    aeui_drawing_area_pin_size(w);
     gtk_widget_set_vexpand(w, FALSE);
 }
 
@@ -3779,6 +3812,8 @@ void aether_ui_set_width(int handle, int width) {
     gtk_widget_get_size_request(w, NULL, &keep_h);
     gtk_widget_set_size_request(w, width, keep_h);
     aeui_label_pin_width(w);
+    aeui_editable_pin_width(w);
+    aeui_drawing_area_pin_size(w);
     // A pinned width normally means "this is exactly my size" — so stop
     // expanding to fill the parent. Canvases are created hexpand=TRUE (a
     // full-window canvas should fill), which otherwise stretches a 16px ICON
@@ -3808,6 +3843,7 @@ void aether_ui_set_height(int handle, int height) {
     int keep_w = -1;
     gtk_widget_get_size_request(w, &keep_w, NULL);
     gtk_widget_set_size_request(w, keep_w, height);
+    aeui_drawing_area_pin_size(w);
     // A pinned height means "this is exactly my size" — stop expanding.
     // valign FILL (not CENTER): a height()'d CONTAINER — e.g. a scrollview
     // holding a list — must fill the box it was just given, or it centres a

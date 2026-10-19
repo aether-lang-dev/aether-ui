@@ -1,0 +1,68 @@
+// spec_pinsize_demo.ae -- a width stated with set_width / canvas_size is the
+// width the widget gets, below the toolkit's own minimums too.
+//
+// GTK4's GtkEntry will not go under ~150px (168 with its padding) and a
+// GtkDrawingArea will not go under its content size, so a 60px field came out
+// 168 and a 200px canvas pinned to 120 stayed 200. The widths here are read
+// off the driver's /widgets (the allocation, not the request), so a request
+// the toolkit honoured only on paper fails.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/pinsize_demo &
+//   UI_SPEC=pinsize_demo/spec_pinsize_demo tests/run_spec.sh
+import std.spec
+import std.string
+import std.json
+import uidriver
+
+// The a11y-named widget's allocated field, or -1.
+named_int(name: string, f: string) -> int {
+    v, _e = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return -1 }
+    r = -1
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "a11y_name"), name) == 1 { r = uidriver.field_int(w, f) }
+        i = i + 1
+    }
+    json.json_free(v)
+    return r
+}
+
+// Polled: the first layout may not have happened when the spec starts.
+wait_named(name: string, f: string, want: int) -> int {
+    i = 0
+    while i < 60 {
+        if named_int(name, f) == want { return 1 }
+        sleep(50)
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a stated width is the width given") {
+        spec.it("a text field narrower than the platform's default minimum") callback {
+            spec.assert_true(wait_named("narrow field", "w", 60), "set_width(60): ${named_int("narrow field", "w")} wide")
+            spec.assert_true(wait_named("tiny field", "w", 30), "set_width(30): ${named_int("tiny field", "w")} wide")
+        }
+        spec.it("a field wider than the minimum is as wide as asked too") callback {
+            spec.assert_true(wait_named("wide field", "w", 300), "set_width(300): ${named_int("wide field", "w")} wide")
+        }
+        spec.it("a canvas pinned below the size it was made at") callback {
+            spec.assert_true(wait_named("pinned canvas", "w", 120), "made 200, pinned to 120 wide: ${named_int("pinned canvas", "w")}")
+            spec.assert_true(wait_named("pinned canvas", "h", 120), "and 120 high: ${named_int("pinned canvas", "h")}")
+        }
+        spec.it("and shrunk again after it is on screen") callback {
+            btn = uidriver.widget_id_of("button", "Shrink")
+            spec.assert_true(btn > 0, "the Shrink button")
+            uidriver.click_widget(btn)
+            spec.assert_true(wait_named("pinned canvas", "w", 80), "pinned to 80 wide: ${named_int("pinned canvas", "w")}")
+            spec.assert_true(wait_named("pinned canvas", "h", 80), "and 80 high: ${named_int("pinned canvas", "h")}")
+        }
+    }
+    return spec.run_summary(fw)
+}
