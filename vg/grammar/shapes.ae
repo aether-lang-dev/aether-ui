@@ -318,7 +318,7 @@ emit_gradient_opts(ctx: ptr, style: ptr, opts: ptr,
 
 // ─── shape_circle ────────────────────────────────────────────────
 
-shape_circle(ctx: @keep ptr, backend: ptr, attrs: ptr) -> ptr {
+shape_circle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
     did_push = maybe_push_transform(ctx, attrs)
     style = style.resolve_style(ctx, attrs, "circle",
                                         attr_str_or(attrs, "class", ""))
@@ -413,7 +413,7 @@ shape_circle(ctx: @keep ptr, backend: ptr, attrs: ptr) -> ptr {
 
 // ─── shape_rectangle ─────────────────────────────────────────────
 
-shape_rectangle(ctx: @keep ptr, backend: ptr, attrs: ptr) -> ptr {
+shape_rectangle(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
     did_push = maybe_push_transform(ctx, attrs)
     style = style.resolve_style(ctx, attrs, "rect",
                                         attr_str_or(attrs, "class", ""))

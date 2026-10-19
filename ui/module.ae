@@ -1842,7 +1842,7 @@ ui_set_list(handle: int, list_ptr: ptr) -> int {
     aether_ui_state_set_list(handle, list_ptr)
     return handle
 }
-each_bind(each_group: @keep ptr, list_state: int) {
+each_bind(each_group: ptr, list_state: int) {
     // Re-run each_update whenever the list-state changes -- for as long as
     // the group's container is alive. Owned by it, so an each() group that
     // was rebuilt away stops re-rendering into a dead container.
@@ -3753,7 +3753,7 @@ _command_own_key_live(cp: ptr) -> int {
 // Register the real accelerator for `key` on an attached keymap. Conditional,
 // so a key the keymap no longer resolves propagates to any other binding of
 // it instead of being swallowed by an inert registration.
-_keymap_register_key(km: @keep ptr, key: string) {
+_keymap_register_key(km: ptr, key: string) {
     shortcut_when(key, || {
         if keymap_command(km, key) == null { return 0 }
         return 1
@@ -3779,7 +3779,7 @@ _keymap_find(km: ptr, key: string) -> int {
 // so the enumeration a rebind UI shows never contains two rows for one key.
 // On an ATTACHED keymap a new key is registered as a real accelerator at
 // once, so a rebind at runtime makes the new key fire -- not only resolve.
-keymap_bind(km: @keep ptr, key: string, name: string) {
+keymap_bind(km: ptr, key: string, name: string) {
     if km == null { return }
     k = km as *Keymap
     at = _keymap_find(km, key)
@@ -4156,7 +4156,7 @@ does(_ctx: ptr, cb: fn) {
 
 // on_button() — a button surface for the ambient command, attached to the
 // widget scope `commands()` was opened in.
-on_button(_ctx: @keep ptr) -> int {
+on_button(_ctx: ptr) -> int {
     if _ctx == 0 { return 0 }
     c = _ctx as *Command
     h = btn(c.scope, c.label) callback { command_fire(_ctx) }
@@ -4165,7 +4165,7 @@ on_button(_ctx: @keep ptr) -> int {
 }
 
 // on_menu_item(menu) — a menu-item surface for the ambient command.
-on_menu_item(_ctx: @keep ptr, menu_handle: int) {
+on_menu_item(_ctx: ptr, menu_handle: int) {
     if _ctx == 0 { return }
     menu_item_command(menu_handle, _ctx)
 }
@@ -4184,7 +4184,7 @@ command_group_set_enabled(gp: ptr, val: int) {
 }
 
 // btn_command(ctx, cmd) — a button labelled and wired from the command.
-btn_command(_ctx: ptr, cp: @keep ptr) -> int {
+btn_command(_ctx: ptr, cp: ptr) -> int {
     c = cp as *Command
     h = btn(_ctx, c.label) callback { command_fire(cp) }
     command_attach(cp, h)
@@ -4199,7 +4199,7 @@ btn_command(_ctx: ptr, cp: @keep ptr) -> int {
 // The key SHOWN is the command's current one: its own accel, or, once an
 // attached keymap owns it, whatever that keymap binds to it now -- and the
 // item is relabelled when a keymap_bind/unbind/register changes that.
-menu_item_command(menu_handle: int, cp: @keep ptr) {
+menu_item_command(menu_handle: int, cp: ptr) {
     c = cp as *Command
     shown = _command_menu_text(cp)
     boxed = box_closure(|| { command_fire(cp) })
@@ -8031,7 +8031,7 @@ _datagrid_floats(g: *DataGrid) {
 // stays in it); the pointer passes through it to the cells beneath
 // (datagrid_float_takes_clicks(g, f, 1) makes it take the pointer).
 // 0 when 256 float already.
-datagrid_float(gp: @keep ptr, row: int, col: int, dx: int, dy: int, w: int, h: int) -> int {
+datagrid_float(gp: ptr, row: int, col: int, dx: int, dy: int, w: int, h: int) -> int {
     g = gp as *DataGrid
     k = 0
     while k < DATAGRID_FLOATS && intarr_get_raw(g.floats, k * DATAGRID_FLOAT_N) != 0 { k = k + 1 }
@@ -8062,7 +8062,7 @@ datagrid_float(gp: @keep ptr, row: int, col: int, dx: int, dy: int, w: int, h: i
 
 // datagrid_float_move(g, f, row, col, dx, dy, w, h): float f (from
 // datagrid_float) at another cell, offset or size. 1 when f is one of the grid's.
-datagrid_float_move(gp: @keep ptr, fh: int, row: int, col: int, dx: int, dy: int, w: int, h: int) -> int {
+datagrid_float_move(gp: ptr, fh: int, row: int, col: int, dx: int, dy: int, w: int, h: int) -> int {
     g = gp as *DataGrid
     k = 0
     while k < DATAGRID_FLOATS {
@@ -8091,7 +8091,7 @@ datagrid_float_move(gp: @keep ptr, fh: int, row: int, col: int, dx: int, dy: int
 // instead of letting it through to the cells beneath, and back (on = 0). Not
 // click_through(f, ...): f is inside a clip box, which lets the pointer through
 // whatever f does. 1 when f is one of the grid's.
-datagrid_float_takes_clicks(gp: @keep ptr, fh: int, on: int) -> int {
+datagrid_float_takes_clicks(gp: ptr, fh: int, on: int) -> int {
     g = gp as *DataGrid
     k = 0
     while k < DATAGRID_FLOATS {
@@ -8107,7 +8107,7 @@ datagrid_float_takes_clicks(gp: @keep ptr, fh: int, on: int) -> int {
 }
 
 // datagrid_float_remove(g, f): float f, and what is in it, taken away.
-datagrid_float_remove(gp: @keep ptr, fh: int) -> int {
+datagrid_float_remove(gp: ptr, fh: int) -> int {
     g = gp as *DataGrid
     k = 0
     while k < DATAGRID_FLOATS {
@@ -9784,7 +9784,7 @@ _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
 // a change before it moves the caret past the new text (GTK's "changed"
 // comes from inside the insert), so read at once the caret lags what was
 // typed; a burst of changes is heard once, as it ends.
-_datagrid_edit_changed(gp: @keep ptr, _t: string) {
+_datagrid_edit_changed(gp: ptr, _t: string) {
     g = gp as *DataGrid
     if g.on_edit_change == null || g.edit_field == 0 || g.change_due == 1 { return }
     g.change_due = 1
@@ -9876,7 +9876,7 @@ table_on_select(tp: ptr, cb: fn) {
 // table_bind(t, list_state): the table tracks a LIST state — every ui_set_list
 // re-runs table_update. The each_bind sibling for tables. Seeds once.
 // Owned, like each_bind, by the container its rows render into.
-table_bind(tp: @keep ptr, list_state: int) {
+table_bind(tp: ptr, list_state: int) {
     t = tp as *TableDef
     lb = t.lb as *ListBox
     eg = lb.group as *EachGroup
@@ -10626,7 +10626,7 @@ separator(_ctx: ptr) {
 
 // menu_entry_command(cmd) — an entry wired to a `command`, on the ambient menu.
 // The command form of the same verb, so a File menu can mix both.
-menu_entry_command(_ctx: ptr, cp: @keep ptr) {
+menu_entry_command(_ctx: ptr, cp: ptr) {
     if _ctx == 0 { return }
     menu_item_command(aether_ui_ctx_to_handle_impl(_ctx), cp)
 }

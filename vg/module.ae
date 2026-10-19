@@ -1952,7 +1952,7 @@ scene_tick(scene: ptr, now_ms: long) -> int {
 // Fold the placeholder element's cached fill/stroke/opacity into the attrs
 // map (as presentation attributes — highest priority in resolve_style), then
 // dispatch via the same grammar_shapes path the eager mode uses.
-flush_one(ctx: @keep ptr, be: ptr, p: ptr) {
+flush_one(ctx: ptr, be: ptr, p: ptr) {
     flush_one_tracked(ctx, be, p, null)
 }
 
@@ -1962,7 +1962,7 @@ flush_one(ctx: @keep ptr, be: ptr, p: ptr) {
 // track it so dispatch_click/hover can hit-test it. The placeholder is the
 // event entity (it holds the user's handlers); the dispatched element only
 // draws — so the bounds must be copied across.
-flush_one_tracked(ctx: @keep ptr, be: ptr, p: ptr, es: ptr) {
+flush_one_tracked(ctx: ptr, be: ptr, p: ptr, es: ptr) {
     pend = p as *VgPending
     el = pend.element
     // clip_path on the shape: draw it inside a layer clipped to the outline.
@@ -2028,7 +2028,7 @@ _pending_bbox(pend: *VgPending) -> (int, float, float, float, float) {
     return 0, 0.0, 0.0, 0.0, 0.0
 }
 
-_flush_one_body(ctx: @keep ptr, be: ptr, p: ptr, es: ptr) {
+_flush_one_body(ctx: ptr, be: ptr, p: ptr, es: ptr) {
     pend = p as *VgPending
     el = pend.element
     // Track interactive elements regardless of visibility, so the tracked list
