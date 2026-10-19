@@ -4086,7 +4086,20 @@ void aether_ui_a11y_announce_impl(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !text) return;
 #if GTK_CHECK_VERSION(4, 14, 0)
-    gtk_accessible_announce(GTK_ACCESSIBLE(w), text, GTK_ACCESSIBLE_ANNOUNCEMENT_PRIORITY_MEDIUM);
+    // With no AT-SPI bus (a bare session, a container, CI under xvfb) GTK
+    // gives a widget a GtkTestATContext, which has no `announce` vfunc.
+    // gtk_accessible_announce calls the vfunc without looking once the
+    // context is realized -- and focusing the widget realizes it -- so
+    // announcing from a focused canvas called a NULL pointer and killed the
+    // app (GTK 4.22.4; 4.14's is the same code). Nothing listens to a test
+    // context, so there is nothing to announce to: the announcement is
+    // recorded below for the driver, and only a real AT context is told.
+    GtkATContext* at = gtk_accessible_get_at_context(GTK_ACCESSIBLE(w));
+    if (at) {
+        if (g_strcmp0(G_OBJECT_TYPE_NAME(at), "GtkTestATContext") != 0)
+            gtk_accessible_announce(GTK_ACCESSIBLE(w), text, GTK_ACCESSIBLE_ANNOUNCEMENT_PRIORITY_MEDIUM);
+        g_object_unref(at);   // gtk_accessible_get_at_context is transfer-full
+    }
 #else
     // GTK before 4.14 has no announcement: the description changes to the
     // text, which AT-SPI tells the screen reader (Orca speaks the focused

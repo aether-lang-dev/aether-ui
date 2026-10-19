@@ -54,8 +54,17 @@ main() {
             uidriver.click_widget(uidriver.widget_id_by_text("Announce on the grid"))
             gb = uidriver.widget_int_field_by_id(uidriver.widget_id_by_text("a grid"), "parent")
             spec.assert_contains(uidriver.get_body("/widget/${gb}/a11y"), "\"announced\":\"Grid said\"", "the grid's")
+            // From a canvas that has the keyboard focus, as a vg scene being
+            // played from the keyboard is: GTK realizes a focused widget's
+            // AT context, and with no AT-SPI bus (a test box) that context
+            // is GtkTestATContext, whose missing announce hook GTK 4.22
+            // called -- the app died on the call.
+            cv = uidriver.widget_id_of("canvas", "")
+            spec.assert_gt(cv, 0, "the canvas is there")
+            uidriver.focus_widget(cv)
             uidriver.click_widget(uidriver.widget_id_by_text("Announce on the canvas"))
             spec.assert_true(uidriver.wait_body_contains("/widgets", "\"type\":\"button\"", 10), "still answering")
+            spec.assert_contains(uidriver.get_body("/widget/${cv}/a11y"), "\"announced\":\"Canvas said\"", "the canvas's, read back")
         }
 
         spec.it("a11y_announce: the screen reader is told, and the driver reads it back") callback {
