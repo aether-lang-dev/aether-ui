@@ -1795,6 +1795,75 @@ static void aeui_flex_layout_init(AeuiFlexLayout* self) {
     self->spacing = 0;
 }
 
+// A scrollview's content, held to the view's width. A GtkScrolledWindow
+// (AUTOMATIC both ways) gives its child at least the child's minimum width,
+// and a stack's minimum is the sum of a row's: one row of sixty sheet tabs,
+// or of twenty tools, made a page 5172 px wide in a 1100 px window, every
+// other row of it (a formula bar that should fill the window) as wide, and a
+// horizontal scrollbar under it. On AppKit and Win32 a scrollview scrolls
+// vertically and its content is the view's width: a wider row is clipped, and
+// no row decides how wide a page is. So the content sits in this: a
+// container whose own minimum width is none, which allocates its one child
+// exactly the width it was given (GTK clamps nothing: a stack given less than
+// its minimum puts its children at theirs and they run past its edge), and
+// clips what runs past. Its natural width is the content's, so a window still
+// opens wide enough for it.
+typedef struct { GtkLayoutManager parent_instance; } AeuiPinLayout;
+typedef struct { GtkLayoutManagerClass parent_class; } AeuiPinLayoutClass;
+G_DEFINE_TYPE(AeuiPinLayout, aeui_pin_layout, GTK_TYPE_LAYOUT_MANAGER)
+
+static GtkSizeRequestMode aeui_pin_get_request_mode(GtkLayoutManager* lm, GtkWidget* widget) {
+    (void)lm;
+    GtkWidget* c = gtk_widget_get_first_child(widget);
+    return c ? gtk_widget_get_request_mode(c) : GTK_SIZE_REQUEST_HEIGHT_FOR_WIDTH;
+}
+
+static void aeui_pin_measure(GtkLayoutManager* lm, GtkWidget* widget, GtkOrientation orientation,
+                             int for_size, int* minimum, int* natural,
+                             int* minimum_baseline, int* natural_baseline) {
+    (void)lm;
+    int cmin = 0, cnat = 0;
+    GtkWidget* c = gtk_widget_get_first_child(widget);
+    if (c && gtk_widget_should_layout(c))
+        gtk_widget_measure(c, orientation, for_size, &cmin, &cnat, NULL, NULL);
+    *minimum = orientation == GTK_ORIENTATION_HORIZONTAL ? 0 : cmin;
+    *natural = cnat;
+    if (minimum_baseline) *minimum_baseline = -1;
+    if (natural_baseline) *natural_baseline = -1;
+}
+
+static void aeui_pin_allocate(GtkLayoutManager* lm, GtkWidget* widget, int width, int height, int baseline) {
+    (void)lm; (void)baseline;
+    GtkWidget* c = gtk_widget_get_first_child(widget);
+    if (c && gtk_widget_should_layout(c)) gtk_widget_allocate(c, width, height, -1, NULL);
+}
+
+static void aeui_pin_layout_class_init(AeuiPinLayoutClass* klass) {
+    GtkLayoutManagerClass* lm = GTK_LAYOUT_MANAGER_CLASS(klass);
+    lm->get_request_mode = aeui_pin_get_request_mode;
+    lm->measure = aeui_pin_measure;
+    lm->allocate = aeui_pin_allocate;
+}
+static void aeui_pin_layout_init(AeuiPinLayout* self) { (void)self; }
+
+// `child` in a pin, ready to be a scrolled window's child.
+static GtkWidget* aeui_pin_wrap(GtkWidget* child) {
+    // (Not a GtkBox: ui.weight and the rest take a box parent for a stack.)
+    GtkWidget* pin = gtk_fixed_new();
+    gtk_widget_set_layout_manager(pin, GTK_LAYOUT_MANAGER(g_object_new(aeui_pin_layout_get_type(), NULL)));
+    gtk_widget_set_overflow(pin, GTK_OVERFLOW_HIDDEN);
+    g_object_set_data(G_OBJECT(pin), "aeui-pin", GINT_TO_POINTER(1));
+    gtk_widget_set_parent(child, pin);
+    return pin;
+}
+
+// What a scrolled window holds, with its pin (if any) taken off.
+static GtkWidget* aeui_scrolled_content(GtkWidget* sw) {
+    GtkWidget* c = gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(sw));
+    if (c && g_object_get_data(G_OBJECT(c), "aeui-pin")) return gtk_widget_get_first_child(c);
+    return c;
+}
+
 // A box's orientation, flex-aware. GtkBox DELEGATES its GtkOrientable to
 // its GtkBoxLayout, so once the flex manager is installed the stock getter
 // warns ("invalid cast from 'AeuiFlexLayout'") and returns garbage — every
@@ -8834,7 +8903,11 @@ static void aeui_container_remove(GtkWidget* parent, GtkWidget* child) {
         // widget. gtk_flow_box_remove accepts either.
         gtk_flow_box_remove(GTK_FLOW_BOX(parent), child);
     } else if (GTK_IS_SCROLLED_WINDOW(parent)) {
-        if (gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(parent)) == child) {
+        if (aeui_scrolled_content(parent) == child) {
+            // The pin goes with it; the child is taken out of it first, so
+            // that it outlives it (the registry holds a reference to it).
+            GtkWidget* held = gtk_scrolled_window_get_child(GTK_SCROLLED_WINDOW(parent));
+            if (held != child) gtk_widget_unparent(child);
             gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), NULL);
         }
     } else if (GTK_IS_OVERLAY(parent)) {
@@ -10658,7 +10731,7 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
             || g_object_get_data(G_OBJECT(child), "aeui-wrap-label"))
             aeui_ensure_flex_layout(parent);
     } else if (GTK_IS_SCROLLED_WINDOW(parent)) {
-        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), child);
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(parent), aeui_pin_wrap(child));
     } else if (GTK_IS_OVERLAY(parent)) {
         if (gtk_overlay_get_child(GTK_OVERLAY(parent)) == NULL) {
             gtk_overlay_set_child(GTK_OVERLAY(parent), child);

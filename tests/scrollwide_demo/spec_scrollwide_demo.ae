@@ -1,0 +1,62 @@
+// spec_scrollwide_demo.ae: a scrollview's content is held to the view's
+// width: no row, however wide, decides how wide the page is (a wide row is
+// squeezed on AppKit, clipped on GTK and Win32), so a field that takes the
+// rest of its row fills the window and follows it as it is resized.
+//
+// Geometry, not a census: on GTK the scrolled window gave its content at
+// least the widest row's width (forty tools, 3000 px), so the field was 2900
+// wide in a 520 px window, a scrollbar under the page, and it did not move as
+// the window did.
+//
+// Run via ci.sh Phase 5e4c, or by hand:
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/scrollwide_demo/bin/scrollwide_demo &
+//   UI_SPEC=scrollwide_demo/spec_scrollwide_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+// 1 once the field's width is `want` within a pixel (a layout lands a frame
+// after the resize on some backends).
+field_w_is(id: int, want: int) -> int {
+    i = 0
+    while i < 60 {
+        w = uidriver.widget_int_field_by_id(id, "w")
+        if w >= want - 1 && w <= want + 1 { return 1 }
+        sleep(50)
+        i = i + 1
+    }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a row wider than the window, in a scrollview") {
+        spec.it("the page is the window's width: the field's right edge is inside the scrollview") callback {
+            // Resized first: AppKit lays a window's content out at its natural
+            // width until the window is first resized (the page opens as wide
+            // as its widest row), then holds it to the view's.
+            uidriver.post_ok("/window/resize?w=600&h=300", "a window 600 wide")
+            sleep(400)
+            sv = uidriver.widget_id_of("scrollview", "")
+            spec.assert_gt(sv, 0, "the scrollview is there")
+            f = uidriver.widget_id_of("textfield", "")
+            spec.assert_gt(f, 0, "the field is there")
+            sv_r = uidriver.widget_int_field_by_id(sv, "x") + uidriver.widget_int_field_by_id(sv, "w")
+            f_r = uidriver.widget_int_field_by_id(f, "x") + uidriver.widget_int_field_by_id(f, "w")
+            spec.assert_true(f_r <= sv_r, "its right edge ${f_r} is not past the scrollview's ${sv_r}")
+            spec.assert_gt(uidriver.widget_int_field_by_id(f, "w"), 100, "and it has room (${uidriver.widget_int_field_by_id(f, "w")})")
+        }
+        spec.it("the field follows the window as it is resized, wider and narrower") callback {
+            f = uidriver.widget_id_of("textfield", "")
+            w0 = uidriver.widget_int_field_by_id(f, "w")
+            uidriver.post_ok("/window/resize?w=900&h=300", "a window 900 wide")
+            sleep(300)
+            spec.assert_eq(field_w_is(f, w0 + 300), 1, "300 wider with the window (from ${w0}, now ${uidriver.widget_int_field_by_id(f, "w")})")
+            uidriver.post_ok("/window/resize?w=450&h=300", "a window 450 wide")
+            sleep(300)
+            spec.assert_eq(field_w_is(f, w0 - 150), 1, "150 narrower than at 600 (from ${w0}, now ${uidriver.widget_int_field_by_id(f, "w")})")
+        }
+    }
+}

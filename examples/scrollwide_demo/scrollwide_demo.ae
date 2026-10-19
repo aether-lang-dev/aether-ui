@@ -1,0 +1,41 @@
+// Aether UI scrollview example: a row WIDER than the window, in a scrollview.
+//
+// A page is a scrollview holding a column of rows; one row, forty tools, is
+// far wider than the window, and another, a text field that takes the rest
+// of its row (a formula bar), has to fill the WINDOW, not the widest row.
+// AppKit and Win32 hold a scrollview's content to its view's width (the wide
+// row is squeezed, or clipped); GTK's scrolled window gave the content at
+// least the wide row's width, so the page was as wide as the tools and the
+// field with it.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server
+//   (9222). The spec reads back the geometry at two window widths.
+
+import ui
+import ui (window, vstack, hstack, text, btn, textfield, scrollview, weight,
+    enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+main() {
+    window("scrollwide", 520, 300) {
+        scrollview() {
+            vstack(6) {
+                hstack(2) {
+                    i = 0
+                    while i < 40 {
+                        _b = btn("tool ${i}") callback { }
+                        i = i + 1
+                    }
+                }
+                hstack(6) {
+                    _fx = text("fx")
+                    f = textfield("formula") callback |_s: string| { }
+                    weight(f, 1)
+                }
+                _end = text("end of page")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

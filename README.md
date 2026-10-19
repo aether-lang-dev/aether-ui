@@ -784,6 +784,7 @@ when a bind, unbind or register changes it.
 | [`examples/svgimage_demo`](examples/svgimage_demo) | ui.svg: an SVG file as a widget, drawn through vg |
 | [`examples/vg_image_demo`](examples/vg_image_demo) | vg.image: a program's RGBA buffer, a decoded PNG, fit modes, opacity and transform in a scene |
 | [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
+| [`examples/scrollwide_demo`](examples/scrollwide_demo) | a row wider than the window in a scroll area: clipped, and no row decides the page's width |
 | [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
 | [`examples/frametick_demo`](examples/frametick_demo) | on_frame (the display-synced frame clock), frame_source, timer_once |
 

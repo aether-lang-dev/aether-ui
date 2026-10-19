@@ -95,6 +95,7 @@ SUITES=(
   "clearchildren|examples/rebuild_demo|rebuild_demo/spec_rebuild_demo|"
   "fileicon|examples/fileicon_demo|fileicon_demo/spec_fileicon_demo|"
   "scrollbg|examples/scrollbg_demo|scrollbg_demo/spec_scrollbg_demo|"
+  "scrollwide|examples/scrollwide_demo|scrollwide_demo/spec_scrollwide_demo|"
   "keyhandler|examples/keyhandler_demo|keyhandler_demo/spec_keyhandler_demo|"
   "imagefill|examples/imagefill_demo|imagefill_demo/spec_imagefill_demo|"
   "barfill|examples/barfill_demo|barfill_demo/spec_barfill_demo|"
