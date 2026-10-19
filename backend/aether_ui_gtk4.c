@@ -769,8 +769,14 @@ static void (*aeui_label_snapshot_orig)(GtkWidget*, GtkSnapshot*) = NULL;
 // whole device pixels thick (at least one) and snapped to the pixel grid, in
 // the label's own colour, the same under every font and scale: what a
 // spreadsheet cell's underline is on macOS and Windows. "aeui-ul" on the label:
-// 1 single, 2 double (two lines, a line apart); the CSS no longer asks Pango
-// for either, only for line-through.
+// 1 single, 2 double (two lines, a line apart). A line-through is drawn here
+// too ("aeui-st"), the font's strikethrough position and the same whole-pixel
+// thickness: it was Pango's, asked for by a CSS class per label
+// (text-decoration-line), and a grid's recycled cells flip that class between
+// line-through and none as they scroll; GTK 4.22 kept the line-through on a
+// label whose rule had long been "none" -- a stray strike across a plain cell,
+// one run in 12 and more as the frames fell differently. A line drawn from the
+// label's own data at each snapshot cannot be stale.
 static void aeui_label_color(GtkWidget* w, GdkRGBA* col) {
 #if GTK_CHECK_VERSION(4, 10, 0)
     gtk_widget_get_color(w, col);
@@ -791,7 +797,7 @@ static void aeui_label_color(GtkWidget* w, GdkRGBA* col) {
     }
 }
 
-static void aeui_label_draw_underline(GtkWidget* w, GtkSnapshot* snap, int kind) {
+static void aeui_label_draw_underline(GtkWidget* w, GtkSnapshot* snap, int kind, int strike) {
     GtkLabel* lb = GTK_LABEL(w);
     PangoLayout* lay = gtk_label_get_layout(lb);
     if (!lay) return;
@@ -811,6 +817,7 @@ static void aeui_label_draw_underline(GtkWidget* w, GtkSnapshot* snap, int kind)
         pango_layout_iter_get_line_extents(it, NULL, &lg);
         // The metrics of the font the line's first run is set in.
         double pos = -1.0, thick = 0.6;
+        double spos = 3.0, sthick = 0.6;
         if (line->runs) {
             PangoFont* f = ((PangoLayoutRun*)line->runs->data)->item->analysis.font;
             if (f) {
@@ -818,31 +825,45 @@ static void aeui_label_draw_underline(GtkWidget* w, GtkSnapshot* snap, int kind)
                 if (m) {
                     pos = pango_font_metrics_get_underline_position(m) / (double)PANGO_SCALE;
                     thick = pango_font_metrics_get_underline_thickness(m) / (double)PANGO_SCALE;
+                    spos = pango_font_metrics_get_strikethrough_position(m) / (double)PANGO_SCALE;
+                    sthick = pango_font_metrics_get_strikethrough_thickness(m) / (double)PANGO_SCALE;
                     pango_font_metrics_unref(m);
                 }
             }
         }
         double base = ly + pango_layout_iter_get_baseline(it) / (double)PANGO_SCALE;
-        double tpx = floor(thick * sc + 0.5);
-        if (tpx < 1) tpx = 1;
-        double t = tpx / sc;
-        // Its top: where the font puts it, onto the next device row down.
-        double y0 = ceil((base - pos) * sc - 0.01) / sc;
         double x0 = floor((lx + lg.x / (double)PANGO_SCALE) * sc) / sc;
         double x1 = ceil((lx + (lg.x + lg.width) / (double)PANGO_SCALE) * sc) / sc;
-        gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)y0, (float)(x1 - x0), (float)t));
-        if (kind == 2)
-            gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)(y0 + 2 * t), (float)(x1 - x0), (float)t));
+        if (kind) {
+            double tpx = floor(thick * sc + 0.5);
+            if (tpx < 1) tpx = 1;
+            double t = tpx / sc;
+            // Its top: where the font puts it, onto the next device row down.
+            double y0 = ceil((base - pos) * sc - 0.01) / sc;
+            gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)y0, (float)(x1 - x0), (float)t));
+            if (kind == 2)
+                gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)(y0 + 2 * t), (float)(x1 - x0), (float)t));
+        }
+        if (strike) {
+            // The strikethrough position is the distance from the baseline up
+            // to the line's top.
+            double tpx = floor(sthick * sc + 0.5);
+            if (tpx < 1) tpx = 1;
+            double t = tpx / sc;
+            double y0 = floor((base - spos) * sc + 0.5) / sc;
+            gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)y0, (float)(x1 - x0), (float)t));
+        }
     } while (pango_layout_iter_next_line(it));
     pango_layout_iter_free(it);
 }
 
 static void aeui_label_snapshot(GtkWidget* w, GtkSnapshot* snap) {
     int ul = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-ul"));
+    int st = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-st"));
     double* rot = (double*)g_object_get_data(G_OBJECT(w), "aeui-rot");
     if (!rot || *rot == 0.0) {
         aeui_label_snapshot_orig(w, snap);
-        if (ul) aeui_label_draw_underline(w, snap, ul);
+        if (ul || st) aeui_label_draw_underline(w, snap, ul, st);
         return;
     }
     float bw = (float)gtk_widget_get_width(w), bh = (float)gtk_widget_get_height(w);
@@ -852,7 +873,7 @@ static void aeui_label_snapshot(GtkWidget* w, GtkSnapshot* snap) {
     gtk_snapshot_rotate(snap, (float)-*rot);
     gtk_snapshot_translate(snap, &GRAPHENE_POINT_INIT(-bw / 2, -bh / 2));
     aeui_label_snapshot_orig(w, snap);
-    if (ul) aeui_label_draw_underline(w, snap, ul);
+    if (ul || st) aeui_label_draw_underline(w, snap, ul, st);
     gtk_snapshot_restore(snap);
     gtk_snapshot_pop(snap);
 }
@@ -3198,7 +3219,7 @@ static void css_forget_handle(int handle) {
         if (widget_css_holes > 256 && widget_css_holes * 2 > widget_css_rules->len) widget_css_compact();
     }
     if (keyed_css) {
-        static const char* const prefixes[] = { "aui-bg-%d", "aui-td-%d", "aui-dec-%d" };
+        static const char* const prefixes[] = { "aui-bg-%d", "aui-dec-%d" };
         char cls[32];
         for (size_t p = 0; p < sizeof(prefixes) / sizeof(prefixes[0]); p++) {
             snprintf(cls, sizeof(cls), prefixes[p], handle);
@@ -3492,19 +3513,14 @@ static void aeui_label_set_underline(GtkWidget* w, int line, int dbl) {
 void aether_ui_set_text_decoration(int handle, int underline, int strike) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return;
-    // The line-through as CSS (text-decoration-line), which GTK turns into
-    // the label's own attributes; the underline is drawn, not Pango's (a
-    // hairline of 0.59 px: aeui_label_draw_underline).
-    char cls[32], rule[160];
-    snprintf(cls, sizeof(cls), "aui-td-%d", handle);
-    gtk_widget_add_css_class(w, cls);
-    // Only the line-through is Pango's: the underline is drawn by
-    // aeui_label_snapshot (a double one is typography's, below).
-    const char* line = strike ? "line-through" : "none";
-    snprintf(rule, sizeof(rule), "label.%s { text-decoration-line: %s; }", cls, line);
+    // Both lines are drawn, not Pango's: an underline of Pango's is a
+    // hairline of 0.59 px, and a line-through asked for in CSS was left on
+    // by GTK 4.22 after its rule changed (aeui_label_draw_underline). A
+    // double underline is typography's, below.
     aeui_label_hook_snapshot();
     aeui_label_set_underline(w, underline ? 1 : 0, -1);
-    global_css_set_keyed(cls, rule);
+    g_object_set_data(G_OBJECT(w), "aeui-st", GINT_TO_POINTER(strike ? 1 : 0));
+    gtk_widget_queue_draw(w);
     int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
     ts = (ts & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
     g_object_set_data(G_OBJECT(w), "aeui-text-style", GINT_TO_POINTER(ts));
