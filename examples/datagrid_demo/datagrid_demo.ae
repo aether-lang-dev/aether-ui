@@ -22,9 +22,16 @@ import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refres
     datagrid_set_row_height, datagrid_row_height, datagrid_fit_row, datagrid_set_height, datagrid_freeze_cols,
     ui_state_s, ui_set_s, text_bound, enable_test_server,
     datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, style_bg_color)
+import vg.live (vg)
+import vg
+import vg (view_box, circle, fill)
 import std.os (os_getenv)
 import std.string
 import std.map
+
+// What the enclosing block does at its end for the vg scenes made in it (their
+// shapes are drawn then): run here, for a scene made by a button.
+extern aether_ui_surface_flush_deferred_impl()
 
 // What a cell shows for what was typed into it: "=2+3" is a formula, shown
 // as its sum; anything else as itself.
@@ -51,6 +58,15 @@ letters(c: int) -> string {
         n = n / 26 - 1
     }
     return s
+}
+
+// A vg scene in a float (its parent): a blue disc at the right of a 32 x 20
+// ground that is drawn on nothing, so whatever the float floats over shows
+// through the rest of it.
+float_scene(parent: ptr) {
+    scene = vg(parent, view_box(0, 0, 32, 20), 32, 20)
+    disc = circle(scene, 24.0, 14.0, 6.0)
+    fill(disc, "#0000ff")
 }
 
 main() {
@@ -248,6 +264,21 @@ main() {
             }
             // Move float: to R11C2, and back to where it was made.
             flmoved = ui_state_i(0)
+            // "vg float": a vg scene floating over R7C2, a pink cell: a blue
+            // disc and, round it, the pink through the scene (its ground is
+            // transparent); and taken away again.
+            vgf = ui_state_i(0)
+            _vgb = btn("vg float") callback {
+                if ui_get_i(vgf) == 0 {
+                    nf = datagrid_float(g, 7, 2, 2, 2, 32, 20)
+                    float_scene(nf)
+                    aether_ui_surface_flush_deferred_impl()
+                    _vs = ui_set_i(vgf, nf)
+                } else {
+                    _vr = datagrid_float_remove(g, ui_get_i(vgf))
+                    _vs = ui_set_i(vgf, 0)
+                }
+            }
             _flm = btn("Move float") callback {
                 if ui_get_i(flmoved) == 0 {
                     _fm = datagrid_float_move(g, fl, 11, 2, 0, 0, 40, 30)

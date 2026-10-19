@@ -332,6 +332,24 @@ reds(name: string, boxes: string) -> string {
     return string.trim(out)
 }
 
+// How many pixels of the colour (rrggbb, within 24 a channel) a snapshot has
+// in each of the boxes (x:y:w:h, points), one a line ("" without a screenshot).
+colour_in(name: string, boxes: string, colour: string) -> string {
+    dims = snapshot(name)
+    if string.length(dims) == 0 { return "" }
+    xw = string.index_of(dims, "x")
+    pw, _pe = string.to_int(string.substring(dims, 0, xw))
+    rw = uidriver.widget_int_field_by_id(1, "w")
+    if rw <= 0 || pw % rw != 0 {
+        println("      (screenshot not at a whole scale of the window: drawn checks skipped)")
+        return ""
+    }
+    bn = uidriver.widget_id_by_text("Under Remote Control")
+    banner = "${uidriver.widget_int_field_by_id(bn, "x")}:${uidriver.widget_int_field_by_id(bn, "y")}:${uidriver.widget_int_field_by_id(bn, "w")}:${uidriver.widget_int_field_by_id(1, "w")}"
+    out, _e = os.exec("BOX_COLOR=${colour} python3 redbox.py target/datagrid-snapshots/${name}.png ${banner} ${boxes}")
+    return string.trim(out)
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -1235,6 +1253,44 @@ main() {
             press("Free A")
             uidriver.post_ok("/widget/${hs}/set_value?v=0", "scroll back")
             spec.assert_true(shows("B") == 1, "free again: B back beside A")
+        }
+    }
+
+    // Last: a vg canvas in the window makes the page settle differently when
+    // the grid's height changes (AppKit), which the tests above would see.
+    spec.describe(fw, "a vg scene floating over the cells") {
+        spec.it("a vg scene floats with a transparent ground: over a pink cell, the pink shows through round its blue disc") callback {
+            vs = nth_of("scrollbar", 0)
+            hs = nth_of("scrollbar", 1)
+            uidriver.post_ok("/widget/${vs}/set_value?v=0", "scroll to the top")
+            uidriver.post_ok("/widget/${hs}/set_value?v=0", "and the left")
+            spec.assert_true(shows("R7C2") == 1, "R7C2 shown")
+            spec.assert_true(shows("R14C2") == 1, "and R14C2, another pink one")
+            press("vg float")
+            a = uidriver.widget_id_by_text("R7C2")
+            b = uidriver.widget_id_by_text("R14C2")
+            ax = uidriver.widget_int_field_by_id(a, "x")
+            ay = uidriver.widget_int_field_by_id(a, "y")
+            bx = uidriver.widget_int_field_by_id(b, "x")
+            by = uidriver.widget_int_field_by_id(b, "y")
+            sleep(300)
+            // The float is 2 right and 2 down in R7C2: two rows of its top left
+            // corner are ground, above the cell's text (which begins 4 down);
+            // R14C2's same two rows are the cell alone. The disc is at (24, 14)
+            // in the float, 6 across.
+            pink = colour_in("float-vg-pink", "${ax + 3}:${ay + 2}:12:2 ${bx + 3}:${by + 2}:12:2", "ffe0e0")
+            if string.length(pink) > 0 {
+                parts = string.string_split(pink, "\n")
+                over, _oe = string.to_int(string.trim(string.string_array_get(parts, 0)))
+                plain, _pe = string.to_int(string.trim(string.string_array_get(parts, 1)))
+                spec.assert_gt(plain, 0, "pink in the plain cell's corner (${pink})")
+                spec.assert_eq(over, plain, "as much pink under the scene's ground as in the plain cell: it draws no background (${pink})")
+                string.string_array_free(parts)
+                blue = colour_in("float-vg-disc", "${ax + 2 + 24 - 3}:${ay + 2 + 14 - 3}:6:6", "0000ff")
+                n, _ne = string.to_int(string.trim(blue))
+                spec.assert_gt(n, 20, "the disc drawn blue (${blue})")
+            }
+            press("vg float")
         }
     }
 

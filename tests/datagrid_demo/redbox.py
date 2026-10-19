@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """redbox.py PNG BX:BY:BW:RW X:Y:W:H ... -- how many red pixels (the demo's floating box, #d82626)
-lie in each box, one count a line.
+lie in each box, one count a line. With BOX_COLOR=rrggbb in the environment, the pixels
+within 24 of that colour in each channel instead.
 
 Reads the 8- or 16-bit RGB(A) PNG a /screenshot gives (stdlib only). Boxes are
 in points, as /widgets gives them; they become pixels through the driver's red
@@ -10,6 +11,7 @@ in the picture (Win32's print of it is its red text alone), the screenshot is th
 window, RW points wide, from its corner. The banner itself is red: a box meant
 to count red must lie below it.
 """
+import os
 import struct
 import sys
 import zlib
@@ -73,6 +75,8 @@ def main():
     else:
         scale = w / root_w
         ox, oy = 0.0, 0.0
+    want = os.environ.get("BOX_COLOR")
+    wr, wg, wb = (int(want[i:i + 2], 16) for i in (0, 2, 4)) if want else (0, 0, 0)
     for spec in sys.argv[3:]:
         bx, by, bw, bh = (float(v) for v in spec.split(":"))
         x0, y0 = int(ox + bx * scale), int(oy + by * scale)
@@ -82,7 +86,10 @@ def main():
             r = rows[y]
             for x in range(max(0, x0), x1):
                 p = x * bpp
-                if r[p] > 200 and r[p + step] < 80 and r[p + 2 * step] < 80:
+                if want:
+                    if abs(r[p] - wr) <= 24 and abs(r[p + step] - wg) <= 24 and abs(r[p + 2 * step] - wb) <= 24:
+                        n += 1
+                elif r[p] > 200 and r[p + step] < 80 and r[p + 2 * step] < 80:
                     n += 1
         print(n)
 
