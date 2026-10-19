@@ -10299,8 +10299,42 @@ static int aeui_remote_controlled(void) { return test_server_port != 0; }
 
 typedef struct { void (*fn)(void*); void* arg; volatile int done; } AeuiUiCall;
 
+// Lay the UI out NOW, as Win32 (w32_drv_settle_layout) and AppKit
+// (layoutSubtreeIfNeeded) do before a read: GTK allocates in the frame
+// clock's layout phase, up to a frame (and, on GTK 4.22 under a software
+// renderer, several) after the call that changed the tree, so a driver read
+// in between saw the tree as it was before: a page's new canvas 0 x 0, a
+// grid's cells where they were before the scroll. A spec that read a
+// geometry and then a screenshot (which waits for a whole frame) got two
+// different layouts, and one that computed pixel coordinates from a size read
+// too early sampled the wrong place -- a failure 1 run in 3 or 4, never on
+// GTK 4.6, which was allocating in the same call.
+//
+// Each toplevel is allocated at the size it has (gtk_widget_allocate is the
+// call GTK's own layout makes, and does nothing for a clean tree), then what
+// the allocation queued -- on_layout handlers, which run from an idle and may
+// change the tree again -- is run, until nothing is ready. Bounded: an app
+// animating from timers is never idle for long. Run on the GTK thread, before
+// a request is served, never inside the walk of the tree it serves.
+static void aeui_drv_settle_layout(void) {
+    for (int pass = 0; pass < 32; pass++) {
+        GListModel* tops = gtk_window_get_toplevels();
+        guint n = tops ? g_list_model_get_n_items(tops) : 0;
+        for (guint i = 0; i < n; i++) {
+            GtkWidget* win = GTK_WIDGET(g_list_model_get_item(tops, i));
+            if (!win) continue;
+            int ww = gtk_widget_get_width(win), wh = gtk_widget_get_height(win);
+            if (gtk_widget_get_realized(win) && ww > 0 && wh > 0)
+                gtk_widget_allocate(win, ww, wh, -1, NULL);
+            g_object_unref(win);
+        }
+        if (!g_main_context_iteration(NULL, FALSE)) break;
+    }
+}
+
 static gboolean aeui_ui_call_idle(gpointer data) {
     AeuiUiCall* c = (AeuiUiCall*)data;
+    aeui_drv_settle_layout();
     c->fn(c->arg);
     c->done = 1;
     return G_SOURCE_REMOVE;
