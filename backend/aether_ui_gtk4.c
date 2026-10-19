@@ -2212,6 +2212,24 @@ void aether_ui_textfield_insert_impl(int handle, const char* text) {
     gtk_editable_set_position(GTK_EDITABLE(w), pos);
 }
 
+// A text written to an entry's buffer from code does not reach the GtkText's
+// placeholder on GTK 4.6: it stays up, drawn under the text (the
+// spreadsheet's Name Box showed "cell" over "A1"; typing hides it, and so
+// does GTK 4.22). The buffer is what is written, not the editable, because the
+// buffer emits one "changed" with the final text where the editable's
+// delete-then-insert emits an empty one first, and a two-way binding writes
+// that empty text back to its state. Giving the placeholder text again is the
+// public call that has the entry decide whether to show it.
+static void aeui_entry_placeholder_refresh(GtkWidget* w) {
+    if (!w || !GTK_IS_ENTRY(w)) return;
+    const char* ph = (const char*)g_object_get_data(G_OBJECT(w), "aeui-placeholder");
+    if (!ph) return;
+    char* keep = g_strdup(ph);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(w), NULL);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(w), keep);
+    g_free(keep);
+}
+
 void aether_ui_textfield_set_text(int handle, const char* text) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w && GTK_IS_ENTRY(w)) {
@@ -2221,6 +2239,7 @@ void aether_ui_textfield_set_text(int handle, const char* text) {
         gtk_entry_buffer_set_text(buf, text ? text : "", -1);
         g_signal_handlers_unblock_matched(w, G_SIGNAL_MATCH_FUNC, 0, 0, NULL,
                                           (gpointer)on_entry_changed, NULL);
+        aeui_entry_placeholder_refresh(w);
     } else if (w && GTK_IS_PASSWORD_ENTRY(w)) {
         // A securefield: not a GtkEntry, but a GtkEditable like one. Writing
         // only GtkEntry left a driver-typed password empty.
@@ -9714,6 +9733,7 @@ static gboolean test_action_idle(gpointer data) {
             } else if (GTK_IS_ENTRY(w)) {
                 GtkEntryBuffer* buf = gtk_entry_get_buffer(GTK_ENTRY(w));
                 gtk_entry_buffer_set_text(buf, ta->sval, -1);
+                aeui_entry_placeholder_refresh(w);
             } else if (GTK_IS_PASSWORD_ENTRY(w)) {
                 // A securefield (a GtkEditable, not a GtkEntry): typed into
                 // as a person would, so its on_change runs. It was skipped.

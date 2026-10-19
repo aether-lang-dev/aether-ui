@@ -12,12 +12,15 @@
 
 import ui
 import ui (window, vstack, hstack, text, root_vstack, textfield, securefield, textarea,
-    btn, enable_test_server_root)
+    btn, set_text, a11y_label, backend_name, enable_test_server_root)
 import std.os (os_getenv)
 
 main() {
+    cell = 0
+    plain = 0
     main_root = root_vstack(10) {
         text("Placeholder demo")
+        _be = a11y_label(text("backend: ${backend_name()}"), "backend")
         _f = textfield("your name") callback |v: string| { }
         _s = securefield("your password") callback |v: string| { }
         _a = textarea("tell us more") callback |v: string| { }
@@ -28,9 +31,22 @@ main() {
             _r = textfield("to") callback |v: string| { }
             _g = btn("Go") callback { }
         }
+        // A field with a placeholder and one without, the same in every other
+        // way: text put in from code must leave the first looking like the
+        // second (on GTK 4.6 it left its placeholder drawn under the text).
+        hstack(6) {
+            cell = textfield("cell") callback |v: string| { }
+            plain = textfield("") callback |v: string| { }
+            _fill = btn("Fill") callback {
+                _a = set_text(cell, "A1")
+                _b = set_text(plain, "A1")
+            }
+        }
+        _n1 = a11y_label(cell, "with placeholder")
+        _n2 = a11y_label(plain, "without placeholder")
     }
 
-    app = ui.app_create("Placeholder demo", 360, 320)
+    app = ui.app_create("Placeholder demo", 360, 380)
     if os_getenv("AETHER_UI_TEST_PORT") != null {
         enable_test_server_root(9222, main_root)
     }

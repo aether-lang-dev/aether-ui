@@ -2,6 +2,8 @@
 # PNG's own pixels. Plain zlib, so a spec needs no imaging library. 8-bit
 # RGB/RGBA, not interlaced (what every driver's /screenshot writes).
 # Also: png_pixel.py FILE.png width  -> the width in pixels
+#       png_pixel.py FILE.png ink X Y W H  -> how many pixels of that rectangle
+#       differ from its top-left one: the ink in a field, whatever it is made of
 import struct, sys, zlib
 
 def load(path):
@@ -41,6 +43,15 @@ def load(path):
 w, h, bpp, rows = load(sys.argv[1])
 if sys.argv[2] == 'width':
     print(w)
+elif sys.argv[2] == 'ink':
+    x0, y0, rw, rh = [int(v) for v in sys.argv[3:7]]
+    bg = rows[y0][x0 * bpp:x0 * bpp + 3]
+    n = 0
+    for y in range(y0, min(y0 + rh, h)):
+        row = rows[y]
+        for x in range(x0, min(x0 + rw, w)):
+            if row[x * bpp:x * bpp + 3] != bg: n += 1
+    print(n)
 else:
     a = sys.argv[2:]
     for i in range(0, len(a), 2):

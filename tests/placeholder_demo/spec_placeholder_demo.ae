@@ -14,6 +14,12 @@
 // macOS code while the other two still report their text, which is what
 // isolates the gap to the textarea rather than to the new readback.
 //
+// And, in pixels, a placeholder is not drawn once there is text. On GTK 4.6 a
+// text field written from code (a state binding, set_text, the driver's) kept
+// its placeholder up under the text: the spreadsheet's Name Box showed "cell"
+// over "A1". The check is on a screenshot: a field with a placeholder and one
+// without, each given the same text, must hold the same ink.
+//
 //   AETHER_UI_TEST_PORT=9222 ./build/placeholder_demo &
 //   UI_SPEC=placeholder_demo/spec_placeholder_demo tests/run_spec.sh
 import std.spec
@@ -21,6 +27,51 @@ import uidriver
 import std.string
 import std.os
 import std.json
+
+// The window as a PNG; "" when the backend has no /screenshot. A capture can
+// miss a frame in flight (GTK under Xvfb), so it is taken again.
+snapshot(name: string) -> string {
+    dir = "${os.os_getenv("PWD")}/target/placeholder-snapshots"
+    _m, _me = os.exec("mkdir -p ${dir}")
+    tries = 0
+    while tries < 5 {
+        out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
+        if string.contains(out, "200") == 1 { return "${dir}/${name}.png" }
+        tries = tries + 1
+        _w, _we = os.exec("sleep 0.3")
+    }
+    return ""
+}
+
+// The ink in a field's inside (what differs from its own background), in the
+// PNG's pixels (a retina capture is 2x the points the driver reports).
+ink(png: string, id: int) -> int {
+    root = uidriver.widget_int_field_by_id(1, "w")
+    sw, _se = os.exec("python3 -I ../lib/png_pixel.py ${png} width")
+    pw, _pe = string.to_int(string.trim(sw))
+    x = (uidriver.widget_int_field_by_id(id, "x") + 6) * pw / root
+    y = (uidriver.widget_int_field_by_id(id, "y") + 6) * pw / root
+    w = (uidriver.widget_int_field_by_id(id, "w") - 12) * pw / root
+    h = (uidriver.widget_int_field_by_id(id, "h") - 12) * pw / root
+    out, _e = os.exec("python3 -I ../lib/png_pixel.py ${png} ink ${x} ${y} ${w} ${h}")
+    n, _ne = string.to_int(string.trim(out))
+    return n
+}
+
+// The widget a screen reader names `name`, or 0.
+named(name: string) -> int {
+    v, _jerr = json.parse(uidriver.get_body("/widgets"))
+    if v == null { return 0 }
+    id = 0
+    i = 0
+    while i < json.json_array_size(v) {
+        w = json.json_array_get_raw(v, i)
+        if string.equals(uidriver.field_str(w, "a11y_name"), name) == 1 { id = uidriver.field_int(w, "id") }
+        i = i + 1
+    }
+    json.json_free(v)
+    return id
+}
 
 placeholder_of(wtype: string) -> string {
     id = uidriver.widget_id_of(wtype, "")
@@ -67,6 +118,50 @@ main() {
         spec.it("a TEXTAREA keeps its placeholder too") callback {
             spec.assert_str_eq(placeholder_of("textarea"), "tell us more",
                                "textarea hint")
+        }
+    }
+
+    spec.describe(fw, "a placeholder goes when there is text") {
+        spec.it("text from code leaves a field with a placeholder looking like one without") callback {
+            a = named("with placeholder")
+            b = named("without placeholder")
+            spec.assert_true(a > 0 && b > 0, "both fields there")
+            png = snapshot("empty")
+            if string.length(png) == 0 { return }
+            // The control: the capture shows a field's placeholder at all.
+            // GTK4's and AppKit's do. Win32's PrintWindow does not paint an
+            // edit control's cue banner (nor its text: the same blank
+            // field), so there the comparison below has nothing to compare
+            // and is not made; GTK4, where the bug was, is held to it.
+            backend = uidriver.widget_text_by_id(named("backend"))
+            if ink(png, a) == 0 && string.equals(backend, "backend: gtk4") == 0 {
+                println("  (skipped: this backend's /screenshot does not paint a field's placeholder: ${backend})")
+                return
+            }
+            spec.assert_true(ink(png, a) > 0, "the placeholder is drawn while the field is empty (${ink(png, a)})")
+            spec.assert_eq(ink(png, b), 0, "and the field without one is blank")
+            // The DSL's set_text (a state binding's path), from a button.
+            uidriver.click_widget(uidriver.widget_id_of("button", "Fill"))
+            sleep(400)
+            png = snapshot("filled")
+            ia = ink(png, a)
+            ib = ink(png, b)
+            spec.assert_true(ib > 0, "the text is drawn (${ib})")
+            spec.assert_eq(ia, ib, "set_text: the same ink with a placeholder as without (${ia} vs ${ib})")
+            // The driver's set_text (a person typing, to the app).
+            uidriver.post_ok("/widget/${a}/set_text?v=B2", "driver text, with placeholder")
+            uidriver.post_ok("/widget/${b}/set_text?v=B2", "driver text, without")
+            sleep(400)
+            png = snapshot("driven")
+            ia = ink(png, a)
+            ib = ink(png, b)
+            spec.assert_true(ib > 0, "the driven text is drawn (${ib})")
+            spec.assert_eq(ia, ib, "driver set_text: the same ink (${ia} vs ${ib})")
+            // Emptied, the placeholder comes back.
+            uidriver.post_ok("/widget/${a}/set_text?v=", "cleared")
+            sleep(400)
+            png = snapshot("cleared")
+            spec.assert_true(ink(png, a) > 0, "the placeholder is back when it is empty again (${ink(png, a)})")
         }
     }
 
