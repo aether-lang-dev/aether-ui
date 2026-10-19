@@ -19,6 +19,7 @@
 import std.spec
 import uidriver
 import std.string
+import std.json
 
 // The row hstack containing label `txt` (rows carry no text of their own).
 row_of(txt: string) -> int {
@@ -69,6 +70,21 @@ main() {
             r2 = uidriver.get_body("/widget/${g}/a11y")
             spec.assert_contains(r2, "\"announcements\":2", "a repeat counted")
             spec.assert_contains(r2, "\"name\":\"Settings\"", "its name unchanged")
+        }
+
+        spec.it("a wrap of buttons is a group, not a grid: only the demo's own grid says grid") callback {
+            w = uidriver.widget_id_of("wrap", "")
+            spec.assert_gt(w, 0, "the wrap is there")
+            spec.assert_true(string.contains(uidriver.get_body("/widget/${w}/a11y"), "\"role\":\"grid\"") == 0, "the wrap is not a grid: ${uidriver.get_body("/widget/${w}/a11y")}")
+            v, _je = json.parse(uidriver.get_body("/widgets"))
+            grids = 0
+            i = 0
+            while v != null && i < json.json_array_size(v) {
+                if string.equals(uidriver.field_str(json.json_array_get_raw(v, i), "role"), "grid") == 1 { grids = grids + 1 }
+                i = i + 1
+            }
+            json.json_free(v)
+            spec.assert_eq(grids, 1, "one widget says grid: the demo's own")
         }
 
         spec.it("a11y_role tags a text as a heading") callback {

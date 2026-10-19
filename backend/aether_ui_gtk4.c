@@ -1921,7 +1921,13 @@ void aether_ui_on_layout_impl(int handle, void* boxed_closure) {
 // between the flowbox and each child ("wrapitem" in the widget JSON).
 int aether_ui_wrap_create(void) {
     ensure_gtk_init();
-    GtkWidget* fb = gtk_flow_box_new();
+    // A GtkFlowBox's own accessible role is GRID (and its children's
+    // GRID_CELL): a screen reader read a row of buttons as a table, and the
+    // driver's /widgets listed every wrap as a "grid" beside the datagrid
+    // (spraedsheet's spec took the last of them for the sheet's grid and
+    // found its announcement nowhere). A wrap is a group of what is in it;
+    // its items are generic (where a child is added).
+    GtkWidget* fb = GTK_WIDGET(g_object_new(GTK_TYPE_FLOW_BOX, "accessible-role", GTK_ACCESSIBLE_ROLE_GROUP, NULL));
     gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(fb), GTK_SELECTION_NONE);
     gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(fb), FALSE);
     gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(fb), 6);
@@ -10739,7 +10745,10 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
             gtk_overlay_add_overlay(GTK_OVERLAY(parent), child);
         }
     } else if (GTK_IS_FLOW_BOX(parent)) {
-        gtk_flow_box_insert(GTK_FLOW_BOX(parent), child, -1);
+        // The item GtkFlowBox would make is a grid cell; this one is generic.
+        GtkWidget* item = GTK_WIDGET(g_object_new(GTK_TYPE_FLOW_BOX_CHILD, "accessible-role", GTK_ACCESSIBLE_ROLE_GENERIC, NULL));
+        gtk_flow_box_child_set_child(GTK_FLOW_BOX_CHILD(item), child);
+        gtk_flow_box_insert(GTK_FLOW_BOX(parent), item, -1);
     } else if (GTK_IS_PANED(parent)) {
         // splitview: exactly two panes, in declaration order. A third
         // attach is silently dropped (documented in ui.splitview).
