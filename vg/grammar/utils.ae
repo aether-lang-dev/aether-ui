@@ -621,7 +621,7 @@ std_regex_for_url_strip() -> (ptr, string) {
 // If alpha < 1.0, the result is baked as rgba(...) via
 // apply_opacity_to_color.
 resolve_fill_color(style: ptr) -> string {
-    f, _ = map.get(style, "fill")
+    f, _ = map.get_string(style, "fill")
     base = "black"
     if f != null {
         if string.equals(f, "none") == 1 { return "" }

@@ -2114,7 +2114,7 @@ _flush_one_body(ctx: @keep ptr, be: ptr, p: ptr, es: ptr) {
         if pend.kind == 3 {
             // Path-accurate shadow: bbox from the outline, silhouette filled by
             // the actual `d` string in render_shadow_path.
-            dstr, _sd = map.get(a, "d")
+            dstr, _sd = map.get_string(a, "d")
             if dstr != null {
                 bb, _bbe = floatarr.new(4)
                 if rasterize.path_bounds(dstr, bb as ptr) == 1 {

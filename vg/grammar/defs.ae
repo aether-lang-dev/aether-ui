@@ -230,7 +230,7 @@ parse_one_stop(node: ptr) -> *GradientStop {
     style = utils.parse_style_attr(attr_or(node, "style", ""))
     color = attr_or(node, "stop-color", "")
     if string.length(color) == 0 {
-        style_color, _ = map.get(style, "stop-color")
+        style_color, _ = map.get_string(style, "stop-color")
         if style_color != null {
             color = style_color
         } else {
@@ -241,7 +241,7 @@ parse_one_stop(node: ptr) -> *GradientStop {
     // stop-opacity: same precedence; default 1
     opacity_str = attr_or(node, "stop-opacity", "")
     if string.length(opacity_str) == 0 {
-        sov, _ = map.get(style, "stop-opacity")
+        sov, _ = map.get_string(style, "stop-opacity")
         if sov != null {
             opacity_str = sov
         } else {

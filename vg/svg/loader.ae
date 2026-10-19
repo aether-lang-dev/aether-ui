@@ -255,7 +255,7 @@ walk_use(ctx: @keep ptr, backend: @keep ptr, node_h: ptr, attrs: ptr) {
         uy = utils.parse_length_to_px(yv)
         if uy != 0.0 { has_xy = 1 }
     }
-    existing_xform, _ = map.get(attrs, "transform")
+    existing_xform, _ = map.get_string(attrs, "transform")
 
     composed_xform = ""
     if has_xy == 1 {

@@ -265,7 +265,13 @@ jobs:
           # function named like one no longer breaks the C; E0900 seeing a
           # slice that dangles through a closure). Verified: ci.sh on macOS
           # and the Linux and Windows lanes.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.824.0' }}
+          # v0.830.0 (2026-10-19): a REAL floor move. This tree reads its
+          # map values as strings through the typed accessors
+          # (`map.get_string`, aether#2981; 0.829.0 and older do not have them,
+          # and warn W1005 where a `ptr` is read as text, an error in a later
+          # release), so nothing older builds it. Verified: ci.sh on macOS and
+          # the Linux lane.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.830.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
