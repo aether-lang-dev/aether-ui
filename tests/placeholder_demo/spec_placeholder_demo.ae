@@ -26,19 +26,20 @@ import std.spec
 import uidriver
 import std.string
 import std.os
+import std.fs
 import std.json
 
 // The window as a PNG; "" when the backend has no /screenshot. A capture can
 // miss a frame in flight (GTK under Xvfb), so it is taken again.
 snapshot(name: string) -> string {
     dir = "${os.os_getenv("PWD")}/target/placeholder-snapshots"
-    _m, _me = os.exec("mkdir -p ${dir}")
+    _mk = fs.mkdir_p(dir)   // not `mkdir -p`: Windows runs os.exec through cmd.exe
     tries = 0
     while tries < 5 {
         out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
         if string.contains(out, "200") == 1 { return "${dir}/${name}.png" }
         tries = tries + 1
-        _w, _we = os.exec("sleep 0.3")
+        sleep(300)
     }
     return ""
 }
@@ -128,16 +129,11 @@ main() {
             spec.assert_true(a > 0 && b > 0, "both fields there")
             png = snapshot("empty")
             if string.length(png) == 0 { return }
-            // The control: the capture shows a field's placeholder at all.
-            // GTK4's and AppKit's do. Win32's PrintWindow does not paint an
-            // edit control's cue banner (nor its text: the same blank
-            // field), so there the comparison below has nothing to compare
-            // and is not made; GTK4, where the bug was, is held to it.
-            backend = uidriver.widget_text_by_id(named("backend"))
-            if ink(png, a) == 0 && string.equals(backend, "backend: gtk4") == 0 {
-                println("  (skipped: this backend's /screenshot does not paint a field's placeholder: ${backend})")
-                return
-            }
+            // The control, first: the capture shows a field's placeholder at
+            // all, on every backend (Win32's, too: its capture paints an edit
+            // control's cue banner and its text; this once looked as if it did
+            // not only because snapshot() ran `mkdir -p` through cmd.exe, which
+            // made no directory, so there was no PNG to count ink in).
             spec.assert_true(ink(png, a) > 0, "the placeholder is drawn while the field is empty (${ink(png, a)})")
             spec.assert_eq(ink(png, b), 0, "and the field without one is blank")
             // The DSL's set_text (a state binding's path), from a button.
