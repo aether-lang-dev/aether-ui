@@ -1,0 +1,98 @@
+// Restyling a page's worth of widgets in one callback is one reload of the
+// style sheets, not one per widget.
+//
+// The GTK4 backend keeps every styling rule in a few CSS sheets and had to
+// reload a sheet (and let GTK restyle every widget on the display) each time
+// one rule changed: a theme switch styles a thousand widgets, so it parsed a
+// sheet a thousand times. On the x86_64 lab host (ae-x64) a spreadsheet of
+// 1,400 widgets took 2.4 s to turn from dark to light, 1.2 s of it in those
+// reloads, and the sheet spec's 3 s wait for it failed.
+//
+// This restyles 500 labels, eight properties each, from one button's handler and reports how long
+// the handler took, and how long until the next timer tick (which is after
+// the backend has loaded what the handler changed). The spec asserts a bound
+// a per-rule reload cannot meet on any host the toolkit is tested on and a
+// batched one meets on the slowest.
+import ui
+import ui (backend_name, window, vstack, text, btn, scrollview, timer, set_text,
+    style_bg_color, style_text_color, style_font_size, style_border, style_corner_radius,
+    style_opacity, style_hover, style_active, a11y_label, enable_test_server)
+import std.os (os_getenv)
+import std.time (now_ms)
+import std.intarr
+import std.string
+
+const GTK_ROWS: int = 500    // enough that a reload per rule is seconds, not milliseconds
+const OTHER_ROWS: int = 40   // no sheets to reload elsewhere; Win32 takes ~25 ms a style call
+
+main() {
+    gtk = string.equals(backend_name(), "gtk4")
+    rows = OTHER_ROWS
+    if gtk == 1 { rows = GTK_ROWS }
+    status = 0
+    ids = intarr.intarr_new_raw(rows)
+    flip = 0
+    rounds = 0
+    pending = 0
+    long t0 = 0
+    handler_ms = 0
+
+    window("css batch", 500, 400) {
+        vstack(4) {
+            status = text("restyle: not yet")
+            _a = a11y_label(status, "status")
+            scrollview {
+                vstack(0) {
+                    r = 0
+                    while r < rows {
+                        h = text("row ${r}")
+                        intarr.intarr_set_raw(ids, r, h)
+                        r = r + 1
+                    }
+                }
+            }
+            btn("Restyle") callback {
+                flip = 1 - flip
+                rounds = rounds + 1
+                t0 = now_ms()
+                i = 0
+                while i < rows {
+                    h = intarr.intarr_get_raw(ids, i)
+                    // Eight properties a label, as a theme gives a widget.
+                    if flip == 1 {
+                        _s = style_bg_color(h, 0.20, 0.20, 0.20, 1.0)
+                        _t = style_text_color(h, 0.95, 0.95, 0.95)
+                        _u = style_font_size(h, 15.0)
+                        _v = style_border(h, 1.0, 0.40, 0.40, 0.45)
+                        _w = style_corner_radius(h, 4.0)
+                        _x = style_opacity(h, 0.95)
+                        _y = style_hover(h, 0.30, 0.30, 0.35)
+                        _z = style_active(h, 0.10, 0.10, 0.15)
+                    } else {
+                        _s = style_bg_color(h, 0.80, 0.80, 0.80, 1.0)
+                        _t = style_text_color(h, 0.10, 0.10, 0.10)
+                        _u = style_font_size(h, 14.0)
+                        _v = style_border(h, 1.0, 0.70, 0.70, 0.75)
+                        _w = style_corner_radius(h, 2.0)
+                        _x = style_opacity(h, 1.0)
+                        _y = style_hover(h, 0.85, 0.85, 0.90)
+                        _z = style_active(h, 0.65, 0.65, 0.70)
+                    }
+                    i = i + 1
+                }
+                handler_ms = (now_ms() - t0) as int
+                pending = 1
+            }
+        }
+        // A tick after the handler: by then the backend has loaded what the
+        // handler changed (the batch is applied before any timer is run).
+        _tick = timer(2) callback {
+            if pending == 1 {
+                pending = 0
+                total_ms = now_ms() - t0
+                set_text(status, "restyle #${rounds} [${backend_name()}]: ${rows} labels, handler ${handler_ms} ms, applied by ${total_ms} ms")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

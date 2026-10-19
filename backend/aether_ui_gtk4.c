@@ -3103,6 +3103,9 @@ static GHashTable* widget_css_keys = NULL;    // handle -> GPtrArray of its keys
 static guint widget_css_holes = 0;
 
 static void global_css_reload(void);
+static unsigned css_bucket(const char* text);
+static guint64 css_dirty = 0;   // the sheets (bit per bucket) whose text may have changed
+static void css_mark_dirty(const char* text) { css_dirty |= (guint64)1 << css_bucket(text); }
 
 static void widget_css_set(int handle, const char* key, const char* rule) {
     if (!widget_css_index) {
@@ -3126,6 +3129,7 @@ static void widget_css_set(int handle, const char* key, const char* rule) {
         }
         g_ptr_array_add(keys, g_strdup(key));
     }
+    css_mark_dirty(rule);
     global_css_reload();
 }
 
@@ -3165,6 +3169,7 @@ static void css_forget_handle(int handle) {
             gpointer at = g_hash_table_lookup(widget_css_index, g_ptr_array_index(keys, k));
             if (!at) continue;
             guint i = GPOINTER_TO_UINT(at) - 1;
+            css_mark_dirty(g_ptr_array_index(widget_css_rules, i));   // its sheet drops it at the next load
             g_free(g_ptr_array_index(widget_css_rules, i));
             g_ptr_array_index(widget_css_rules, i) = NULL;
             g_hash_table_remove(widget_css_index, g_ptr_array_index(keys, k));
@@ -3178,7 +3183,7 @@ static void css_forget_handle(int handle) {
         char cls[32];
         for (size_t p = 0; p < sizeof(prefixes) / sizeof(prefixes[0]); p++) {
             snprintf(cls, sizeof(cls), prefixes[p], handle);
-            g_hash_table_remove(keyed_css, cls);
+            if (g_hash_table_remove(keyed_css, cls)) css_mark_dirty(cls);
         }
     }
 }
@@ -3193,6 +3198,7 @@ static void global_css_set_keyed(const char* key, const char* rule) {
     const char* was = g_hash_table_lookup(keyed_css, key);
     if (was && strcmp(was, rule) == 0) return;
     g_hash_table_replace(keyed_css, g_strdup(key), g_strdup(rule));
+    css_mark_dirty(key);
     global_css_reload();
 }
 
@@ -3218,21 +3224,41 @@ static unsigned css_bucket(const char* text) {
 // builder recurses once for about each class, a stack overflow inside
 // gtk_css_provider_load_from_data: sae's spreadsheet crashed in dark mode on
 // aether-linux, 1,400 widgets in. A sheet holds a sixty-fourth of them.
-static void global_css_reload(void) {
-    if (!widget_css_rules && !keyed_css) return;
+//
+// And not once per rule set. A theme switch sets some 1,500 rules, and each
+// set rebuilt the text of every sheet, compared it all, and parsed the one
+// sheet it had touched, which GTK answers by restyling every widget on the
+// display: 0.85 ms a rule on ae-x64, 1.2 s of the 2.4 s a spreadsheet took to
+// turn from dark to light. The rule sets now only note which sheets they
+// changed (css_dirty); the sheets are rebuilt and loaded once, by an idle at
+// the highest priority, so before anything else is dispatched (a driver
+// request, a redraw) and after the callback that did the styling has finished
+// (the theme switch is one callback). Only a sheet that changed is rebuilt
+// and parsed. With no main loop running (a widget tree built before
+// app_start, a headless program) there is no idle to wait for, and it loads
+// at once.
+static guint css_flush_source = 0;
+
+static void global_css_flush(void) {
+    if (css_flush_source) { g_source_remove(css_flush_source); css_flush_source = 0; }
+    guint64 dirty = css_dirty;
+    css_dirty = 0;
+    if (!dirty || (!widget_css_rules && !keyed_css)) return;
     ensure_gtk_init();
     GdkDisplay* display = gdk_display_get_default();
     if (!display) return;
     for (int b = 0; b < AEUI_CSS_BUCKETS; b++) {
+        if (!(dirty >> b & 1)) continue;
         if (!css_text[b]) css_text[b] = g_string_new(NULL);
         g_string_truncate(css_text[b], 0);
     }
     for (guint i = 0; widget_css_rules && i < widget_css_rules->len; i++) {
         const gchar* rule = g_ptr_array_index(widget_css_rules, i);
         if (!rule) continue;
-        GString* sheet = css_text[css_bucket(rule)];
-        g_string_append(sheet, rule);
-        g_string_append_c(sheet, '\n');
+        unsigned b = css_bucket(rule);
+        if (!(dirty >> b & 1)) continue;
+        g_string_append(css_text[b], rule);
+        g_string_append_c(css_text[b], '\n');
     }
     if (keyed_css) {
         GHashTableIter it;
@@ -3241,12 +3267,14 @@ static void global_css_reload(void) {
         while (g_hash_table_iter_next(&it, &key, &rule)) {
             // A key is its class's name (aui-bg-12, aui-ty-12-script): the
             // rule names the class too, and says the same number.
-            GString* sheet = css_text[css_bucket((const char*)key)];
-            g_string_append(sheet, (const char*)rule);
-            g_string_append_c(sheet, '\n');
+            unsigned b = css_bucket((const char*)key);
+            if (!(dirty >> b & 1)) continue;
+            g_string_append(css_text[b], (const char*)rule);
+            g_string_append_c(css_text[b], '\n');
         }
     }
     for (int b = 0; b < AEUI_CSS_BUCKETS; b++) {
+        if (!(dirty >> b & 1)) continue;
         const char* now = css_text[b]->str;
         if (css_loaded[b] ? strcmp(css_loaded[b], now) == 0 : now[0] == 0) continue;
         if (!css_provider[b]) {
@@ -3259,6 +3287,21 @@ static void global_css_reload(void) {
         g_free(css_loaded[b]);
         css_loaded[b] = g_strdup(now);
     }
+}
+
+static gboolean css_flush_idle(gpointer unused) {
+    (void)unused;
+    css_flush_source = 0;
+    global_css_flush();
+    return G_SOURCE_REMOVE;
+}
+
+// The rules changed (css_dirty says which sheets): load them, once the
+// callback that changed them is done.
+static void global_css_reload(void) {
+    if (!css_dirty) return;
+    if (g_main_depth() == 0) { global_css_flush(); return; }
+    if (!css_flush_source) css_flush_source = g_idle_add_full(G_PRIORITY_HIGH, css_flush_idle, NULL, NULL);
 }
 
 static void aether_ui_apply_css(int handle, GtkWidget* widget, const char* property_css) {

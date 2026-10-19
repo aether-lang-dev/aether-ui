@@ -786,6 +786,7 @@ when a bind, unbind or register changes it.
 | [`examples/scrollbg_demo`](examples/scrollbg_demo) | small content inside a scroll area, and theming it |
 | [`examples/scrollwide_demo`](examples/scrollwide_demo) | a row wider than the window in a scroll area: clipped, and no row decides the page's width |
 | [`examples/pinsize_demo`](examples/pinsize_demo) | a stated width is the width given: text fields narrower than the platform's minimum, a canvas pinned below its creation size |
+| [`examples/cssbatch_demo`](examples/cssbatch_demo) | 500 labels restyled from one handler: applied in tens of milliseconds, one sheet reload not one per rule (GTK4) |
 | [`examples/barfill_demo`](examples/barfill_demo) | a pinned toolbar with a body that takes the slack |
 | [`examples/frametick_demo`](examples/frametick_demo) | on_frame (the display-synced frame clock), frame_source, timer_once |
 
