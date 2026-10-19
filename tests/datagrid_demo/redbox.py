@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """redbox.py PNG BX:BY:BW:RW X:Y:W:H ... -- how many red pixels (the demo's floating box, #d82626)
 lie in each box, one count a line. With BOX_COLOR=rrggbb in the environment, the pixels
-within 24 of that colour in each channel instead.
+within 24 of that colour in each channel instead. With BOX_RUN=1, how many pixel rows
+of the box hold an unbroken run of dark ink (darker than mid-grey, as ink.py reads it)
+across 60% of its width: a line drawn under some text (an underline), which no row
+through letters is.
 
 Reads the 8- or 16-bit RGB(A) PNG a /screenshot gives (stdlib only). Boxes are
 in points, as /widgets gives them; they become pixels through the driver's red
@@ -82,8 +85,18 @@ def main():
         x0, y0 = int(ox + bx * scale), int(oy + by * scale)
         x1, y1 = min(w, x0 + int(bw * scale)), min(h, y0 + int(bh * scale))
         n = 0
+        run_rows = os.environ.get("BOX_RUN")
         for y in range(max(0, y0), y1):
             r = rows[y]
+            if run_rows:
+                run = best = 0
+                for x in range(max(0, x0), x1):
+                    p = x * bpp
+                    run = run + 1 if (r[p] + r[p + step] + r[p + 2 * step]) < 3 * 110 else 0
+                    best = max(best, run)
+                if best >= 0.6 * (x1 - x0):
+                    n += 1
+                continue
             for x in range(max(0, x0), x1):
                 p = x * bpp
                 if want:

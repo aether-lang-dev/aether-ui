@@ -762,9 +762,89 @@ void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
 // untouched.
 static void (*aeui_label_snapshot_orig)(GtkWidget*, GtkSnapshot*) = NULL;
 
+// A label's underline, drawn here rather than by Pango. Pango's is the
+// font's own thickness at a fractional position (DejaVu Sans at 10 px: 0.59 px
+// a few tenths into a row), which at one device pixel to the point is a hairline
+// of faint grey spread over two rows: GTK 4.6 and 4.22 alike. So an underline is
+// whole device pixels thick (at least one) and snapped to the pixel grid, in
+// the label's own colour, the same under every font and scale: what a
+// spreadsheet cell's underline is on macOS and Windows. "aeui-ul" on the label:
+// 1 single, 2 double (two lines, a line apart); the CSS no longer asks Pango
+// for either, only for line-through.
+static void aeui_label_color(GtkWidget* w, GdkRGBA* col) {
+#if GTK_CHECK_VERSION(4, 10, 0)
+    gtk_widget_get_color(w, col);
+#else
+    gtk_style_context_get_color(gtk_widget_get_style_context(w), col);
+#endif
+    // A colour set as a Pango foreground (aether_ui_set_text_color) is the
+    // text's, and so the underline's.
+    PangoAttrList* attrs = gtk_label_get_attributes(GTK_LABEL(w));
+    PangoAttrIterator* it = attrs ? pango_attr_list_get_iterator(attrs) : NULL;
+    if (it) {
+        PangoAttribute* a = pango_attr_iterator_get(it, PANGO_ATTR_FOREGROUND);
+        if (a) {
+            PangoColor* c = &((PangoAttrColor*)a)->color;
+            col->red = c->red / 65535.0f; col->green = c->green / 65535.0f; col->blue = c->blue / 65535.0f;
+        }
+        pango_attr_iterator_destroy(it);
+    }
+}
+
+static void aeui_label_draw_underline(GtkWidget* w, GtkSnapshot* snap, int kind) {
+    GtkLabel* lb = GTK_LABEL(w);
+    PangoLayout* lay = gtk_label_get_layout(lb);
+    if (!lay) return;
+    const char* txt = pango_layout_get_text(lay);
+    if (!txt || !*txt) return;
+    int lx = 0, ly = 0;
+    gtk_label_get_layout_offsets(lb, &lx, &ly);
+    GdkRGBA col;
+    aeui_label_color(w, &col);
+    double sc = gtk_widget_get_scale_factor(w);
+    if (sc < 1) sc = 1;
+    PangoLayoutIter* it = pango_layout_get_iter(lay);
+    do {
+        PangoLayoutLine* line = pango_layout_iter_get_line_readonly(it);
+        if (!line || line->length == 0) continue;
+        PangoRectangle lg;
+        pango_layout_iter_get_line_extents(it, NULL, &lg);
+        // The metrics of the font the line's first run is set in.
+        double pos = -1.0, thick = 0.6;
+        if (line->runs) {
+            PangoFont* f = ((PangoLayoutRun*)line->runs->data)->item->analysis.font;
+            if (f) {
+                PangoFontMetrics* m = pango_font_get_metrics(f, NULL);
+                if (m) {
+                    pos = pango_font_metrics_get_underline_position(m) / (double)PANGO_SCALE;
+                    thick = pango_font_metrics_get_underline_thickness(m) / (double)PANGO_SCALE;
+                    pango_font_metrics_unref(m);
+                }
+            }
+        }
+        double base = ly + pango_layout_iter_get_baseline(it) / (double)PANGO_SCALE;
+        double tpx = floor(thick * sc + 0.5);
+        if (tpx < 1) tpx = 1;
+        double t = tpx / sc;
+        // Its top: where the font puts it, onto the next device row down.
+        double y0 = ceil((base - pos) * sc - 0.01) / sc;
+        double x0 = floor((lx + lg.x / (double)PANGO_SCALE) * sc) / sc;
+        double x1 = ceil((lx + (lg.x + lg.width) / (double)PANGO_SCALE) * sc) / sc;
+        gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)y0, (float)(x1 - x0), (float)t));
+        if (kind == 2)
+            gtk_snapshot_append_color(snap, &col, &GRAPHENE_RECT_INIT((float)x0, (float)(y0 + 2 * t), (float)(x1 - x0), (float)t));
+    } while (pango_layout_iter_next_line(it));
+    pango_layout_iter_free(it);
+}
+
 static void aeui_label_snapshot(GtkWidget* w, GtkSnapshot* snap) {
+    int ul = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-ul"));
     double* rot = (double*)g_object_get_data(G_OBJECT(w), "aeui-rot");
-    if (!rot || *rot == 0.0) { aeui_label_snapshot_orig(w, snap); return; }
+    if (!rot || *rot == 0.0) {
+        aeui_label_snapshot_orig(w, snap);
+        if (ul) aeui_label_draw_underline(w, snap, ul);
+        return;
+    }
     float bw = (float)gtk_widget_get_width(w), bh = (float)gtk_widget_get_height(w);
     gtk_snapshot_push_clip(snap, &GRAPHENE_RECT_INIT(0, 0, bw, bh));
     gtk_snapshot_save(snap);
@@ -772,6 +852,7 @@ static void aeui_label_snapshot(GtkWidget* w, GtkSnapshot* snap) {
     gtk_snapshot_rotate(snap, (float)-*rot);
     gtk_snapshot_translate(snap, &GRAPHENE_POINT_INIT(-bw / 2, -bh / 2));
     aeui_label_snapshot_orig(w, snap);
+    if (ul) aeui_label_draw_underline(w, snap, ul);
     gtk_snapshot_restore(snap);
     gtk_snapshot_pop(snap);
 }
@@ -3227,20 +3308,32 @@ void aether_ui_set_font_italic(int handle, int italic) {
     g_object_set_data(G_OBJECT(w), "aeui-text-style", GINT_TO_POINTER(ts));
 }
 
+// A label's underline as set_text_decoration (line) and typography (dbl) have
+// it, -1 for the one a call leaves as it was; aeui_label_snapshot draws it.
+static void aeui_label_set_underline(GtkWidget* w, int line, int dbl) {
+    if (line >= 0) g_object_set_data(G_OBJECT(w), "aeui-ul-line", GINT_TO_POINTER(line));
+    if (dbl >= 0) g_object_set_data(G_OBJECT(w), "aeui-ul-dbl", GINT_TO_POINTER(dbl));
+    int d = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-ul-dbl"));
+    int l = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-ul-line"));
+    g_object_set_data(G_OBJECT(w), "aeui-ul", GINT_TO_POINTER(d ? 2 : l ? 1 : 0));
+    gtk_widget_queue_draw(w);
+}
+
 void aether_ui_set_text_decoration(int handle, int underline, int strike) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (!w || !GTK_IS_LABEL(w)) return;
-    // As CSS (text-decoration-line), which GTK turns into the label's own
-    // attributes: a Pango underline attribute set directly is not drawn by
-    // GTK 4.6 (Ubuntu 22.04), though line-through is.
+    // The line-through as CSS (text-decoration-line), which GTK turns into
+    // the label's own attributes; the underline is drawn, not Pango's (a
+    // hairline of 0.59 px: aeui_label_draw_underline).
     char cls[32], rule[160];
     snprintf(cls, sizeof(cls), "aui-td-%d", handle);
     gtk_widget_add_css_class(w, cls);
-    const char* line = "none";
-    if (underline && strike) line = "underline line-through";
-    else if (underline) line = "underline";
-    else if (strike) line = "line-through";
+    // Only the line-through is Pango's: the underline is drawn by
+    // aeui_label_snapshot (a double one is typography's, below).
+    const char* line = strike ? "line-through" : "none";
     snprintf(rule, sizeof(rule), "label.%s { text-decoration-line: %s; }", cls, line);
+    aeui_label_hook_snapshot();
+    aeui_label_set_underline(w, underline ? 1 : 0, -1);
     global_css_set_keyed(cls, rule);
     int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
     ts = (ts & ~6) | (underline ? 2 : 0) | (strike ? 4 : 0) | 8;
@@ -3248,7 +3341,7 @@ void aether_ui_set_text_decoration(int handle, int underline, int strike) {
 }
 
 // A label's typography beyond the font's (aether_ui_typo.h): a double
-// underline as CSS (text-decoration-style), super- and subscript as Pango's
+// underline (drawn, aeui_label_draw_underline), super- and subscript as Pango's
 // own (a baseline shift and its smaller size), the vertical placement as the
 // label's yalign, the indent as its leading padding, and the rotation as a
 // CSS transform about its centre, which GTK applies as it allocates.
@@ -3267,13 +3360,9 @@ static void aeui_typo_apply(int handle, const AeuiTypo* t) {
     snprintf(cls, sizeof(cls), "aui-ty-%d", handle);
     gtk_widget_add_css_class(w, cls);
     char parts[256] = "";
-    if (t->underline == 2) {
-        // A double underline, the label's strike kept (set_text_decoration's
-        // rule names the lines; this one comes after it).
-        int ts = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "aeui-text-style"));
-        strncat(parts, (ts & 4) ? " text-decoration-line: underline line-through;" : " text-decoration-line: underline;", sizeof(parts) - strlen(parts) - 1);
-        strncat(parts, " text-decoration-style: double;", sizeof(parts) - strlen(parts) - 1);
-    }
+    // A double underline is drawn by aeui_label_snapshot, as a single one is.
+    aeui_label_hook_snapshot();
+    aeui_label_set_underline(w, -1, t->underline == 2 ? 1 : 0);
     if (t->indent > 0) {
         char x[48];
         snprintf(x, sizeof(x), " padding-left: %dpx;", t->indent);

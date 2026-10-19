@@ -350,6 +350,25 @@ colour_in(name: string, boxes: string, colour: string) -> string {
     return string.trim(out)
 }
 
+// How many pixel rows of each box (x:y:w:h, points) a snapshot has an
+// unbroken run of dark ink across most of: a line under text, one a line
+// ("" without a screenshot).
+runs_in(name: string, boxes: string) -> string {
+    dims = snapshot(name)
+    if string.length(dims) == 0 { return "" }
+    xw = string.index_of(dims, "x")
+    pw, _pe = string.to_int(string.substring(dims, 0, xw))
+    rw = uidriver.widget_int_field_by_id(1, "w")
+    if rw <= 0 || pw % rw != 0 {
+        println("      (screenshot not at a whole scale of the window: drawn checks skipped)")
+        return ""
+    }
+    bn = uidriver.widget_id_by_text("Under Remote Control")
+    banner = "${uidriver.widget_int_field_by_id(bn, "x")}:${uidriver.widget_int_field_by_id(bn, "y")}:${uidriver.widget_int_field_by_id(bn, "w")}:${uidriver.widget_int_field_by_id(1, "w")}"
+    out, _e = os.exec("BOX_RUN=1 python3 redbox.py target/datagrid-snapshots/${name}.png ${banner} ${boxes}")
+    return string.trim(out)
+}
+
 main() {
     fw = spec.init()
     uidriver.wait_server()
@@ -998,6 +1017,28 @@ main() {
             spec.assert_str_eq(fstr("R12C4", "textDecoration"), "underline", "and underlined")
             spec.assert_str_eq(fstr("R13C4", "textDecoration"), "line-through", "R13C4 struck through")
             spec.assert_str_eq(fstr("R13C4", "fontStyle"), "normal", "and not italic")
+            // Drawn: the underline is a line of ink across R12C4, a row that is
+            // dark right across most of the cell, where a plain cell (R11C4) has
+            // none. (GTK's own was a 0.59 px hairline, too faint to count: a pixel
+            // check where the attribute check passed.)
+            spec.assert_true(shows("R11C4") == 1, "row 11 shown, a plain cell beside it")
+            u = uidriver.widget_id_by_text("R12C4")
+            p = uidriver.widget_id_by_text("R11C4")
+            ux = uidriver.widget_int_field_by_id(u, "x")
+            uy = uidriver.widget_int_field_by_id(u, "y")
+            uw = uidriver.widget_int_field_by_id(u, "w")
+            uh = uidriver.widget_int_field_by_id(u, "h")
+            px = uidriver.widget_int_field_by_id(p, "x")
+            py = uidriver.widget_int_field_by_id(p, "y")
+            runs = runs_in("underline", "${ux}:${uy}:${uw}:${uh} ${px}:${py}:${uw}:${uh}")
+            if string.length(runs) > 0 {
+                parts = string.string_split(runs, "\n")
+                under, _ue = string.to_int(string.trim(string.string_array_get(parts, 0)))
+                plain, _pe = string.to_int(string.trim(string.string_array_get(parts, 1)))
+                string.string_array_free(parts)
+                spec.assert_eq(plain, 0, "no line of ink in a plain cell (${runs})")
+                spec.assert_gt(under, 0, "a line of ink under R12C4's text (${runs})")
+            }
         }
         spec.it("a font family") callback {
             spec.assert_str_eq(fstr("R12C4", "fontFamily"), "monospace", "R12C4 in the monospace family")
