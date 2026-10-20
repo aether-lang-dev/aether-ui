@@ -3578,7 +3578,9 @@ static void aeui_typo_apply(int handle, const AeuiTypo* t) {
         // other side (GTK 4.6 draws Pango's rise nowhere): padding below a
         // centred label lifts its text by half of it.
         pango_attr_list_insert(attrs, pango_attr_scale_new(0.66));
-        char pad[64];
+        // Sized for the longest rule: cls is "aui-ty-" and a handle (at most
+        // 18 bytes), the property name 14, the pixel count an int (11).
+        char pad[96];
         snprintf(pad, sizeof(pad), "label.%s.aui-ty-script { %s: %dpx; }", cls,
                  t->script == 1 ? "padding-bottom" : "padding-top", (int)(px * (t->script == 1 ? 0.66 : 0.4) + 0.5));
         char key[48];
