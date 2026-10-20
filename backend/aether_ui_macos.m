@@ -4684,11 +4684,31 @@ void aether_ui_set_alignment(int handle, int alignment) {
     }
 }
 
+// A size width()/height() fixed before, made a floor: fill_width after a
+// width (canvas_size and then fill_width, say) means "at least this, and
+// the rest of the parent", as GTK's size request under hexpand does and as
+// Win32's fill does. Left an equality, the widget could not fill, and in a
+// stack its stretch to the parent's edge (aeui-inset-trail, 750) held the
+// parent to the widget's width instead: the ae3d editor's colour picker,
+// canvas_size 240 then fill_width, pinned its inspector to 240 plus the
+// insets, and the splitter beside it (holding at 250) never moved.
+static void aeui_fixed_size_to_floor(NSView* v, NSLayoutAttribute attr, NSString* ident) {
+    NSLayoutConstraint* fixed = aeui_own_size(v, attr, ident);
+    if (!fixed || fixed.relation != NSLayoutRelationEqual) return;
+    NSLayoutAnchor* anchor = attr == NSLayoutAttributeWidth ? (NSLayoutAnchor*)v.widthAnchor
+                                                             : (NSLayoutAnchor*)v.heightAnchor;
+    NSLayoutConstraint* floor_c = [(NSLayoutDimension*)anchor constraintGreaterThanOrEqualToConstant:fixed.constant];
+    [floor_c setIdentifier:ident];
+    fixed.active = NO;
+    floor_c.active = YES;
+}
+
 void aether_ui_match_parent_width(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     [v setContentHuggingPriority:1
                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+    aeui_fixed_size_to_floor(v, NSLayoutAttributeWidth, @"aeui-width");
 }
 
 void aether_ui_match_parent_height(int handle) {
@@ -4696,6 +4716,7 @@ void aether_ui_match_parent_height(int handle) {
     if (!v) return;
     [v setContentHuggingPriority:1
                   forOrientation:NSLayoutConstraintOrientationVertical];
+    aeui_fixed_size_to_floor(v, NSLayoutAttributeHeight, @"aeui-height");
 }
 
 void aether_ui_set_margin(int handle, int top, int right, int bottom, int left) {

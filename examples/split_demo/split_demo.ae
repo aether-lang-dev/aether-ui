@@ -12,6 +12,7 @@
 import ui
 import ui (content_inset, window, vstack, hstack, text, btn, divider, splitview,
     split_position, split_set_position, on_layout, weight, wrap,
+    canvas_create, canvas_size, canvas_widget, fill_width,
     enable_test_server)
 import std.os (os_getenv)
 import std.string
@@ -33,6 +34,14 @@ main() {
                 vstack(4) {
                     _r1 = text("right pane")
                     _r2 = text("omega")
+                    // Sized, then told to fill: at least 120 wide, and the
+                    // pane's width -- a colour picker under an inspector's
+                    // fields. On AppKit the size stayed an equality, and the
+                    // canvas's stretch to the pane's edge held the pane at
+                    // its 120: the splitter could not widen it.
+                    strip = canvas_create(120, 24)
+                    canvas_size(strip, 120, 24)
+                    fill_width(canvas_widget(strip))
                 }
             }
             divider()

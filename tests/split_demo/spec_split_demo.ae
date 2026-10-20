@@ -56,6 +56,33 @@ main() {
             spec.assert_gt(rw, 300, "right pane grew")
         }
 
+        spec.it("a canvas sized and then filled widens with its pane, and lets the splitter go") callback {
+            // The right pane holds a canvas given 120 x 24 and then
+            // fill_width. With the splitter at 150 the pane is the rest of
+            // the 640, and the canvas has to be its width, not its 120 --
+            // and the splitter has to move back the other way too.
+            lp = pane_of("left pane")
+            rp = pane_of("right pane")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            strip = uidriver.canvas_widget_id()
+            spec.assert_gt(strip, 0, "the strip is in the tree, the demo's one canvas")
+            uidriver.post_ok("/widget/${sv}/split_position?px=150", "drag to 150")
+            ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":150", 20)
+            spec.assert_true(ok, "splitter at 150")
+            rw = uidriver.widget_int_field_by_id(rp, "w")
+            sw = uidriver.widget_int_field_by_id(strip, "w")
+            spec.assert_gt(rw, 400, "right pane is the rest of the window (${rw})")
+            spec.assert_gt(sw, rw - 40, "the strip fills its pane (${sw} of ${rw}), not its 120")
+            uidriver.post_ok("/widget/${sv}/split_position?px=450", "drag to 450")
+            ok2 = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":450", 20)
+            spec.assert_true(ok2, "splitter at 450: the strip gives way")
+            sw2 = uidriver.widget_int_field_by_id(strip, "w")
+            spec.assert_gt(sw2, 119, "and keeps its 120 at the least (${sw2})")
+            uidriver.post_ok("/widget/${sv}/split_position?px=150", "back to 150")
+            ok3 = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":150", 20)
+            spec.assert_true(ok3, "and back at 150")
+        }
+
         spec.it("app-side split_position reads the moved splitter") callback {
             rb = uidriver.widget_id_by_text("Read position")
             uidriver.post_ok("/widget/${rb}/click", "read position")
