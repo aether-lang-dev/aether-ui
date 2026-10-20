@@ -92,7 +92,7 @@ node(name: string, attrs_lit: string, class_name: string) -> *CtNode {
         a = jv.parse(attrs_lit)
         i = 0
         while i < jv.key_count(a) {
-            attr(n, jv.key_at(a, i), jv.value_at(a, i))
+            attr(n, jv.key_at(a, i), jv.entry_value(a, i))
             i = i + 1
         }
     }

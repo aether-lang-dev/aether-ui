@@ -8,7 +8,7 @@
 import ui
 import ui (content_inset, window, vstack, hstack, text, btn, divider, add_css_class,
     create_styles, st_color, st_bg, st_font_size, st_opacity,
-    ui_states, add_state, set_state, current_state, transition,
+    add_state, set_state, current_state, transition,
     states, on_state, bg, color, font_size_of, opacity_of,
     enable_test_server)
 import std.os (os_getenv)

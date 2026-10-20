@@ -53,7 +53,7 @@ exports (
     is_array, is_object, truthy,
     number_of, string_of, bool_of,
     len, at, push, set_at,
-    get, has, put, remove_key, key_count, key_at, value_at,
+    get, has, put, remove_key, key_count, key_at, entry_value,
     get_path, num_path, num_path_or, str_path, bool_path, has_path,
     parse, parse_error, stringify,
     js_number, js_string, to_number, is_numeric, is_falsey_but_zero,
@@ -274,7 +274,7 @@ key_at(o: *JsValue, i: int) -> string {
     return kv.str
 }
 
-value_at(o: *JsValue, i: int) -> *JsValue {
+entry_value(o: *JsValue, i: int) -> *JsValue {
     if kind(o) != JV_OBJECT { return null }
     item, _e = list.get(o.items, i)
     return item as *JsValue
@@ -687,7 +687,7 @@ stringify(v: *JsValue) -> string {
     n = key_count(v)
     i = 0
     while i < n {
-        e = value_at(v, i)
+        e = entry_value(v, i)
         if is_undefined(e) == 0 {
             if first == 0 { out = string.concat(out, ",") }
             out = string.concat(out, json_quote(key_at(v, i)))
@@ -960,7 +960,7 @@ obj_covers(a: *JsValue, b: *JsValue) -> int {
     n = key_count(a)
     i = 0
     while i < n {
-        v = value_at(a, i)
+        v = entry_value(a, i)
         if is_undefined(v) == 0 {
             if equals(v, get(b, key_at(a, i))) == 0 { return 0 }
         }
@@ -986,7 +986,7 @@ clone(v: *JsValue) -> *JsValue {
     o = obj()
     n2 = key_count(v)
     j = 0
-    while j < n2 { put(o, key_at(v, j), clone(value_at(v, j))); j = j + 1 }
+    while j < n2 { put(o, key_at(v, j), clone(entry_value(v, j))); j = j + 1 }
     return o
 }
 
@@ -1001,7 +1001,7 @@ extend(target: *JsValue, source: *JsValue) -> *JsValue {
     i = 0
     while i < n {
         k = key_at(source, i)
-        sp = value_at(source, i)
+        sp = entry_value(source, i)
         if kind(sp) == JV_OBJECT {
             tp = get(target, k)
             base = tp

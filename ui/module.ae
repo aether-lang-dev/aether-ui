@@ -73,7 +73,7 @@ exports (
     use_styles, current_styles, use_styles_pair, on_appearance_change,
     free_styles, free_scheme,
     load_styles,
-    ui_states, add_state, set_state, current_state,
+    add_state, set_state, current_state,
     states, on_state,
     commands, action, does, on_button, on_menu_item,
     command_group_set_enabled,

@@ -345,7 +345,7 @@ shape(p: *sp.CtSvgPath) -> *jv.JsValue {
         o = sp.el_params_lit(e)
         k = 0
         while k < jv.key_count(o) {
-            v = jv.value_at(o, k)
+            v = jv.entry_value(o, k)
             if jv.is_number(v) == 1 { jv.put(o, jv.key_at(o, k), jv.num(core.round_to(jv.number_of(v), 3))) }
             k = k + 1
         }
