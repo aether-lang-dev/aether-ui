@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit, datagrid_set_view_only, datagrid_view_only,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6684,6 +6684,7 @@ struct DataGrid {
     drag_far: float   // how far the press has moved (a click moves under 4 px)
     boxes: ptr        // intarr of zstack handles holding each body cell
     on_edit: ptr      // boxed |r, c, text|, or null: the grid is not editable
+    view_only: int    // 1: no editor opens and no cursor or selection is drawn (datagrid_set_view_only)
     edit_field: int   // the open editor's text field, 0 when none
     edit_box: int     // the zstack it sits in
     edit_r: int       // the cell it edits (view column)
@@ -6831,6 +6832,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.min_w = 24
     g.max_w = 1000
     g.on_edit = null
+    g.view_only = 0
     g.edit_field = 0
     g.edit_box = 0
     g.edit_text = null
@@ -8602,7 +8604,8 @@ _datagrid_paint(g: *DataGrid) {
             } else if mr == g.cur_r && mc == g.cur_c {
                 cur = 1
             }
-            if _datagrid_in_range(g, mr, mc) == 1 {
+            if g.view_only == 1 { cur = 0 }
+            if g.view_only == 0 && _datagrid_in_range(g, mr, mc) == 1 {
                 // The range over a cell's own colour is the two half and
                 // half, so a red cell still reads as red when selected.
                 if base < 0 { col = 0xcce0ff } else { col = _datagrid_mix(base, 0xcce0ff) }
@@ -9658,6 +9661,35 @@ datagrid_on_edit(gp: @keep ptr, cb: fn) -> ptr {
     return gp
 }
 
+// datagrid_set_view_only(g, on): a read view. With on = 1 no editor opens
+// (typing, F2, Return, a double click, datagrid_edit), one open is closed
+// without storing, and no cursor box or selection colour is drawn; the
+// cursor and the selection still move and on_select is still told, so a page
+// can follow them. on = 0 gives editing and the selection back. The grid
+// draws it itself, so it is the same on every backend.
+datagrid_set_view_only(gp: @keep ptr, on: int) -> ptr {
+    g = gp as *DataGrid
+    want = 0
+    if on != 0 { want = 1 }
+    if g.view_only == want { return gp }
+    if want == 1 && g.edit_field != 0 {
+        _datagrid_edit_finish(g, 0)
+        focus(g.root)
+    }
+    g.view_only = want
+    n = g.vis_rows * g.npos
+    i = 0
+    while i < n {
+        _datagrid_unpaint(g, i)
+        i = i + 1
+    }
+    _datagrid_paint(g)
+    return gp
+}
+
+// datagrid_view_only(g): 1 while the grid is a read view.
+datagrid_view_only(gp: ptr) -> int { g = gp as *DataGrid; return g.view_only }
+
 // datagrid_edit(g, r, c): open the editor on a cell from code, holding its
 // text (an editable grid only).
 datagrid_edit(gp: @keep ptr, r: int, c: int) -> ptr {
@@ -9743,7 +9775,7 @@ _datagrid_edit_start(g: *DataGrid, r: int, c: int) -> string {
 // point mode does); this call's is the one left open, the handler's
 // closed unstored, rather than left over the grid with nothing to close it.
 _datagrid_edit_begin(g: *DataGrid, r: int, c: int, initial: string) {
-    if g.on_edit == null { return }
+    if g.on_edit == null || g.view_only == 1 { return }
     if g.edit_field != 0 { _datagrid_edit_finish(g, 1) }
     _datagrid_move(g, r, c, 0)
     if g.edit_field != 0 { _datagrid_edit_finish(g, 0) }

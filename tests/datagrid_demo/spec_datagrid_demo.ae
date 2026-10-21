@@ -826,6 +826,46 @@ main() {
             spec.assert_true(shows("edited: 99990,1 = w") == 1, "and committed w")
         }
     }
+    spec.describe(fw, "view only (a read view)") {
+        spec.it("switched on with an editor open: the editor closes unstored, and the cursor's box and the selection's colour are gone") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99985C1")}/click", "click R99985C1")
+            spec.assert_true(boxed_on("R99985C1") == 1, "the cursor's box is on R99985C1")
+            key("v")
+            spec.assert_true(editor_open(1) == 1, "an editor opened")
+            uidriver.post_ok("/widget/${uidriver.widget_id_of("button", "View only")}/click", "View only")
+            spec.assert_true(editor_open(0) == 1, "the editor closed")
+            spec.assert_true(gone("edited: 99985,1 = v") == 1, "and stored nothing")
+            spec.assert_str_eq(boxed(), "", "no cursor box")
+            spec.assert_str_eq(bg_of("R99985C1"), "#ffffff", "the cursor's cell plain")
+            snap_v1 = uidriver.get_body("/screenshot?b64=1")
+            if string.contains(snap_v1, "not supported") == 0 {
+                spec.assert_true(string.starts_with(snap_v1, "iVBORw0KGgo") == 1, "a screenshot of the read view")
+            }
+        }
+        spec.it("typing, F2, Return and a double click open no editor; a click still tells the page, paints nothing") callback {
+            key("x")
+            key("F2")
+            key("Return")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99986C1")}/double_click", "double-click R99986C1")
+            sleep(400)
+            spec.assert_eq(editor(), 0, "no editor")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("R99987C1")}/click", "click R99987C1")
+            spec.assert_true(shows("selection: 99987,1 from 99987,1") == 1, "the page is told of the selection")
+            spec.assert_str_eq(bg_of("R99987C1"), "#ffffff", "nothing painted on it")
+            spec.assert_str_eq(boxed(), "", "still no box")
+            key("Shift+Down")
+            spec.assert_str_eq(bg_of("R99988C1"), "#ffffff", "a range drawn over nothing")
+        }
+        spec.it("Editable puts the cursor's box and editing back") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_of("button", "Editable")}/click", "Editable")
+            spec.assert_true(boxed_on("R99988C1") == 1, "the cursor's box is back")
+            spec.assert_str_eq(bg_of("R99987C1"), "#cce0ff", "and the range's colour")
+            key("y")
+            spec.assert_true(editor_open(1) == 1, "typing opens an editor again")
+            key("Escape")
+            spec.assert_true(editor_open(0) == 1, "closed")
+        }
+    }
     spec.describe(fw, "accessibility") {
         spec.it("the grid says its size: 100,000 rows and a header row, 50 columns") callback {
             gid = id_of_role("grid")
