@@ -4495,6 +4495,8 @@ JMETHOD(M_View_getVisibility, C_View, "getVisibility", "()I");
 JMETHOD(M_View_setSelected, C_View, "setSelected", "(Z)V");
 JMETHOD(M_View_measure, C_View, "measure", "(II)V");
 JMETHOD(M_View_layout, C_View, "layout", "(IIII)V");
+JMETHOD(M_View_getRootView, C_View, "getRootView", "()Landroid/view/View;");
+JMETHOD(M_View_isLayoutRequested, C_View, "isLayoutRequested", "()Z");
 JMETHOD(M_View_getLeft, C_View, "getLeft", "()I");
 JMETHOD(M_View_getTop, C_View, "getTop", "()I");
 JMETHOD(M_View_getRight, C_View, "getRight", "()I");
@@ -9669,8 +9671,31 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
     aeui_unframe(env);
 }
 
+// Lay the UI out NOW, as Win32 (w32_drv_settle_layout), AppKit
+// (layoutSubtreeIfNeeded) and GTK4 (aeui_drv_settle_layout) do before the
+// driver's next read: Android lays a changed tree out in the next frame's
+// traversal, so a read straight after an action (a button that makes a canvas)
+// saw it 0 x 0. A pending requestLayout reaches the window's root view
+// (isLayoutRequested); it is measured and laid out at the size it has, the
+// traversal's own call, which then finds nothing left to do. Run on the UI
+// thread, after the action's handlers.
+static void aeui_drv_settle_layout(JNIEnv* env) {
+    if (!g_host) return;
+    jobject root = JO(g_host, M_View_getRootView);
+    if (!root) return;
+    for (int pass = 0; pass < 8 && JZ(root, M_View_isLayoutRequested); pass++) {
+        int l = JI(root, M_View_getLeft), t = JI(root, M_View_getTop);
+        int w = JI(root, M_View_getWidth), h = JI(root, M_View_getHeight);
+        if (w <= 0 || h <= 0) break;   // not laid out once yet: the traversal's
+        JV(root, M_View_measure, (jint)(0x40000000 | w), (jint)(0x40000000 | h));
+        JV(root, M_View_layout, (jint)l, (jint)t, (jint)(l + w), (jint)(t + h));
+    }
+}
+
 static void driver_perform_trampoline(void* arg) {
     driver_perform((AetherDriverActionCtx*)arg);
+    JNIEnv* env = aeui_frame(8);
+    if (env) { aeui_drv_settle_layout(env); aeui_unframe(env); }
 }
 
 static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
