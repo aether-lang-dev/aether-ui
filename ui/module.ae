@@ -32,7 +32,7 @@ exports (
     datagrid_cursor_col, datagrid_anchor_row, datagrid_anchor_col, datagrid_is_selected,
     datagrid_on_select, datagrid_on_activate, datagrid_col_width, datagrid_set_col_width,
     datagrid_col_limits, datagrid_move_col, datagrid_col_model, datagrid_on_col_resize,
-    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit, datagrid_set_view_only, datagrid_view_only,
+    datagrid_on_col_move, datagrid_on_header_click, datagrid_add_area, datagrid_clear_areas, datagrid_areas, datagrid_set_height, datagrid_height, datagrid_freeze_cols, datagrid_frozen_cols, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_float, datagrid_float_move, datagrid_float_remove, datagrid_float_takes_clicks, datagrid_floats, datagrid_set_row_heights, datagrid_row_heights, datagrid_selection_glide, datagrid_glide_ms, datagrid_gliding, datagrid_glide_box, datagrid_on_edit, datagrid_edit, datagrid_edit_commit, datagrid_set_view_only, datagrid_view_only, datagrid_on_edit_cancel,
     datagrid_edit_cancel, datagrid_editor, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_col_hidden, datagrid_row_model, datagrid_row_view,
     datagrid_freeze_rows, datagrid_frozen_rows, datagrid_cell_tooltip, cell_tooltip,
@@ -6684,6 +6684,7 @@ struct DataGrid {
     drag_far: float   // how far the press has moved (a click moves under 4 px)
     boxes: ptr        // intarr of zstack handles holding each body cell
     on_edit: ptr      // boxed |r, c, text|, or null: the grid is not editable
+    on_edit_cancel: ptr  // boxed |r, c| (c a model column), or null (datagrid_on_edit_cancel)
     view_only: int    // 1: no editor opens and no cursor or selection is drawn (datagrid_set_view_only)
     edit_field: int   // the open editor's text field, 0 when none
     edit_box: int     // the zstack it sits in
@@ -6833,6 +6834,7 @@ datagrid(_ctx: ptr, rows: int, cols: int, vis_rows: int, vis_cols: int, frozen: 
     g.max_w = 1000
     g.on_edit = null
     g.view_only = 0
+    g.on_edit_cancel = null
     g.edit_field = 0
     g.edit_box = 0
     g.edit_text = null
@@ -9672,10 +9674,7 @@ datagrid_set_view_only(gp: @keep ptr, on: int) -> ptr {
     want = 0
     if on != 0 { want = 1 }
     if g.view_only == want { return gp }
-    if want == 1 && g.edit_field != 0 {
-        _datagrid_edit_finish(g, 0)
-        focus(g.root)
-    }
+    if want == 1 { _ec = datagrid_edit_cancel(gp) }
     g.view_only = want
     n = g.vis_rows * g.npos
     i = 0
@@ -9712,9 +9711,27 @@ datagrid_edit_commit(gp: @keep ptr) -> ptr {
 datagrid_edit_cancel(gp: @keep ptr) -> ptr {
     g = gp as *DataGrid
     if g.edit_field != 0 {
+        er = g.edit_r
+        ec = g.edit_c
         _datagrid_edit_finish(g, 0)
         focus(g.root)
+        // Told: Escape, a view-only switch or a page's own cancel closed an
+        // editor with nothing stored. (Not the editor an open one is
+        // replaced by, as a spreadsheet's point mode does: that one is
+        // still being edited.)
+        if g.on_edit_cancel != null { _datagrid_invoke_click(unbox_closure(g.on_edit_cancel), er, _datagrid_model(g, ec)) }
     }
+    return gp
+}
+
+// datagrid_on_edit_cancel(g) callback |r: int, c: int| { ... }: an editor on
+// row r, MODEL column c was closed without storing its text (Escape, a view-only
+// switch, datagrid_edit_cancel). The shortcut that takes Escape while an editor
+// is open stops a window key handler hearing it on GTK, so a page that must
+// know hears it here, the same on every backend.
+datagrid_on_edit_cancel(gp: @keep ptr, cb: fn) -> ptr {
+    g = gp as *DataGrid
+    g.on_edit_cancel = box_closure(cb)
     return gp
 }
 

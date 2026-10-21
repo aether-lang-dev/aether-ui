@@ -783,6 +783,7 @@ main() {
             spec.assert_true(editor_open(0) == 1, "the editor closed")
             spec.assert_true(shows("R99982C1") == 1, "the cell is unchanged")
             spec.assert_true(shows("edited: 99981,1 = hello") == 1, "nothing was stored")
+            spec.assert_true(shows("typing: cancelled 99982,1") == 1, "on_edit_cancel heard it: row 99982, model column 1")
         }
         spec.it("F2 opens one; Tab commits and moves right") callback {
             key("F2")
@@ -835,6 +836,7 @@ main() {
             uidriver.post_ok("/widget/${uidriver.widget_id_of("button", "View only")}/click", "View only")
             spec.assert_true(editor_open(0) == 1, "the editor closed")
             spec.assert_true(gone("edited: 99985,1 = v") == 1, "and stored nothing")
+            spec.assert_true(shows("typing: cancelled 99985,1") == 1, "and on_edit_cancel heard it")
             spec.assert_str_eq(boxed(), "", "no cursor box")
             spec.assert_str_eq(bg_of("R99985C1"), "#ffffff", "the cursor's cell plain")
             snap_v1 = uidriver.get_body("/screenshot?b64=1")

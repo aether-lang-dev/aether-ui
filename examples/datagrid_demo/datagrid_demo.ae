@@ -14,7 +14,7 @@
 import ui
 import ui (window, vstack, text, textfield_bound, btn, datagrid, datagrid_refresh,
     ui_state_i, ui_get_i, ui_set_i, cells, headers, column_width, on_cell_click,
-    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, datagrid_edit, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_set_row_heights, datagrid_row_heights, datagrid_set_view_only, datagrid_view_only, datagrid_selection_glide, datagrid_glide_ms, shortcut,
+    edit_text, cell_style, cell_tooltip, on_cell_edit_change, datagrid_edit_insert, datagrid_edit, datagrid_show_header, datagrid_header_shown, datagrid_cell_picture, datagrid_set_row_heights, datagrid_row_heights, datagrid_set_view_only, datagrid_view_only, datagrid_on_edit_cancel, datagrid_selection_glide, datagrid_glide_ms, shortcut,
     on_cell_activate, on_col_resize, on_col_move, on_header_click, on_cell_edit,
     datagrid_anchor_row, datagrid_anchor_col, datagrid_hide_row, datagrid_hide_col,
     datagrid_row_hidden, datagrid_row_model, datagrid_col_model,
@@ -171,6 +171,10 @@ main() {
             // before ae 0.804.0 a method call on a selectively imported name
             // was mangled wrongly (aether #2715), and aether-ui's floor is
             // older than that.)
+            // An editor closed with nothing stored (Escape, View only).
+            g.datagrid_on_edit_cancel() callback |r: int, c: int| {
+                _cn = ui_set_s(typing, "cancelled ${r},${c}")
+            }
             g.datagrid_col_limits(24, 1000).datagrid_on_select() callback |r: int, c: int| {
                 // Its other areas, after a Ctrl/Cmd click, said after it.
                 more = datagrid_areas(g)
