@@ -1752,14 +1752,17 @@ scene_eval_bindings(scene: ptr) -> int {
 // ─── animation (continuous, timer-driven) ───────────────────────
 //
 // animate(node, duration_ms, loop, yoyo) callback |el, t| { ... } registers a
-// per-frame animation on the scene's manager. The tick closure is
-// fn(el: ptr, t: float): `el` is THIS shape's element (passed in so the closure
-// captures no block-locals — a captured block-local would dangle once the
-// vg{} block returns and the timer fires later), `t` is raw in [0,1] (apply
-// easing yourself). Mutate via vg.element_set_*(el, …). On a live window
+// per-frame animation on the scene's manager. The tick is typed
+// fn(@keep ptr, float) (aether #2980, 0.841.0): `el` is THIS shape's element
+// (passed in so the closure captures no block-locals — a captured block-local
+// would dangle once the vg{} block returns and the timer fires later), and
+// because the tick's `el` is @keep it may be handed straight to the keeping
+// setters: vg.element_set_fill(el, …), vg.element_set_opacity(el, …). `t` is
+// raw in [0,1] (apply easing yourself). The closure may stay untyped
+// (`|el, t|`); it takes the types and modes of the tick type. On a live window
 // vg_live runs a 16ms timer that advances + re-renders while is_animating;
 // headless callers drive scene_tick(scene, now_ms). Mirrors CVG's .transition.
-animate(_ctx: ptr, duration_ms: long, loop: int, yoyo: int, tick: @keep fn) {
+animate(_ctx: ptr, duration_ms: long, loop: int, yoyo: int, tick: @keep fn(@keep ptr, float)) {
     el = node_payload(_ctx)
     if el == null { return }
     mgr = scene_anim_mgr_of_node(_ctx)

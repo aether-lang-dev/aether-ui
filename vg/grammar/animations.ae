@@ -88,14 +88,14 @@ handle_completed(p: ptr) -> int { h = p as *AnimationHandle; return h.completed 
 struct ActiveAnimation {
     handle: ptr            // *AnimationHandle
     element: ptr           // *AevgElement (opaque)
-    tick_fn: ptr           // boxed closure: fn(float) — receives raw t in [0,1]
+    tick_fn: fn(@keep ptr, float)  // tick closure: (element, raw t in [0,1])
     start_time_ms: long    // when this animation should first tick (start + delay)
     duration_ms: long
     loop: int              // 0/1
     yoyo: int              // 0/1
 }
 
-mk_active(handle: @keep ptr, element: @keep ptr, tick_fn: @keep ptr,
+mk_active(handle: @keep ptr, element: @keep ptr, tick_fn: @keep fn(@keep ptr, float),
           start_time_ms: long, duration_ms: long,
           loop: int, yoyo: int) -> *ActiveAnimation {
     // 3 ptr + 2 long + 2 int + padding → 56-64 bytes; 80 is safe.
@@ -161,7 +161,7 @@ manager_new() -> ptr { return mk_manager() }
 add_animation(mgr: ptr, element: @keep ptr,
               duration_ms: long, delay_ms: long,
               loop: int, yoyo: int,
-              now_ms: long, tick_fn: @keep fn) -> ptr {
+              now_ms: long, tick_fn: @keep fn(@keep ptr, float)) -> ptr {
     return add_animation_impl(mgr, element, tick_fn,
                               duration_ms, delay_ms, loop, yoyo, now_ms)
 }
@@ -169,7 +169,7 @@ add_animation(mgr: ptr, element: @keep ptr,
 // Internal: tick_fn arrives as `ptr` (the fn → ptr coercion at the
 // call boundary boxes it). We re-thread through impl rather than
 // duplicating logic.
-add_animation_impl(mgr: ptr, element: @keep ptr, tick_fn: @keep ptr,
+add_animation_impl(mgr: ptr, element: @keep ptr, tick_fn: @keep fn(@keep ptr, float),
                    duration_ms: long, delay_ms: long,
                    loop: int, yoyo: int,
                    now_ms: long) -> ptr {
@@ -261,11 +261,11 @@ inner_call_tick(cb: fn, t: float) {
 // fires later (from the live timer, after the vg{} block has returned) reads
 // freed closure state and segfaults — passing the element through dodges it.
 // The engine stores a.element already; this just threads it to the closure.
-invoke_tick_el(p: ptr, el: ptr, t: float) {
-    inner_call_tick_el(p, el, t)
+invoke_tick_el(cb: fn(@keep ptr, float), el: @keep ptr, t: float) {
+    inner_call_tick_el(cb, el, t)
 }
 
-inner_call_tick_el(cb: fn, el: ptr, t: float) {
+inner_call_tick_el(cb: fn(@keep ptr, float), el: @keep ptr, t: float) {
     cb(el, t)
 }
 

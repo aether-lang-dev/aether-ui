@@ -13,6 +13,11 @@ import vg.grammar.element
 import vg.geom.transform
 import std.string
 
+same_str(a: string, b: string) -> int {
+    if a == b { return 1 }
+    return 0
+}
+
 extern exit(code: int)
 extern malloc(size: int) -> ptr
 
@@ -49,11 +54,10 @@ main() {
     vg.vg_flush(scene)
 
     // A 1000ms opacity fade 0→1, linear (t passed straight to opacity). The
-    // tick sets the element it captured (cel): the `el` it is handed is a
-    // closure's borrowed `ptr` parameter, which cannot reach
-    // vg.element_set_opacity, a keeper (aether #2926).
-    vg.animate(cnode, 1000, 0, 0) callback |_el: ptr, t: float| {
-        vg.element_set_opacity(cel, t)
+    // tick uses the `el` it is handed: animate types the tick as
+    // fn(@keep ptr, float), so element_set_opacity (a keeper) accepts it.
+    vg.animate(cnode, 1000, 0, 0) callback |el, t| {
+        vg.element_set_opacity(el, t)
     }
 
     assert_eq_int("animating after register", vg.scene_is_animating(scene), 1)
@@ -75,6 +79,24 @@ main() {
     // A further tick is a harmless no-op (nothing left to run).
     nn = vg.scene_tick(scene, 1500)
     assert_eq_int("tick after complete: 0 ran", nn, 0)
+
+    // The same pattern with element_set_fill, on a second node, using `el`
+    // inside the tick: the fill follows t (red at t=0, blue at t=1).
+    rnode = vg.rect(root, 10.0, 10.0, 30.0, 30.0)
+    rel = vg.node_element(rnode)
+    vg.fill(rnode, "#ff0000")
+    vg.vg_flush(scene)
+    vg.animate(rnode, 1000, 0, 0) callback |el, t| {
+        if t < 0.5 { vg.element_set_fill(el, "#00ff00") }
+        else { vg.element_set_fill(el, "#0000ff") }
+        vg.element_set_opacity(el, 1.0 - t)
+    }
+    _ = vg.scene_tick(scene, 250)
+    assert_near("rect opacity @250 (el used in tick)", element.element_last_opacity(rel), 0.75)
+    assert_eq_int("rect fill @250 is green", same_str(element.element_last_fill(rel), "#00ff00"), 1)
+    _ = vg.scene_tick(scene, 750)
+    assert_near("rect opacity @750", element.element_last_opacity(rel), 0.25)
+    assert_eq_int("rect fill @750 is blue", same_str(element.element_last_fill(rel), "#0000ff"), 1)
 
     println("=== test_vg_anim passed ===")
 }

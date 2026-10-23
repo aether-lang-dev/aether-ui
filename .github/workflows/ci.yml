@@ -282,7 +282,13 @@ jobs:
           # accessors are args_count/args_get (0.836.0). Nothing older than
           # 0.836.0 builds the tree. Verified: ci.sh, all phases, on macOS
           # and the aether-linux lane against 0.840.0.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.840.0' }}
+          # v0.841.0 (2026-10-23): a REAL floor move. vg's animate types its
+          # tick `fn(@keep ptr, float)` (aether#2980), so the documented
+          # `animate(...) callback |el, t| { vg.element_set_fill(el, ...) }`
+          # pattern compiles; 0.840.0 and older cannot parse `@keep` in a
+          # function type. Verified: ci.sh on macOS and the aether-linux lane
+          # against 0.841.0.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.841.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the

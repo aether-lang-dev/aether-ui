@@ -19,13 +19,13 @@
 #   PREFIX        install prefix                 (default: $HOME/.local; no sudo)
 #   AETHER_REF    ae tag/branch/SHA to install   (default: latest tag) — pin in CI
 #   AEB_REF       aeb tag/branch/SHA to install  (default: latest tag) — pin in CI
-#   MIN_AE        minimum acceptable ae version  (default: 0.830.0, the family's: `@keep ptr` parameters arrived in 0.818.0, #2926; the typed accessors map.get_string, list.get_string and string.from_ptr in 0.830.0, #2981)
+#   MIN_AE        minimum acceptable ae version  (default: 0.841.0, the family's: `@keep` in a function type, `fn(@keep ptr, float)`, in 0.841.0, #2980; `@keep ptr` parameters arrived in 0.818.0, #2926; the typed accessors map.get_string, list.get_string and string.from_ptr in 0.830.0, #2981)
 # Extra args pass through to `aeb` (e.g. ./bootstrap.sh aevg/.analog-clock.ae).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"; export PREFIX
-MIN_AE="${MIN_AE:-0.830.0}"
+MIN_AE="${MIN_AE:-0.841.0}"
 AETHER_GET_URL="https://raw.githubusercontent.com/aether-lang-org/aether/main/get.sh"
 AEB_INSTALL_URL="https://raw.githubusercontent.com/aether-lang-org/aeb/main/install.sh"
 
