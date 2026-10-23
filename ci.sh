@@ -226,6 +226,32 @@ run_server_test() {
         return 1
     fi
 
+    # The squat check above runs once, BEFORE the launch. A second process on
+    # this port (another run sharing the box or container, a leftover app,
+    # dual-stack IPv4/IPv6 listeners) can still answer the spec's requests
+    # instead of ours, which reads as inexplicable "was not 2xx" and missing
+    # widgets (the field-placeholder spec, 5e17, failed that way on a shared
+    # lane). The app says "bind to port N failed" when it lost the port, and
+    # lsof, where present, names every listener: all of them must be ours.
+    if grep -q "bind to port .* failed" "/tmp/ci_${name}.app.log" 2>/dev/null; then
+        echo "  FAIL: $name — port $PORT is held by another process (the app could not bind it)"
+        kill_tree "$pid"; wait "$pid" 2>/dev/null
+        return 1
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        local mine others l
+        mine=" $(tree_pids "$pid" | tr '\n' ' ') "
+        others=""
+        for l in $(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u); do
+            case "$mine" in *" $l "*) ;; *) others="$others $l" ;; esac
+        done
+        if [ -n "$others" ]; then
+            echo "  FAIL: $name — port $PORT also has foreign listener(s):$others (run with another port: ./ci.sh <port>)"
+            kill_tree "$pid"; wait "$pid" 2>/dev/null
+            return 1
+        fi
+    fi
+
     "$script" "$PORT"
     local rc=$?
     # Close the app PROPERLY: ask the driver to shut down (the app exits by
