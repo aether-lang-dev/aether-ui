@@ -225,6 +225,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **gtk4: a driver request is bounded by a frame, not by thirty-two.** The
+  layout settling before each request (`aeui_drv_settle_layout`, ebee1c96)
+  ran the main loop for up to 32 rounds, each round dispatching whatever was
+  ready. In an app whose frame timer is due again the moment its frame ends,
+  that is 32 frames per request: ae3d's editor draws a frame in 250 ms under a
+  software rasteriser, so a request took eight seconds, the client's timeout
+  fired, and the abandoned requests queued behind each other until the app
+  answered none. The loop now also gives up after 30 ms (once the allocation
+  is made and a round has run). `examples/settle_demo` +
+  `tests/settle_demo`: a 120 ms frame on a 16 ms timer; a request took 4095 ms
+  before and 361 ms after (aether-linux, GTK 4.6).
+
 - **A datagrid cell whose style changes is redrawn.** The style cache keyed
   on a djb2 hash computed in a 32-bit int: `h * 33` overflowed, most long
   style strings hashed negative, every negative hash became 1, and a cell

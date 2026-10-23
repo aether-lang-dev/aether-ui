@@ -10318,7 +10318,20 @@ typedef struct { void (*fn)(void*); void* arg; volatile int done; } AeuiUiCall;
 // change the tree again -- is run, until nothing is ready. Bounded: an app
 // animating from timers is never idle for long. Run on the GTK thread, before
 // a request is served, never inside the walk of the tree it serves.
+//
+// Bounded in time as well as in rounds. Each round dispatches whatever is
+// ready, and in an app with a frame timer that is the app's whole frame: a
+// timer that reschedules itself every 16 ms is ready again the moment its
+// frame ends, so the loop never found "nothing ready" and ran all 32 rounds.
+// ae3d's editor draws a frame in 250 ms on a software rasteriser, so a
+// request cost 32 frames, eight seconds, long past any client's timeout; the
+// abandoned requests queued up behind one another and the app answered none.
+// The layout work is a round or two of short handlers, so the loop gives up
+// after AEUI_SETTLE_BUDGET_US once the allocation has been made and one round
+// has run.
+#define AEUI_SETTLE_BUDGET_US 30000
 static void aeui_drv_settle_layout(void) {
+    gint64 started = g_get_monotonic_time();
     for (int pass = 0; pass < 32; pass++) {
         GListModel* tops = gtk_window_get_toplevels();
         guint n = tops ? g_list_model_get_n_items(tops) : 0;
@@ -10331,6 +10344,7 @@ static void aeui_drv_settle_layout(void) {
             g_object_unref(win);
         }
         if (!g_main_context_iteration(NULL, FALSE)) break;
+        if (g_get_monotonic_time() - started > AEUI_SETTLE_BUDGET_US) break;
     }
 }
 

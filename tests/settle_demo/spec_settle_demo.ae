@@ -1,0 +1,54 @@
+// spec_settle_demo.ae — a request is answered in about a frame, not thirty-two.
+//
+// settle_demo draws a frame every 120 ms from a 16 ms timer, so a timer tick is
+// ready at every round of the main loop. GTK4's driver ran that loop before
+// each request, up to 32 rounds, and each round ran a whole frame: a request
+// took close to four seconds, longer than a client waits, and the abandoned
+// ones queued up behind it (ae3d's editor, whose frame is 250 ms under a
+// software rasteriser, answered nothing at all).
+//
+// The bound is generous (a second and a half against 3.8 s unbounded and about
+// 0.2 s bounded) because the question is "one frame or thirty-two", not how
+// loaded the machine is. The other backends do not run the loop and answer at
+// once, so this passes there for the right reason.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/settle_demo &
+//   UI_SPEC=settle_demo/spec_settle_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a request to an app whose frame outlasts its timer") {
+        spec.it("is answered in about a frame") callback {
+            go = uidriver.widget_id_by_text("go slow")
+            spec.assert_gt(go, 0, "the button is there")
+            uidriver.post_ok("/widget/${go}/click", "go slow")
+            sleep(300)
+            long worst = 0
+            i = 0
+            while i < 4 {
+                long t0 = os.now_unix_ms()
+                body = uidriver.get_body("/widgets")
+                long took = os.now_unix_ms() - t0
+                if took > worst { worst = took }
+                spec.assert_contains(body, "\"text\":\"frames: ", "the tree came back")
+                sleep(150)
+                i = i + 1
+            }
+            print("    slowest request: ${worst} ms\n")
+            spec.assert_true(worst < 1500, "every request under 1.5 s (slowest ${worst} ms)")
+        }
+
+        spec.it("while the timer is still the one running") callback {
+            ok = uidriver.wait_body_contains("/widgets", "frames: 8", 80)
+            spec.assert_true(ok, "the frames kept coming")
+        }
+    }
+
+    return spec.run_summary(fw)
+}

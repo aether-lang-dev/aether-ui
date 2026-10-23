@@ -1,0 +1,54 @@
+// Aether UI settle example: an app whose frame outlasts its frame timer.
+//
+// The driver lays the UI out before it serves a request (GTK4:
+// aeui_drv_settle_layout), and that runs the main loop until nothing is ready.
+// An app with a timer that reschedules itself every 16 ms and takes 120 ms to
+// draw has something ready at every round, because the timer is due again the
+// moment its frame ends, so the loop ran all 32 of its rounds: 32 frames, close
+// to four seconds, for one request. ae3d's editor under a software rasteriser
+// is such an app (a frame is 250 ms there), and its driver run never got an
+// answer from it: every request outlived the client's timeout and the
+// abandoned ones queued up behind each other.
+//
+// "frames" counts the timer's ticks, so the spec can tell the timer is the one
+// being run and that the loop is bounded in time rather than in not running it.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (text, btn, root_vstack, timer, enable_test_server_root)
+import std.os (os_getenv)
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+main() {
+    frames = 0
+    label = 0
+    slow = 0
+
+    main_root = root_vstack(10) {
+        text("Settle demo")
+        label = text("frames: 0")
+    }
+
+    // A frame that takes longer than the interval it is scheduled at, once
+    // "go slow" has been pressed: from the first tick it would starve the
+    // test server's own start, which is queued on the same main loop.
+    _tick = timer(16) callback {
+        if slow == 1 {
+            sleep(120)
+            frames = frames + 1
+            aether_ui_text_set_string(label, "frames: ${frames}")
+        }
+    }
+
+    _go = btn(main_root, "go slow") callback {
+        slow = 1
+    }
+
+    app = ui.app_create("Settle demo", 320, 200)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

@@ -111,6 +111,7 @@ SUITES=(
   "datagrid|examples/datagrid_demo|datagrid_demo/spec_datagrid_demo|"
   "sheet|examples/sheet_demo|sheet_demo/spec_sheet_demo|"
   "timer|examples/timer_demo|timer_demo/spec_timer_demo|"
+  "settle|examples/settle_demo|settle_demo/spec_settle_demo|"
   "frametick|examples/frametick_demo|frametick_demo/spec_frametick_demo|"
   "background|examples/background_demo|background_demo/spec_background_demo|"
   "canvasscroll|examples/canvasscroll_demo|canvasscroll_demo/spec_canvasscroll_demo|"
