@@ -34,6 +34,10 @@ snapshot(name: string) -> string {
 
 // "r,g,b" of the PNG's pixel (x, y), in the PNG's own pixels.
 px(png: string, x: int, y: int) -> string {
+    if string.length(png) == 0 {
+        spec.assert_true(false, "screenshot failed after 5 tries")
+        return ""
+    }
     out, _e = os.exec("python3 -I ../lib/png_pixel.py ${png} ${x} ${y}")
     return string.trim(out)
 }

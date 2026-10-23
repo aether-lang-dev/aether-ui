@@ -219,6 +219,20 @@ run_server_test() {
         if curl -sf -o /dev/null "http://127.0.0.1:$PORT/widgets"; then up=1; break; fi
         sleep 0.2
     done
+    # Let the app say whether it bound (a foreign listener can answer the
+    # loop above before the app has started).
+    for _ in $(seq 1 25); do
+        grep -q "listening on\|bind to port .* failed" "/tmp/ci_${name}.app.log" 2>/dev/null && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.2
+    done
+    # A bound port that is not ours: the app says so in its own log (the
+    # foreign listener may answer the wait loop above, or answer it with a 404).
+    if grep -q "bind to port .* failed" "/tmp/ci_${name}.app.log" 2>/dev/null; then
+        echo "  FAIL: $name — port $PORT is held by another process (the app could not bind it)"
+        kill_tree "$pid"; wait "$pid" 2>/dev/null
+        return 1
+    fi
     if [ "$up" -ne 1 ]; then
         echo "  FAIL: $name test server never responded"
         kill_tree "$pid"; wait "$pid" 2>/dev/null
@@ -233,11 +247,6 @@ run_server_test() {
     # widgets (the field-placeholder spec, 5e17, failed that way on a shared
     # lane). The app says "bind to port N failed" when it lost the port, and
     # lsof, where present, names every listener: all of them must be ours.
-    if grep -q "bind to port .* failed" "/tmp/ci_${name}.app.log" 2>/dev/null; then
-        echo "  FAIL: $name — port $PORT is held by another process (the app could not bind it)"
-        kill_tree "$pid"; wait "$pid" 2>/dev/null
-        return 1
-    fi
     if command -v lsof >/dev/null 2>&1; then
         local mine others l
         mine=" $(tree_pids "$pid" | tr '\n' ' ') "

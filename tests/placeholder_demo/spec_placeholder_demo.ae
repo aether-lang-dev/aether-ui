@@ -47,6 +47,12 @@ snapshot(name: string) -> string {
 // The ink in a field's inside (what differs from its own background), in the
 // PNG's pixels (a retina capture is 2x the points the driver reports).
 ink(png: string, id: int) -> int {
+    // snapshot() gave up: say so, rather than run png_pixel.py with no path
+    // (the shell drops the empty word and 'width' becomes the file name).
+    if string.length(png) == 0 {
+        spec.assert_true(false, "screenshot failed after 5 tries")
+        return 0
+    }
     root = uidriver.widget_int_field_by_id(1, "w")
     sw, _se = os.exec("python3 -I ../lib/png_pixel.py ${png} width")
     pw, _pe = string.to_int(string.trim(sw))

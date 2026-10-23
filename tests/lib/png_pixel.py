@@ -4,7 +4,7 @@
 # Also: png_pixel.py FILE.png width  -> the width in pixels
 #       png_pixel.py FILE.png ink X Y W H  -> how many pixels of that rectangle
 #       differ from its top-left one: the ink in a field, whatever it is made of
-import struct, sys, zlib
+import os, struct, sys, zlib
 
 def load(path):
     d = open(path, 'rb').read()
@@ -40,6 +40,9 @@ def load(path):
         prev = cur
     return w, h, bpp, rows
 
+if len(sys.argv) < 3 or not sys.argv[1] or not os.path.isfile(sys.argv[1]):
+    sys.exit('png_pixel.py: no PNG at %r (usage: png_pixel.py FILE.png width | ink X Y W H | X Y ...); '
+             'the screenshot was probably never written' % (sys.argv[1] if len(sys.argv) > 1 else ''))
 w, h, bpp, rows = load(sys.argv[1])
 if sys.argv[2] == 'width':
     print(w)
