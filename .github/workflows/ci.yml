@@ -343,12 +343,13 @@ jobs:
           # `make install` failed and both legs were red from the 0.824 bump
           # (8ca06029's parent) on. v0.327 is the aeb sae pins with 0.824.0 and
           # what this tree's lanes were verified with.
-          # aeb main at 3f5acf4 (2026-10-23), by commit because no tag has it
-          # yet: on Aether 0.840.0 a build node's session handle goes into a
-          # map (bldr.begin's "_session"), so bldr.begin/build and the node
-          # entry transform-ae writes declare it @keep; with v0.332 every node
-          # here failed to compile (46 failures).
-          AEB_REF: ${{ vars.AEB_REF || '3f5acf481720f2d6b02acae5e413f3e16360249c' }}
+          # v0.333 (2026-10-23): the first tag with aeb 3f5acf4, which this
+          # tree was pinned to by commit until then. On Aether 0.840.0 a build
+          # node's session handle goes into a map (bldr.begin's "_session"),
+          # so bldr.begin/build and the node entry transform-ae writes declare
+          # it @keep; with v0.332 every node here failed to compile (46
+          # failures). A tag again, same code.
+          AEB_REF: ${{ vars.AEB_REF || 'v0.333' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
