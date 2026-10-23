@@ -103,27 +103,27 @@ new_region() -> ptr {
     return r
 }
 
-region_set_items(rp: ptr, cb: fn) {
+region_set_items(rp: ptr, cb: @keep fn) {
     r = rp as *BindingRegion
     r.items_cb = cb
 }
 
-region_set_render(rp: ptr, cb: fn) {
+region_set_render(rp: ptr, cb: @keep fn) {
     r = rp as *BindingRegion
     r.render_cb = cb
 }
 
-region_set_trackby(rp: ptr, cb: fn) {
+region_set_trackby(rp: ptr, cb: @keep fn) {
     r = rp as *BindingRegion
     r.trackby_cb = cb
 }
 
-region_set_update(rp: ptr, cb: fn) {
+region_set_update(rp: ptr, cb: @keep fn) {
     r = rp as *BindingRegion
     r.update_cb = cb
 }
 
-region_init(ctx: ptr, rp: ptr) {
+region_init(ctx: ptr, rp: @keep ptr) {
     r = rp as *BindingRegion
 
     // Initial render — fill current with everything that items() returns.
@@ -195,7 +195,7 @@ refresh_one(ctx: ptr, rp: ptr) {
                     _ = context.ctx_untrack_element(ctx, e.el)
                 }
             }
-            _ = map.remove(r.current, key)
+            map.remove(r.current, key)
         }
         k = k + 1
     }

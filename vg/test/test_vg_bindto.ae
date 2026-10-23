@@ -94,7 +94,7 @@ main() {
     assert_eq_str("clicked b is green", element.element_last_fill(elb), "#00ff00")
 
     // Remove 'b' from the data, refresh → b destroyed (invisible, untracked).
-    _ = list.remove(data, 1)   // drop b (index 1)
+    list.remove(data, 1)   // drop b (index 1)
     vg.scene_refresh(scene)
     assert_eq_int("after remove: b not visible",
                   element.element_is_visible(elb), 0)

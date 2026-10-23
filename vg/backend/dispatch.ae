@@ -52,7 +52,7 @@ struct Dispatch {
 
 // Construct a dispatch table. `be` is the concrete backend's handle;
 // `cb` is a single closure that switches on the op selector.
-backend_make(be: @keep ptr, cb: fn) -> ptr {
+backend_make(be: @keep ptr, cb: @keep fn) -> ptr {
     d = malloc(sizeof(Dispatch)) as *Dispatch
     d.be = be
     d.cb = cb
@@ -64,7 +64,7 @@ backend_make(be: @keep ptr, cb: fn) -> ptr {
 // byte_len). opts carries x, y, w, h (the canvas-px dest rect) and pw, ph
 // (the pixel dims of the rgba buffer). Optional: a backend without one
 // draws no images (dispatch_image is then a no-op).
-backend_set_image(p: ptr, cb: fn) {
+backend_set_image(p: ptr, cb: @keep fn) {
     d = p as *Dispatch
     d.img_cb = cb
 }

@@ -155,7 +155,7 @@ frame_finish(buf: ptr, w: int, h: int) -> string {
 // live_draw_new(x,y,w,h, draw_fn) — a region drawn by a per-frame callback.
 // draw_fn is a fn(region, t); the fn→ptr coercion at this boundary boxes it
 // into the ptr field (the grammar_events/grammar_bind handler-storage pattern).
-live_draw_new(x: float, y: float, w: float, h: float, draw_fn: fn) -> ptr {
+live_draw_new(x: float, y: float, w: float, h: float, draw_fn: @keep fn) -> ptr {
     r = malloc(sizeof(LiveRegion)) as *LiveRegion
     r.kind = 1
     r.x = x
@@ -235,7 +235,7 @@ region_src_fn(p: ptr) -> ptr     { r = p as *LiveRegion; return r.src_fn }
 // live loop calls this each frame to produce + push the next frame. Capture-
 // free (gets the region), like the draw callback. Without it the region is
 // static (push a frame once via region_push).
-region_set_source(p: ptr, src: fn) {
+region_set_source(p: ptr, src: @keep fn) {
     r = p as *LiveRegion
     r.src_fn = src
 }

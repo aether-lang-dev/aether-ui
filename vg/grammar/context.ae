@@ -200,7 +200,7 @@ ctx_tracked_elements(c: ptr) -> ptr { x = c as *AevgContext; return x.tracked_el
 // at element_new sites that are aware of their context (Phase 1
 // integration); also the natural slot where shape factories
 // register their results.
-ctx_track_element(c: ptr, el: ptr) {
+ctx_track_element(c: ptr, el: @keep ptr) {
     x = c as *AevgContext
     _ = list.add(x.tracked_elements, el)
 }
@@ -230,7 +230,7 @@ ctx_untrack_element(c: ptr, el: ptr) -> int {
 // once that lands; the registries themselves don't need to know the
 // shape of what they store).
 
-register_gradient(c: ptr, id: string, def: ptr) {
+register_gradient(c: ptr, id: string, def: @keep ptr) {
     x = c as *AevgContext
     _ = map.put(x.gradients, id, def)
 }
@@ -246,7 +246,7 @@ has_gradient(c: ptr, id: string) -> int {
     return map.has(x.gradients, id)
 }
 
-register_filter(c: ptr, id: string, def: ptr) {
+register_filter(c: ptr, id: string, def: @keep ptr) {
     x = c as *AevgContext
     _ = map.put(x.filters, id, def)
 }
@@ -262,7 +262,7 @@ has_filter(c: ptr, id: string) -> int {
     return map.has(x.filters, id)
 }
 
-register_clip_path(c: ptr, id: string, def: ptr) {
+register_clip_path(c: ptr, id: string, def: @keep ptr) {
     x = c as *AevgContext
     _ = map.put(x.clip_paths, id, def)
 }
@@ -278,7 +278,7 @@ has_clip_path(c: ptr, id: string) -> int {
     return map.has(x.clip_paths, id)
 }
 
-register_node(c: ptr, id: string, node: ptr) {
+register_node(c: ptr, id: string, node: @keep ptr) {
     x = c as *AevgContext
     _ = map.put(x.nodes_by_id, id, node)
 }
@@ -295,7 +295,7 @@ has_node(c: ptr, id: string) -> int {
 }
 
 // CSS-rule values are themselves a property-value map (ptr handle).
-register_css_rule(c: ptr, selector: string, props_map: ptr) {
+register_css_rule(c: ptr, selector: string, props_map: @keep ptr) {
     x = c as *AevgContext
     _ = map.put(x.css_rules, selector, props_map)
 }
@@ -318,7 +318,7 @@ has_css_rule(c: ptr, selector: string) -> int {
 // affine handle, a closure). The context module doesn't care.
 
 // Style stack: each entry is a std.map string→string ("style cascade").
-style_push(c: ptr, style_map: ptr) {
+style_push(c: ptr, style_map: @keep ptr) {
     x = c as *AevgContext
     _ = list.add(x.style_stack, style_map)
 }
@@ -343,7 +343,7 @@ style_top(c: ptr) -> ptr {
 }
 
 // Transform stack: each entry is a *Affine handle.
-transform_push(c: ptr, xform: ptr) {
+transform_push(c: ptr, xform: @keep ptr) {
     x = c as *AevgContext
     _ = list.add(x.transform_stack, xform)
 }
@@ -373,7 +373,7 @@ transform_top(c: ptr) -> ptr {
 // params now forward correctly into ptr-typed slots — captured-
 // state closures survive the round-trip via _aether_box_closure.
 // Used for conditional rendering: `s.g({ when: () => state.toggle })`.
-when_push(c: ptr, pred: fn) {
+when_push(c: ptr, pred: @keep fn) {
     x = c as *AevgContext
     _ = list.add(x.when_stack, pred)
 }
@@ -403,7 +403,7 @@ when_top(c: ptr) -> ptr {
 // struct-field type issues (the BindingRegion struct lives in
 // bind.ae and isn't visible here).
 
-binding_regions_add(c: ptr, region: ptr) {
+binding_regions_add(c: ptr, region: @keep ptr) {
     x = c as *AevgContext
     _ = list.add(x.binding_regions, region)
 }

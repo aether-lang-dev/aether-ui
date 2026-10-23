@@ -201,9 +201,9 @@ responsive(c: *CtChart, query: string, options: string) {
     _a = list.add(c.responsive, r)
 }
 
-label_x(c: *CtChart, f: fn) { c.label_x = f }
-label_y(c: *CtChart, f: fn) { c.label_y = f }
-label_pie(c: *CtChart, f: fn) { c.label_pie = f }
+label_x(c: *CtChart, f: @keep fn) { c.label_x = f }
+label_y(c: *CtChart, f: @keep fn) { c.label_y = f }
+label_pie(c: *CtChart, f: @keep fn) { c.label_pie = f }
 
 // lineSmooth as an interpolation value (custom ones included): for the chart,
 // or with series_line_smooth for the series of that name.
@@ -216,9 +216,9 @@ series_line_smooth(c: *CtChart, series: string, interp: *ip.CtInterp) {
     _a = list.add(c.smooth, o)
 }
 
-on_compose(c: *CtChart, f: fn) { _a = list.add(c.compose_hooks, f) }
-on_scene(c: *CtChart, f: fn) { _a = list.add(c.scene_hooks, f) }
-measure_style(c: *CtChart, f: fn) { c.measure_style = f }
+on_compose(c: *CtChart, f: @keep fn) { _a = list.add(c.compose_hooks, f) }
+on_scene(c: *CtChart, f: @keep fn) { _a = list.add(c.scene_hooks, f) }
+measure_style(c: *CtChart, f: @keep fn) { c.measure_style = f }
 
 // ─── responsive queries, against the chart's width ────────────────
 

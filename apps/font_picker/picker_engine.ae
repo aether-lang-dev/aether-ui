@@ -379,7 +379,7 @@ pl_new() -> ptr {
     return l as ptr
 }
 
-pl_add(lp: ptr, fam: ptr) -> int {
+pl_add(lp: ptr, fam: @keep ptr) -> int {
     l = lp as *PickList
     if l.n >= FP_MAX { return 0 }
     _ = list.list_add_raw(l.fams, fam)

@@ -8,7 +8,7 @@
 // command buffer to a PNG headless via canvas_write_png (pure cairo image
 // surface — no window/display needed).
 //
-// Uses std.os argv accessors (aether_args_*) — main() reads the OS argv the
+// Uses std.os argv accessors (args_*) — main() reads the OS argv the
 // generated entrypoint captured. (Earlier this tool used a stdin+env
 // convention as a workaround; std.os exposes argv directly, so it's a normal
 // CLI now.)
@@ -22,24 +22,24 @@ import vg.svg.loader
 import vg.backend.gtk
 import std.string
 import std.os
-import std.os (aether_args_count, aether_args_get)
+import std.os (args_count, args_get)
 import std.fs
 import std.fs (read)
 
 extern exit(code: int)
 
 main() {
-    n = aether_args_count()
+    n = args_count()
     if n < 3 {
         println("usage: svg_render <in.svg> <out.png> [size]")
         exit(2)
     }
-    in_path = aether_args_get(1)
-    out_path = aether_args_get(2)
+    in_path = args_get(1)
+    out_path = args_get(2)
 
     size = 400
     if n >= 4 {
-        v, ok = string.to_int(aether_args_get(3))
+        v, ok = string.to_int(args_get(3))
         if ok == 1 { size = v }
     }
 

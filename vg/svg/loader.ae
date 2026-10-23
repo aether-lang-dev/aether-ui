@@ -302,7 +302,7 @@ walk_use(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr) {
 // has an `id` attribute into ctx.nodes_by_id. Needed for <use>
 // element resolution. Matches TS source's `proto.indexNodes`.
 
-index_nodes(ctx: ptr, node_h: ptr) {
+index_nodes(ctx: ptr, node_h: @keep ptr) {
     if parser.node_has_attr(node_h, "id") == 1 {
         id = parser.node_attr(node_h, "id")
         context.register_node(ctx, id, node_h)

@@ -124,7 +124,9 @@ main() {
         return item_id(item)
     }
     bind.region_set_update(region) callback |item: ptr, el: ptr| {
-        ignored = list.add(update_log, item)
+        // Only the count is read: an entry a call, not the item (a closure
+        // given to region_set_update's `fn` slot borrows what it is handed).
+        ignored = list.add(update_log, null)
     }
 
     bind.region_init(ctx, region)

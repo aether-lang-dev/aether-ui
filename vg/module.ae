@@ -325,12 +325,12 @@ scene_new(ctx: @keep ptr, backend: @keep ptr) -> ptr {
 // needs-frames calls happen inside (or after) that block — so the ordering
 // works by construction. (Deciding up front, inside vg(), cannot work: the
 // block body is what declares the need, and it runs after vg() returns.)
-scene_set_arm_hook(p: ptr, cb: fn) {
+scene_set_arm_hook(p: ptr, cb: @keep fn) {
     s = p as *VgScene
     s.arm_cb = cb
 }
 
-scene_set_present_hook(p: ptr, cb: fn) {
+scene_set_present_hook(p: ptr, cb: @keep fn) {
     s = p as *VgScene
     s.present_cb = cb
 }
@@ -1215,22 +1215,22 @@ css_id(_ctx: ptr, name: string) {
 // handler closure can capture the element (returned by the shape verb) and
 // recolor it: `c = circle(…) { fill("#f00") }; on_click(c) { ... set_fill }`.
 
-on_click(_ctx: ptr, h: fn) {
+on_click(_ctx: ptr, h: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_on_click(el, h) }
 }
 
-on_hover(_ctx: ptr, h: fn) {
+on_hover(_ctx: ptr, h: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_on_hover(el, h) }
 }
 
-on_double_click(_ctx: ptr, h: fn) {
+on_double_click(_ctx: ptr, h: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_on_double_click(el, h) }
 }
 
-on_right_click(_ctx: ptr, h: fn) {
+on_right_click(_ctx: ptr, h: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_on_right_click(el, h) }
 }
@@ -1260,19 +1260,19 @@ on_click_recolor(_ctx: ptr, color: string) {
 // the shape's position (and recomputes its hit-test bounds). Mirror CVG's
 // .bindFill/.bindPos/etc. The closure captures whatever state it reads.
 
-bind_fill(_ctx: ptr, f: fn) {
+bind_fill(_ctx: ptr, f: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_bind_fill(el, f) }
 }
-bind_stroke(_ctx: ptr, f: fn) {
+bind_stroke(_ctx: ptr, f: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_bind_stroke(el, f) }
 }
-bind_opacity(_ctx: ptr, f: fn) {
+bind_opacity(_ctx: ptr, f: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_bind_opacity(el, f) }
 }
-bind_text(_ctx: ptr, f: fn) {
+bind_text(_ctx: ptr, f: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_bind_text(el, f) }
 }
@@ -1281,7 +1281,7 @@ bind_text(_ctx: ptr, f: fn) {
 // recompute_bounds re-maps to canvas space, so hit-testing follows the move
 // (CVG semantic-update). The element must carry shape geometry — set by the
 // shape factory at flush — so bind_pos is meaningful after the first flush.
-bind_pos(_ctx: ptr, f: fn) {
+bind_pos(_ctx: ptr, f: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_bind_pos(el, f) }
 }
@@ -1290,7 +1290,7 @@ bind_pos(_ctx: ptr, f: fn) {
 // 0 = hide), re-evaluated on scene refresh. A hidden element is not drawn and
 // not hit-tested (clicks fall through). CVG names this `when`; Aether reserves
 // that word, so the DSL spells it visible_when.
-visible_when(_ctx: ptr, pred: fn) {
+visible_when(_ctx: ptr, pred: @keep fn) {
     el = node_payload(_ctx)
     if el != null { element.element_set_when(el, pred) }
 }
@@ -1705,11 +1705,11 @@ _emit_clip(ctx: ptr, be: ptr, ref: string, has_bb: int, bx: float, by: float, bw
 bind_to(scene: ptr) -> ptr {
     return bind.new_region()
 }
-bind_items(region: ptr, cb: fn)   { bind.region_set_items(region, cb) }
-bind_trackby(region: ptr, cb: fn) { bind.region_set_trackby(region, cb) }
-bind_render(region: ptr, cb: fn)  { bind.region_set_render(region, cb) }
-bind_update(region: ptr, cb: fn)  { bind.region_set_update(region, cb) }
-bind_start(scene: ptr, region: ptr) {
+bind_items(region: ptr, cb: @keep fn)   { bind.region_set_items(region, cb) }
+bind_trackby(region: ptr, cb: @keep fn) { bind.region_set_trackby(region, cb) }
+bind_render(region: ptr, cb: @keep fn)  { bind.region_set_render(region, cb) }
+bind_update(region: ptr, cb: @keep fn)  { bind.region_set_update(region, cb) }
+bind_start(scene: ptr, region: @keep ptr) {
     s = scene as *VgScene
     bind.region_init(s.ctx, region)
 }
@@ -1759,7 +1759,7 @@ scene_eval_bindings(scene: ptr) -> int {
 // easing yourself). Mutate via vg.element_set_*(el, …). On a live window
 // vg_live runs a 16ms timer that advances + re-renders while is_animating;
 // headless callers drive scene_tick(scene, now_ms). Mirrors CVG's .transition.
-animate(_ctx: ptr, duration_ms: long, loop: int, yoyo: int, tick: fn) {
+animate(_ctx: ptr, duration_ms: long, loop: int, yoyo: int, tick: @keep fn) {
     el = node_payload(_ctx)
     if el == null { return }
     mgr = scene_anim_mgr_of_node(_ctx)
@@ -1814,7 +1814,7 @@ scene_is_animating(scene: ptr) -> int {
 // blitted by the live path (vg_live walks scene_live_regions and calls
 // canvas_draw_image); DRAW regions are rendered here via scene_render_live_draws
 // during flush. Both compose into the one backbuffer → atomic present.
-scene_add_live_region(scene: ptr, lr: ptr) {
+scene_add_live_region(scene: ptr, lr: @keep ptr) {
     s = scene as *VgScene
     if s.live_regions == null { s.live_regions = list.new() }
     _ = list.add(s.live_regions, lr)

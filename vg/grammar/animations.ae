@@ -161,7 +161,7 @@ manager_new() -> ptr { return mk_manager() }
 add_animation(mgr: ptr, element: @keep ptr,
               duration_ms: long, delay_ms: long,
               loop: int, yoyo: int,
-              now_ms: long, tick_fn: fn) -> ptr {
+              now_ms: long, tick_fn: @keep fn) -> ptr {
     return add_animation_impl(mgr, element, tick_fn,
                               duration_ms, delay_ms, loop, yoyo, now_ms)
 }

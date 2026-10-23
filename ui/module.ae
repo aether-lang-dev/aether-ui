@@ -617,7 +617,7 @@ canvas_widget(canvas_id: int) -> int {
 // `done` runs whatever happened meanwhile: close the window that started a
 // scan and its `done` still runs, against widgets that are gone. When the
 // result is FOR some widget, use background_for below.
-background(work: fn, done: fn) -> int {
+background(work: @keep fn, done: @keep fn) -> int {
     aether_ui_worker_poster_install_impl()
     if worker.run(work, done) { return 1 }
     return 0
@@ -654,7 +654,7 @@ background(work: fn, done: fn) -> int {
 // widget, which dies with it. owner <= 0 means no owner (only cancel drops).
 // Cancellation is cooperative: `work` that never polls runs to the end, and
 // its result then goes to `dropped`.
-background_for(owner: int, work: fn, done: fn, dropped: fn) -> int {
+background_for(owner: int, work: @keep fn, done: @keep fn, dropped: @keep fn) -> int {
     aether_ui_worker_poster_install_impl()
     job = aether_ui_bg_job_begin()
     if job == 0 { return 0 }
@@ -689,7 +689,7 @@ background_cancelled(job: int) -> int {
 }
 
 // Fire-and-forget: `work` runs off the UI thread and its result is dropped.
-background_detached(work: fn) -> int {
+background_detached(work: @keep fn) -> int {
     if worker.run_detached(work) { return 1 }
     return 0
 }
@@ -1842,7 +1842,7 @@ ui_set_list(handle: int, list_ptr: ptr) -> int {
     aether_ui_state_set_list(handle, list_ptr)
     return handle
 }
-each_bind(each_group: ptr, list_state: int) {
+each_bind(each_group: @keep ptr, list_state: int) {
     // Re-run each_update whenever the list-state changes -- for as long as
     // the group's container is alive. Owned by it, so an each() group that
     // was rebuilt away stops re-rendering into a dead container.
@@ -1898,7 +1898,7 @@ _state_hub() -> ptr {
 
 // Register cb to run when cell a or b (0 = none) is set. owner > 0 ties its
 // life to that widget.
-_state_observe(a: int, b: int, owner: int, cb: fn) {
+_state_observe(a: int, b: int, owner: int, cb: @keep fn) {
     hub = _state_hub() as *StateHub
     o = malloc(sizeof(StateObs)) as *StateObs
     o.a = a
@@ -2032,7 +2032,7 @@ ui_batch(body: fn) {
 //
 // ONE observer watching both inputs, so inside a ui_batch that sets both it
 // recomputes once, after both (see ui_batch).
-computed_s(recompute: fn, a: int, b: int) {
+computed_s(recompute: @keep fn, a: int, b: int) {
     recompute()   // seed the derived cell now
     bb = b
     if bb == a { bb = 0 }
@@ -4021,7 +4021,7 @@ keymap_free(km: ptr) -> int {
 }
 
 // command(label, accel, cb) — accel may be "" for no keystroke.
-command(label: string, accel: string, cb: fn) -> ptr {
+command(label: string, accel: string, cb: @keep fn) -> ptr {
     c = malloc(sizeof(Command)) as *Command
     c.label = label
     c.accel = accel
@@ -4148,7 +4148,7 @@ action(_ctx: ptr, label: string, accel: string) -> ptr {
 }
 
 // does() callback { … } — what the ambient action actually does.
-does(_ctx: ptr, cb: fn) {
+does(_ctx: ptr, cb: @keep fn) {
     if _ctx == 0 { return }
     c = _ctx as *Command
     c.cb = box_closure(cb)
@@ -4889,7 +4889,7 @@ _each_invoke(cb: fn, item: ptr, i: int, parent: int) {
 
 // each(orientation "v"|"h", spacing, render) -> each-handle. Creates the group
 // container in the enclosing block (auto-attached via _ctx).
-each(_ctx: ptr, orientation: string, spacing: int, render: fn) -> ptr {
+each(_ctx: ptr, orientation: string, spacing: int, render: @keep fn) -> ptr {
     h = 0
     if string.equals(orientation, "h") == 1 {
         h = aether_ui_hstack_create(spacing)
@@ -5178,18 +5178,18 @@ _listbox_row_clicked(lbp: ptr, i: int) {
 }
 
 // listbox(spacing, render) -> listbox-handle. render = |item, i, row|.
-listbox(_ctx: ptr, spacing: int, render: fn) -> ptr {
+listbox(_ctx: ptr, spacing: int, render: @keep fn) -> ptr {
     return _listbox_make(_ctx, spacing, render, 0)
 }
 
 // listbox_multi(spacing, render): like listbox but clicking rows TOGGLES their
 // selection — any number of rows can be selected at once. listbox_is_selected
 // reads a row's state; on_select fires with the toggled row's index.
-listbox_multi(_ctx: ptr, spacing: int, render: fn) -> ptr {
+listbox_multi(_ctx: ptr, spacing: int, render: @keep fn) -> ptr {
     return _listbox_make(_ctx, spacing, render, 1)
 }
 
-_listbox_make(_ctx: ptr, spacing: int, render: fn, multi: int) -> ptr {
+_listbox_make(_ctx: ptr, spacing: int, render: @keep fn, multi: int) -> ptr {
     lb = malloc(sizeof(ListBox)) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
@@ -5243,7 +5243,7 @@ _listbox_row_double(lbp: ptr, i: int) {
 
 // on_row_double_click(lb) callback |i: int| — fires when a row is double-
 // clicked (native gesture, or the driver's /widget/{row}/double_click).
-on_row_double_click(lbp: ptr, cb: fn) {
+on_row_double_click(lbp: ptr, cb: @keep fn) {
     lb = lbp as *ListBox
     lb.on_dbl = box_closure(cb)
 }
@@ -5369,12 +5369,12 @@ listbox_update(lbp: ptr, items: @keep ptr) {
 //
 // The old wording named GTK4 in a parenthesis, which reads as "this is how the
 // gesture is implemented" rather than "this is the only place it exists".
-listbox_reorderable(_ctx: ptr, spacing: int, render: fn) -> ptr {
+listbox_reorderable(_ctx: ptr, spacing: int, render: @keep fn) -> ptr {
     return _listbox_make_reorder(_ctx, spacing, render)
 }
 
 // on_reorder(lb) callback |from: int, to: int| — fires after a row moves.
-on_reorder(lbp: ptr, cb: fn) {
+on_reorder(lbp: ptr, cb: @keep fn) {
     lb = lbp as *ListBox
     lb.on_reorder = box_closure(cb)
 }
@@ -5386,7 +5386,7 @@ _listbox_invoke_reorder(cb: fn, from: int, to: int) {
 // Build a reorderable listbox: rows are native drag sources + drop targets, and
 // a drop calls listbox_move(source_index, target_index). The drag gesture is
 // backend C (GTK4 GtkDragSource/GtkDropTarget); the model reorder is shared.
-_listbox_make_reorder(_ctx: ptr, spacing: int, render: fn) -> ptr {
+_listbox_make_reorder(_ctx: ptr, spacing: int, render: @keep fn) -> ptr {
     lb = malloc(sizeof(ListBox)) as *ListBox
     lb.rows = null
     lb.selected = 0 - 1
@@ -5558,7 +5558,7 @@ listbox_items(lbp: ptr) -> ptr {
 }
 
 // on_select(lb) callback |i: int| { … } — fires on click AND listbox_select.
-on_select(lbp: ptr, cb: fn) {
+on_select(lbp: ptr, cb: @keep fn) {
     lb = lbp as *ListBox
     lb.on_sel = box_closure(cb)
 }
@@ -5729,12 +5729,12 @@ col(_ctx: ptr, title: string, w: int) {
 
 // col_delegate(title, width) callback |item, i, cell| { … } — a column whose
 // cells are built by the app, on the ambient spec.
-col_delegate(_ctx: ptr, title: string, w: int, render: fn) {
+col_delegate(_ctx: ptr, title: string, w: int, render: @keep fn) {
     if _ctx == 0 { return }
     table_col_delegate(_ctx, title, w, render)
 }
 
-table_col_delegate(cols: ptr, title: string, w: int, render: fn) {
+table_col_delegate(cols: ptr, title: string, w: int, render: @keep fn) {
     c = malloc(sizeof(TableCol)) as *TableCol
     c.title = title
     c.w = w
@@ -5755,7 +5755,7 @@ _table_invoke_sort(cb: fn, c: int) {
 }
 
 // table(cols, cell) -> table-handle. cell = |item, c| -> string.
-table(_ctx: ptr, cols: @keep ptr, cell: fn) -> ptr {
+table(_ctx: ptr, cols: @keep ptr, cell: @keep fn) -> ptr {
     t = malloc(sizeof(TableDef)) as *TableDef
     t.cols = cols
     t.cell = box_closure(cell)
@@ -5832,7 +5832,7 @@ _table_header_clicked(tp: ptr, c: int) {
 // on_sort(t) callback |c: int| { … } — header click; the app sorts + updates.
 // With table_sorter armed the app does NOT have to sort: the callback becomes
 // a notification (which column, now in which direction — read table_sort_dir).
-on_sort(tp: ptr, cb: fn) {
+on_sort(tp: ptr, cb: @keep fn) {
     t = tp as *TableDef
     t.sort_cb = box_closure(cb)
 }
@@ -5980,7 +5980,7 @@ table_sorter(tp: ptr, items: @keep ptr) {
 // table_sorter_cmp(t, cb) — supply a comparator, cb(|a: ptr, b: ptr, c: int|)
 // returning <0 / 0 / >0, replacing the cell-text comparison. Use for dates,
 // secondary keys, or locale collation.
-table_sorter_cmp(tp: ptr, cb: fn) {
+table_sorter_cmp(tp: ptr, cb: @keep fn) {
     t = tp as *TableDef
     t.cmp = box_closure(cb)
 }
@@ -6069,7 +6069,7 @@ _table_filter_pass(t: *TableDef, item: ptr) -> int {
 }
 
 // table_filter(t) callback |item| -> int — arm a predicate filter (1 = keep).
-table_filter(tp: ptr, pred: fn) {
+table_filter(tp: ptr, pred: @keep fn) {
     t = tp as *TableDef
     t.filter = box_closure(pred)
     t.fmode = 1
@@ -6202,7 +6202,7 @@ tree_node(label: string) -> ptr {
     n.expanded = 0
     return n as ptr
 }
-tree_add_child(parent: ptr, child: ptr) {
+tree_add_child(parent: ptr, child: @keep ptr) {
     p = parent as *TreeNode
     if p.children == null { p.children = list.new() }
     _ = list.add(p.children, child)
@@ -6325,7 +6325,7 @@ _tree_invoke_select(cb: fn, node: ptr) { cb(node) }
 // tree_on_select(t) callback |node: ptr| { … } — fires when a row is picked.
 // The NODE is passed rather than a row index, because the index is only
 // meaningful until the next expand or collapse.
-tree_on_select(tp: ptr, cb: fn) {
+tree_on_select(tp: ptr, cb: @keep fn) {
     t = tp as *TreeDef
     t.on_sel = box_closure(cb)
 }
@@ -6406,7 +6406,7 @@ struct VList {
     native: int         // 1 = the backend realizes rows, not _vlist_render
 }
 
-vlist(_ctx: ptr, orientation: string, window: int, render: fn) -> ptr {
+vlist(_ctx: ptr, orientation: string, window: int, render: @keep fn) -> ptr {
     v = malloc(sizeof(VList)) as *VList
     v.render = box_closure(render)
     v.items = null
@@ -8183,7 +8183,7 @@ _datagrid_pictures(g: *DataGrid) {
 // datagrid_cell_picture(g) callback |r: int, c: int| -> string { ... }: a
 // cell's picture, its PNG, JPEG, GIF or BMP bytes in base64 ("" none),
 // drawn over the cell fitted to it, as Excel's Place in Cell does.
-datagrid_cell_picture(gp: @keep ptr, fn_: fn) -> ptr {
+datagrid_cell_picture(gp: @keep ptr, fn_: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.pic = box_closure(fn_)
     _datagrid_bind(g)
@@ -8545,14 +8545,14 @@ datagrid_row_view(gp: ptr, r: int) -> int {
 
 // datagrid_on_col_resize(g) callback |c, w| { ... }: view column c was given
 // width w by a header drag (when the drag ends).
-datagrid_on_col_resize(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_col_resize(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_resize = box_closure(cb)
     return gp
 }
 
 // datagrid_on_col_move(g) callback |from, to| { ... }: a column moved.
-datagrid_on_col_move(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_col_move(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_move = box_closure(cb)
     return gp
@@ -8562,7 +8562,7 @@ datagrid_on_col_move(gp: @keep ptr, cb: fn) -> ptr {
 // label pressed and let go without a drag; c the model column (a frozen
 // column's too, as the corner over the row numbers is). A drag on it still
 // moves the column, one on its grip resizes it.
-datagrid_on_header_click(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_header_click(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_hdr = box_closure(cb)
     return gp
@@ -9346,7 +9346,7 @@ _datagrid_key(gp: @keep ptr, k: string, m: int) {
 }
 
 // datagrid_header(g) callback |c| -> string: the header's text per column.
-datagrid_header(gp: @keep ptr, header: fn) -> ptr {
+datagrid_header(gp: @keep ptr, header: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.header = box_closure(header)
     _datagrid_bind(g)
@@ -9355,7 +9355,7 @@ datagrid_header(gp: @keep ptr, header: fn) -> ptr {
 
 // datagrid_cells(g) callback |r: int, c: int| -> string: the cells' text,
 // asked for as each is shown (r a row, c a MODEL column).
-datagrid_cells(gp: @keep ptr, cell: fn) -> ptr {
+datagrid_cells(gp: @keep ptr, cell: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.cell = box_closure(cell)
     _datagrid_bind(g)
@@ -9366,7 +9366,7 @@ datagrid_cells(gp: @keep ptr, cell: fn) -> ptr {
 // opened by F2, a double click or Return starts with (c a model column),
 // when that is not what the cell shows: a spreadsheet shows 42 and edits
 // =A1+B2. Typing a character still starts with that character.
-datagrid_edit_text(gp: @keep ptr, fn_: fn) -> ptr {
+datagrid_edit_text(gp: @keep ptr, fn_: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.edit_text = box_closure(fn_)
     return gp
@@ -9376,7 +9376,7 @@ datagrid_edit_text(gp: @keep ptr, fn_: fn) -> ptr {
 // style, from the model, as AeCS properties: "background: #ffeeee; color:
 // #c00; font-weight: bold; text-align: end" ("" for the grid's own). Asked
 // as each cell is shown; a widget is restyled only when its string changes.
-datagrid_cell_style(gp: @keep ptr, fn_: fn) -> ptr {
+datagrid_cell_style(gp: @keep ptr, fn_: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.style = box_closure(fn_)
     _datagrid_bind(g)
@@ -9386,7 +9386,7 @@ datagrid_cell_style(gp: @keep ptr, fn_: fn) -> ptr {
 // datagrid_cell_tooltip(g) callback |r: int, c: int| -> string: what shows
 // when the pointer rests on a cell (a comment, say: --corner marks the
 // cell); "" for none. Asked as each cell is shown (c a model column).
-datagrid_cell_tooltip(gp: @keep ptr, fn_: fn) -> ptr {
+datagrid_cell_tooltip(gp: @keep ptr, fn_: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.tip = box_closure(fn_)
     _datagrid_bind(g)
@@ -9468,39 +9468,39 @@ datagrid_row_heights(gp: ptr) -> int { g = gp as *DataGrid; return g.row_h }
 // ── The grid's ambient verbs: inside datagrid(...) { ... } the grid is the
 // receiver, as a button is inside button("OK") { ... }. Each is its
 // datagrid_* form for that grid; outside a grid's block they do nothing.
-cells(_ctx: @keep ptr, cell: fn) {
+cells(_ctx: @keep ptr, cell: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cells(g, cell) }
 }
-headers(_ctx: @keep ptr, header: fn) {
+headers(_ctx: @keep ptr, header: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_header(g, header) }
 }
-on_cell_click(_ctx: @keep ptr, cb: fn) {
+on_cell_click(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_click(g, cb) }
 }
-on_cell_select(_ctx: @keep ptr, cb: fn) {
+on_cell_select(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_select(g, cb) }
 }
-on_cell_activate(_ctx: @keep ptr, cb: fn) {
+on_cell_activate(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_activate(g, cb) }
 }
-on_cell_edit(_ctx: @keep ptr, cb: fn) {
+on_cell_edit(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_edit(g, cb) }
 }
-on_col_resize(_ctx: @keep ptr, cb: fn) {
+on_col_resize(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_col_resize(g, cb) }
 }
-on_col_move(_ctx: @keep ptr, cb: fn) {
+on_col_move(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_col_move(g, cb) }
 }
-on_header_click(_ctx: @keep ptr, cb: fn) {
+on_header_click(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_header_click(g, cb) }
 }
@@ -9508,19 +9508,19 @@ column_width(_ctx: @keep ptr, w: int) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_set_col_widths(g, w) }
 }
-edit_text(_ctx: @keep ptr, fn_: fn) {
+edit_text(_ctx: @keep ptr, fn_: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_edit_text(g, fn_) }
 }
-cell_style(_ctx: @keep ptr, fn_: fn) {
+cell_style(_ctx: @keep ptr, fn_: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cell_style(g, fn_) }
 }
-on_cell_edit_change(_ctx: @keep ptr, cb: fn) {
+on_cell_edit_change(_ctx: @keep ptr, cb: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_on_edit_change(g, cb) }
 }
-cell_tooltip(_ctx: @keep ptr, fn_: fn) {
+cell_tooltip(_ctx: @keep ptr, fn_: @keep fn) {
     g = _datagrid_ctx(_ctx)
     if g != null { _d = datagrid_cell_tooltip(g, fn_) }
 }
@@ -9581,7 +9581,7 @@ datagrid_refresh(gp: @keep ptr) -> ptr {
 // row and column it shows now (scrolling moves what a cell widget shows, so
 // the position is worked out at the click, not when the handler was set).
 // The click has already selected the cell (or, with Shift, extended to it).
-datagrid_on_click(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_click(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.click = box_closure(cb)
     return gp
@@ -9640,14 +9640,14 @@ datagrid_is_selected(gp: ptr, r: int, c: int) -> int {
 
 // datagrid_on_select(g) callback |r, c| { ... }: the selection changed; the
 // cursor is at (r, c) (read the anchor for the range).
-datagrid_on_select(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_select(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_sel = box_closure(cb)
     return gp
 }
 
 // datagrid_on_activate(g) callback |r, c| { ... }: Return on the cursor cell.
-datagrid_on_activate(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_activate(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_act = box_closure(cb)
     return gp
@@ -9657,7 +9657,7 @@ datagrid_on_activate(gp: @keep ptr, cb: fn) -> ptr {
 // the grid editable; called when an edit of row r, MODEL column c (the one
 // the cell function is given for that cell) commits, to store the text. The
 // grid then shows the cell function's answer for it.
-datagrid_on_edit(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_edit(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_edit = box_closure(cb)
     return gp
@@ -9729,7 +9729,7 @@ datagrid_edit_cancel(gp: @keep ptr) -> ptr {
 // switch, datagrid_edit_cancel). The shortcut that takes Escape while an editor
 // is open stops a window key handler hearing it on GTK, so a page that must
 // know hears it here, the same on every backend.
-datagrid_on_edit_cancel(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_edit_cancel(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_edit_cancel = box_closure(cb)
     return gp
@@ -9854,7 +9854,7 @@ _datagrid_invoke_text_caret(cb: fn, t: string, caret: int) {
 // the open editor's text as it is typed, with its caret (in the platform's
 // units: see textfield_caret), and once as it opens. A formula's point
 // mode, or colouring the references a formula being typed names.
-datagrid_on_edit_change(gp: @keep ptr, cb: fn) -> ptr {
+datagrid_on_edit_change(gp: @keep ptr, cb: @keep fn) -> ptr {
     g = gp as *DataGrid
     g.on_edit_change = box_closure(cb)
     return gp
@@ -9917,7 +9917,7 @@ datagrid_vscroll(gp: ptr) -> int { g = gp as *DataGrid; return g.vsl }
 datagrid_hscroll(gp: ptr) -> int { g = gp as *DataGrid; return g.hsl }
 
 // table_on_select(t) callback |i: int| — row selection (delegates to listbox).
-table_on_select(tp: ptr, cb: fn) {
+table_on_select(tp: ptr, cb: @keep fn) {
     t = tp as *TableDef
     on_select(t.lb, cb)
 }
@@ -9925,7 +9925,7 @@ table_on_select(tp: ptr, cb: fn) {
 // table_bind(t, list_state): the table tracks a LIST state — every ui_set_list
 // re-runs table_update. The each_bind sibling for tables. Seeds once.
 // Owned, like each_bind, by the container its rows render into.
-table_bind(tp: ptr, list_state: int) {
+table_bind(tp: @keep ptr, list_state: int) {
     t = tp as *TableDef
     lb = t.lb as *ListBox
     eg = lb.group as *EachGroup

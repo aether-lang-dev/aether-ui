@@ -92,7 +92,7 @@ event_state_dragged(p: ptr) -> ptr { s = p as *EventState; return s.dragged_elem
 // by shape factories on every element that has an event handler or
 // might be hit-tested.
 
-track_element(ctx: ptr, el: ptr) {
+track_element(ctx: ptr, el: @keep ptr) {
     list_p = context.ctx_tracked_elements(ctx)
     _ = list.add(list_p, el)
 }
@@ -374,12 +374,12 @@ dispatch_right_click(es: ptr, ctx: ptr, x: float, y: float) {
 // handlers on EventState (where the events sub-system keeps its state) and
 // fire them unconditionally — keyboard focus is scene-level, not geometric.
 
-event_on_key_down(es: ptr, h: fn) {
+event_on_key_down(es: ptr, h: @keep fn) {
     state = es as *EventState
     state.key_down_handler = h
 }
 
-event_on_key_up(es: ptr, h: fn) {
+event_on_key_up(es: ptr, h: @keep fn) {
     state = es as *EventState
     state.key_up_handler = h
 }

@@ -117,7 +117,7 @@ frames(_ctx: ptr, scene: @keep ptr, x: float, y: float, w: float, h: float) -> p
 // A declarative child of frames{}. The callback is retained and invoked for
 // each paint with the frame-local content bounds.
 frame(_ctx: @keep ptr, title: string, x: float, y: float, w: float, h: float,
-      content: fn) -> ptr {
+      content: @keep fn) -> ptr {
     f = frame_add(_ctx, title, x, y, w, h)
     frame_set_content(f, content)
     return f
@@ -177,7 +177,7 @@ frame_add(host: @keep ptr, title: string, x: float, y: float, w: float, h: float
     return f as ptr
 }
 
-frame_set_content(frame: ptr, cb: fn) {
+frame_set_content(frame: ptr, cb: @keep fn) {
     f = frame as *Frame
     f.content = box_closure(cb)
     frame_invalidate(frame)

@@ -258,7 +258,7 @@ video_region(_ctx: ptr, x: float, y: float, ext_w: float, ext_h: float,
     return lr
 }
 
-canvas_region(_ctx: ptr, x: float, y: float, w: float, h: float, draw: fn) -> ptr {
+canvas_region(_ctx: ptr, x: float, y: float, w: float, h: float, draw: @keep fn) -> ptr {
     scene = vg.node_scene(_ctx)
     lr = region.live_draw_new(x, y, w, h, draw)
     vg.scene_add_live_region(scene, lr)
@@ -269,16 +269,16 @@ canvas_region(_ctx: ptr, x: float, y: float, w: float, h: float, draw: fn) -> pt
 // per-frame source to a raster region so it ANIMATES: the live loop calls it
 // each tick to produce + push the next frame (capture-free; gets the region +
 // the monotonic-seconds clock). Without it the region is static (push once).
-video_source(region: ptr, src: fn) {
-    region.region_set_source(region, src)
+video_source(rg: ptr, src: @keep fn) {
+    region.region_set_source(rg, src)
 }
 
 // region_set_animated(region, 0) — mark a draw region STATIC-UNTIL-DIRTY: the
 // 60fps live loop skips it (zero idle cost); the app re-renders explicitly
 // via vg_flush_live when its state changes. Default is 1 (continuous), which
 // t-keyed draws (the tumbling cube) and video sources need.
-region_set_animated(region: ptr, on: int) {
-    region.region_set_animated(region, on)
+region_set_animated(rg: ptr, on: int) {
+    region.region_set_animated(rg, on)
 }
 
 // _flush_live(scene, canvas_id, t) — the full per-frame render: static shapes
@@ -328,17 +328,17 @@ _render_live_z_ordered(scene: ptr, canvas_id: int, t: float) {
 }
 
 // Render one live region by kind.
-_render_one_region(scene: ptr, canvas_id: int, region: ptr, t: float) {
-    if region.region_kind(region) == region.LIVE_RASTER {
+_render_one_region(scene: ptr, canvas_id: int, rg: ptr, t: float) {
+    if region.region_kind(rg) == region.LIVE_RASTER {
         // Animated source: produce + push this frame before blitting. Static
         // regions (no source) just blit their once-pushed frame.
-        src = region.region_src_fn(region)
+        src = region.region_src_fn(rg)
         if src != null {
-            region.invoke_region_source(src, region, t)
+            region.invoke_region_source(src, rg, t)
         }
-        _blit_one_raster(scene, canvas_id, region)
+        _blit_one_raster(scene, canvas_id, rg)
     } else {
-        vg.render_one_draw(scene, region, t)
+        vg.render_one_draw(scene, rg, t)
     }
 }
 
@@ -351,15 +351,15 @@ vg_flush_live(scene: ptr, canvas_id: int, t: float) {
 }
 
 // Blit one RASTER region's current frame, scaled to fill its mapped extent.
-_blit_one_raster(scene: ptr, canvas_id: int, region: ptr) {
-    frame = region.region_frame(region)
-    flen = region.region_frame_len(region)
+_blit_one_raster(scene: ptr, canvas_id: int, rg: ptr) {
+    frame = region.region_frame(rg)
+    flen = region.region_frame_len(rg)
     if flen == 0 { return }
     ctx = vg.scene_ctx(scene)
-    rx = region.region_x(region)
-    ry = region.region_y(region)
-    rw = region.region_w(region)
-    rh = region.region_h(region)
+    rx = region.region_x(rg)
+    ry = region.region_y(rg)
+    rw = region.region_w(rg)
+    rh = region.region_h(rg)
     // Region rect (viewBox) → canvas px: the DEST extent. The frame's own pixel
     // dims (pw×ph) are the SOURCE; the blit scales source→dest so a frame of any
     // resolution fills the region's mapped extent.
@@ -369,8 +369,8 @@ _blit_one_raster(scene: ptr, canvas_id: int, region: ptr) {
     cy0 = transform.pt_y(p_tl)
     dw = transform.pt_x(p_br) - cx0
     dh = transform.pt_y(p_br) - cy0
-    pw = region.region_pw(region)
-    ph = region.region_ph(region)
+    pw = region.region_pw(rg)
+    ph = region.region_ph(rg)
     ui.canvas_draw_image_scaled(canvas_id, cx0, cy0, dw, dh, pw, ph, frame, flen)
 }
 

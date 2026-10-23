@@ -202,7 +202,7 @@ md_block_text(bp: ptr) -> string {
 // ---- editing operations ----------------------------------------------------
 
 // std.list has no insert-at-index: append then shift the tail right.
-list_insert_at(l: ptr, at: int, item: ptr) {
+list_insert_at(l: ptr, at: int, item: @keep ptr) {
     n = list.list_size(l)
     _ = list.list_add_raw(l, item)
     i = n

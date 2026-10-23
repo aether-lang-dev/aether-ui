@@ -371,7 +371,7 @@ element_context(p: ptr) -> ptr {
 // the stored ptr; invoking via a `fn`-typed param auto-unboxes at
 // that call site.
 
-element_on_click(p: ptr, h: fn) {
+element_on_click(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.click_handler = h
 }
@@ -381,7 +381,7 @@ element_click_handler(p: ptr) -> ptr {
     return e.click_handler
 }
 
-element_on_hover(p: ptr, h: fn) {
+element_on_hover(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.hover_handler = h
 }
@@ -391,7 +391,7 @@ element_hover_handler(p: ptr) -> ptr {
     return e.hover_handler
 }
 
-element_on_drag(p: ptr, h: fn) {
+element_on_drag(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.drag_handler = h
 }
@@ -401,7 +401,7 @@ element_drag_handler(p: ptr) -> ptr {
     return e.drag_handler
 }
 
-element_on_drag_end(p: ptr, h: fn) {
+element_on_drag_end(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.drag_end_handler = h
 }
@@ -411,7 +411,7 @@ element_drag_end_handler(p: ptr) -> ptr {
     return e.drag_end_handler
 }
 
-element_on_scroll(p: ptr, h: fn) {
+element_on_scroll(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.scroll_handler = h
 }
@@ -421,7 +421,7 @@ element_scroll_handler(p: ptr) -> ptr {
     return e.scroll_handler
 }
 
-element_on_double_click(p: ptr, h: fn) {
+element_on_double_click(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.double_click_handler = h
 }
@@ -431,7 +431,7 @@ element_double_click_handler(p: ptr) -> ptr {
     return e.double_click_handler
 }
 
-element_on_right_click(p: ptr, h: fn) {
+element_on_right_click(p: ptr, h: @keep fn) {
     e = p as *AevgElement
     e.right_click_handler = h
 }
@@ -491,7 +491,7 @@ element_cursor(p: ptr) -> string {
     return e.cursor_str
 }
 
-element_set_when(p: ptr, pred: fn) {
+element_set_when(p: ptr, pred: @keep fn) {
     e = p as *AevgElement
     e.when_predicate = pred
 }
@@ -533,7 +533,7 @@ element_destroy(p: ptr) {
 
 // ─── Reactive bindings ───────────────────────────────────────────
 
-element_bind_fill(p: ptr, f: fn) {
+element_bind_fill(p: ptr, f: @keep fn) {
     e = p as *AevgElement
     e.fill_binding = f
 }
@@ -543,7 +543,7 @@ element_fill_binding(p: ptr) -> ptr {
     return e.fill_binding
 }
 
-element_bind_stroke(p: ptr, f: fn) {
+element_bind_stroke(p: ptr, f: @keep fn) {
     e = p as *AevgElement
     e.stroke_binding = f
 }
@@ -553,7 +553,7 @@ element_stroke_binding(p: ptr) -> ptr {
     return e.stroke_binding
 }
 
-element_bind_opacity(p: ptr, f: fn) {
+element_bind_opacity(p: ptr, f: @keep fn) {
     e = p as *AevgElement
     e.opacity_binding = f
 }
@@ -563,7 +563,7 @@ element_opacity_binding(p: ptr) -> ptr {
     return e.opacity_binding
 }
 
-element_bind_text(p: ptr, f: fn) {
+element_bind_text(p: ptr, f: @keep fn) {
     e = p as *AevgElement
     e.text_binding = f
 }
@@ -573,7 +573,7 @@ element_text_binding(p: ptr) -> ptr {
     return e.text_binding
 }
 
-element_bind_pos(p: ptr, f: fn) {
+element_bind_pos(p: ptr, f: @keep fn) {
     e = p as *AevgElement
     e.pos_binding = f
 }

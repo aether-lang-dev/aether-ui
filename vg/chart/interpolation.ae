@@ -94,7 +94,7 @@ interp_cardinal(tension: float, fill_holes: int) -> *CtInterp {
 
 interp_monotone_cubic(fill_holes: int) -> *CtInterp { return mk_interp("monotoneCubic", fill_holes) }
 
-interp_custom(f: fn) -> *CtInterp {
+interp_custom(f: @keep fn) -> *CtInterp {
     ip = mk_interp("custom", 0)
     ip.custom = f
     return ip

@@ -87,7 +87,7 @@ import vg (view_box, rect)
 import std.string
 import std.list
 import std.os
-import std.os (os_getenv, aether_args_count, aether_args_get)
+import std.os (os_getenv, args_count, args_get)
 import std.fs
 import gp_model
 import gp_model (FileEntry, mk_entry, root_label, to_float, fmt_size,
@@ -138,7 +138,7 @@ tick(s: *AppState) {
 main() {
     // Directory to visualise: argv[1] > $AEVG_DIR > $HOME > /tmp.
     start = ""
-    if aether_args_count() > 1 { start = aether_args_get(1) }
+    if args_count() > 1 { start = args_get(1) }
     if string.length(start) == 0 { start = os_getenv("AEVG_DIR") }
     if string.length(start) == 0 { start = os_getenv("HOME") }
     if string.length(start) == 0 { start = "/tmp" }

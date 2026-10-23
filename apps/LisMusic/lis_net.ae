@@ -96,7 +96,7 @@ fetch_songs(term: string) -> ptr {
 // Real async search: fetch off-thread, deliver the song list back on the loop
 // thread to `on_done`. Returns true if the worker launched (false → nothing
 // ran; caller can fall back to the canned search()).
-search_async(term: string, on_done: fn) -> int {
+search_async(term: string, on_done: @keep fn) -> int {
     ok = worker.run(
         || { return fetch_songs(term) },       // WORKER thread — blocking OK
         |songs: ptr| { on_done(songs) }        // LOOP thread — safe to touch UI

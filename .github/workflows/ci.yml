@@ -271,7 +271,18 @@ jobs:
           # and warn W1005 where a `ptr` is read as text, an error in a later
           # release), so nothing older builds it. Verified: ci.sh on macOS and
           # the Linux lane.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.830.0' }}
+          # v0.840.0 (2026-10-23): a REAL floor move (aether-ui#221). From
+          # 0.838.0 a function that keeps a closure parameter declares it
+          # `@keep fn` (ui.background, background_for, background_detached
+          # hand theirs to worker.run, which keeps them; every vg and ui
+          # setter that stores a callback), and from 0.840.0 a borrowed `ptr`
+          # put in a list or a map is kept (list.add, map.put are @retain);
+          # a parameter named like a module hides it (vg/live.ae's `region`),
+          # map.remove and list.remove return nothing, and std.os's argv
+          # accessors are args_count/args_get (0.836.0). Nothing older than
+          # 0.836.0 builds the tree. Verified: ci.sh, all phases, on macOS
+          # and the aether-linux lane against 0.840.0.
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.840.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the
@@ -332,7 +343,12 @@ jobs:
           # `make install` failed and both legs were red from the 0.824 bump
           # (8ca06029's parent) on. v0.327 is the aeb sae pins with 0.824.0 and
           # what this tree's lanes were verified with.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.327' }}
+          # aeb main at 3f5acf4 (2026-10-23), by commit because no tag has it
+          # yet: on Aether 0.840.0 a build node's session handle goes into a
+          # map (bldr.begin's "_session"), so bldr.begin/build and the node
+          # entry transform-ae writes declare it @keep; with v0.332 every node
+          # here failed to compile (46 failures).
+          AEB_REF: ${{ vars.AEB_REF || '3f5acf481720f2d6b02acae5e413f3e16360249c' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
