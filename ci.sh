@@ -1665,6 +1665,13 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=background_demo/spec_background_demo \
     run_server_test "$(EX_BIN background_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" background_demo || FAIL=$((FAIL + 1))
+    # And headless: the poster is installed once the loop is about to run, headless
+    # or not (GTK left it out under AETHER_UI_HEADLESS, so a job finished on the
+    # pool was never delivered: sae's native-engine search, a std.worker job,
+    # waited for ever).
+    AETHER_UI_HEADLESS=1 UI_SPEC=background_demo/spec_background_demo \
+    run_server_test "$(EX_BIN background_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" background_demo || FAIL=$((FAIL + 1))
 fi
 
 echo
@@ -1695,6 +1702,14 @@ if [ "$SPEC_OK" -eq 1 ]; then
 
     echo "-- Phase 5e20: canvas_on_resize passes floats like its siblings --"
     UI_SPEC=resizecb_demo/spec_resizecb_demo \
+    run_server_test "$(EX_BIN resizecb_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" resizecb_demo || FAIL=$((FAIL + 1))
+
+    # A window AETHER_UI_HEADLESS never presents: on GTK nothing maps it, so it
+    # had no size (every widget 0 x 0, a canvas never told its own), a driver
+    # resize went nowhere and /screenshot failed. The same app, launched headless.
+    echo "-- Phase 5e20b: a window never presented is laid out, resized and photographed --"
+    AETHER_UI_HEADLESS=1 UI_SPEC=resizecb_demo/spec_headless_window \
     run_server_test "$(EX_BIN resizecb_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" resizecb_demo || FAIL=$((FAIL + 1))
 

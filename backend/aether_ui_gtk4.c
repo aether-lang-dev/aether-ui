@@ -625,9 +625,10 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
 /* ── Background work: std.worker's main-thread poster ─────────────────
    A finished job arrives here on the POOL thread; g_idle_add is thread-safe
    and runs the idle on the default main context, which is the UI thread.
-   Not installed under AETHER_UI_HEADLESS: that run parks without a loop, so
-   the job would sit in the idle queue forever -- left on the drain queue
-   instead. See the header for the contract. */
+   Not installed under AETHER_UI_HEADLESS until the application's loop is
+   about to run: a headless program that never runs one would leave the job
+   in the idle queue forever -- it stays on the drain queue instead. See the
+   header for the contract. */
 static GThread* aeui_ui_thread = NULL;
 static int      aeui_worker_poster_installed = 0;
 
@@ -641,14 +642,27 @@ static void aeui_worker_post(void* env, void* job) {
     g_idle_add(aeui_worker_deliver_idle, job);
 }
 
-void aether_ui_worker_poster_install_impl(void) {
+// loop_running: app_run_raw is about to run the application, which services
+// the default main context even under AETHER_UI_HEADLESS (only the window is
+// not presented). Before that, a headless program may never run a loop (the
+// UI-logic tests), so completions stay on std.worker's drain queue. AppKit's
+// backend does the same (aeui_worker_poster_install(1)); here a headless app
+// with a loop never had a poster, so a job finished on the pool was never
+// delivered: sae's native-engine search (chess) hung until the control bus
+// gave up on it.
+static void aeui_worker_poster_install(int loop_running) {
     if (!aeui_ui_thread) aeui_ui_thread = g_thread_self();
-    if (aeui_worker_poster_installed || aeui_is_headless()) return;
+    if (aeui_worker_poster_installed || (aeui_is_headless() && !loop_running)) return;
     AetherUiWorkerClosure poster;
     poster.fn = (void (*)(void))aeui_worker_post;
     poster.env = NULL;
     aether_worker_set_main_poster(poster);
     aeui_worker_poster_installed = 1;
+    aether_worker_drain(0);   /* completions that queued before the poster existed */
+}
+
+void aether_ui_worker_poster_install_impl(void) {
+    aeui_worker_poster_install(0);
 }
 
 int aether_ui_on_ui_thread_impl(void) {
@@ -713,6 +727,7 @@ void aether_ui_app_run_raw(int app_handle) {
         AEUI_GAPP_DEFAULT_FLAGS | G_APPLICATION_NON_UNIQUE);
     g_signal_connect(e->gtk_app, "activate", G_CALLBACK(on_activate), e);
     aeui_running_app = G_APPLICATION(e->gtk_app);
+    aeui_worker_poster_install(1);   /* the loop runs, headless or not */
     g_application_run(G_APPLICATION(e->gtk_app), 0, NULL);
     aeui_running_app = NULL;
     g_object_unref(e->gtk_app);
@@ -6861,6 +6876,21 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
     return need;
 }
 
+// The canvas's resize hook, if it has one and the size is not the one it was
+// last told: fired from the draw func, and from the driver's layout settle for
+// a window that is never presented (AETHER_UI_HEADLESS), whose canvases are
+// allocated but never drawn.
+static void canvas_fire_resize(CanvasState* cs, int width, int height) {
+    if (cs && cs->on_resize && cs->on_resize->fn &&
+        (width != cs->last_w || height != cs->last_h)) {
+        cs->last_w = width;
+        cs->last_h = height;
+        /* #94: doubles, matching the other canvas callbacks. */
+        ((void(*)(void*, double, double))cs->on_resize->fn)(
+            cs->on_resize->env, (double)width, (double)height);
+    }
+}
+
 static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
                               int width, int height, gpointer data) {
     (void)area;
@@ -6899,14 +6929,7 @@ static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
     // re-map + re-flush its shapes at the new scale BEFORE we replay. The hook
     // receives (w, h) and must rebuild the command buffer (clear + re-dispatch);
     // it must NOT queue another draw (we're already drawing).
-    if (cs && cs->on_resize && cs->on_resize->fn &&
-        (width != cs->last_w || height != cs->last_h)) {
-        cs->last_w = width;
-        cs->last_h = height;
-        /* #94: doubles, matching the other canvas callbacks. */
-        ((void(*)(void*, double, double))cs->on_resize->fn)(
-            cs->on_resize->env, (double)width, (double)height);
-    }
+    canvas_fire_resize(cs, width, height);
     if (cs) {
         cairo_surface_t* surf = canvas_ensure_paint_surface(cs, width, height);
         if (!surf) {
@@ -10153,25 +10176,55 @@ static gboolean screenshot_idle_cb(gpointer data) {
     GdkPaintable* paintable = NULL;
     int w = 0, h = 0;
     GskRenderNode* node = NULL;
+    // A window AETHER_UI_HEADLESS never presented has no frames: its surface
+    // is not mapped, so the frame clock does not run, GTK draws nothing, and a
+    // paintable of it is empty (a 500 from /screenshot, "screenshot capture
+    // failed" from a bus's ui channel). AppKit and Win32 draw a hidden window
+    // on request. Do the same: map the content (not the window, which would
+    // put it on a display) for the length of the capture, so its widgets will
+    // be snapshotted, and take the picture of that.
+    GtkWidget* shot_root = toplevel;
+    GtkWidget* shot_mapped = NULL;
+    int unpresented = GTK_IS_WINDOW(toplevel) && !gtk_widget_get_mapped(toplevel);
+    if (unpresented) {
+        GtkWidget* content = gtk_window_get_child(GTK_WINDOW(toplevel));
+        if (content && gtk_widget_get_visible(content)) {
+            if (!gtk_widget_get_mapped(content)) {
+                gtk_widget_map(content);
+                shot_mapped = content;
+            }
+            shot_root = content;
+        }
+    }
     // What the UI is now is in the toplevel's last frame only once a frame
     // has run since the last change (see screenshot_wait_for_paint).
-    screenshot_wait_for_paint(toplevel);
+    if (!unpresented) screenshot_wait_for_paint(toplevel);
     for (int attempt = 0; attempt < 2 && !node; attempt++) {
-        if (attempt == 1) {
+        if (attempt == 1 && !unpresented) {
             // Still no node: once more, then look again with a new paintable
             // (the old one holds an empty image).
             screenshot_wait_for_paint(toplevel);
         }
         if (paintable) g_object_unref(paintable);
-        paintable = gtk_widget_paintable_new(toplevel);
+        paintable = gtk_widget_paintable_new(shot_root);
         w = gdk_paintable_get_intrinsic_width(paintable);
         h = gdk_paintable_get_intrinsic_height(paintable);
         if (w <= 0 || h <= 0) { w = 400; h = 300; }
 
         GtkSnapshot* snapshot = gtk_snapshot_new();
-        gdk_paintable_snapshot(paintable, snapshot, (double)w, (double)h);
+        if (unpresented && shot_root != toplevel) {
+            // A paintable holds the widget's render node from its last frame,
+            // and there was none. Draw the content now: the window's child,
+            // snapshotted by its parent (which does not have to be mapped).
+            w = gtk_widget_get_width(shot_root);
+            h = gtk_widget_get_height(shot_root);
+            gtk_widget_snapshot_child(toplevel, shot_root, snapshot);
+        } else {
+            gdk_paintable_snapshot(paintable, snapshot, (double)w, (double)h);
+        }
         node = gtk_snapshot_free_to_node(snapshot);
     }
+    if (shot_mapped) gtk_widget_unmap(shot_mapped);   // the capture is taken: back as it was
     if (!node) {
         g_object_unref(paintable);
         screenshot_from_canvas_surface();
@@ -10339,9 +10392,42 @@ static void aeui_drv_settle_layout(void) {
             GtkWidget* win = GTK_WIDGET(g_list_model_get_item(tops, i));
             if (!win) continue;
             int ww = gtk_widget_get_width(win), wh = gtk_widget_get_height(win);
+            // A window AETHER_UI_HEADLESS realized but never presented has no
+            // size yet (nothing maps it, so no surface layout gives it one):
+            // every widget in it read 0 x 0, a vg canvas included, and a spec
+            // waiting for the canvas's width waited for ever. Lay it out at
+            // the size it would open at, as AppKit and Win32 do for a hidden
+            // window.
+            // (Every time, not only the first: nothing resizes it but its
+            // default size, which a driver's resize sets.)
+            if (GTK_IS_WINDOW(win) && gtk_widget_get_realized(win)
+                && !gtk_widget_get_mapped(win)) {
+                int dw = 0, dh = 0;
+                gtk_window_get_default_size(GTK_WINDOW(win), &dw, &dh);
+                if (dw <= 0 || dh <= 0) {
+                    int mw = 0, mh = 0;
+                    gtk_widget_measure(win, GTK_ORIENTATION_HORIZONTAL, -1, NULL, &mw, NULL, NULL);
+                    gtk_widget_measure(win, GTK_ORIENTATION_VERTICAL, mw, NULL, &mh, NULL, NULL);
+                    if (dw <= 0) dw = mw;
+                    if (dh <= 0) dh = mh;
+                }
+                if (dw > 0 && dh > 0) { ww = dw; wh = dh; }
+                else { ww = 0; wh = 0; }
+            }
             if (gtk_widget_get_realized(win) && ww > 0 && wh > 0)
                 gtk_widget_allocate(win, ww, wh, -1, NULL);
             g_object_unref(win);
+        }
+        // A canvas learns its size in its draw func, and an unmapped window
+        // (headless) never draws: tell its resize hook what the allocation
+        // above gave it, so a vg scene is laid out at the canvas's size.
+        for (int cid = 1; cid <= canvas_state_count; cid++) {
+            CanvasState* cs = get_canvas_state(cid);
+            if (!cs || !cs->on_resize) continue;
+            GtkWidget* cw = aether_ui_get_widget(cs->widget_handle);
+            if (!cw || gtk_widget_get_mapped(cw)) continue;
+            int cwid = gtk_widget_get_width(cw), chei = gtk_widget_get_height(cw);
+            if (cwid > 0 && chei > 0) canvas_fire_resize(cs, cwid, chei);
         }
         if (!g_main_context_iteration(NULL, FALSE)) break;
         if (g_get_monotonic_time() - started > AEUI_SETTLE_BUDGET_US) break;

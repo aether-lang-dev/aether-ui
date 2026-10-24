@@ -1,0 +1,46 @@
+// spec_headless_window.ae — a window AETHER_UI_HEADLESS never presents is
+// still laid out, still tells a canvas its size, and can still be photographed.
+//
+// On GTK nothing maps such a window, so nothing gave it a size: every widget
+// read 0 x 0 (a canvas included, so a vg scene stayed at its default size and
+// a spec waiting for the canvas's width waited for ever), a driver resize
+// went nowhere, and /screenshot failed ("screenshot capture failed") because
+// a window GTK never draws has no render node to take. AppKit and Win32 do all
+// three for a hidden window. Run on resizecb_demo, launched with
+// AETHER_UI_HEADLESS=1:
+//
+//   AETHER_UI_HEADLESS=1 AETHER_UI_TEST_PORT=9222 ./build/resizecb_demo &
+//   UI_SPEC=resizecb_demo/spec_headless_window tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a window that is never presented (AETHER_UI_HEADLESS)") {
+        spec.it("is laid out, and the canvas's resize hook was told its size") callback {
+            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"size: 2", 30)
+            spec.assert_true(ok, "the canvas reported its allocation (a width in the 200s of the 240-wide window)")
+            cv = uidriver.widget_id_last_of("canvas", "")
+            spec.assert_true(cv > 0, "there is a canvas")
+            spec.assert_true(uidriver.widget_int_field_by_id(cv, "w") > 0, "its width is not 0")
+            spec.assert_true(uidriver.widget_int_field_by_id(cv, "h") > 0, "nor its height")
+        }
+        spec.it("follows a resize from the driver") callback {
+            uidriver.post_ok("/window/resize?w=500&h=420", "resize")
+            ok = uidriver.wait_body_contains("/widgets", "\"text\":\"size: 5", 30)
+            spec.assert_true(ok, "the canvas follows the window: a width in the 500s")
+        }
+        spec.it("gives a screenshot of what is in it") callback {
+            spec.assert_eq(uidriver.get_status("/screenshot"), 200, "GET /screenshot")
+            // The same picture as base64 text (a PNG's bytes carry NULs, which a
+            // string cannot hold): its first bytes, and enough of them to be a picture.
+            body = uidriver.get_body("/screenshot?b64=1")
+            spec.assert_true(string.starts_with(body, "iVBORw0KGgo"), "it is a PNG")
+            spec.assert_true(string.length(body) > 400, "with something in it (${string.length(body)} characters of base64)")
+        }
+    }
+    return spec.run_summary(fw)
+}
