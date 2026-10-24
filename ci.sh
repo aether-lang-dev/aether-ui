@@ -1299,6 +1299,18 @@ if [ "$SPEC_OK" -eq 1 ]; then
 fi
 
 echo
+echo "=== Phase 3c: AetherUIDriver introspection does not grow the app ==="
+# Polling GET /widgets must leave the app's RSS where it was. On AppKit the
+# server thread had no autorelease pool, so the accessibility getters it calls
+# leaked on every poll (spraedsheet's spec_sheet reached 5.8 GB). Skipped on a
+# host without lsof (the spec finds the app's pid through its listening port).
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=driver_rss/spec_driver_rss \
+    run_server_test "$(EX_BIN calculator)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" driver_rss || FAIL=$((FAIL + 1))
+fi
+
+echo
 echo "=== Phase 4: AetherUIDriver testable spec ==="
 if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=testable/spec_testable \

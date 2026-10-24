@@ -1,0 +1,70 @@
+// spec_driver_rss.ae — the driver's own introspection must not grow the app.
+//
+// The HTTP test server answers GET /widgets (and /widget/<id>) on its own
+// pthread. On AppKit and UIKit those queries call into the toolkit (the
+// accessibility getters alone autorelease a handful of NSSets, NSArrays and
+// NSStrings per widget), and a pthread with no run loop has no autorelease
+// pool: nothing autoreleased there was ever freed. Polling /widgets while a
+// spec waited for something made the app, and so the spec, grow without
+// bound -- spraedsheet's spec_sheet reached 5.8 GB on macOS, its page then
+// hit the sae time limit mid-command and the cases after it failed.
+// The server now drains a pool per request (aether_ui_test_server.c).
+//
+// This polls /widgets a few hundred times and bounds the app's RSS growth.
+// Any driver-armed app will do (ci.sh points it at the calculator); on a host
+// without lsof/ps the pid is not found and the check is skipped.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/calculator/bin/calculator &
+//   UI_SPEC=driver_rss/spec_driver_rss tests/run_spec.sh
+import std.spec
+import std.os
+import std.string
+import uidriver
+
+const WARMUP = 100
+const POLLS = 2000
+// KB. Unfixed, the calculator grew by about 70 MB over these polls
+// (and by gigabytes over spec_sheet); fixed, it does not move.
+const MOST_GROWTH_KB = 25000
+
+rss_kb(pid: string) -> int {
+    out, _e = os.exec("ps -o rss= -p ${pid}")
+    n, err = string.to_int(string.trim(out))
+    if string.length(err) > 0 { return -1 }
+    return n
+}
+
+poll(n: int) {
+    i = 0
+    while i < n {
+        _b = uidriver.get_body("/widgets")
+        i = i + 1
+    }
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "driver introspection does not grow the app") {
+        spec.it("polling /widgets leaves the app's RSS where it was") callback {
+            port = os.os_getenv("AETHER_UI_TEST_PORT")
+            if port == null || string.length(port) == 0 { port = "9222" }
+            out, _e = os.exec("lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null | head -1")
+            pid = string.trim(out)
+            if string.length(pid) == 0 {
+                println("  (no lsof, or no listener found: RSS check skipped)")
+                spec.assert_true(true, "skipped")
+            } else {
+                poll(WARMUP)
+                before = rss_kb(pid)
+                poll(POLLS)
+                after = rss_kb(pid)
+                println("  RSS ${before} KB -> ${after} KB over ${POLLS} polls of /widgets")
+                spec.assert_true(before > 0 && after > 0, "ps read the app's RSS")
+                spec.assert_true(after - before < MOST_GROWTH_KB, "RSS grew by ${after - before} KB (bound ${MOST_GROWTH_KB})")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -662,13 +662,31 @@ static void handle_request_trampoline(void* arg) {
  * NULL hook = today's behaviour exactly. macOS and win32 leave it unset and
  * are not affected by this change.
  */
+#ifdef __APPLE__
+/* AppKit/UIKit calls made from the HTTP thread (the macOS and UIKit hooks
+ * answer introspection right here) autorelease what they return -- an
+ * accessibility query alone makes a handful of NSSets and NSArrays. This
+ * pthread has no run loop, so no autorelease pool: with none, everything
+ * autoreleased on it is never freed. /widgets walks every widget, so a spec
+ * polling it grew the app by gigabytes (spraedsheet's spec_sheet reached
+ * 5.8 GB). One pool per request fixes it for every hook, present and future. */
+extern void* objc_autoreleasePoolPush(void);
+extern void objc_autoreleasePoolPop(void*);
+#endif
+
 static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) {
+#ifdef __APPLE__
+    void* pool = objc_autoreleasePoolPush();
+#endif
     if (h && h->run_on_ui_thread) {
         AeuiRequestCall call = { client_fd, h };
         h->run_on_ui_thread(handle_request_trampoline, &call);
-        return;
+    } else {
+        handle_request_inner(client_fd, h);
     }
-    handle_request_inner(client_fd, h);
+#ifdef __APPLE__
+    objc_autoreleasePoolPop(pool);
+#endif
 }
 
 static void handle_request_inner(aether_sock_t client_fd,
