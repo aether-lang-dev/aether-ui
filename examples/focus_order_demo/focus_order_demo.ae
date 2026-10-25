@@ -1,0 +1,40 @@
+// Aether UI focus-order example: a window of controls laid out in rows, with a
+// hidden one and a disabled one among them, for the driver's focus route
+// (POST /focus/move, which moves the focus as Tab and Shift+Tab do and says
+// which widget has it now). The order a person's Tab walks is the order the
+// controls are laid out in; one that is hidden, or disabled, is not in it.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, btn, toggle, textfield, divider,
+    set_hidden, style_enabled, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    window("focus order", 520, 300) {
+        vstack(8) {
+            text("Tab walks these in the order they are laid out")
+            divider()
+            hstack(6) {
+                btn("Alpha") callback { }
+                textfield("Name") callback |v: string| { }
+                toggle("Beta") callback |on: int| { }
+                btn("Gamma") callback { }
+            }
+            hidden_btn = btn("Hidden") callback { }
+            set_hidden(hidden_btn, 1)
+            off_btn = btn("Disabled") callback { }
+            style_enabled(off_btn, 0)
+            divider()
+            vstack(4) {
+                textfield("Notes") callback |v: string| { }
+                hstack(6) {
+                    toggle("Delta") callback |on: int| { }
+                    btn("Epsilon") callback { }
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

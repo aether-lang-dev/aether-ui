@@ -14157,6 +14157,49 @@ int aether_ui_focused_widget(void) {
     return hook_focused_widget();
 }
 
+// The widgets Tab visits, in the order the window tree lists them: a walk of
+// each window's children from the top of the Z order down (a child made later
+// goes below the ones before it, which is the order a dialog's Tab follows),
+// a container that is not shown skipped with what is in it. A control takes
+// part when it is one of ours, has WS_TABSTOP, is shown and enabled.
+static void w32_focus_chain(HWND parent, HWND* out, int* n, int max) {
+    for (HWND c = GetWindow(parent, GW_CHILD); c && *n < max; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (!w32_own_visible(c)) continue;
+        int h = handle_for_hwnd(c);
+        if (h > 0) {
+            Widget* cand = widget_at(h);
+            if (cand && !cand->dead && (GetWindowLongW(c, GWL_STYLE) & WS_TABSTOP) && IsWindowEnabled(c))
+                out[(*n)++] = c;
+        }
+        w32_focus_chain(c, out, n, max);
+    }
+}
+
+// Focus moved as Tab (back = 0) or Shift+Tab (1) moves it, through that
+// chain and nothing else, wrapping at the end: the driver's /focus/move.
+// Like a real Tab it makes the focus ring show. 1 if the focus moved.
+static int w32_focus_move(int back) {
+    HWND top = (app_count > 0) ? apps[0].hwnd : NULL;
+    if (!top) return 0;
+    enum { MAXCHAIN = 4096 };
+    HWND* chain = (HWND*)malloc(sizeof(HWND) * MAXCHAIN);
+    if (!chain) return 0;
+    int n = 0;
+    w32_focus_chain(top, chain, &n, MAXCHAIN);
+    int moved = 0;
+    if (n > 0) {
+        HWND cur = GetFocus();
+        int at = -1;
+        for (int i = 0; i < n; i++) if (chain[i] == cur) { at = i; break; }
+        int next = at < 0 ? (back ? n - 1 : 0) : (back ? (at + n - 1) % n : (at + 1) % n);
+        w32_show_focus_cues();
+        SetFocus(chain[next]);
+        moved = 1;
+    }
+    free(chain);
+    return moved;
+}
+
 // dispatch_action: sends the ctx to the UI thread via AE_WM_DRIVER and
 // blocks until the WndProc fills in ctx->result. Runs on the server
 // thread — SendMessageW is synchronous so no explicit wait is needed.
@@ -14180,6 +14223,12 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 case 3: aether_ui_state_set_s(ctx->handle, ctx->sval); break;
                 default: aether_ui_state_set(ctx->handle, ctx->dval);
             }
+            ctx->result = 0;
+            ctx->done = 1;
+            return 0;
+        }
+        if (ctx->action == AETHER_DRV_FOCUS_MOVE) {
+            ctx->retval = w32_focus_move(ctx->ival ? 1 : 0);
             ctx->result = 0;
             ctx->done = 1;
             return 0;

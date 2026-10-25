@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`POST /focus/move?dir=forward|backward`: the driver moves the keyboard
+  focus as Tab and Shift+Tab do, and says where it went.** The answer is
+  `{"moved": bool, "handle": N, "type": "...", "widget": {as /widget/N}}`, so a
+  spec asserts the ORDER a person's Tab walks (not only that something has
+  focus). The move is the toolkit's own focus order and nothing else: no app
+  key handler hears it first (`/window/key?combo=Tab` goes by them, and a grid
+  that takes Tab for its cursor hid the order). It wraps at either end. Real on
+  every backend: GTK4 `gtk_widget_child_focus` (focus cleared and tried again to
+  wrap), AppKit and UIKit a depth-first walk of the view tree for the views that
+  take focus (AppKit's own key-view loop depends on a system setting; the
+  registry's order is the order widgets were MADE, so a panel built later came
+  last whatever it sat beside), Win32 the window tree from the top of the Z
+  order (WS_TABSTOP, shown, enabled), Android `View.focusSearch` with the
+  window's content taking it at the end when nothing has it. `uidriver.ae`:
+  `focus_move`, `focus_next`, `focus_prev`, `focus_move_body`. sae passes the
+  route on its control bus; `examples/focus_order_demo` +
+  `tests/focus_order_demo`. Also: `aeui_accel_text` is `static inline`, which
+  the Android backend's `-Wall -Werror` compile of the header refused.
+
 - **`reorderable(stack, cb)`: a stack's children dragged among themselves.**
   The children of an hstack or vstack can be dragged to reorder (a
   spreadsheet's sheet tabs); a bar shows the gap a dragged child would land

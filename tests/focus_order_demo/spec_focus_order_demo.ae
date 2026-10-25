@@ -1,0 +1,141 @@
+// spec_focus_order_demo.ae -- the driver's focus route: POST /focus/move moves
+// the keyboard focus as Tab and Shift+Tab do, through the toolkit's own focus
+// order, and says which widget has it now. The window lays out Alpha, the Name
+// field, Beta, Gamma, a hidden button, a disabled one, the Notes field, Delta
+// and Epsilon. The stops are the ones of those that can take the keyboard focus
+// on the backend (every control on the desktops and Android; on iOS only the
+// two text fields, a button not being a first responder there); a walk forward
+// visits exactly them, in the order they are laid out, and wraps; a walk back
+// visits them in reverse; the hidden and the disabled are never reached. It is
+// the order itself that is asserted, not that something moved.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/focus_order_demo/bin/focus_order_demo &
+//   UI_SPEC=focus_order_demo/spec_focus_order_demo tests/run_spec.sh focus_order_demo
+import std.spec
+import std.string
+import std.json
+import std.list
+import uidriver
+
+// The widgets of the layout, in order, as "type text" (a text field by its hint).
+const LAYOUT = "button:Alpha textfield:Name toggle:Beta button:Gamma textfield:Notes toggle:Delta button:Epsilon"
+
+// The handle of a widget given as "type:text" (a text field is found by the order it is made in).
+handle_of(spec_: string) -> int {
+    parts = string.string_split(spec_, ":")
+    wtype = string.string_array_get(parts, 0)
+    label = string.string_array_get(parts, 1)
+    if string.equals(wtype, "textfield") == 1 {
+        v, _jerr = json.parse(uidriver.get_body("/widgets"))
+        if v == null { return 0 }
+        r = 0
+        i = 0
+        while i < json.json_array_size(v) {
+            w = json.json_array_get_raw(v, i)
+            if string.equals(uidriver.field_str(w, "type"), "textfield") == 1 && string.equals(uidriver.field_str(w, "placeholder"), label) == 1 { r = uidriver.field_int(w, "id") }
+            i = i + 1
+        }
+        json.json_free(v)
+        return r
+    }
+    return uidriver.widget_id_of(wtype, label)
+}
+
+// 1 when the widget takes the keyboard focus when it is given it.
+takes_focus(id: int) -> int {
+    if id == 0 { return 0 }
+    uidriver.focus_widget(id)
+    if uidriver.focused_widget() == id { return 1 }
+    return 0
+}
+
+// The stops, in layout order: the handles of the laid-out widgets that take the focus, as a string of them.
+stops_ids() -> string {
+    out = ""
+    names = string.string_split(LAYOUT, " ")
+    i = 0
+    while i < string.string_array_size(names) {
+        id = handle_of(string.string_array_get(names, i))
+        if takes_focus(id) == 1 { out = "${out}${id} " }
+        i = i + 1
+    }
+    return string.trim(out)
+}
+
+// The i'th handle of such a string, and how many there are.
+stop_at(ids: string, i: int) -> int {
+    parts = string.string_split(ids, " ")
+    v, _e = string.to_int(string.string_array_get(parts, i))
+    return v
+}
+stop_count(ids: string) -> int { return string.string_array_size(string.string_split(ids, " ")) }
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "focus order over the driver's /focus/move") {
+        spec.it("Tab visits the stops in the order they are laid out, and wraps from the last to the first") callback {
+            stops = stops_ids()
+            n = stop_count(stops)
+            spec.assert_gt(n, 1, "at least the two text fields take the focus (${n} stops)")
+            uidriver.focus_widget(stop_at(stops, 0))
+            i = 1
+            while i <= n {
+                body = uidriver.focus_move_body(0)
+                spec.assert_contains(body, "\"moved\":true", "Tab ${i}: the focus moved")
+                spec.assert_eq(uidriver.focused_widget(), stop_at(stops, i % n), "Tab ${i}: the stop ${i % n} of ${n}")
+                i = i + 1
+            }
+        }
+        spec.it("the answer names the widget: its handle, type and the widget as /widget/{id} has it") callback {
+            stops = stops_ids()
+            uidriver.focus_widget(stop_at(stops, 0))
+            body = uidriver.focus_move_body(0)
+            v, _jerr = json.parse(body)
+            spec.assert_true(v != null, "JSON")
+            id = uidriver.field_int(v, "handle")
+            spec.assert_eq(id, uidriver.focused_widget(), "the handle is the one /focus names")
+            w = json.json_object_get_raw(v, "widget")
+            spec.assert_true(w != null, "the widget itself")
+            spec.assert_eq(uidriver.field_int(w, "id"), id, "with its id")
+            spec.assert_true(string.length(uidriver.field_str(w, "type")) > 0, "and its type")
+            json.json_free(v)
+        }
+        spec.it("a hidden button and a disabled one are not in the order") callback {
+            hid = uidriver.widget_id_of("button", "Hidden")
+            off = uidriver.widget_id_of("button", "Disabled")
+            stops = stops_ids()
+            uidriver.focus_widget(stop_at(stops, 0))
+            seen = 0
+            i = 0
+            while i < stop_count(stops) + 2 {
+                got = uidriver.focus_next()
+                if got == hid || got == off { seen = seen + 1 }
+                i = i + 1
+            }
+            spec.assert_eq(seen, 0, "a round of Tabs and more never lands on either")
+        }
+        spec.it("Shift+Tab walks the same order back, and wraps from the first to the last") callback {
+            stops = stops_ids()
+            n = stop_count(stops)
+            uidriver.focus_widget(stop_at(stops, n - 1))
+            i = 1
+            while i <= n {
+                body = uidriver.focus_move_body(1)
+                spec.assert_contains(body, "\"moved\":true", "Shift+Tab ${i}: the focus moved")
+                spec.assert_eq(uidriver.focused_widget(), stop_at(stops, (n - 1 - i + n) % n), "Shift+Tab ${i}: the stop ${(n - 1 - i + n) % n} of ${n}")
+                i = i + 1
+            }
+        }
+        spec.it("a Tab and a Shift+Tab undo each other") callback {
+            stops = stops_ids()
+            first = stop_at(stops, 0)
+            uidriver.focus_widget(first)
+            uidriver.focus_next()
+            uidriver.focus_prev()
+            spec.assert_eq(uidriver.focused_widget(), first, "back where it began")
+        }
+    }
+    return spec.run_summary(fw)
+}

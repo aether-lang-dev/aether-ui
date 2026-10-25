@@ -93,6 +93,13 @@ typedef enum {
     // (clamped) and its on_change told (aether_ui_scrollbar_user_set).
     AETHER_DRV_SCROLLBAR_SET = 30,
     AETHER_DRV_SECONDARY = 31,
+    /* Focus moved as Tab (ival 0) or Shift+Tab (ival 1) moves it, through the
+       toolkit's focus order and nothing else (no app key handler hears it, so
+       a grid that claims Tab for its cursor does not hide the order): retval 1
+       when the focus went to a widget, wrapping past the end; ival2 comes in -1
+       and a backend that can answers with the handle that has the focus now
+       (asked on the UI thread), else the server asks the focused_widget hook. */
+    AETHER_DRV_FOCUS_MOVE = 33,
     AETHER_DRV_WIN_FRONT = 32,   /* the window brought to the front and made key: retval 1 key, 2 key and the app active */   /* a widget's secondary click at (dval, dval2): retval 1 if it had one */
 } AetherDriverActionKind;
 

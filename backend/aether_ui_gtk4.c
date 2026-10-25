@@ -10640,12 +10640,32 @@ static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
 // than marshalling a second time.
 static int aeui_menu_native_activate(int menu_handle, const char* label);
 
+// Focus moved as Tab / Shift+Tab move it: GTK's own focus chain over the
+// primary window, nothing before it (no key handler), wrapping at the end as
+// GtkWindow's own Tab does (focus cleared, then in again from the other end).
+static int aeui_focus_move(int backward) {
+    if (!primary_window) return 0;
+    GtkDirectionType dir = backward ? GTK_DIR_TAB_BACKWARD : GTK_DIR_TAB_FORWARD;
+    int moved = gtk_widget_child_focus(GTK_WIDGET(primary_window), dir) ? 1 : 0;
+    if (!moved) {
+        gtk_window_set_focus(GTK_WINDOW(primary_window), NULL);
+        moved = gtk_widget_child_focus(GTK_WIDGET(primary_window), dir) ? 1 : 0;
+    }
+    return moved;
+}
+
 static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
     /* The NATIVE menu path: activate the GAction the item's GMenuItem names,
        exactly as GtkPopoverMenuBar does on a click -- not the label side-store
        AETHER_DRV_MENU_ACTIVATE uses. Only this reaches a wrong action name. */
     if (ctx->action == AETHER_DRV_MENU_NATIVE_ACTIVATE) {
         ctx->retval = aeui_menu_native_activate(ctx->handle, ctx->sval);
+        ctx->result = 0;
+        ctx->done = 1;
+        return;
+    }
+    if (ctx->action == AETHER_DRV_FOCUS_MOVE) {
+        ctx->retval = aeui_focus_move(ctx->ival ? 1 : 0);
         ctx->result = 0;
         ctx->done = 1;
         return;

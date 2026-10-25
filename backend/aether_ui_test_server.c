@@ -1321,6 +1321,46 @@ static void handle_request_inner(aether_sock_t client_fd,
             send_http(client_fd, 501, "Not Implemented", "application/json",
                       "{\"error\":\"focus introspection not wired on this backend\"}");
         }
+    } else if (method == 1 && strncmp(path, "/focus/move", 11) == 0) {
+        // POST /focus/move?dir=forward|backward — move the keyboard focus as
+        // Tab (forward, the default) or Shift+Tab (backward) does, through the
+        // toolkit's own focus order, and report the widget that has it now:
+        // {"moved":bool,"handle":N,"type":"...","widget":{...as /widget/N}}.
+        // The order is what a person's Tab walks; /window/key's Tab goes by the
+        // page's key handlers first (a grid takes it), this does not.
+        AetherDriverActionCtx ctx = {0};
+        ctx.action = AETHER_DRV_FOCUS_MOVE;
+        char dir[32] = "forward";
+        query_param_decoded(path, "dir", dir, sizeof(dir), 0);
+        ctx.ival2 = -1;   // a backend says who has the focus now (ival2 >= 0) from the UI thread, where it is safe to ask
+        ctx.ival = (strcmp(dir, "backward") == 0 || strcmp(dir, "back") == 0 ||
+                    strcmp(dir, "prev") == 0 || strcmp(dir, "previous") == 0 ||
+                    strcmp(dir, "shift_tab") == 0) ? 1 : 0;
+        if (!h->dispatch_action || !h->focused_widget) {
+            send_http(client_fd, 501, "Not Implemented", "application/json",
+                      "{\"error\":\"focus order not wired on this backend\"}");
+        } else {
+            h->dispatch_action(&ctx);
+            if (ctx.result == 3) {
+                send_http(client_fd, 501, "Not Implemented", "application/json",
+                          "{\"error\":\"focus order not wired on this backend\"}");
+            } else {
+                // Asked of the UI thread by the backend when it can (AppKit's first responder is
+                // not safe to read from here while the field editor it replaces is torn down).
+                int fh = ctx.ival2 >= 0 ? ctx.ival2 : h->focused_widget();
+                char wbody[8192];
+                int n = snprintf(wbody, sizeof(wbody),
+                                 "{\"moved\":%s,\"handle\":%d,\"type\":\"%s\"",
+                                 ctx.retval ? "true" : "false", fh,
+                                 fh > 0 ? h->widget_type(fh) : "none");
+                if (fh > 0) {
+                    n += snprintf(wbody + n, sizeof(wbody) - n, ",\"widget\":");
+                    n += widget_to_json(h, fh, wbody + n, (int)sizeof(wbody) - n - 4);
+                }
+                snprintf(wbody + n, sizeof(wbody) - n, "}");
+                send_http(client_fd, 200, "OK", "application/json", wbody);
+            }
+        }
     } else if (method == 1 && strstr(path, "/widget/") && strstr(path, "/focus")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_FOCUS;

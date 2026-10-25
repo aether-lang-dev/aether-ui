@@ -1350,7 +1350,6 @@ const char* aether_ui_textfield_get_text(int handle) {
 // title; a labelled row is composed at the DSL level, as on iOS generally.)
 // ---------------------------------------------------------------------------
 int aether_ui_toggle_create(const char* label, void* boxed_closure) {
-    (void)label;
     UISwitch* sw = [[UISwitch alloc] init];
     sw.translatesAutoresizingMaskIntoConstraints = NO;
     if (boxed_closure) {
@@ -1360,7 +1359,12 @@ int aether_ui_toggle_create(const char* label, void* boxed_closure) {
             forControlEvents:UIControlEventValueChanged];
         aeui_own_helper(sw, t);
     }
-    return register_widget_typed((__bridge void*)sw, AUI_TOGGLE);
+    int h = register_widget_typed((__bridge void*)sw, AUI_TOGGLE);
+    // A UISwitch carries no label of its own, so the label is what a screen reader
+    // calls it (and the driver reports as its accessible name), as the other
+    // backends' toggles are named by theirs.
+    if (label && label[0]) aether_ui_a11y_set_label_impl(h, label);
+    return h;
 }
 
 void aether_ui_toggle_set_active(int handle, int active) {
@@ -2308,6 +2312,7 @@ static UIFont* aeui_metrics_font(double size) {
 @interface AetherCanvasView : UIView
 @property (assign) int canvasId;
 @property (assign) CGSize aeuiLastSize;
+@property (assign) BOOL aeuiFocusable;   // set_focusable: a canvas drawn as a control takes the keyboard focus
 @end
 
 static void canvas_replay_range(CGContextRef cg, CanvasState* cs,
@@ -2874,6 +2879,7 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
 // release by the names the desktop backends give (aeui_press_key_name).
 // A key it does not hear goes up the chain, to the window's handler.
 - (BOOL)canBecomeFirstResponder {
+    if (self.aeuiFocusable) return YES;
     CanvasState* cs = get_canvas_state(self.canvasId);
     return cs && (cs->on_key || cs->on_key_release);
 }
@@ -4829,6 +4835,12 @@ int aether_ui_focused_widget(void) {
 void aether_ui_set_focusable_impl(int handle, int on) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v) return;
+    // A canvas drawn as a control keeps taking touches whether or not it takes the keyboard.
+    if ([v isKindOfClass:[AetherCanvasView class]]) {
+        ((AetherCanvasView*)v).aeuiFocusable = (on != 0);
+        if (!on && [v isFirstResponder]) [v resignFirstResponder];
+        return;
+    }
     v.userInteractionEnabled = (on != 0);
     // A stack answers canBecomeFirstResponder from this (see AeuiStackView);
     // native controls accept focus by their own rules and need nothing here.
@@ -6700,6 +6712,43 @@ static int hook_widget_children(int handle, int* out, int max) {
     return n;
 }
 
+// Tab order. On iOS the keyboard focus is the first responder, which a text
+// field, a text view or a view given ui.set_focusable can be (a button
+// cannot). The chain is those views in the order the view tree lists them (a
+// depth-first walk, a stack's arranged views in their order), skipping a
+// view that is hidden, disabled or inside a hidden one: what a hardware
+// keyboard's Tab walks, and the same order GTK's focus chain and AppKit's
+// give.
+static void aeui_focus_chain(UIView* v, NSMutableArray<NSNumber*>* out) {
+    if (v.hidden || v.alpha < 0.01) return;
+    int h = aether_ui_handle_for_widget((__bridge void*)v);
+    if (h > 0 && v.userInteractionEnabled && [v canBecomeFirstResponder]) {
+        BOOL enabled = YES;
+        if ([v isKindOfClass:[UIControl class]]) enabled = ((UIControl*)v).enabled;
+        if (enabled) [out addObject:@(h)];
+    }
+    NSArray<UIView*>* subs = [v isKindOfClass:[UIStackView class]]
+        ? [(UIStackView*)v arrangedSubviews] : [v subviews];
+    for (UIView* c in subs) aeui_focus_chain(c, out);
+}
+
+static int aeui_focus_move(int backward) {
+    UIView* root = aeui_driver_reference_view();
+    if (!root) return 0;
+    NSMutableArray<NSNumber*>* chain = [NSMutableArray array];
+    aeui_focus_chain(root, chain);
+    NSInteger n = (NSInteger)[chain count];
+    if (n == 0) return 0;
+    int cur = aether_ui_focused_widget();
+    NSInteger at = -1;
+    for (NSInteger i = 0; i < n; i++) if ([chain[i] intValue] == cur) { at = i; break; }
+    NSInteger next;
+    if (at < 0) next = backward ? n - 1 : 0;
+    else next = backward ? (at + n - 1) % n : (at + 1) % n;
+    aether_ui_focus_impl([chain[next] intValue]);
+    return aether_ui_focused_widget() == [chain[next] intValue] ? 1 : 0;
+}
+
 static int hook_widget_hovered(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     return v && objc_getAssociatedObject(v, "aeui-hovered") ? 1 : 0;
@@ -6823,6 +6872,11 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             ctx->result = 0;
             return;
         }
+        case AETHER_DRV_FOCUS_MOVE:
+            ctx->retval = aeui_focus_move(ctx->ival ? 1 : 0);
+            ctx->ival2 = aether_ui_focused_widget();
+            ctx->result = 0;
+            return;
         case AETHER_DRV_WIN_RESIZE:
             // An iOS window is the screen (or the scene the system sizes);
             // nothing here can set it. 404 rather than a pretend success.

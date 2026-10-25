@@ -2757,6 +2757,7 @@ JMETHOD(M_View_setLayoutDirection, C_View, "setLayoutDirection", "(I)V");
 JMETHOD(M_View_setFocusable, C_View, "setFocusable", "(Z)V");
 JMETHOD(M_View_setFocusableInTouchMode, C_View, "setFocusableInTouchMode", "(Z)V");
 JMETHOD(M_View_requestFocus, C_View, "requestFocus", "()Z");
+JMETHOD(M_View_requestFocusDir, C_View, "requestFocus", "(I)Z");
 JMETHOD(M_View_requestFocusFromTouch, C_View, "requestFocusFromTouch", "()Z");
 JMETHOD(M_View_requestLayout, C_View, "requestLayout", "()V");
 JMETHOD(M_View_setContentDescription, C_View, "setContentDescription", "(Ljava/lang/CharSequence;)V");
@@ -6429,11 +6430,20 @@ static int aeui_combo_split(const char* canonical, char* name, int namesize) {
 // Tab is not a real key event, so it leaves touch mode the way a key would
 // (requestFocusFromTouch on the focused widget) before searching.
 static int aeui_focus_step(JNIEnv* env, int backward) {
+    jint dir = backward ? 1 /* FOCUS_BACKWARD */ : 2 /* FOCUS_FORWARD */;
     jobject f = g_activity ? JO(g_activity, M_Act_getCurrentFocus) : NULL;
-    if (!f) return 0;
-    JZ(f, M_View_requestFocusFromTouch);
-    jobject next = JO(f, M_View_focusSearch, (jint)(backward ? 1 /* FOCUS_BACKWARD */ : 2 /* FOCUS_FORWARD */));
-    return next ? (JZ(next, M_View_requestFocus) ? 1 : 0) : 0;
+    jobject next = NULL;
+    if (f) {
+        JZ(f, M_View_requestFocusFromTouch);
+        next = JO(f, M_View_focusSearch, dir);
+        if (next && JZ(next, M_View_requestFocus)) return 1;
+    }
+    // Nothing has the focus, or the search ran off the end of the chain: the
+    // window's content takes it at the end the direction starts from (the
+    // first focusable going forward, the last going back), as a Tab out of
+    // the last control wraps.
+    jobject root = view_of(g_root_handle);
+    return root && JZ(root, M_View_requestFocusDir, dir) ? 1 : 0;
 }
 
 // One key, as a canonical combo plus the name and mods the any-key
@@ -9557,6 +9567,14 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_PRESS:
         case AETHER_DRV_RELEASE:
             break;   // handled below, against the widget
+        case AETHER_DRV_FOCUS_MOVE: {
+            JNIEnv* fenv = aeui_frame(32);
+            ctx->retval = fenv ? aeui_focus_step(fenv, ctx->ival ? 1 : 0) : 0;
+            if (fenv) aeui_unframe(fenv);
+            ctx->ival2 = aether_ui_focused_widget();
+            ctx->result = 0;
+            return;
+        }
         case AETHER_DRV_CANVAS_CLICK:
         case AETHER_DRV_CANVAS_RIGHT_CLICK:
         case AETHER_DRV_CANVAS_DOUBLE_CLICK:
