@@ -1905,12 +1905,15 @@ void aether_ui_shortcut_chord_impl(const char* first_combo,
 - (void)aeuiRepack;
 @end
 
+static void aeui_canvas_set_focusable(NSView* v, int on);   // a canvas drawn as a control; below, with its class
+
 void aether_ui_set_focusable_impl(int handle, int on) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     if ([v isKindOfClass:[AetherStackView class]]) {
         [(AetherStackView*)v setAeuiFocusable:on ? YES : NO];
     }
+    aeui_canvas_set_focusable(v, on);
     // Native controls (buttons, fields) accept focus by their own rules and
     // need nothing here; saying so beats silently doing nothing for them.
 }
@@ -1928,6 +1931,10 @@ void aether_ui_focus_impl(int handle) {
     // NSTextField's editing first responder is its field editor, so focusing
     // an entry makes the WINDOW's firstResponder an NSTextView whose delegate
     // is the field. focused_widget() below resolves that back to the field.
+    // A view that does not take the focus is not given it: AppKit let makeFirstResponder:
+    // make a stack the first responder after set_focusable(h, 0) took that away, where the
+    // other backends' focus() does nothing for a widget that cannot take it.
+    if (![v acceptsFirstResponder]) return;
     [win makeFirstResponder:v];
 }
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
@@ -6562,7 +6569,12 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
 
 @interface AetherCanvasView : NSView
 @property (assign) int canvasId;
+@property (assign) BOOL aeuiFocusable;   // set_focusable: a canvas drawn as a control is a stop of Tab
 @end
+
+static void aeui_canvas_set_focusable(NSView* v, int on) {
+    if ([v isKindOfClass:[AetherCanvasView class]]) [(AetherCanvasView*)v setAeuiFocusable:on ? YES : NO];
+}
 
 // Replay a canvas command buffer into ANY CGContext. Factored out of
 // drawRect: so the same code path serves both the on-screen view and the
@@ -9561,7 +9573,7 @@ int aether_ui_focused_widget(void) { return hook_focused_widget(); }
 // ---------------------------------------------------------------------------
 static int aeui_is_focusable(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
-    if (!v || [v isHidden]) return 0;
+    if (!v || [v isHiddenOrHasHiddenAncestor]) return 0;
     if ([v isKindOfClass:[NSTextField class]]) {
         NSTextField* tf = (NSTextField*)v;   // a label is a non-editable field
         return ([tf isEditable] && [tf isEnabled]) ? 1 : 0;
@@ -9572,24 +9584,56 @@ static int aeui_is_focusable(int handle) {
     if ([v isKindOfClass:[NSControl class]]) {
         return [(NSControl*)v isEnabled] ? 1 : 0;
     }
+    // A stack that took focus by ui.set_focusable (a datagrid): in the order a
+    // person's Tab visits it. A canvas that takes keys (it has an on_key) too.
+    if ([v isKindOfClass:[AetherStackView class]]) return ((AetherStackView*)v).aeuiFocusable ? 1 : 0;
+    if ([v isKindOfClass:[AetherCanvasView class]]) {
+        // One marked by set_focusable, or with a key handler (as on Win32, UIKit and Android).
+        if (((AetherCanvasView*)v).aeuiFocusable) return 1;
+        CanvasState* cs = get_canvas_state(((AetherCanvasView*)v).canvasId);
+        return cs && cs->on_key && cs->on_key->fn ? 1 : 0;
+    }
     return 0;
 }
 
 static int hook_focused_widget(void);
 
+// The focusable widgets in the order the view tree lists them (a depth-first
+// walk of the window's content, each view's subviews in their order): what
+// a person's Tab visits, and what GTK's focus chain is. The registry's
+// order is the order widgets were MADE, and a panel built later (a page that
+// rebuilds part of itself) would come last whatever it sits beside.
+static void aeui_focus_chain(NSView* v, NSMutableArray<NSNumber*>* out) {
+    int h = handle_for_view(v);
+    if (h > 0 && aeui_is_focusable(h)) [out addObject:@(h)];
+    // A stack lays its ARRANGED views out in order; its subviews are in the
+    // order they were added, which is not that once one is inserted before
+    // another (a window's chrome made after its content, and shown above it).
+    if ([v isKindOfClass:[NSStackView class]]) {
+        NSArray<NSView*>* arranged = [(NSStackView*)v arrangedSubviews];
+        for (NSView* sub in arranged) aeui_focus_chain(sub, out);
+        for (NSView* sub in [v subviews]) if (![arranged containsObject:sub]) aeui_focus_chain(sub, out);
+        return;
+    }
+    for (NSView* sub in [v subviews]) aeui_focus_chain(sub, out);
+}
+
 static int aeui_tab_move(int backward) {
     if (!primary_window) return 0;
+    NSView* root = [primary_window contentView];
+    if (!root) return 0;
+    NSMutableArray<NSNumber*>* chain = [NSMutableArray array];
+    aeui_focus_chain(root, chain);
+    NSInteger n = (NSInteger)[chain count];
+    if (n == 0) return 0;
     int cur = hook_focused_widget();
-    // Scan outward from the current widget, wrapping around the registry.
-    for (int step = 1; step <= widget_count; step++) {
-        int idx = backward ? (cur - step) : (cur + step);
-        while (idx < 1) idx += widget_count;
-        while (idx > widget_count) idx -= widget_count;
-        if (!aeui_is_focusable(idx)) continue;
-        aether_ui_focus_impl(idx);
-        return 1;
-    }
-    return 0;
+    NSInteger at = -1;
+    for (NSInteger i = 0; i < n; i++) if ([chain[i] intValue] == cur) { at = i; break; }
+    NSInteger next;
+    if (at < 0) next = backward ? n - 1 : 0;
+    else next = backward ? (at + n - 1) % n : (at + 1) % n;
+    aether_ui_focus_impl([chain[next] intValue]);
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -9609,6 +9653,11 @@ static int aeui_driver_real_events(void) {
 static void driver_perform(AetherDriverActionCtx* ctx) {
     // Actions with no widget subject, handled before the registry lookup.
     switch (ctx->action) {
+        case AETHER_DRV_FOCUS_MOVE:
+            ctx->retval = aeui_tab_move(ctx->ival ? 1 : 0);
+            ctx->ival2 = hook_focused_widget();
+            ctx->result = 0;
+            return;
         case AETHER_DRV_WIN_FRONT:
             [NSApp activateIgnoringOtherApps:YES];
             if (primary_window) {

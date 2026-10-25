@@ -73,7 +73,7 @@ static void aeui_accel_canon(const char* accel, char* out, size_t n) {
 
 /* How the accelerator reads in a label where the platform draws none:
  * "Ctrl+Shift+S", or on macOS and iOS their symbols, "⇧⌘S". */
-static void aeui_accel_text(const char* accel, char* out, size_t n) {
+static inline void aeui_accel_text(const char* accel, char* out, size_t n) {
     char key[32];
     int mods = aeui_accel_parse(accel, key, sizeof(key));
     char k[32];

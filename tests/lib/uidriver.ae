@@ -18,7 +18,7 @@ exports(
     text_width, font_ascent,
     click, click_widget, click_widget_mods, toggle_widget, key, move_to, resize_window, wait_int_field_change,
     hover_widget, unhover, press_widget, release_widget,
-    window_key, focus_widget, focused_widget,
+    window_key, focus_widget, focused_widget, focus_move, focus_move_body, focus_next, focus_prev,
     set_state, state_value_int,
     widget_id_by_text, widget_id_of, widget_id_of_parent, widget_id_last_of, widget_text_by_id, widget_bool_by_text,
     widget_bool_by_id, widget_int_field_by_id, widget_str_field_by_id, field_str, field_int,
@@ -172,6 +172,28 @@ focused_widget() -> int {
     json.json_free(v)
     return r
 }
+
+// Focus moved as Tab (back 0) or Shift+Tab (back 1) moves it, through the
+// toolkit's own focus order and nothing else (POST /focus/move): returns the
+// handle that has the focus now, 0 when none does or the move found nothing
+// to move to. The reply also carries "moved", "type" and the widget as
+// /widget/{id} reports it; focus_move_body is the whole answer.
+focus_move_body(back: int) -> string {
+    dir = "forward"
+    if back == 1 { dir = "backward" }
+    return post_body("/focus/move?dir=${dir}")
+}
+
+focus_move(back: int) -> int {
+    v, _jerr = json.parse(focus_move_body(back))
+    if v == null { return 0 }
+    r = field_int(v, "handle")
+    json.json_free(v)
+    return r
+}
+
+focus_next() -> int { return focus_move(0) }
+focus_prev() -> int { return focus_move(1) }
 
 // ─── Reactive state ──────────────────────────────────────────────
 

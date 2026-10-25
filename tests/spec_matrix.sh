@@ -99,6 +99,7 @@ SUITES=(
   "pinsize|examples/pinsize_demo|pinsize_demo/spec_pinsize_demo|"
   "cssbatch|examples/cssbatch_demo|cssbatch_demo/spec_cssbatch_demo|"
   "keyhandler|examples/keyhandler_demo|keyhandler_demo/spec_keyhandler_demo|"
+  "focusorder|examples/focus_order_demo|focus_order_demo/spec_focus_order_demo|"
   "imagefill|examples/imagefill_demo|imagefill_demo/spec_imagefill_demo|"
   "barfill|examples/barfill_demo|barfill_demo/spec_barfill_demo|"
   "filedrop|examples/filedrop_demo|filedrop_demo/spec_filedrop_demo|"
