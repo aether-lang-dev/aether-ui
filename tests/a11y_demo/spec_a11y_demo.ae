@@ -110,6 +110,11 @@ main() {
             spec.assert_contains(r, "\"role\":\"listitem\"", "each row is a listitem")
         }
 
+        spec.it("a toggle's own label is its accessible name") callback {
+            body = uidriver.get_body("/widgets")
+            spec.assert_contains(body, "\"a11y_name\":\"Notify me\"", "the toggle is named by its label")
+        }
+
         spec.it("role + a11y_name also surface in /widgets") callback {
             b = uidriver.widget_id_by_text("Save")
             body = uidriver.get_body("/widgets")

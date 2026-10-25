@@ -4188,6 +4188,11 @@ void aether_ui_a11y_get_impl(int handle,
         } else if (GTK_IS_BUTTON(w)) {
             const char* lbl = gtk_button_get_label(GTK_BUTTON(w));
             if (lbl) g_strlcpy(name, lbl, namesz);
+        } else if (GTK_IS_CHECK_BUTTON(w)) {
+            // A toggle's (or radio's) own label is its auto name, as a
+            // button's is; GtkCheckButton is not a GtkButton.
+            const char* lbl = gtk_check_button_get_label(GTK_CHECK_BUTTON(w));
+            if (lbl) g_strlcpy(name, lbl, namesz);
         } else if (GTK_IS_LABEL(w)) {
             const char* lbl = gtk_label_get_text(GTK_LABEL(w));
             if (lbl) g_strlcpy(name, lbl, namesz);

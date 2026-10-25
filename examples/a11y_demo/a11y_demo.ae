@@ -76,6 +76,10 @@ main() {
             }
             divider()
 
+            // A toggle's own label is its name (GtkCheckButton is not a GtkButton).
+            _tg = ui.toggle("Notify me") callback |active: int| { }
+            divider()
+
             items = list.new()
             _ = list.add(items, mk_row("Alpha"))
             _ = list.add(items, mk_row("Beta"))
