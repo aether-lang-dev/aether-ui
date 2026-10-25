@@ -225,6 +225,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GTK: a toggle (check or radio button) reported no accessible name.**
+  The driver read a name from a button or a text only; a `GtkCheckButton` is
+  neither, so a labelled `toggle` had no `a11y_name` on GTK (AppKit, Win32 and
+  UIKit already read the control's own text). It now reads its label.
+
 - **gtk4: a driver request is bounded by a frame, not by thirty-two.** The
   layout settling before each request (`aeui_drv_settle_layout`, ebee1c96)
   ran the main loop for up to 32 rounds, each round dispatching whatever was
