@@ -1348,11 +1348,13 @@ const char* aether_ui_textfield_get_text(int handle) {
 // ---------------------------------------------------------------------------
 // Toggle — UISwitch. Closure fires 0/1 as intptr_t. (UISwitch carries no
 // title; a labelled row is composed at the DSL level, as on iOS generally.)
+// The label is still the switch's name: it is its accessibilityLabel, what
+// VoiceOver says for it, as the other backends' toggles are named by theirs.
 // ---------------------------------------------------------------------------
 int aether_ui_toggle_create(const char* label, void* boxed_closure) {
-    (void)label;
     UISwitch* sw = [[UISwitch alloc] init];
     sw.translatesAutoresizingMaskIntoConstraints = NO;
+    if (label && *label) sw.accessibilityLabel = [NSString stringWithUTF8String:label];
     if (boxed_closure) {
         AeuiToggleTarget* t = [[AeuiToggleTarget alloc] init];
         t.closure = (AeClosure*)boxed_closure;
@@ -1823,6 +1825,14 @@ void aether_ui_a11y_get_impl(int handle, char* role, int rolesz,
             if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
             a11y_copy(name, namesz, t);
         }
+    }
+    // A toggle's is its label, which it was created with.
+    if (v && get_widget_type(handle) == AUI_TOGGLE && [v isKindOfClass:[UISwitch class]] &&
+        name && namesz && !name[0]) {
+        __block NSString* t = nil;
+        void (^read)(void) = ^{ t = v.accessibilityLabel; };
+        if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
+        a11y_copy(name, namesz, t);
     }
 }
 
