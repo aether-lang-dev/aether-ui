@@ -95,7 +95,7 @@ exports (
     timer, timer_cancel, backend_name,
     timer_once, on_frame, frame_cancel, frame_source, frame_count,
     window_create, window_set_body, window_show, window_close, app_quit,
-    set_width, set_height, set_min_width, set_min_height,
+    set_width, set_height, set_min_width, set_min_height, min_width, min_height, detach,
     get_width, get_height, get_min_width, get_min_height,
     overlay, overlay_modal, dismiss_overlay, overlay_is_live, toast, style_shadow,
     transition_overlay, overlay_is_exiting,
@@ -152,7 +152,7 @@ exports (
     menu_bar, menu, menu_item, menu_item_accel, menu_separator,
     menu_entry, menu_entry_accel, separator, menu_entry_command,
     menu_bar_add, attach_menu_bar, attach_menu_bar_to_window, menu_popup,
-    menu_clear, menu_item_disabled, on_secondary_click, key_claim,
+    menu_clear, menu_item_disabled, on_secondary_click, onsecondaryclick, key_claim,
     root_grid, grid, grid_place, equal_cells,
     tray_icon, tray_set_tooltip, tray_set_menu,
     tray_set_icon_for_state, tray_set_icon_template, tray_seal,
@@ -4627,6 +4627,19 @@ set_min_width(handle: int, px: int) -> int {
 set_min_height(handle: int, px: int) -> int {
     aether_ui_set_min_height_impl(handle, px)
     return handle
+}
+
+// min_width(px) / min_height(px): the same floors as in-block words, for the
+// widget the block is of:
+//   button("Expert") { min_width(125); min_height(35) }
+min_width(_ctx: ptr, px: int) {
+    if _ctx == null { return }
+    aether_ui_set_min_width_impl(aether_ui_ctx_to_handle_impl(_ctx), px)
+}
+
+min_height(_ctx: ptr, px: int) {
+    if _ctx == null { return }
+    aether_ui_set_min_height_impl(aether_ui_ctx_to_handle_impl(_ctx), px)
 }
 
 // get_min_width(h) / get_min_height(h): the floor as REQUESTED, 0 where none
@@ -10562,6 +10575,14 @@ clear_children(handle: int) {
     aether_ui_clear_children_impl(handle)
 }
 
+// detach(handle): take a widget out of whatever holds it, the parent found
+// for you; a widget with no parent, or handle 0, is left as it is.
+detach(handle: int) {
+    if handle == 0 { return }
+    parent = aether_ui_widget_parent_impl(handle)
+    if parent != 0 { aether_ui_remove_child_impl(parent, handle) }
+}
+
 // --- AetherUIDriver ---
 
 // Enable the AetherUIDriver server. Injects an "Under Remote Control"
@@ -10745,6 +10766,13 @@ menu_item_disabled(menu_handle: int, label: string) {
 on_secondary_click(handle: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_on_secondary_click_impl(handle, boxed)
+}
+
+// onsecondaryclick() callback |x: float, y: float| { ... }: on_secondary_click
+// as an in-block word, beside onclick, for the widget the block is of.
+onsecondaryclick(_ctx: ptr, cb: fn) {
+    if _ctx == null { return }
+    aether_ui_on_secondary_click_impl(aether_ui_ctx_to_handle_impl(_ctx), box_closure(cb))
 }
 
 // --- Grid layout ---

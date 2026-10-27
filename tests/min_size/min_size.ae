@@ -15,9 +15,10 @@
 import ui
 import ui (root_vstack, hstack, vstack, text, set_width, set_min_width,
     set_min_height, get_width, get_height, get_min_width, get_min_height,
-    weight, backend_name)
+    weight, backend_name, min_width, min_height, detach)
 
 extern exit(code: int)
+extern aether_ui_widget_parent_impl(handle: int) -> int
 
 var bad = 0
 check_eq(label: string, got: int, want: int) {
@@ -99,6 +100,32 @@ main() {
         println("  note: ${backend_name()} does not allocate a windowless tree,")
         println("        so the requested floor is all this backend can show.")
     }
+
+    // --- the same floors as in-block words -------------------------------
+    // min_width / min_height inside a block floor the block's own widget, as
+    // a ChrysaLisp view's :min_width does; the explicit-handle verbs above
+    // are what they call.
+    blocky = vstack(root, 0) {
+        min_width(150)
+        min_height(60)
+        text("in a block")
+    }
+    check_eq("min_width in a block floors that block's widget", get_min_width(blocky), 150)
+    check_eq("min_height in a block floors that block's widget", get_min_height(blocky), 60)
+    labelled = text(root, "a leaf") { min_width(90) }
+    check_eq("and a leaf's block floors the leaf", get_min_width(labelled), 90)
+
+    // --- detach: out of whatever holds it ---------------------------------
+    holder = vstack(root, 0) {
+    }
+    kid = text(holder, "kid")
+    check_eq("a child knows its parent", aether_ui_widget_parent_impl(kid), holder)
+    detach(kid)
+    check_eq("detached, it has none", aether_ui_widget_parent_impl(kid), 0)
+    detach(kid)
+    detach(0)
+    check_eq("detaching again, or nothing, leaves the rest alone",
+        aether_ui_widget_parent_impl(holder), root)
 
     if bad == 0 {
         println("min_size: OK")

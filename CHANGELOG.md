@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`min_width(px)`, `min_height(px)`, `onsecondaryclick()` and `detach(h)` as
+  block words.** The floors and the right click were explicit-handle verbs
+  only (`set_min_width(h, px)`, `on_secondary_click(h, cb)`), so a widget's
+  own block could not say them: `button("Expert") { min_width(125);
+  min_height(35); onsecondaryclick() callback |x: float, y: float| { ... } }`
+  now does. `detach(h)` takes a widget out of whatever holds it, the parent
+  found for you (`remove_child` wants both). Pure DSL over the existing
+  backend calls, so every backend has them. Wanted by ChrysaLisp's Minefield
+  translated to aether-ui (`:min_width`, a right click, `(. view :sub)`).
+  `tests/min_size` checks the floors from a block and `detach`.
+
 - **`reorderable(stack, cb)`: a stack's children dragged among themselves.**
   The children of an hstack or vstack can be dragged to reorder (a
   spreadsheet's sheet tabs); a bar shows the gap a dragged child would land
@@ -229,6 +240,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The driver read a name from a button or a text only; a `GtkCheckButton` is
   neither, so a labelled `toggle` had no `a11y_name` on GTK (AppKit, Win32 and
   UIKit already read the control's own text). It now reads its label.
+
+- **UIKit: a toggle reported no accessible name either.** A `UISwitch` has no
+  title, and the label `toggle` was made with was dropped, so `a11y_demo`'s
+  spec failed on the iOS simulator once it gained its toggle (and the
+  simulator phase stopped before `vg_chart_demo` and the three after it). The
+  label is now the switch's `accessibilityLabel`, what VoiceOver says for it,
+  and the driver reads it as the name.
+
+- **`examples/cssbatch_demo` builds under Aether 0.853.** It wrote
+  `scrollview {`, which aether#3188 makes an error (a function's name alone
+  calls nothing); it is `scrollview() {`.
 
 - **gtk4: a driver request is bounded by a frame, not by thirty-two.** The
   layout settling before each request (`aeui_drv_settle_layout`, ebee1c96)
