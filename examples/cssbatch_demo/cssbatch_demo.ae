@@ -41,7 +41,7 @@ main() {
         vstack(4) {
             status = text("restyle: not yet")
             _a = a11y_label(status, "status")
-            scrollview {
+            scrollview() {
                 vstack(0) {
                     r = 0
                     while r < rows {
