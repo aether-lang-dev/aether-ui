@@ -83,6 +83,10 @@ main() {
     assert_near("AV narrower than A+V by the kern pair",
                 (wa + wv) - wav, 139.0 * 100.0 / 2048.0, 0.5)
 
+    println("-- line metrics (DejaVu Bold hhea: ascender 1901, descender -483 of 2048)")
+    assert_near("ascent at 2048 is the ascender", vg.text_paths_ascent(2048.0), 1901.0, 0.01)
+    assert_near("descent at 2048 is the descender, as a depth", vg.text_paths_descent(2048.0), 483.0, 0.01)
+
     println("-- the DSL element IS a path")
     id = transform.affine_identity()
     m = context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)

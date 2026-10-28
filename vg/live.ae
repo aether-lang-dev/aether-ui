@@ -40,7 +40,7 @@
 // A selective import alone shadows the full module for transitive callees;
 // see example_vg.ae's 4-line preamble.
 
-exports ( vg, vg_redraw, video_region, video_source, canvas_region, vg_flush_live, region_set_animated )
+exports ( vg, vg_px, vg_redraw, video_region, video_source, canvas_region, vg_flush_live, region_set_animated )
 
 import ui
 import vg
@@ -63,6 +63,19 @@ extern malloc(size: int) -> ptr
 // the AevgContext, and a GTK backend; returns the VgNode root that the
 // shape verbs accept as their _ctx.
 vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
+    return _vg_open(_ctx, vb, w, h, 0)
+}
+
+// vg_px(w, h) { … } — a scene in canvas pixels: its viewBox is the canvas,
+// w x h now and whatever size the canvas is given later (ui.canvas_size, or
+// a stack's slack), never scaled. For a scene that lays itself out in pixels
+// and grows with what it holds, as a toolkit drawn in vg does; a vg() scene
+// keeps its viewBox and scales to the canvas instead.
+vg_px(_ctx: ptr, w: int, h: int) -> ptr {
+    return _vg_open(_ctx, "0 0 ${w} ${h}", w, h, 1)
+}
+
+_vg_open(_ctx: ptr, vb: string, w: int, h: int, px: int) -> ptr {
     // Canvas attached to the enclosing surface container (_ctx).
     canvas_id = _canvas_create_attached(_ctx, w, h)
     backend = gtk.gtk_backend_new(canvas_id)
@@ -148,11 +161,14 @@ vg(_ctx: ptr, vb: string, w: int, h: int) -> ptr {
     // shapes: draw-region content (canvas_region) isn't retained between
     // frames, so flushing only recordings would blank it until the app's next
     // dirty repaint (seen as an empty pane after maximize/un-maximize). The
-    // viewBox (vb) is fixed SVG space, so only the mapping changes. (No
+    // viewBox (vb) is fixed SVG space, so only the mapping changes; a vg_px
+    // scene's viewBox is the canvas, so it takes the new size. (No
     // canvas_redraw here: the hook runs INSIDE the draw func, which replays
     // the freshly-flushed buffer.)
     ui.canvas_on_resize(canvas_id) callback |rw: float, rh: float| {
-        new_ctx = _build_ctx(vb, rw as int, rh as int)
+        nvb = vb
+        if px == 1 { nvb = "0 0 ${rw as int} ${rh as int}" }
+        new_ctx = _build_ctx(nvb, rw as int, rh as int)
         vg.scene_set_ctx(scene, new_ctx)
         ui.canvas_clear(canvas_id)
         _flush_live(scene, canvas_id, ms_to_secs(now_monotonic_ms()))

@@ -44,7 +44,7 @@ exports (
     // and the same three from anywhere later, by the node image() returned.
     image, image_pixels, image_bytes, image_bytes_str, image_fit, image_rendering,
     image_set_pixels, image_set_bytes, image_set_fit, image_pixel_w, image_pixel_h, image_box,
-    use_font, typeface, text_paths, text_paths_width, text_path, text_path_anchored,
+    use_font, typeface, text_paths, text_paths_width, text_paths_ascent, text_paths_descent, text_path, text_path_anchored,
     text_polypath,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Definitions and CSS for the scene; a shape's clip path, class and id.
@@ -69,7 +69,7 @@ exports (
     bind_to, bind_items, bind_trackby, bind_render, bind_update, bind_start,
     animate, scene_animation_manager, scene_is_animating, scene_tick, scene_advance,
     scene_add_live_region, scene_remove_live_region, scene_live_regions, scene_render_live_draws, render_one_draw,
-    scene_free_recording,
+    scene_free_recording, scene_clear,
     scene_set_refreshing, scene_is_refreshing, scene_eval_bindings,
     scene_set_arm_hook, scene_set_present_hook, scene_set_timer, scene_timer,
     scene_present,
@@ -896,9 +896,36 @@ text_paths_width(txt: string, size: float) -> float {
     return font.font_text_width(fh, txt) * size / (font.font_upem(fh) * 1.0)
 }
 
+// How far the outline font rises above the baseline, and falls below it,
+// at `size` (viewBox units), from the face's own `hhea`: a line of
+// text_path type is their sum high, with its baseline the ascent down.
+text_paths_ascent(size: float) -> float {
+    fh = _tp_font()
+    if fh == null { return 0.0 }
+    return font.font_ascender(fh) * size / (font.font_upem(fh) * 1.0)
+}
+
+text_paths_descent(size: float) -> float {
+    fh = _tp_font()
+    if fh == null { return 0.0 }
+    return font.font_descender(fh) * size / (font.font_upem(fh) * 1.0)
+}
+
 // The DSL shape: a word as a live path element. All path modifiers apply.
 text_path(_ctx: ptr, x: float, y: float, size: float, txt: string) -> ptr {
-    return path(_ctx, text_paths(txt, x, y, size))
+    n = path(_ctx, text_paths(txt, x, y, size))
+    // Outlines are still words: a deferred scene keeps them, so the driver's
+    // GET /canvas/{id}/nodes reads them as it reads a text().
+    scene = node_scene(_ctx)
+    if scene_is_deferred(scene) == 1 {
+        s = scene as *VgScene
+        last, _e = list.get(s.pending, list.size(s.pending) - 1)
+        p = last as *VgPending
+        cc = string.copy(txt)
+        string_retain(cc)
+        p.content = cc
+    }
+    return n
 }
 
 // Anchored variant, mirroring text_anchored: "start" | "middle" | "end".
@@ -1514,6 +1541,9 @@ _nodes_json(s: *VgScene) -> string {
             if p.kind == 4 {
                 o = string.concat(o, ",\"text\":\"${_json_esc(_text_of(p))}\"")
             }
+            if p.kind == 3 && string.length(p.content) > 0 {
+                o = string.concat(o, ",\"text\":\"${_json_esc(p.content)}\"")
+            }
             o = string.concat(o, "}")
             if first == 0 { out = string.concat(out, ",") }
             out = string.concat(out, o)
@@ -1893,6 +1923,7 @@ scene_free_recording(scene: ptr) {
             pend = item as *VgPending
             if pend.attrs != null { map.free(pend.attrs) }
             if pend.kind == 4 { string_release(pend.content); string_release(pend.anchor) }
+            if pend.kind == 3 && string.length(pend.content) > 0 { string_release(pend.content) }
             element.element_release(pend.element)
             free(item)
             i = i + 1
@@ -1912,6 +1943,33 @@ scene_free_recording(scene: ptr) {
         s.nodes = null
     }
     free(scene)
+}
+
+// scene_clear(scene) — forget every recorded shape, keeping the scene: its
+// canvas, context, backend, hooks and live regions. For a scene redrawn from
+// the app's own model on each change (a retained view tree), which records
+// it afresh and presents it; without this every redraw piled its shapes on
+// top of the last ones. The context's tracked elements go too, so a click
+// hit-tests only what is drawn now.
+scene_clear(scene: ptr) {
+    s = scene as *VgScene
+    if s.pending != null {
+        n = list.size(s.pending)
+        i = 0
+        while i < n {
+            item, _ = list.get(s.pending, i)
+            pend = item as *VgPending
+            if pend.attrs != null { map.free(pend.attrs) }
+            if pend.kind == 4 { string_release(pend.content); string_release(pend.anchor) }
+            if pend.kind == 3 && string.length(pend.content) > 0 { string_release(pend.content) }
+            element.element_release(pend.element)
+            free(item)
+            i = i + 1
+        }
+        list.clear(s.pending)
+    }
+    tr = context.ctx_tracked_elements(s.ctx)
+    if tr != null { list.clear(tr) }
 }
 
 // Render a single DRAW region: a FRESH deferred sub-scene sharing this scene's

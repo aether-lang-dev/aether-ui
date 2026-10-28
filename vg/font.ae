@@ -35,7 +35,7 @@
 // A/e survive).
 
 exports (
-    font_load, font_ok, font_upem, font_nglyphs, font_name,
+    font_load, font_ok, font_upem, font_nglyphs, font_ascender, font_descender, font_name,
     font_is_monospace, font_is_serif,
     font_glyph_index, font_glyph_advance, font_kern, font_text_width,
     font_glyph_outlines, font_text_outlines, font_text_outlines_norm,
@@ -72,6 +72,7 @@ struct TtfFont {
     name0: int        // abs offset of the `name` table (0 = none)
     post0: int        // abs offset of `post` (isFixedPitch)
     os2: int          // abs offset of `OS/2` (PANOSE)
+    hhea0: int        // abs offset of `hhea` (ascender, descender)
 }
 
 // ─── Byte readers (big-endian, bounds-safe) ──────────────────────────────────
@@ -126,6 +127,7 @@ font_load(path: string) -> ptr {
     f.name0 = 0
     f.post0 = 0
     f.os2 = 0
+    f.hhea0 = 0
     data, len, err = read_binary(path)
     if string.length(err) > 0 { return f as ptr }
     if len < 12 { return f as ptr }
@@ -159,6 +161,7 @@ font_load(path: string) -> ptr {
     f.loca_fmt = rd16(f, head + 50)
     f.nglyphs = rd16(f, maxp + 4)
     f.nhm = rd16(f, hhea + 34)
+    f.hhea0 = hhea
     // Pick the first format-4 cmap subtable (BMP segment mapping).
     ns = rd16(f, cmap + 2)
     j = 0
@@ -281,6 +284,20 @@ font_name(fp: ptr) -> string {
     return out
 }
 font_upem(fp: ptr) -> int { f = fp as *TtfFont; return f.upem }
+// The face's own line metrics, from `hhea`, in font units: how far its
+// letters rise above the baseline, and how far they fall below it (a
+// positive depth, though the table holds it negative). A toolkit sizes a
+// line of text by their sum.
+font_ascender(fp: ptr) -> int {
+    f = fp as *TtfFont
+    if f.ok == 0 { return 0 }
+    return rd16s(f, f.hhea0 + 4)
+}
+font_descender(fp: ptr) -> int {
+    f = fp as *TtfFont
+    if f.ok == 0 { return 0 }
+    return 0 - rd16s(f, f.hhea0 + 6)
+}
 font_nglyphs(fp: ptr) -> int { f = fp as *TtfFont; return f.nglyphs }
 
 // ─── cmap format 4: codepoint → glyph id ─────────────────────────────────────

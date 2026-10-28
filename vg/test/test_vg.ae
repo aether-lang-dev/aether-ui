@@ -8,6 +8,7 @@
 // verb (live.ae) creates.
 
 import std.string
+import std.list
 import vg
 import vg.grammar.context
 import vg.grammar.element
@@ -127,6 +128,29 @@ main() {
                   record.backend_opt_get(dbk, 0, "fillColor"), "#abc123")
     // At 1× (identity), the circle's bbox x = cx - r = 50 - 20 = 30.
     assert_near("deferred 1x: circle bbox x", parse_opt(dbk, 0, "x"), 30.0)
+
+    // scene_clear: the recorded shapes go, the scene stays. A scene redrawn
+    // from the app's model records afresh each time; without the clear every
+    // flush dispatched the old shapes again under the new ones.
+    cctx = mk_ctx()
+    cbk = record.backend_new()
+    cscene = vg.scene_new(cctx, cbk)
+    vg.scene_set_deferred(cscene, 1)
+    croot = vg.vg_root(cscene)
+    ccircle = vg.circle(croot, 5.0, 5.0, 2.0)
+    vg.fill(ccircle, "#000000")
+    vg.vg_flush(cscene)
+    vg.scene_clear(cscene)
+    assert_eq_int("clear: nothing tracked", list.size(context.ctx_tracked_elements(cctx)), 0)
+    vg.vg_flush(cscene)
+    assert_eq_int("clear: a flush after it dispatches nothing",
+                  record.backend_call_count(cbk), 1)
+    crect = vg.rect(croot, 1.0, 2.0, 3.0, 4.0)
+    vg.fill(crect, "#102030")
+    vg.vg_flush(cscene)
+    assert_eq_int("clear: only what was recorded since is dispatched",
+                  record.backend_call_count(cbk), 2)
+    assert_eq_str("clear: the new shape", record.backend_kind(cbk, 1), "rectangle")
 
     // ── re-map + re-flush (the resize path, headless) ───────────────
     // Swap in a 2× context, clear the recording, re-flush. vg_flush must be
