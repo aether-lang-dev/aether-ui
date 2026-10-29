@@ -159,6 +159,8 @@ main() {
         own = font.font_own_sample(gs, 8)
         assert_gt("Symbol: own sample non-empty", string.length(own), 0)
         assert_gt("Symbol: own sample is mapped", font.font_covered(gs, own), 0)
+    } else {
+        println("  SKIP: Symbol.ttf not present")
     }
     // Negative control: a Unicode font's missing codes stay missing.
     assert_eq("DejaVu: U+4E00 stays missing", font.font_glyph_index(f, 19968), 0)
