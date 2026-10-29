@@ -8,6 +8,7 @@
 import vg.font
 import std.math
 import std.string
+import std.fs
 
 extern exit(code: int)
 
@@ -130,9 +131,70 @@ main() {
         exit(1)
     }
 
+    println("test_font: cmap format 12 (beyond the BMP)")
+    // DejaVu Sans Bold carries U+1F600 (grinning face) only in its format-12
+    // subtable; a format-4-only reader maps it to .notdef.
+    assert_gt("U+1F600 maps via cmap 12", font.font_glyph_index(f, 128512), 0)
+
     println("test_font: missing file")
     fbad = font.font_load("fonts/no-such-font.ttf")
     assert_eq("missing font -> not ok", font.font_ok(fbad), 0)
+    assert_gt("missing font says why", string.length(font.font_last_error()), 0)
+    // A not-ok handle answers every accessor with zeros instead of crashing.
+    assert_eq("not-ok upem", font.font_upem(fbad), 0)
+    assert_eq("not-ok glyph index", font.font_glyph_index(fbad, 65), 0)
+    onone = font.font_text_outlines(fbad, "A", 4)
+    assert_eq("not-ok outlines not ok", font.outl_ok(onone), 0)
+    font.outl_free(onone)
+
+    println("test_font: truncated / corrupt font fails cleanly")
+    data, len, rerr = fs.read_binary("fonts/DejaVuSans-Bold.ttf")
+    assert_eq("read the font bytes", string.length(rerr), 0)
+    tdir, terr = fs.make_temp_dir("", "aeui_font_")
+    assert_eq("temp dir", string.length(terr), 0)
+    tpath = "${tdir}/trunc.ttf"
+    // Negative control: the full copy written through the same path loads.
+    assert_eq("full copy written", string.length(fs.write_binary(tpath, string.bytes(data)[0..len])), 0)
+    ffull = font.font_load(tpath)
+    assert_eq("full copy loads (control)", font.font_ok(ffull), 1)
+    assert_eq("full copy glyph count", font.font_nglyphs(ffull), font.font_nglyphs(f))
+    cuts = 12
+    nfail = 0
+    ncut = 0
+    while cuts < len {
+        if string.length(fs.write_binary(tpath, string.bytes(data)[0..cuts])) > 0 {
+            println("  FAIL: could not write the cut copy")
+            exit(1)
+        }
+        ft = font.font_load(tpath)
+        ncut = ncut + 1
+        if font.font_ok(ft) == 0 {
+            nfail = nfail + 1
+            if string.length(font.font_last_error()) == 0 {
+                println("  FAIL: cut at ${cuts} failed without an error")
+                exit(1)
+            }
+        } else {
+            // Loaded: every glyph must still read without running past the end.
+            g = 0
+            while g < font.font_nglyphs(ft) {
+                ot = font.font_glyph_outlines(ft, g, 2)
+                font.outl_free(ot)
+                font.font_glyph_advance(ft, g)
+                g = g + 97
+            }
+        }
+        // Dense near the start (table directory), then coarser.
+        if cuts < 400 { cuts = cuts + 37 } else { cuts = cuts + 20011 }
+    }
+    println("  cuts tried: ${ncut}, rejected at load: ${nfail}")
+    assert_gt("truncations are rejected at load", nfail, 5)
+    // Garbage that only looks like a font: a valid-looking header, no tables.
+    fs.write_binary(tpath, string.bytes("\x00\x01\x00\x00\x00\x20\x00\x00\x00\x00\x00\x00zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")[0..44])
+    fg = font.font_load(tpath)
+    assert_eq("garbage -> not ok", font.font_ok(fg), 0)
+    assert_gt("garbage says why", string.length(font.font_last_error()), 0)
+    fs.remove_tree(tdir)
 
     println("ALL PASS")
 }
