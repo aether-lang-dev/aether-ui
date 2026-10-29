@@ -1,41 +1,35 @@
-// vg/font.ae — pure-Aether TrueType glyph OUTLINE extraction.
+// vg/font.ae — glyph OUTLINES and text metrics for vector text.
 //
-// Reads a .ttf (or .ttc) file and turns text into flattened vector contours —
-// no FreeType, no platform text API, no offline generator: the same bytes
-// parse identically on every backend. This is the "text is just paths"
-// primitive: once a word is an Outl, it can be transformed, projected onto a
-// 3D face (apps/tumbling_cube), stroked, morphed — anything a path can do.
+// Reads a .ttf (or .ttc) through Aether's std.truetype and turns text into
+// flattened vector contours — no FreeType, no platform text API, no offline
+// generator: the same bytes parse identically on every backend. This is the
+// "text is just paths" primitive: once a word is an Outl, it can be
+// transformed, projected onto a 3D face (apps/tumbling_cube), stroked,
+// morphed — anything a path can do.
 //
-// Scope (deliberate):
-//   * TrueType `glyf` outlines: simple glyphs (quadratic contours, flag
-//     run-length + short/same coordinate encodings) and composite glyphs
-//     (XY offsets + scale / XY-scale / 2x2 transforms, recursion-capped).
-//   * `cmap` format 4 (the BMP segment mapping every practical Latin font
-//     carries), `loca` short+long, `hmtx` advances, `.ttc` collections
-//     (first font).
-//   * UTF-8 text runs (font_text_outlines decodes multi-byte sequences;
-//     cmap format 4 covers the BMP); any codepoint directly via
-//     font_glyph_index + font_glyph_outlines.
-//   * Pair kerning from the legacy `kern` table (format 0, binary search)
-//     — applied in font_text_outlines / font_text_width. GPOS kerning is
-//     NOT read (a full OpenType layout engine is out of scope).
-//   * NOT parsed: CFF/OTF `CFF ` outlines (cubic, different container),
-//     kerning, hinting — flattened outlines at showcase sizes don't need
-//     them.
+// std.truetype owns the file format: every read is bounds-checked (a
+// truncated or malformed font fails to load, with font_last_error() saying
+// why), cmap formats 4 and 12 (so codepoints beyond the BMP map), `hmtx`
+// advances, `kern` format 0 pair kerning, the face's own name / fixed-pitch /
+// serif declarations, simple and compound glyph points, `.ttc` collections
+// (first font). It does NOT read CFF/OTF outlines or GPOS kerning.
 //
-// Quadratic contours follow the TrueType on/off-curve convention: runs of
-// off-curve control points imply on-curve midpoints between them; a contour
-// with NO on-curve point starts at the midpoint of its first two controls.
-// Curves are flattened to `steps` line segments each — at UI sizes the
-// polyline is indistinguishable from the true curve.
-//
-// An Outl is contours-as-flat-buffers: interleaved x,y points plus contour
-// end indices (both floatarr), counters kept as separate contours whose
-// winding the renderer's nonzero fill rule resolves (that's how the holes in
-// A/e survive).
+// What stays here is what aether-ui draws on top of it:
+//   * UTF-8 text runs (font_text_outlines decodes multi-byte sequences),
+//     laid out with pair kerning (font_text_outlines / font_text_width).
+//   * Flattening: the font's quadratic contours follow the TrueType
+//     on/off-curve convention — runs of off-curve control points imply
+//     on-curve midpoints between them; a contour with NO on-curve point
+//     starts at the midpoint of its first two controls. Curves are flattened
+//     to `steps` line segments each — at UI sizes the polyline is
+//     indistinguishable from the true curve.
+//   * The Outl: contours-as-flat-buffers, interleaved x,y points plus
+//     contour end indices (both floatarr), counters kept as separate
+//     contours whose winding the renderer's nonzero fill rule resolves
+//     (that's how the holes in A/e survive).
 
 exports (
-    font_load, font_ok, font_upem, font_nglyphs, font_ascender, font_descender, font_name,
+    font_load, font_ok, font_last_error, font_upem, font_nglyphs, font_ascender, font_descender, font_name,
     font_is_monospace, font_is_serif,
     font_glyph_index, font_glyph_advance, font_kern, font_text_width,
     font_glyph_outlines, font_text_outlines, font_text_outlines_norm,
@@ -43,329 +37,99 @@ exports (
     outl_adv, outl_free
 )
 
-import std.fs (read_binary)
+import std.truetype
 import std.string
 import std.floatarr
 import std.math
 
 extern malloc(size: int) -> ptr
 extern free(p: ptr)
-extern string_retain(s: string)
-extern string_char_at(s: string, index: int) -> int
 extern string_char_at_n(s: string, known_length: int, index: int) -> int
 extern lrint(x: float) -> long
 
-// ─── The font: raw bytes + resolved table offsets ────────────────────────────
-struct TtfFont {
-    data: string
-    len: int
-    ok: int
-    upem: int
-    loca_fmt: int
-    nglyphs: int
-    nhm: int          // numberOfHMetrics
-    cmap4: int        // abs offset of the format-4 cmap subtable
-    glyf: int
-    loca: int
-    hmtx: int
-    kern0: int        // abs offset of the kern format-0 pair block (0 = none)
-    name0: int        // abs offset of the `name` table (0 = none)
-    post0: int        // abs offset of `post` (isFixedPitch)
-    os2: int          // abs offset of `OS/2` (PANOSE)
-    hhea0: int        // abs offset of `hhea` (ascender, descender)
+// ─── The font: a std.truetype Typeface behind an opaque handle ───────────────
+// font_load returns null when the file cannot be read as a TrueType font
+// (font_last_error() says why). Every accessor tolerates a null handle, so a
+// caller may go straight from font_load to font_ok.
+face_of(fp: @into ptr) -> *truetype.Typeface { return fp as *truetype.Typeface }
+
+font_load(path: string) -> ptr {
+    return truetype.load(path) as ptr
 }
 
-// ─── Byte readers (big-endian, bounds-safe) ──────────────────────────────────
-// string_char_at* return a SIGNED char — mask to 0..255.
-rd8(f: *TtfFont, off: int) -> int {
-    b = string_char_at_n(f.data, f.len, off)
-    if b < 0 { return b + 256 }
-    return b
-}
-rd8s(f: *TtfFont, off: int) -> int {
-    v = rd8(f, off)
-    if v >= 128 { return v - 256 }
-    return v
-}
-rd16(f: *TtfFont, off: int) -> int { return rd8(f, off) * 256 + rd8(f, off + 1) }
-rd16s(f: *TtfFont, off: int) -> int {
-    v = rd16(f, off)
-    if v >= 32768 { return v - 65536 }
-    return v
-}
-rd32(f: *TtfFont, off: int) -> int { return rd16(f, off) * 65536 + rd16(f, off + 2) }
-// F2Dot14 fixed-point (composite scales).
-rdf214(f: *TtfFont, off: int) -> float { return rd16s(f, off) / 16384.0 }
-
-tag_is(f: *TtfFont, off: int, t: string) -> int {
-    i = 0
-    while i < 4 {
-        if rd8(f, off + i) != string_char_at(t, i) { return 0 }
-        i = i + 1
-    }
+font_ok(fp: ptr) -> int {
+    if fp == null { return 0 }
     return 1
 }
 
-pw2(k: int) -> int {
-    if k == 0 { return 1 } if k == 1 { return 2 } if k == 2 { return 4 }
-    if k == 3 { return 8 } if k == 4 { return 16 } if k == 5 { return 32 }
-    if k == 6 { return 64 } return 128
-}
-bit(v: int, k: int) -> int { return (v / pw2(k)) % 2 }
-imod16(v: int) -> int {
-    m = v % 65536
-    if m < 0 { m = m + 65536 }
-    return m
-}
+// What the last failed font_load found wrong.
+font_last_error() -> string { return truetype.last_error() }
 
-// ─── Loading ─────────────────────────────────────────────────────────────────
-font_load(path: string) -> ptr {
-    f = malloc(sizeof(TtfFont)) as *TtfFont
-    f.data = ""; f.len = 0; f.ok = 0; f.upem = 0; f.loca_fmt = 0
-    f.nglyphs = 0; f.nhm = 0; f.cmap4 = 0; f.glyf = 0; f.loca = 0; f.hmtx = 0
-    f.kern0 = 0
-    f.name0 = 0
-    f.post0 = 0
-    f.os2 = 0
-    f.hhea0 = 0
-    data, len, err = read_binary(path)
-    if string.length(err) > 0 { return f as ptr }
-    if len < 12 { return f as ptr }
-    string_retain(data)
-    f.data = data
-    f.len = len
-    base = 0
-    if tag_is(f, 0, "ttcf") == 1 { base = rd32(f, 12) }   // collection → first font
-    head = 0; maxp = 0; cmap = 0; hhea = 0
-    nt = rd16(f, base + 4)
-    i = 0
-    while i < nt {
-        rec = base + 12 + i * 16
-        off = rd32(f, rec + 8)
-        if tag_is(f, rec, "head") == 1 { head = off }
-        if tag_is(f, rec, "maxp") == 1 { maxp = off }
-        if tag_is(f, rec, "cmap") == 1 { cmap = off }
-        if tag_is(f, rec, "hhea") == 1 { hhea = off }
-        if tag_is(f, rec, "loca") == 1 { f.loca = off }
-        if tag_is(f, rec, "glyf") == 1 { f.glyf = off }
-        if tag_is(f, rec, "hmtx") == 1 { f.hmtx = off }
-        if tag_is(f, rec, "kern") == 1 { f.kern0 = off }
-        if tag_is(f, rec, "name") == 1 { f.name0 = off }
-        if tag_is(f, rec, "post") == 1 { f.post0 = off }
-        if tag_is(f, rec, "OS/2") == 1 { f.os2 = off }
-        i = i + 1
-    }
-    if head == 0 || maxp == 0 || cmap == 0 || hhea == 0 { return f as ptr }
-    if f.glyf == 0 || f.loca == 0 || f.hmtx == 0 { return f as ptr }   // CFF/OTF: no glyf
-    f.upem = rd16(f, head + 18)
-    f.loca_fmt = rd16(f, head + 50)
-    f.nglyphs = rd16(f, maxp + 4)
-    f.nhm = rd16(f, hhea + 34)
-    f.hhea0 = hhea
-    // Pick the first format-4 cmap subtable (BMP segment mapping).
-    ns = rd16(f, cmap + 2)
-    j = 0
-    while j < ns {
-        sub = cmap + rd32(f, cmap + 4 + j * 8 + 4)
-        if rd16(f, sub) == 4 && f.cmap4 == 0 { f.cmap4 = sub }
-        j = j + 1
-    }
-    if f.cmap4 == 0 { return f as ptr }
-    if f.upem <= 0 { return f as ptr }
-    // Legacy `kern` table: walk subtables for a horizontal format-0 one and
-    // remember its pair block. Absent/unsupported → kern0 = 0 (no-op).
-    if f.kern0 != 0 {
-        kt = f.kern0
-        f.kern0 = 0
-        nsub = rd16(f, kt + 2)
-        sub = kt + 4
-        si = 0
-        while si < nsub {
-            cov = rd16(f, sub + 4)
-            fmt = cov / 256
-            horiz = cov % 2
-            if fmt == 0 && horiz == 1 && f.kern0 == 0 { f.kern0 = sub + 6 }
-            sub = sub + rd16(f, sub + 2)
-            si = si + 1
-        }
-    }
-    f.ok = 1
-    return f as ptr
-}
-
-font_ok(fp: ptr) -> int { f = fp as *TtfFont; return f.ok }
-
-// Is this a MONOSPACED face? From `post`.isFixedPitch (offset 12) — the
-// font's own declaration, so it works for Consolas and Courier New alike,
-// where guessing from the NAME does not.
+// Is this a MONOSPACED face? From `post`.isFixedPitch — the font's own
+// declaration, so it works for Consolas and Courier New alike, where
+// guessing from the NAME does not.
 font_is_monospace(fp: ptr) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 || f.post0 == 0 { return 0 }
-    if rd32(f, f.post0 + 12) != 0 { return 1 }
+    if fp == null { return 0 }
+    if truetype.is_monospace(face_of(fp)) { return 1 }
     return 0
 }
 
-// Is this a SERIF face? From OS/2 PANOSE (offset 32): byte 0 is the family
-// kind (2 = latin text), byte 1 the serif style — 2..10 are the serif
-// classes, 11..15 the sans ones. Again the font's own declaration, so
-// "Times New Roman" and "Georgia" classify correctly without name guessing.
+// Is this a SERIF face? From OS/2 PANOSE, again the font's own declaration,
+// so "Times New Roman" and "Georgia" classify correctly without name guessing.
 font_is_serif(fp: ptr) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 || f.os2 == 0 { return 0 }
-    fam = rd8(f, f.os2 + 32)
-    serif_style = rd8(f, f.os2 + 32 + 1)
-    if fam != 2 { return 0 }
-    if serif_style >= 2 && serif_style <= 10 { return 1 }
+    if fp == null { return 0 }
+    if truetype.is_serif(face_of(fp)) { return 1 }
     return 0
 }
 
-// The face's FULL NAME ("DejaVu Sans Bold") from the `name` table.
-//
-// nameID 4, preferring the Macintosh-platform ENGLISH record (langID 0 —
-// plain ASCII in the file), else the Windows English record (langID 0x409,
-// UTF-16BE). Language matters: fonts commonly carry the same nameID in
-// several languages (e.g. IPAexMincho also stores "IPAex明朝"), and picking
-// a non-English record yields mojibake or, once non-Latin codepoints are
-// skipped, a truncated fragment. "" if absent.
+// The face's FULL NAME ("DejaVu Sans Bold") from the `name` table: Mac
+// English, else Windows English, else any. "" if absent.
 font_name(fp: ptr) -> string {
-    f = fp as *TtfFont
-    if f.ok == 0 || f.name0 == 0 { return "" }
-    count = rd16(f, f.name0 + 2)
-    strs = f.name0 + rd16(f, f.name0 + 4)
-    best = -1
-    best_plat = -1
-    i = 0
-    while i < count {
-        rec = f.name0 + 6 + i * 12
-        plat = rd16(f, rec)
-        lang = rd16(f, rec + 4)
-        nid = rd16(f, rec + 6)
-        if nid == 4 {
-            // Mac/English (langID 0) wins outright; Windows/English
-            // (0x409 = 1033) is the fallback.
-            if plat == 1 && lang == 0 && best_plat != 1 { best = rec; best_plat = 1 }
-            if plat == 3 && lang == 1033 && best_plat == 0 - 1 { best = rec; best_plat = 3 }
-        }
-        i = i + 1
-    }
-    // Nothing English: take any nameID 4 rather than reporting no name.
-    if best < 0 {
-        i = 0
-        while i < count {
-            rec = f.name0 + 6 + i * 12
-            if rd16(f, rec + 6) == 4 && best < 0 {
-                best = rec
-                best_plat = rd16(f, rec)
-            }
-            i = i + 1
-        }
-    }
-    if best < 0 { return "" }
-    nlen = rd16(f, best + 8)
-    noff = strs + rd16(f, best + 10)
-    // Macintosh-platform records are plain ASCII bytes in the file — the
-    // name IS a substring of the font data.
-    if best_plat == 1 {
-        return string.substring_n(f.data, f.len, noff, noff + nlen)
-    }
-    // Windows UTF-16BE: keep BMP Latin chars (hi byte 0) by slicing each
-    // low byte out of the data; skip anything wider.
-    out = ""
-    j = 0
-    while j + 1 < nlen {
-        hi = rd8(f, noff + j)
-        lo = rd8(f, noff + j + 1)
-        if hi == 0 && lo >= 32 {
-            ch = string.substring_n(f.data, f.len, noff + j + 1, noff + j + 2)
-            out = "${out}${ch}"
-        }
-        j = j + 2
-    }
-    return out
+    if fp == null { return "" }
+    return truetype.full_name(face_of(fp))
 }
-font_upem(fp: ptr) -> int { f = fp as *TtfFont; return f.upem }
+
+font_upem(fp: ptr) -> int {
+    if fp == null { return 0 }
+    f = face_of(fp)
+    return f.units_per_em
+}
 // The face's own line metrics, from `hhea`, in font units: how far its
 // letters rise above the baseline, and how far they fall below it (a
 // positive depth, though the table holds it negative). A toolkit sizes a
 // line of text by their sum.
 font_ascender(fp: ptr) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 { return 0 }
-    return rd16s(f, f.hhea0 + 4)
+    if fp == null { return 0 }
+    f = face_of(fp)
+    return f.ascender
 }
 font_descender(fp: ptr) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 { return 0 }
-    return 0 - rd16s(f, f.hhea0 + 6)
+    if fp == null { return 0 }
+    f = face_of(fp)
+    return 0 - f.descender
 }
-font_nglyphs(fp: ptr) -> int { f = fp as *TtfFont; return f.nglyphs }
+font_nglyphs(fp: ptr) -> int {
+    if fp == null { return 0 }
+    f = face_of(fp)
+    return f.glyph_count
+}
 
-// ─── cmap format 4: codepoint → glyph id ─────────────────────────────────────
+// Codepoint → glyph id (0 = missing glyph).
 font_glyph_index(fp: ptr, cp: int) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 { return 0 }
-    sub = f.cmap4
-    segx2 = rd16(f, sub + 6)
-    segs = segx2 / 2
-    ends0 = sub + 14
-    starts0 = sub + 16 + segx2
-    deltas0 = starts0 + segx2
-    ranges0 = deltas0 + segx2
-    i = 0
-    while i < segs {
-        if rd16(f, ends0 + i * 2) >= cp {
-            st = rd16(f, starts0 + i * 2)
-            if st > cp { return 0 }
-            delta = rd16s(f, deltas0 + i * 2)
-            ro = rd16(f, ranges0 + i * 2)
-            if ro == 0 { return imod16(cp + delta) }
-            g = rd16(f, ranges0 + i * 2 + ro + (cp - st) * 2)
-            if g == 0 { return 0 }
-            return imod16(g + delta)
-        }
-        i = i + 1
-    }
-    return 0
+    if fp == null { return 0 }
+    return truetype.glyph_index(face_of(fp), cp)
 }
 
-// loca → [start, end) absolute glyf offsets for glyph `gid`.
-glyf_range(f: *TtfFont, gid: int) -> (int, int) {
-    if f.loca_fmt == 0 {
-        return f.glyf + rd16(f, f.loca + gid * 2) * 2,
-               f.glyf + rd16(f, f.loca + gid * 2 + 2) * 2
-    }
-    return f.glyf + rd32(f, f.loca + gid * 4),
-           f.glyf + rd32(f, f.loca + gid * 4 + 4)
-}
-
-// hmtx advance width (font units). Glyphs past numberOfHMetrics share the last.
+// hmtx advance width (font units).
 font_glyph_advance(fp: ptr, gid: int) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 { return 0 }
-    g = gid
-    if g >= f.nhm { g = f.nhm - 1 }
-    if g < 0 { return 0 }
-    return rd16(f, f.hmtx + g * 4)
+    if fp == null { return 0 }
+    return truetype.advance(face_of(fp), gid)
 }
 
-// Pair kern (font units, usually negative) between two GLYPH IDs, from the
-// format-0 pair block: binary search over (left<<16|right)-sorted entries.
+// Pair kern (font units, usually negative) between two GLYPH IDs.
 font_kern(fp: ptr, gl: int, gr: int) -> int {
-    f = fp as *TtfFont
-    if f.ok == 0 || f.kern0 == 0 { return 0 }
-    npairs = rd16(f, f.kern0)
-    base = f.kern0 + 8               // past nPairs, searchRange, entrySel, rangeShift
-    key = gl * 65536 + gr
-    lo = 0
-    hi = npairs - 1
-    while lo <= hi {
-        mid = (lo + hi) / 2
-        rec = base + mid * 6
-        rkey = rd16(f, rec) * 65536 + rd16(f, rec + 2)
-        if rkey == key { return rd16s(f, rec + 4) }
-        if rkey < key { lo = mid + 1 } else { hi = mid - 1 }
-    }
-    return 0
+    if fp == null { return 0 }
+    return truetype.kerning(face_of(fp), gl, gr)
 }
 
 // ─── UTF-8: decode the codepoint at byte i; returns (cp, next_i) ─────────────
@@ -400,11 +164,9 @@ cont(text: string, n: int, i: int) -> int {
     if b >= 128 && b < 192 { return b - 128 }
     return -1
 }
-
 // Advance width of a UTF-8 run in FONT UNITS, kerning applied.
 font_text_width(fp: ptr, text: string) -> float {
-    f = fp as *TtfFont
-    if f.ok == 0 { return 0.0 }
+    if fp == null { return 0.0 }
     n = string.length(text)
     penx = 0.0
     prev = -1
@@ -464,13 +226,11 @@ outl_free(op: ptr) {
     floatarr.free(o.cends)
     free(op)
 }
-
-// Append an affine-transformed point.
-opush(o: *Outl, a: float, b: float, c: float, d: float, tx: float, ty: float,
-      x: float, y: float) {
+// Append a point, shifted along x by the pen position `tx`.
+opush(o: *Outl, tx: float, x: float, y: float) {
     if o.npts * 2 + 1 >= o.cap { o.ok = 0; return }
-    floatarr.set_unchecked(o.pts, o.npts * 2, a * x + b * y + tx)
-    floatarr.set_unchecked(o.pts, o.npts * 2 + 1, c * x + d * y + ty)
+    floatarr.set_unchecked(o.pts, o.npts * 2, x + tx)
+    floatarr.set_unchecked(o.pts, o.npts * 2 + 1, y)
     o.npts = o.npts + 1
 }
 oclose(o: *Outl) {
@@ -480,126 +240,52 @@ oclose(o: *Outl) {
     o.nctrs = o.nctrs + 1
 }
 
-// Flatten one quadratic (P0 → ctrl → P1) as `steps` transformed line points.
-oquad(o: *Outl, a: float, b: float, c: float, d: float, tx: float, ty: float,
-      x0: float, y0: float, cx: float, cy: float, x1: float, y1: float, steps: int) {
+// Flatten one quadratic (P0 → ctrl → P1) as `steps` line points.
+oquad(o: *Outl, tx: float, x0: float, y0: float, cx: float, cy: float, x1: float, y1: float, steps: int) {
     i = 1
     while i <= steps {
         t = i * 1.0 / (steps * 1.0)
         mt = 1.0 - t
         qx = mt * mt * x0 + 2.0 * mt * t * cx + t * t * x1
         qy = mt * mt * y0 + 2.0 * mt * t * cy + t * t * y1
-        opush(o, a, b, c, d, tx, ty, qx, qy)
+        opush(o, tx, qx, qy)
         i = i + 1
     }
 }
 
-// ─── Simple glyph: decode points, walk each contour's quadratic spline ───────
-parse_simple(f: *TtfFont, off: int, nc: int,
-             a: float, b: float, c: float, d: float, tx: float, ty: float,
-             steps: int, o: *Outl) {
-    npts = rd16(f, off + 10 + (nc - 1) * 2) + 1
-    if npts <= 0 { return }
-    xs, _xe = floatarr.new(npts)
-    ys, _ye = floatarr.new(npts)
-    ons, _oe = floatarr.new(npts)
-    fls, _fe = floatarr.new(npts)
-    insl = rd16(f, off + 10 + nc * 2)
-    p = off + 10 + nc * 2 + 2 + insl
-    // Flags, run-length expanded (bit 3 = repeat count follows).
-    i = 0
-    while i < npts {
-        fl = rd8(f, p); p = p + 1
-        floatarr.set_unchecked(fls, i, fl * 1.0)
-        i = i + 1
-        if bit(fl, 3) == 1 {
-            rep = rd8(f, p); p = p + 1
-            k = 0
-            while k < rep && i < npts {
-                floatarr.set_unchecked(fls, i, fl * 1.0)
-                i = i + 1
-                k = k + 1
-            }
-        }
-    }
-    // X coordinates: bit1 = one byte (bit4 = sign), else bit4 = repeat-last,
-    // else signed 16-bit delta.
-    x = 0
-    i = 0
-    while i < npts {
-        fl = lrint(floatarr.get_unchecked(fls, i)) as int
-        if bit(fl, 1) == 1 {
-            dv = rd8(f, p); p = p + 1
-            if bit(fl, 4) == 0 { dv = 0 - dv }
-            x = x + dv
-        } else {
-            if bit(fl, 4) == 0 { x = x + rd16s(f, p); p = p + 2 }
-        }
-        floatarr.set_unchecked(xs, i, x * 1.0)
-        floatarr.set_unchecked(ons, i, bit(fl, 0) * 1.0)
-        i = i + 1
-    }
-    // Y coordinates: same scheme on bits 2/5.
-    y = 0
-    i = 0
-    while i < npts {
-        fl = lrint(floatarr.get_unchecked(fls, i)) as int
-        if bit(fl, 2) == 1 {
-            dv = rd8(f, p); p = p + 1
-            if bit(fl, 5) == 0 { dv = 0 - dv }
-            y = y + dv
-        } else {
-            if bit(fl, 5) == 0 { y = y + rd16s(f, p); p = p + 2 }
-        }
-        floatarr.set_unchecked(ys, i, y * 1.0)
-        i = i + 1
-    }
-    // Contours.
-    s = 0
-    ci = 0
-    while ci < nc {
-        e = rd16(f, off + 10 + ci * 2)
-        emit_contour(xs, ys, ons, s, e, a, b, c, d, tx, ty, steps, o)
-        s = e + 1
-        ci = ci + 1
-    }
-    floatarr.free(xs)
-    floatarr.free(ys)
-    floatarr.free(ons)
-    floatarr.free(fls)
+// Point `k` (wrapping) of the contour that starts at point `s` and has `n` points.
+cpx(p: *truetype.GlyphPoints, s: int, n: int, k: int) -> float {
+    return truetype.point_x(p, s + (k % n))
 }
-
-cpx(xs: ptr, s: int, n: int, k: int) -> float {
-    return floatarr.get_unchecked(xs, s + (k % n))
+cpy(p: *truetype.GlyphPoints, s: int, n: int, k: int) -> float {
+    return truetype.point_y(p, s + (k % n))
 }
 
 // Walk contour points s..e as a closed quadratic spline: off-curve runs imply
 // on-curve midpoints; a contour with no on-curve point starts at the midpoint
 // of its first two controls.
-emit_contour(xs: ptr, ys: ptr, ons: ptr, s: int, e: int,
-             a: float, b: float, c: float, d: float, tx: float, ty: float,
-             steps: int, o: *Outl) {
+emit_contour(p: *truetype.GlyphPoints, s: int, e: int, tx: float, steps: int, o: *Outl) {
     n = e - s + 1
     if n < 2 { return }
     fo = -1
     i = 0
     while i < n {
-        if lrint(floatarr.get_unchecked(ons, s + i)) as int == 1 { fo = i; break }
+        if truetype.point_on(p, s + i) { fo = i; break }
         i = i + 1
     }
     // Start point.
     sx = 0.0
     sy = 0.0
     if fo >= 0 {
-        sx = cpx(xs, s, n, fo)
-        sy = cpx(ys, s, n, fo)
+        sx = cpx(p, s, n, fo)
+        sy = cpy(p, s, n, fo)
     } else {
         // All off-curve: start at the implied midpoint of controls 0 and 1.
-        sx = (cpx(xs, s, n, 0) + cpx(xs, s, n, 1)) / 2.0
-        sy = (cpx(ys, s, n, 0) + cpx(ys, s, n, 1)) / 2.0
+        sx = (cpx(p, s, n, 0) + cpx(p, s, n, 1)) / 2.0
+        sy = (cpy(p, s, n, 0) + cpy(p, s, n, 1)) / 2.0
         fo = 0
     }
-    opush(o, a, b, c, d, tx, ty, sx, sy)
+    opush(o, tx, sx, sy)
     curx = sx
     cury = sy
     ctlx = 0.0
@@ -608,16 +294,16 @@ emit_contour(xs: ptr, ys: ptr, ons: ptr, s: int, e: int,
     k = 1
     while k <= n {
         idx = fo + k
-        px = cpx(xs, s, n, idx)
-        py = cpx(ys, s, n, idx)
-        on = lrint(floatarr.get_unchecked(ons, s + (idx % n))) as int
-        if on == 1 {
+        px = cpx(p, s, n, idx)
+        py = cpy(p, s, n, idx)
+        on = truetype.point_on(p, s + (idx % n))
+        if on {
             if pending == 1 {
-                oquad(o, a, b, c, d, tx, ty, curx, cury, ctlx, ctly, px, py, steps)
+                oquad(o, tx, curx, cury, ctlx, ctly, px, py, steps)
                 pending = 0
             } else {
                 // k == n is the start point again — Z closes, skip the dup.
-                if k < n { opush(o, a, b, c, d, tx, ty, px, py) }
+                if k < n { opush(o, tx, px, py) }
             }
             curx = px
             cury = py
@@ -625,7 +311,7 @@ emit_contour(xs: ptr, ys: ptr, ons: ptr, s: int, e: int,
             if pending == 1 {
                 mx = (ctlx + px) / 2.0
                 my = (ctly + py) / 2.0
-                oquad(o, a, b, c, d, tx, ty, curx, cury, ctlx, ctly, mx, my, steps)
+                oquad(o, tx, curx, cury, ctlx, ctly, mx, my, steps)
                 curx = mx
                 cury = my
             }
@@ -637,78 +323,34 @@ emit_contour(xs: ptr, ys: ptr, ons: ptr, s: int, e: int,
     }
     // Close back to the start point.
     if pending == 1 {
-        oquad(o, a, b, c, d, tx, ty, curx, cury, ctlx, ctly, sx, sy, steps)
+        oquad(o, tx, curx, cury, ctlx, ctly, sx, sy, steps)
     }
     oclose(o)
 }
 
-// ─── Composite glyph: components with offsets/scales, recursion-capped ───────
-parse_composite(f: *TtfFont, off: int,
-                a: float, b: float, c: float, d: float, tx: float, ty: float,
-                steps: int, o: *Outl, depth: int) {
-    p = off + 10
-    more = 1
-    while more == 1 {
-        fl = rd16(f, p)
-        gi = rd16(f, p + 2)
-        p = p + 4
-        arg1 = 0
-        arg2 = 0
-        if bit(fl, 0) == 1 {
-            arg1 = rd16s(f, p); arg2 = rd16s(f, p + 2); p = p + 4
-        } else {
-            arg1 = rd8s(f, p); arg2 = rd8s(f, p + 1); p = p + 2
-        }
-        ca = 1.0; cb = 0.0; cc = 0.0; cd = 1.0
-        if bit(fl, 3) == 1 {
-            sc = rdf214(f, p); p = p + 2
-            ca = sc; cd = sc
-        } else {
-            if bit(fl, 6) == 1 {
-                ca = rdf214(f, p); cd = rdf214(f, p + 2); p = p + 4
-            } else {
-                if bit(fl, 7) == 1 {
-                    ca = rdf214(f, p); cb = rdf214(f, p + 2)
-                    cc = rdf214(f, p + 4); cd = rdf214(f, p + 6); p = p + 8
-                }
-            }
-        }
-        ce = 0.0
-        cf = 0.0
-        if bit(fl, 1) == 1 { ce = arg1 * 1.0; cf = arg2 * 1.0 }
-        // Compose child transform under the parent's, then recurse.
-        if depth < 4 {
-            glyph_outline(f, gi,
-                a * ca + b * cc, a * cb + b * cd,
-                c * ca + d * cc, c * cb + d * cd,
-                a * ce + b * cf + tx, c * ce + d * cf + ty,
-                steps, o, depth + 1)
-        }
-        more = bit(fl, 5)
+// One glyph's contours (compound glyphs arrive placed by std.truetype),
+// flattened and appended with the pen at `tx`. A glyph the font cannot give
+// contributes nothing.
+glyph_outline(fp: ptr, gid: int, tx: float, steps: int, o: *Outl) {
+    p = truetype.glyph_points(face_of(fp), gid)
+    if p == null { return }
+    s = 0
+    ci = 0
+    while ci < p.contours {
+        e = truetype.contour_end(p, ci)
+        emit_contour(p, s, e, tx, steps, o)
+        s = e + 1
+        ci = ci + 1
     }
-}
-
-glyph_outline(f: *TtfFont, gid: int,
-              a: float, b: float, c: float, d: float, tx: float, ty: float,
-              steps: int, o: *Outl, depth: int) {
-    if gid < 0 || gid >= f.nglyphs { return }
-    g0, g1 = glyf_range(f, gid)
-    if g1 <= g0 { return }                       // empty glyph (space)
-    nc = rd16s(f, g0)
-    if nc >= 0 {
-        parse_simple(f, g0, nc, a, b, c, d, tx, ty, steps, o)
-    } else {
-        parse_composite(f, g0, a, b, c, d, tx, ty, steps, o, depth)
-    }
+    truetype.points_free(p)
 }
 
 // ─── Public outline builders ─────────────────────────────────────────────────
 // One glyph (by id), untransformed font units, y-up.
 font_glyph_outlines(fp: ptr, gid: int, steps: int) -> ptr {
-    f = fp as *TtfFont
     o = mk_outl()
-    if f.ok == 0 { o.ok = 0; return o as ptr }
-    glyph_outline(f, gid, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, steps, o, 0)
+    if fp == null { o.ok = 0; return o as ptr }
+    glyph_outline(fp, gid, 0.0, steps, o)
     o.adv = font_glyph_advance(fp, gid) * 1.0
     return o as ptr
 }
@@ -716,9 +358,8 @@ font_glyph_outlines(fp: ptr, gid: int, steps: int) -> ptr {
 // A UTF-8 text run, glyphs advanced along x with pair kerning. Font units,
 // y-up, pen origin at (0,0).
 font_text_outlines(fp: ptr, text: string, steps: int) -> ptr {
-    f = fp as *TtfFont
     o = mk_outl()
-    if f.ok == 0 { o.ok = 0; return o as ptr }
+    if fp == null { o.ok = 0; return o as ptr }
     penx = 0.0
     prev = -1
     n = string.length(text)
@@ -728,7 +369,7 @@ font_text_outlines(fp: ptr, text: string, steps: int) -> ptr {
         i = ni
         gid = font_glyph_index(fp, cp)
         if prev >= 0 { penx = penx + font_kern(fp, prev, gid) * 1.0 }
-        glyph_outline(f, gid, 1.0, 0.0, 0.0, 1.0, penx, 0.0, steps, o, 0)
+        glyph_outline(fp, gid, penx, steps, o)
         penx = penx + font_glyph_advance(fp, gid) * 1.0
         prev = gid
     }
@@ -767,3 +408,4 @@ font_text_outlines_norm(fp: ptr, text: string, steps: int, target_w: float) -> p
     }
     return op
 }
+
