@@ -61,6 +61,8 @@ extern string_to_lower(s: string) -> string @heap
 extern string_contains(s: string, sub: string) -> int
 extern string_substring(s: string, start: int, end: int) -> string @heap
 
+extern aether_ui_vgfont_get() -> ptr
+
 const FP_PREVIEW: string = "Handgloves 123"
 
 // One visible row: the family index plus the strings the row renders.
@@ -315,11 +317,21 @@ build_preview_path(app: *App) -> string {
     fp = picker_engine.fam_path(fam)
     if string.length(fp) == 0 { return "" }
     if use_font(fp) == 0 { return "" }
+    // A face with no Latin letters (Noto Serif Myanmar, Oriya, Armenian ...)
+    // would draw the Latin sample as .notdef boxes, which says nothing about
+    // the font. When fewer than half of the sample's letters (its first ten
+    // characters) are mapped, preview the first characters the font DOES map.
+    sample = FP_PREVIEW
+    fh = aether_ui_vgfont_get()
+    if font.font_covered(fh, "Handgloves") < 5 {
+        own = font.font_own_sample(fh, 14)
+        if string.length(own) > 0 { sample = own }
+    }
     // Scale to fit the panel: shrink until the sample fits 440 units.
     size = 44.0
-    w = text_paths_width(FP_PREVIEW, size)
+    w = text_paths_width(sample, size)
     if w > 440.0 { size = size * 440.0 / w }
-    return text_paths(FP_PREVIEW, 16.0, 62.0, size)
+    return text_paths(sample, 16.0, 62.0, size)
 }
 
 draw_preview(app: *App, rn: ptr) {

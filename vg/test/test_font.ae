@@ -136,6 +136,34 @@ main() {
     // subtable; a format-4-only reader maps it to .notdef.
     assert_gt("U+1F600 maps via cmap 12", font.font_glyph_index(f, 128512), 0)
 
+    println("test_font: symbol-encoded cmap (3,0): chars at 0xF000 + code")
+    // Wingdings (macOS Supplemental) has a Microsoft Symbol (3,0) cmap with
+    // its characters at U+F020-U+F0FF, plus a Mac cmap; skipped where absent.
+    sym = font.font_load("/System/Library/Fonts/Supplemental/Wingdings.ttf")
+    if font.font_ok(sym) == 1 {
+        assert_gt("Wingdings: 'A' (0x41) maps", font.font_glyph_index(sym, 65), 0)
+        assert_gt("Wingdings: 'a' maps", font.font_glyph_index(sym, 97), 0)
+        assert_gt("Wingdings: '1' maps", font.font_glyph_index(sym, 49), 0)
+        assert_eq("Wingdings: U+F041 directly agrees", font.font_glyph_index(sym, 61505), font.font_glyph_index(sym, 65))
+        assert_eq("Wingdings: covers the Latin sample", font.font_covered(sym, "Handgloves"), 10)
+        // Negative control: outside both the code range and the 0xF000 block.
+        assert_eq("Wingdings: U+4E00 still missing", font.font_glyph_index(sym, 19968), 0)
+    } else {
+        println("  SKIP: Wingdings.ttf not present")
+    }
+    // Symbol.ttf is NOT a (3,0) font here: Unicode cmap with Greek, no Latin.
+    // Its preview needs the font's own sample, not a Latin one.
+    gs = font.font_load("/System/Library/Fonts/Symbol.ttf")
+    if font.font_ok(gs) == 1 {
+        assert_eq("Symbol: no Latin letters mapped", font.font_covered(gs, "Handgloves"), 0)
+        own = font.font_own_sample(gs, 8)
+        assert_gt("Symbol: own sample non-empty", string.length(own), 0)
+        assert_gt("Symbol: own sample is mapped", font.font_covered(gs, own), 0)
+    }
+    // Negative control: a Unicode font's missing codes stay missing.
+    assert_eq("DejaVu: U+4E00 stays missing", font.font_glyph_index(f, 19968), 0)
+    assert_eq("covered counts mapped letters", font.font_covered(f, "Handgloves"), 10)
+
     println("test_font: missing file")
     fbad = font.font_load("fonts/no-such-font.ttf")
     assert_eq("missing font -> not ok", font.font_ok(fbad), 0)

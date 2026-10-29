@@ -31,7 +31,7 @@
 exports (
     font_load, font_ok, font_last_error, font_upem, font_nglyphs, font_ascender, font_descender, font_name,
     font_is_monospace, font_is_serif,
-    font_glyph_index, font_glyph_advance, font_kern, font_text_width,
+    font_glyph_index, font_covered, font_own_sample, font_glyph_advance, font_kern, font_text_width,
     font_glyph_outlines, font_text_outlines, font_text_outlines_norm,
     outl_ok, outl_npts, outl_nctrs, outl_px, outl_py, outl_ctr_end,
     outl_adv, outl_free
@@ -117,7 +117,72 @@ font_nglyphs(fp: ptr) -> int {
 // Codepoint → glyph id (0 = missing glyph).
 font_glyph_index(fp: ptr, cp: int) -> int {
     if fp == null { return 0 }
-    return truetype.glyph_index(face_of(fp), cp)
+    g = truetype.glyph_index(face_of(fp), cp)
+    // STOPGAP (aether-ui #<issue>): a Microsoft Symbol (3,0) cmap keeps its
+    // characters at 0xF000 + code (Symbol, Webdings, Wingdings, ...), and
+    // std.truetype before the fix looked up the bare code. Retry there for
+    // codes below 0x100, as Windows and FreeType do. Delete this when the
+    // Aether pinned by aether-ui includes std.truetype's symbol-cmap fix
+    // (branch fix/truetype-symbol-cmap); on a fixed std the retry is a no-op
+    // for symbol fonts and finds nothing in others.
+    if g == 0 && cp >= 0 && cp < 256 {
+        g = truetype.glyph_index(face_of(fp), 61440 + cp)
+    }
+    return g
+}
+
+// How many codepoints of `text` the font maps to a real glyph.
+font_covered(fp: ptr, text: string) -> int {
+    if fp == null { return 0 }
+    n = string.length(text)
+    i = 0
+    got = 0
+    while i < n {
+        cp, ni = utf8_at(text, n, i)
+        i = ni
+        if font_glyph_index(fp, cp) != 0 { got = got + 1 }
+    }
+    return got
+}
+
+// A UTF-8 string of the first `count` printable codepoints the font really
+// maps, for previewing a face whose script is not Latin. Prefers codepoints
+// from U+00A0 up (the font's own script) and falls back to U+0021.. when it
+// maps nothing there. Combining/format marks (U+0300-036F, U+200B-200F,
+// U+FE00-FE0F) are skipped: alone they draw as nothing or as stray marks.
+font_own_sample(fp: ptr, count: int) -> string {
+    if fp == null { return "" }
+    out = ""
+    got = 0
+    cp = 160
+    while cp < 12288 && got < count {
+        skip = (cp >= 768 && cp <= 879) || (cp >= 8203 && cp <= 8207) || (cp >= 65024 && cp <= 65039)
+        if !skip && font_glyph_index(fp, cp) != 0 {
+            out = "${out}${utf8_encode(cp)}"
+            got = got + 1
+        }
+        cp = cp + 1
+    }
+    if got == 0 {
+        cp = 33
+        while cp < 127 && got < count {
+            if font_glyph_index(fp, cp) != 0 {
+                out = "${out}${utf8_encode(cp)}"
+                got = got + 1
+            }
+            cp = cp + 1
+        }
+    }
+    return out
+}
+
+// One codepoint (below U+10000) as a UTF-8 string.
+utf8_encode(cp: int) -> string {
+    if cp < 128 { return string.from_char(cp) }
+    if cp < 2048 {
+        return "${string.from_char(192 + cp / 64)}${string.from_char(128 + cp % 64)}"
+    }
+    return "${string.from_char(224 + cp / 4096)}${string.from_char(128 + (cp / 64) % 64)}${string.from_char(128 + cp % 64)}"
 }
 
 // hmtx advance width (font units).
