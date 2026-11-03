@@ -44,6 +44,25 @@ main() {
             spec.assert_contains(b, "splitPosition", "splitPosition reported")
         }
 
+        spec.it("a widget with insets reports its frame, its children inside it") callback {
+            // root carries the 12 px gutter (content_inset). Its box in
+            // /widgets is the window's, 0 to 640, with the insets inside
+            // it, as AppKit's and win32's are; GTK put it 12 px left of the
+            // window and 664 wide, the insets counted a second time over
+            // a box that already held them (ae3d#885).
+            lp = pane_of("left pane")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            root = uidriver.widget_int_field_by_id(sv, "parent")
+            rx = uidriver.widget_int_field_by_id(root, "x")
+            rw = uidriver.widget_int_field_by_id(root, "w")
+            spec.assert_eq(rx, 0, "root starts at the window's edge (x ${rx})")
+            spec.assert_eq(rw, 640, "root is the window's width, insets included (w ${rw})")
+            svx = uidriver.widget_int_field_by_id(sv, "x")
+            svw = uidriver.widget_int_field_by_id(sv, "w")
+            spec.assert_true(svx >= 12, "the splitview sits inside root's gutter (x ${svx})")
+            spec.assert_true(svx + svw <= 628, "and ends inside it (${svx}+${svw})")
+        }
+
         spec.it("split_position route moves the splitter, panes follow") callback {
             lp = pane_of("left pane")
             sv = uidriver.widget_int_field_by_id(lp, "parent")

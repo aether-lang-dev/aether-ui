@@ -9575,8 +9575,10 @@ static int widget_to_json(int handle, char* buf, int bufsize) {
         graphene_rect_t r;
         if (root && GTK_IS_WIDGET(root) &&
             gtk_widget_compute_bounds(w, GTK_WIDGET(root), &r)) {
+            // compute_bounds is the border box, insets inside it already
+            // (see hook_widget_rect).
             n += snprintf(buf + n, bufsize - n, ",\"x\":%d,\"y\":%d",
-                          (int)r.origin.x - il, (int)r.origin.y - it);
+                          (int)r.origin.x, (int)r.origin.y);
         } else {
             n += snprintf(buf + n, bufsize - n, ",\"x\":0,\"y\":0");
         }
@@ -10558,14 +10560,19 @@ static int hook_widget_rect(int handle, int* x, int* y, int* w, int* hgt) {
     graphene_rect_t r;
     GtkWidget* root = GTK_WIDGET(gtk_widget_get_root(wd));
     if (!root || !gtk_widget_compute_bounds(wd, root, &r)) return 1;
-    // The frame, insets included (see aeui_frame_insets).
-    int it, ir, ib, il;
-    aeui_frame_insets(wd, &it, &ir, &ib, &il);
-    int x0 = aeui_round_edge(r.origin.x) - il;
-    int y0 = aeui_round_edge(r.origin.y) - it;
+    // The frame, insets included (see aeui_frame_insets). compute_bounds
+    // is already that box: the border box, the CSS padding the insets
+    // became inside it (GTK 4.6 and 4.22 alike). Only get_width/get_height
+    // and an allocation are the content box. Adding the insets here as
+    // well put every inset widget its own inset left of and above where it
+    // is, and that much wider and taller on the far side: a panel's pane
+    // started 14 px inside the splitter's other pane, and two buttons with
+    // different insets in one column read two left edges (ae3d#885).
+    int x0 = aeui_round_edge(r.origin.x);
+    int y0 = aeui_round_edge(r.origin.y);
     *x = x0; *y = y0;
-    *w   = aeui_round_edge(r.origin.x + r.size.width)  + ir - x0;
-    *hgt = aeui_round_edge(r.origin.y + r.size.height) + ib - y0;
+    *w   = aeui_round_edge(r.origin.x + r.size.width)  - x0;
+    *hgt = aeui_round_edge(r.origin.y + r.size.height) - y0;
     return 0;
 }
 

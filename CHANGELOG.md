@@ -236,6 +236,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GTK: a widget with edge insets reported its box shifted and grown by
+  them.** The driver's x/y/w/h for a widget given `edge_insets` (directly or
+  by a style sheet's `st_insets`) took `gtk_widget_compute_bounds` and
+  subtracted the insets from its origin, adding them to its size. That box is
+  already the border box, padding included (GTK 4.6.9 and 4.22.4 alike,
+  measured), so the widget read its own inset left of and above where it is
+  and that much wider and taller: `split_demo`'s root, 640 wide with a 12 px
+  gutter, read x -12 and w 664, and AppKit and Win32 read 0 and 640. Now it
+  reads 0 and 640 on GTK too. In ae3d's editor, the inspector's pane read as
+  starting 14 px inside the viewport's, and two buttons with different
+  insets in one column read two left edges (ae3d#885). `split_demo`'s spec
+  checks the root's frame and the splitview inside its gutter.
+
 - **GTK: a toggle (check or radio button) reported no accessible name.**
   The driver read a name from a button or a text only; a `GtkCheckButton` is
   neither, so a labelled `toggle` had no `a11y_name` on GTK (AppKit, Win32 and
