@@ -25,6 +25,8 @@
 #   usage: test_spring_curve.sh [port]
 set -u
 PORT="${1:-9222}"
+# Plain-zlib PNG luminance maths (no Pillow/numpy needed).
+PNGC="$(dirname "$0")/../lib/png_contrast.py"
 SCRATCH="${TMPDIR:-/tmp}"
 BASE="http://127.0.0.1:$PORT"
 PASS=0; FAIL=0
@@ -36,20 +38,13 @@ BTN=$(curl -s -m 5 "$BASE/widgets" | tr '}' '\n' | grep '"text":"Toggle spring"'
 [ -n "$BTN" ] && ok "Toggle spring button found (id $BTN)" || { bad "Toggle spring button found"; exit 1; }
 
 curl -s -m 5 "$BASE/screenshot" -o $SCRATCH/sp_start.png
-if ! python3 -c "from PIL import Image; import sys; Image.open(sys.argv[1])" "$SCRATCH/sp_start.png" 2>/dev/null; then
+if ! python3 "$PNGC" ok "$SCRATCH/sp_start.png" 2>/dev/null; then
     echo "  SKIP: /screenshot returned no image — the app is probably on a"
     echo "        different display than the one being captured."
     exit 0
 fi
 
-SPREAD=$(python3 - "$SCRATCH/sp_start.png" <<'PY'
-import sys
-from PIL import Image
-import numpy as np
-a = np.asarray(Image.open(sys.argv[1]).convert("L"), dtype=float)
-print(f"{a.max() - a.min():.1f}")
-PY
-)
+SPREAD=$(python3 "$PNGC" spread "$SCRATCH/sp_start.png")
 if python3 -c "import sys; sys.exit(0 if $SPREAD < 1.0 else 1)"; then
     echo "  SKIP: /screenshot is uniform (spread $SPREAD) — it captured the"
     echo "        window background but no child controls, so the label is not"
@@ -58,23 +53,18 @@ if python3 -c "import sys; sys.exit(0 if $SPREAD < 1.0 else 1)"; then
 fi
 
 # 16 samples at 90ms across a 1200ms tween, deadlines from one t0.
-python3 - "$BASE" "$BTN" "$SCRATCH" > $SCRATCH/sp_curve.txt <<'PY'
+python3 - "$BASE" "$BTN" "$PNGC" > $SCRATCH/sp_curve.txt <<'PY'
 import sys, time, urllib.request
-from PIL import Image
-import numpy as np
 base, btn = sys.argv[1], sys.argv[2]
-scratch = sys.argv[3]
-def ink():
-    # contrast against the ground (the frame's median brightness), not
-    # "ink": a fade lowers it in a light theme and a dark one alike, where
-    # 255-brightness only falls for dark text on a light ground (see
-    # test_easing_curve.sh).
-    urllib.request.urlretrieve(base + "/screenshot", scratch + "/_sp.png")
-    a = np.asarray(Image.open(scratch + "/_sp.png").convert("L"), dtype=float)
-    return np.abs(a - np.median(a)).mean()
+sys.path.insert(0, __import__("os").path.dirname(sys.argv[3]))
+import png_contrast
+def shot():
+    # Capture only: decoding a PNG in plain Python takes longer than the
+    # sampling interval, so frames are kept raw and measured after the sweep.
+    return urllib.request.urlopen(base + "/screenshot").read()
 # The start value anchors every progress figure, and a dropped frame here
 # (see the median filter below) would skew all of them: the middle of three.
-i0 = sorted(ink() for _ in range(3))[1]
+i0 = sorted(png_contrast.contrast(shot()) for _ in range(3))[1]
 t0 = time.time()
 urllib.request.urlopen(urllib.request.Request(base + "/widget/" + btn + "/click",
                                               method="POST")).read()
@@ -82,9 +72,11 @@ pts = []
 for k in range(16):
     d = t0 + 0.09 * (k + 1) - time.time()
     if d > 0: time.sleep(d)
-    pts.append((time.time() - t0, ink()))
+    pts.append((time.time() - t0, shot()))
+# contrast against the ground (the frame's median brightness), not "ink":
+# theme-agnostic (see the header)
 print(i0)
-for el, v in pts: print(f"{el:.4f} {v:.6f}")
+for el, v in pts: print(f"{el:.4f} {png_contrast.contrast(v):.6f}")
 PY
 
 read -r I_START < $SCRATCH/sp_curve.txt

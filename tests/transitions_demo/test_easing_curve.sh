@@ -54,6 +54,8 @@
 #   usage: test_easing_curve.sh [port]
 set -u
 PORT="${1:-9222}"
+# Plain-zlib PNG luminance maths (no Pillow/numpy needed).
+PNGC="$(dirname "$0")/../lib/png_contrast.py"
 # Scratch dir both halves of the toolchain agree on. On MSYS the shell's /tmp
 # and a native-Windows python's /tmp are DIFFERENT directories, so curl would
 # write a PNG that python then could not find -- which reads as "no image" and
@@ -69,13 +71,7 @@ bad() { echo "  [FAIL] $1"; FAIL=$((FAIL+1)); }
 # ground this falls, in a light theme and a dark one alike, so it is a direct
 # proxy for the animated opacity -- no per-widget probe needed.
 ink() {
-  python3 - "$1" <<'PY'
-import sys
-from PIL import Image
-import numpy as np
-a = np.asarray(Image.open(sys.argv[1]).convert("L"), dtype=float)
-print(f"{np.abs(a - np.median(a)).mean():.4f}")
-PY
+  python3 "$PNGC" contrast "$1"
 }
 
 BTN=$(curl -s -m 5 "$BASE/widgets" | tr '}' '\n' | grep '"text":"Toggle fade"' \
@@ -83,7 +79,7 @@ BTN=$(curl -s -m 5 "$BASE/widgets" | tr '}' '\n' | grep '"text":"Toggle fade"' \
 [ -n "$BTN" ] && ok "Toggle button found (id $BTN)" || { bad "Toggle button found"; exit 1; }
 
 curl -s -m 5 "$BASE/screenshot" -o $SCRATCH/ec_start.png
-if ! python3 -c "from PIL import Image; import sys; Image.open(sys.argv[1])" "$SCRATCH/ec_start.png" 2>/dev/null; then
+if ! python3 "$PNGC" ok "$SCRATCH/ec_start.png" 2>/dev/null; then
     echo "  SKIP: /screenshot returned no image — the app is probably on a"
     echo "        different display than the one being captured. The curve can"
     echo "        only be read from pixels, so there is nothing to assert."
@@ -95,14 +91,7 @@ fi
 # constant ink reads as "the label did not fade", which is a false accusation
 # against the tween: the label was never in the picture. Any real UI frame has
 # both light and dark pixels, so a zero spread means the instrument is blind.
-SPREAD=$(python3 - "$SCRATCH/ec_start.png" <<'PY'
-import sys
-from PIL import Image
-import numpy as np
-a = np.asarray(Image.open(sys.argv[1]).convert("L"), dtype=float)
-print(f"{a.max() - a.min():.1f}")
-PY
-)
+SPREAD=$(python3 "$PNGC" spread "$SCRATCH/ec_start.png")
 if python3 -c "import sys; sys.exit(0 if $SPREAD < 1.0 else 1)"; then
     echo "  SKIP: /screenshot is uniform (spread $SPREAD) — it captured the"
     echo "        window background but no child controls, so the label is not"
@@ -126,20 +115,18 @@ fi
 #
 # 14 samples at 100ms across a 1200ms tween. Deadlines are computed from ONE t0
 # so capture cost cannot accumulate into drift.
-python3 - "$BASE" "$BTN" "$SCRATCH" > $SCRATCH/ec_curve.txt <<'PY'
+python3 - "$BASE" "$BTN" "$PNGC" > $SCRATCH/ec_curve.txt <<'PY'
 import sys, time, urllib.request
-from PIL import Image
-import numpy as np
 base, btn = sys.argv[1], sys.argv[2]
-scratch = sys.argv[3]
-def ink():
-    # contrast against the ground: theme-agnostic (see the header)
-    urllib.request.urlretrieve(base + "/screenshot", scratch + "/_ec.png")
-    a = np.asarray(Image.open(scratch + "/_ec.png").convert("L"), dtype=float)
-    return np.abs(a - np.median(a)).mean()
+sys.path.insert(0, __import__("os").path.dirname(sys.argv[3]))
+import png_contrast
+def shot():
+    # Capture only: decoding a PNG in plain Python takes longer than the
+    # sampling interval, so frames are kept raw and measured after the sweep.
+    return urllib.request.urlopen(base + "/screenshot").read()
 # The start value anchors every progress figure, and a dropped frame here
 # (see the median filter below) would skew all of them: the middle of three.
-i0 = sorted(ink() for _ in range(3))[1]
+i0 = sorted(png_contrast.contrast(shot()) for _ in range(3))[1]
 t0 = time.time()
 urllib.request.urlopen(urllib.request.Request(base + "/widget/" + btn + "/click",
                                               method="POST")).read()
@@ -147,9 +134,11 @@ pts = []
 for k in range(14):
     d = t0 + 0.10 * (k + 1) - time.time()
     if d > 0: time.sleep(d)
-    pts.append((time.time() - t0, ink()))
+    pts.append((time.time() - t0, shot()))
+# contrast against the ground (the frame's median brightness), not "ink":
+# theme-agnostic (see the header)
 print(i0)
-for el, v in pts: print(f"{el:.4f} {v:.6f}")
+for el, v in pts: print(f"{el:.4f} {png_contrast.contrast(v):.6f}")
 PY
 
 read -r I_START < $SCRATCH/ec_curve.txt
