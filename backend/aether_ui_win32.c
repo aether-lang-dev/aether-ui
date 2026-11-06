@@ -14033,8 +14033,14 @@ void aether_ui_clear_children_impl(int handle) {
 // aether_ui_test_server.c and is shared with the GTK4 and AppKit
 // backends. This section only provides the Win32-specific pieces:
 //
-//   * Backend hooks that answer widget introspection queries from the
-//     server thread (widget_type, widget_text, toggle_active, etc.)
+//   * Backend hooks that answer widget introspection queries (widget_type,
+//     widget_text, toggle_active, etc.). They run on the UI THREAD: the
+//     server hands each whole request to run_on_ui_thread, which
+//     SendMessages it to the hidden driver window. They used to run on the
+//     HTTP thread, and widget_text copied a text_cache that the UI thread
+//     frees and replaces on every text change (w32_cache_text): a
+//     use-after-free whenever a spec read a field while it changed. AppKit's
+//     reads crashed sae-driver the same way (2026-11-05).
 //   * UI-thread marshalling: HTTP requests fill an AetherDriverActionCtx
 //     and hand it to dispatch_action(), which SendMessages it to a
 //     hidden AE_WM_DRIVER window on the UI thread and blocks until the
@@ -14097,6 +14103,8 @@ static int w32_drv_post_key(HWND hwnd, const char* name, int down, int up) {
     PostMessageW(driver_host_hwnd, AE_WM_KEYSTATE, 0, 0);
     return 1;
 }
+#define AE_WM_RUN_REQUEST (WM_USER + 0x49) // a whole driver request → UI thread
+typedef struct { void (*fn)(void*); void* arg; } W32UiCall;
 // AE_WM_DBLCLICK (WM_USER + 0x47), defined at aether_ui_fire_double_click.
 
 static HWND driver_host_hwnd = NULL;   // declared earlier for the double-click hop
@@ -14390,6 +14398,11 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
         } else {    /* after it: the keyboard as it was */
             SetKeyboardState(w32_drv_saved_keys);
         }
+        return 0;
+    }
+    if (msg == AE_WM_RUN_REQUEST) {
+        W32UiCall* c = (W32UiCall*)lp;
+        c->fn(c->arg);
         return 0;
     }
     if (msg == AE_WM_DRIVER) {
@@ -14987,7 +15000,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-// Geometry reads come from the HTTP thread. A layout the UI thread still
+// Geometry reads (on the UI thread, inside the request). A layout still
 // owes would be read as it was before the last add, so the read first hops
 // to the UI thread for the flush (SendMessage blocks until the proc returns)
 // -- only when something is owed, so a quiet tree costs nothing.
@@ -15002,6 +15015,21 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
     // The action's handlers have run; place what they built before the
     // spec's next GET sees it.
     w32_drv_settle_layout();
+}
+
+// The shared server services each whole request through this, so every hook
+// above runs on the UI thread. A SendMessage to a window of the calling
+// thread is a plain call, so dispatch_action's and the settle's own
+// SendMessages still work from inside a request; and nothing on the UI thread
+// waits on the HTTP thread, so the blocking send cannot deadlock.
+static void hook_run_on_ui_thread(void (*fn)(void*), void* arg) {
+    if (!driver_host_hwnd
+        || GetWindowThreadProcessId(driver_host_hwnd, NULL) == GetCurrentThreadId()) {
+        fn(arg);
+        return;
+    }
+    W32UiCall c = { fn, arg };
+    SendMessageW(driver_host_hwnd, AE_WM_RUN_REQUEST, 0, (LPARAM)&c);
 }
 
 // List direct children of a widget. Returns the number written; -1 if
@@ -15284,6 +15312,7 @@ static const AetherDriverHooks win32_driver_hooks = {
     .screenshot_png       = hook_screenshot_png,
     .canvas_debug         = hook_canvas_debug,
     .canvas_paint_counters = hook_canvas_paint_counters,
+    .run_on_ui_thread     = hook_run_on_ui_thread,
 };
 
 static int test_server_started = 0;

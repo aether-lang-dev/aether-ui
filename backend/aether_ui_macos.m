@@ -9402,9 +9402,18 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
 // parity is now structural instead of a thing to remember: a route added to
 // the shared server lands on both backends at once.
 //
-// Threading: introspection hooks are called on the HTTP thread (read-only
-// queries AppKit tolerates). Every MUTATION goes through dispatch_action,
-// which bounces to the main queue with dispatch_sync and blocks.
+// Threading: the WHOLE request is serviced on the main thread
+// (run_on_ui_thread below), reads as well as mutations, as on GTK4, UIKit and
+// Android. The reads used to run on the HTTP thread, on the belief that
+// AppKit tolerates read-only queries off main. It does not: the Main Thread
+// Checker flags every hook (-[NSControl stringValue], -[NSView superview],
+// -[NSResponder accessibilityRole], ...), and -[NSTextField stringValue] read
+// while the main thread put a field editor away (a Tab) autoreleased, on the
+// HTTP thread, an object the main thread then freed. The server's per-request
+// autorelease pool popped it and the app died in objc_release (sae-driver
+// during spraedsheet's spec_sheet, 2026-11-05; tests/driver_threads
+// reproduces it in about a second without the hop). Mutations still go
+// through dispatch_action, which runs in place when already on main.
 //
 // "Every" was not true of menu-bar and tray activation until #116: those two
 // routes called the item's closure where the HTTP request landed, so an app's
@@ -9471,7 +9480,7 @@ static const char* widget_type_name_for(int handle) {
 }
 
 // ---------------------------------------------------------------------------
-// Introspection hooks — HTTP thread.
+// Introspection hooks — main thread (the request is hopped there).
 // ---------------------------------------------------------------------------
 static int hook_widget_count(void) { return widget_count; }
 
@@ -10443,7 +10452,9 @@ static int hook_widget_pressed(int handle) {
 
 static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
     __block NSData* png = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    // On main already when the request was hopped there (run_on_ui_thread),
+    // and a dispatch_sync onto the main queue from main never returns.
+    void (^capture)(void) = ^{
         NSWindow* win = primary_window;
         if (!win) return;
         NSView* v = [win contentView];
@@ -10479,7 +10490,9 @@ static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
             [v cacheDisplayInRect:bounds toBitmapImageRep:rep];
             png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
         }
-    });
+    };
+    if ([NSThread isMainThread]) capture();
+    else dispatch_sync(dispatch_get_main_queue(), capture);
     if (!png || [png length] == 0) return -1;
     *out_len = (size_t)[png length];
     *out_data = (unsigned char*)malloc(*out_len);
@@ -10512,6 +10525,13 @@ static int hook_canvas_paint_counters(int canvas_id, int* full_paints,
     return 0;
 }
 
+// Run fn(arg) on the main thread and block until it returns; the shared
+// server services each request through it (see the threading note above).
+static void hook_run_on_ui_thread(void (*fn)(void*), void* arg) {
+    if ([NSThread isMainThread]) { fn(arg); return; }
+    dispatch_sync(dispatch_get_main_queue(), ^{ fn(arg); });
+}
+
 static const AetherDriverHooks macos_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -10533,6 +10553,7 @@ static const AetherDriverHooks macos_driver_hooks = {
     .screenshot_png       = hook_screenshot_png,
     .canvas_debug         = hook_canvas_debug,
     .canvas_paint_counters = hook_canvas_paint_counters,
+    .run_on_ui_thread     = hook_run_on_ui_thread,
 };
 
 // Inject the "Under Remote Control" banner as the first arranged subview.

@@ -128,18 +128,17 @@ typedef struct {
 } AetherDriverActionCtx;
 
 typedef struct {
-    // Introspection — called on the HTTP server thread UNLESS the backend
-    // supplies run_on_ui_thread (below), in which case the whole request is
-    // serviced on the UI thread and these are called from there.
+    // Introspection — called on the UI thread: every backend supplies
+    // run_on_ui_thread (below), so the whole request is serviced there.
     //
     // CORRECTION: this block used to claim "GTK, AppKit, and Win32 all
-    // tolerate read-only queries about widget state from off-thread". That is
-    // true of AppKit and Win32 and FALSE of GTK: a server-thread widget walk
+    // tolerate read-only queries about widget state from off-thread". It is
+    // false of all three. GTK first: a server-thread widget walk
     // races the UI thread and trips GTK's css-node global parent cache,
     // aborting in gtkcssnode.c with "node->cache == NULL" (observed live, see
     // aether_ui_gtk4.c). It is why GTK4 could not adopt these hooks until
-    // run_on_ui_thread existed, and why the claim is worth correcting rather
-    // than leaving for the next backend to trust.
+    // run_on_ui_thread existed. AppKit and Win32 kept the claim until it
+    // crashed sae-driver (2026-11-05): see run_on_ui_thread below.
     int         (*widget_count)(void);
     const char* (*widget_type)(int handle);
     void        (*widget_text_into)(int handle, char* buf, int bufsize);
@@ -203,12 +202,15 @@ typedef struct {
     int (*canvas_paint_counters)(int canvas_id, int* full_paints,
                                  int* clip_paints, int* last_clip_area);
 
-    // Optional: run `fn(arg)` on the UI thread and BLOCK until it returns.
+    // Run `fn(arg)` on the UI thread and BLOCK until it returns. Every
+    // backend supplies it. It is optional only in the sense that NULL leaves
+    // introspection on the HTTP thread, and no toolkit here tolerates that:
+    // AppKit's off-main -[NSTextField stringValue] during a Tab was a
+    // use-after-free (sae-driver, 2026-11-05, tests/driver_threads), Win32's
+    // text hook read a text_cache the UI thread frees, and UIKit's view walk
+    // indexed an NSArray the main thread was mutating.
     //
-    // Leave NULL if the backend tolerates read-only introspection from the
-    // HTTP thread -- macOS and Win32 do, and are unaffected.
-    //
-    // GTK4 does not, and this hook exists for it. A server-thread widget walk
+    // GTK4 was first. A server-thread widget walk
     // races the UI thread's mutations and trips GTK's css-node global parent
     // cache: the app aborts in gtkcssnode.c ("node->cache == NULL"). That was
     // observed live (aether_ui_gtk4.c:6196), which is why GTK4's own embedded

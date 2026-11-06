@@ -627,25 +627,43 @@ static void dispatch_and_reply(aether_sock_t client_fd,
     }
 }
 
-/* Payload for the optional UI-thread hop. See handle_request just below. */
+/* Payload for the UI-thread hop. See handle_request just below. */
 typedef struct {
     aether_sock_t client_fd;
     const AetherDriverHooks* h;
+    int method;
+    const char* path;
 } AeuiRequestCall;
 
 static void handle_request_inner(aether_sock_t client_fd,
-                                 const AetherDriverHooks* h);
+                                 const AetherDriverHooks* h,
+                                 int method, const char* path);
+
+#ifdef __APPLE__
+extern void* objc_autoreleasePoolPush(void);
+extern void objc_autoreleasePoolPop(void*);
+#endif
 
 static void handle_request_trampoline(void* arg) {
     AeuiRequestCall* c = (AeuiRequestCall*)arg;
-    handle_request_inner(c->client_fd, c->h);
+#ifdef __APPLE__
+    /* A pool of the UI thread's own per request, so what the toolkit
+       autoreleases while answering is freed when the answer has been sent,
+       not whenever the main run loop next turns (spec_driver_rss). */
+    void* pool = objc_autoreleasePoolPush();
+#endif
+    handle_request_inner(c->client_fd, c->h, c->method, c->path);
+#ifdef __APPLE__
+    objc_autoreleasePoolPop(pool);
+#endif
 }
 
 /* THE THREADING SPLIT, and why this wrapper exists.
  *
  * This server's original contract was: MUTATIONS marshal onto the UI thread
  * via dispatch_action; INTROSPECTION runs right here on the HTTP thread.
- * AppKit tolerates that for read-only queries and macOS adopted it as-is.
+ * macOS and win32 adopted it as-is, believing their toolkits tolerate
+ * off-thread reads. They do not (see below).
  *
  * GTK DOES NOT. A server-thread widget walk races the UI thread's mutations
  * and trips GTK's css-node global parent cache -- the app aborts in
@@ -659,30 +677,52 @@ static void handle_request_trampoline(void* arg) {
  * the 23 hook call sites means a future route cannot forget to do it, which
  * matters because forgetting is a crash under load, not a red test.
  *
- * NULL hook = today's behaviour exactly. macOS and win32 leave it unset and
- * are not affected by this change.
+ * EVERY backend supplies the hook now. GTK4, UIKit and Android did; AppKit
+ * and Win32 left it unset on the belief that they tolerate off-thread reads.
+ * They do not. On AppKit the Main Thread Checker flags every hook
+ * (-[NSControl stringValue], -[NSView superview], -[NSResponder
+ * accessibilityRole], ...), and -[NSTextField stringValue] read here while
+ * the main thread put a field editor away (a Tab) autoreleased, on this
+ * thread, an object the main thread then freed: the per-request pool below
+ * popped it and the app died in objc_release (sae-driver during
+ * spraedsheet's spec_sheet, 2026-11-05; tests/driver_threads reproduces it
+ * in about a second). Win32's text hook copied a widget's text_cache, which
+ * the UI thread frees and replaces on every text change.
+ *
+ * NULL hook = introspection on the HTTP thread, for a backend yet to come.
+ *
+ * The request is READ here, on the HTTP thread, and only parsed and answered
+ * over there: a client that connects and is slow to send must not hold the
+ * UI thread in recv().
  */
 #ifdef __APPLE__
-/* AppKit/UIKit calls made from the HTTP thread (the macOS and UIKit hooks
- * answer introspection right here) autorelease what they return -- an
- * accessibility query alone makes a handful of NSSets and NSArrays. This
- * pthread has no run loop, so no autorelease pool: with none, everything
- * autoreleased on it is never freed. /widgets walks every widget, so a spec
- * polling it grew the app by gigabytes (spraedsheet's spec_sheet reached
- * 5.8 GB). One pool per request fixes it for every hook, present and future. */
-extern void* objc_autoreleasePoolPush(void);
-extern void objc_autoreleasePoolPop(void*);
+/* The HTTP thread's own pool, so anything autoreleased on it is freed per
+ * request. A pthread with no run loop has none, and nothing autoreleased on
+ * it was ever freed: polling /widgets grew spraedsheet's spec_sheet to
+ * 5.8 GB while the hooks still ran here. */
 #endif
 
 static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) {
 #ifdef __APPLE__
     void* pool = objc_autoreleasePoolPush();
 #endif
-    if (h && h->run_on_ui_thread) {
-        AeuiRequestCall call = { client_fd, h };
-        h->run_on_ui_thread(handle_request_trampoline, &call);
+    char req[4096];
+    int n = (int)aether_socket_recv(client_fd, req, sizeof(req) - 1);
+    if (n <= 0) {
+        aether_close_socket(client_fd);
     } else {
-        handle_request_inner(client_fd, h);
+        req[n] = '\0';
+        char path[1024];
+        int method = parse_http_request(req, path, sizeof(path));
+        if (method < 0) {
+            send_http(client_fd, 400, "Bad Request", "text/plain", "bad request");
+            aether_close_socket(client_fd);
+        } else if (h && h->run_on_ui_thread) {
+            AeuiRequestCall call = { client_fd, h, method, path };
+            h->run_on_ui_thread(handle_request_trampoline, &call);
+        } else {
+            handle_request_inner(client_fd, h, method, path);
+        }
     }
 #ifdef __APPLE__
     objc_autoreleasePoolPop(pool);
@@ -690,19 +730,8 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
 }
 
 static void handle_request_inner(aether_sock_t client_fd,
-                                 const AetherDriverHooks* h) {
-    char req[4096];
-    int n = (int)aether_socket_recv(client_fd, req, sizeof(req) - 1);
-    if (n <= 0) { aether_close_socket(client_fd); return; }
-    req[n] = '\0';
-
-    char path[1024];
-    int method = parse_http_request(req, path, sizeof(path));
-    if (method < 0) {
-        send_http(client_fd, 400, "Bad Request", "text/plain", "bad request");
-        aether_close_socket(client_fd);
-        return;
-    }
+                                 const AetherDriverHooks* h,
+                                 int method, const char* path) {
 
     // GET /widgets[?type=X][&text=Y]
     if (method == 0 && strncmp(path, "/widgets", 8) == 0

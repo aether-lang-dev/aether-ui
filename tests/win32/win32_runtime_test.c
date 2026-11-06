@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <winsock2.h>   /* before windows.h, which would pull in winsock 1 */
 #include <windows.h>
 #include "aether_ui_backend.h"
 
@@ -499,6 +500,92 @@ static void native_controls_remember_their_theme_family(void) {
               "retheme: a field records the edit theme family");
 }
 
+// The driver answers a request ON THE UI THREAD. Its reads used to run on the
+// HTTP thread: the text hook copied a widget's text_cache, which the UI
+// thread frees and replaces on every text change (a use-after-free whenever a
+// spec read a field while it changed), and AppKit's identical arrangement
+// crashed sae-driver (2026-11-05). So a request must wait while the UI thread
+// is busy and be answered once it pumps messages again. GET /focus is the
+// probe because nothing in it sends a message of its own (a field's /widget
+// read sends EM_GETSEL, which waited for this thread before the fix too):
+// with the reads on the HTTP thread, its answer arrived while this one slept.
+typedef struct { int port; char path[128]; char buf[4096]; volatile LONG done; } DrvGet;
+
+static DWORD WINAPI drv_get_thread(LPVOID p) {
+    DrvGet* g = (DrvGet*)p;
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+    int got = 0;
+    for (int attempt = 0; attempt < 100 && !got; attempt++) {   // the server starts on its own thread
+        SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_port = htons((unsigned short)g->port);
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
+            closesocket(s);
+            Sleep(20);
+            continue;
+        }
+        char req[192];
+        snprintf(req, sizeof(req), "GET %s HTTP/1.0\r\n\r\n", g->path);
+        send(s, req, (int)strlen(req), 0);
+        int n = 0, r;
+        while ((r = recv(s, g->buf + n, (int)sizeof(g->buf) - 1 - n, 0)) > 0) n += r;
+        g->buf[n] = '\0';
+        closesocket(s);
+        got = 1;
+    }
+    WSACleanup();
+    InterlockedExchange(&g->done, 1);
+    return 0;
+}
+
+static void drv_pump_until(volatile LONG* done, DWORD ms) {
+    DWORD until = GetTickCount() + ms;
+    while ((!done || !*done) && GetTickCount() < until) {
+        MSG m;
+        while (PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        Sleep(10);
+    }
+}
+
+static void driver_requests_are_answered_on_the_ui_thread(void) {
+    int stack = aether_ui_vstack_create(0);
+    int field = aether_ui_textfield_create("", NULL);
+    aether_ui_widget_add_child_ctx((void*)(intptr_t)stack, field);
+    aether_ui_textfield_set_text(field, "on the ui thread");
+    const char* ps = getenv("AETHER_UI_TEST_PORT");
+    int port = (ps && atoi(ps) > 0) ? atoi(ps) : 9437;
+    aether_ui_enable_test_server_impl(port, stack);
+    drv_pump_until(NULL, 300);   // what the new tree owes, before the probe
+
+    static DrvGet focus, text;
+    focus.port = text.port = port;
+    snprintf(focus.path, sizeof(focus.path), "/focus");
+    snprintf(text.path, sizeof(text.path), "/widget/%d", field);
+
+    HANDLE t = CreateThread(NULL, 0, drv_get_thread, &focus, 0, NULL);
+    Sleep(1500);   // busy: no messages pumped
+    expect_eq((unsigned)focus.done, 0u,
+              "driver: a request waits while the UI thread is busy");
+    drv_pump_until(&focus.done, 10000);
+    expect_eq((unsigned)focus.done, 1u,
+              "driver: the request is answered once the UI thread pumps");
+    if (t) { WaitForSingleObject(t, 5000); CloseHandle(t); }
+
+    t = CreateThread(NULL, 0, drv_get_thread, &text, 0, NULL);
+    drv_pump_until(&text.done, 10000);
+    int has_text = strstr(text.buf, "\"text\":\"on the ui thread\"") != NULL;
+    expect_eq((unsigned)has_text, 1u, "driver: a field's text read there");
+    if (!has_text) printf("       the answer: %.300s\n", text.buf);
+    if (t) { WaitForSingleObject(t, 5000); CloseHandle(t); }
+}
+
 int main(void) {
     // Unbuffered: under Wine a fault would otherwise discard everything this
     // has printed, which is exactly the run you most need the output from.
@@ -518,6 +605,7 @@ int main(void) {
     focus_ring_shows_after_keyboard_navigation();
     tab_strip_is_one_stop_walked_by_arrows();
     native_controls_remember_their_theme_family();
+    driver_requests_are_answered_on_the_ui_thread();
 
     if (failures) {
         printf("%d assertion(s) failed\n", failures);

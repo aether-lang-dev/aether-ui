@@ -1517,6 +1517,46 @@ if [ "$SPEC_OK" -eq 1 ]; then
 fi
 
 echo
+echo "=== Phase 5e5c: AetherUIDriver reads run on the UI thread (Tab vs text reads) ==="
+# Two clients read the text fields while a third moves the focus through them
+# (tests/driver_threads). AppKit's hooks used to read widgets on the HTTP
+# thread: -[NSTextField stringValue] during a Tab autoreleased there an object
+# the main thread freed, and sae-driver died in objc_release (2026-11-05). On
+# macOS the app runs under NSZombieEnabled, and under the Main Thread Checker
+# when Xcode's is installed, which aborts the app at the first AppKit call
+# off main: the old code failed here on its first request, every run.
+_dt_prefix="$LAUNCH_PREFIX"
+if [ "$PLATFORM" = macos ]; then
+    _mtc=""
+    _xc="$(xcode-select -p 2>/dev/null || true)"
+    [ -n "$_xc" ] && [ -f "$_xc/usr/lib/libMainThreadChecker.dylib" ] \
+        && _mtc="$_xc/usr/lib/libMainThreadChecker.dylib"
+    LAUNCH_PREFIX="env NSZombieEnabled=YES MallocScribble=1"
+    if [ -n "$_mtc" ]; then
+        LAUNCH_PREFIX="$LAUNCH_PREFIX DYLD_INSERT_LIBRARIES=$_mtc MTC_CRASH_ON_REPORT=1"
+    else
+        echo "  (no Xcode Main Thread Checker: zombies only)"
+    fi
+fi
+if [ "$SPEC_OK" -eq 1 ]; then
+    if run_server_test "$(EX_BIN focus_order_demo)" \
+                       "$SCRIPT_DIR/tests/driver_threads/run.sh" driver_threads; then
+        if grep -q "Main Thread Checker\|message sent to deallocated" \
+                "/tmp/ci_driver_threads.app.log" 2>/dev/null; then
+            echo "  FAIL: the app reported a thread violation:"
+            grep -m3 "Main Thread Checker\|message sent to deallocated" \
+                "/tmp/ci_driver_threads.app.log" | sed 's/^/       /'
+            FAIL=$((FAIL + 1))
+        fi
+    else
+        grep -m3 "Main Thread Checker\|message sent to deallocated" \
+            "/tmp/ci_driver_threads.app.log" 2>/dev/null | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+fi
+LAUNCH_PREFIX="$_dt_prefix"
+
+echo
 echo "=== Phase 5e6: AetherUIDriver image fill-mode spec ==="
 # Issue #16: how a picture fills a box it does not match. Also pins the
 # DEFAULT, which the two toolkits disagree about on their own (GtkPicture

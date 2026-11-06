@@ -315,6 +315,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moved after a `SetWindowPos` stops. `examples/splitreenter_demo` +
   `tests/splitreenter_demo`.
 
+- **AppKit and Win32: the driver read widgets off the UI thread, and AppKit
+  crashed for it.** sae-driver died in `objc_release` while spraedsheet's
+  spec_sheet walked Tab (2026-11-05): the driver's HTTP thread read
+  `-[NSTextField stringValue]` while the main thread put a field editor away,
+  and its per-request autorelease pool released an object the main thread had
+  already freed. The two backends answered reads on the HTTP thread on the
+  belief that their toolkits tolerate it; the Main Thread Checker flags every
+  AppKit hook (16 distinct calls in one `/widgets`), and Win32's text hook
+  copied a `text_cache` that the UI thread frees on every text change. Both
+  now supply `run_on_ui_thread`, as GTK4, UIKit and Android did, so every
+  request is answered on the UI thread; the shared server reads the request on
+  its own thread first, so a slow client does not hold the UI in `recv`.
+  AppKit's screenshot no longer `dispatch_sync`s onto main from main.
+  `tests/driver_threads` (ci.sh Phase 5e5c) keeps two readers on
+  focus_order_demo's text fields while a third client Tabs through them,
+  under NSZombieEnabled and the Main Thread Checker on macOS: the old code
+  aborted on the first request, or trapped on a zombie within a second; the
+  Win32 runtime test (Wine) checks a request waits for a busy UI thread.
+
 - **GTK: a widget with edge insets reported its box shifted and grown by
   them.** The driver's x/y/w/h for a widget given `edge_insets` (directly or
   by a style sheet's `st_insets`) took `gtk_widget_compute_bounds` and
