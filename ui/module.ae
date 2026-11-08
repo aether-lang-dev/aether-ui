@@ -14,7 +14,7 @@ exports (
     root_vstack, root_hstack,
     window, window_run, render_to, record, surface_diagnostics,
     register_deferred_flush, canvas_on_resize, canvas_on_click, canvas_on_right_click, canvas_on_double_click, canvas_on_move, canvas_on_key,
-    canvas_on_key_release, canvas_on_release,
+    canvas_on_key_release, canvas_on_text, canvas_on_release,
     _surface_window_factory, _surface_render_factory, _surface_record_factory,
     app_run, app_create, app_start,
     vstack, hstack, scrollview, zstack, zstack_place, click_through, form, section, navstack,
@@ -221,6 +221,7 @@ extern aether_ui_canvas_on_double_click_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_move_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_key_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_key_release_impl(canvas_id: int, boxed_closure: ptr)
+extern aether_ui_canvas_on_text_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_release_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_on_scroll_impl(canvas_id: int, boxed_closure: ptr)
 extern aether_ui_canvas_gesture_probe_impl(canvas_id: int, boxed_closure: ptr)
@@ -1110,6 +1111,27 @@ canvas_on_key(cid: int, cb: fn) {
 canvas_on_key_release(cid: int, cb: fn) {
     boxed = box_closure(cb)
     aether_ui_canvas_on_key_release_impl(cid, boxed)
+}
+
+// canvas_on_text(cid, cb) — fire cb(text) for each piece of text the user
+// commits while the canvas has keyboard focus: the characters as the keyboard
+// layout, a dead key or an input method produce them ("A" with shift, ","
+// "é" through a dead key, a whole word from an IME), never a key name.
+// Delivered beside canvas_on_key, which still reports the keys themselves
+// (Left, BackSpace, Tab); control characters (Return, Tab, BackSpace, Escape,
+// Ctrl+letter) are keys, not text, and never arrive here. A canvas that
+// draws its own text field reads the text from here and the editing keys
+// from canvas_on_key.
+//
+// REAL ON EVERY BACKEND: GTK4 a GtkIMContext's commit, AppKit insertText:
+// (the canvas view is an NSTextInputClient, so dead keys and input methods
+// compose), Win32 WM_CHAR (surrogate pairs joined), UIKit insertText: (the
+// canvas a UIKeyInput while it has a text handler, so the software keyboard
+// can type into it), Android the view's InputConnection commitText. The
+// driver's POST /canvas/{id}/text?s= delivers to the same closure.
+canvas_on_text(cid: int, cb: fn) {
+    boxed = box_closure(cb)
+    aether_ui_canvas_on_text_impl(cid, boxed)
 }
 
 // canvas_on_release(cid, cb) — fire cb(x, y) (canvas-local px) when the pointer

@@ -1,0 +1,135 @@
+// spec_canvasinput_demo.ae — drives the canvasinput_demo example.
+//
+// Canvas ids (the driver's /canvas/{id}): 1..8 the filler canvases, 9 "bare"
+// (no handlers), 10 "input" (on_key, on_key_release, on_text), 11 "other".
+//
+// ?real=1 asks for the platform's own events. Win32 posts WM_KEYDOWN/KEYUP,
+// WM_CHAR and sends WM_MOUSEWHEEL to the canvas, so the key goes through the
+// message loop (the dialog manager, TranslateMessage) as a keystroke does;
+// AppKit sends an NSEvent through -keyDown:, so the text comes from
+// interpretKeyEvents: and insertText:. A backend that cannot make the event
+// calls the closure, and the steps that need the platform to turn a key into
+// text are asserted only where it can (real_text_from_keys).
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/canvasinput_demo &
+//   UI_SPEC=canvasinput_demo/spec_canvasinput_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os
+
+// The text of the label that starts with `prefix` ("" when there is none).
+label(prefix: string) -> string {
+    b = uidriver.get_body("/widgets")
+    key = string.concat("\"text\":\"", prefix)
+    i = string.string_index_of(b, key)
+    if i < 0 { return "" }
+    rest = string.string_substring(b, i + 8, string.length(b))
+    j = string.string_index_of(rest, "\"")
+    if j < 0 { return "" }
+    return string.string_substring(rest, 0, j)
+}
+
+// Wait (up to ~4 s) for the label starting `prefix` to read `want`: a real
+// key is posted, and handled when the app's loop gets to it.
+wait_label(prefix: string, want: string) -> string {
+    i = 0
+    got = label(prefix)
+    while i < 25 {
+        if string.equals(got, want) == 1 { return got }
+        sleep(150)
+        got = label(prefix)
+        i = i + 1
+    }
+    return got
+}
+
+alive() -> int { return uidriver.get_status("/widgets") }
+
+backend() -> string {
+    b = label("backend: ")
+    return string.string_substring(b, 9, string.length(b))
+}
+
+// Backends whose driver turns a key into the platform's key event, so the
+// platform makes the text (and Tab goes through its focus handling).
+real_keys() -> int {
+    be = backend()
+    if string.equals(be, "win32") == 1 { return 1 }
+    if string.equals(be, "macos") == 1 { return 1 }
+    return 0
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a canvas with no input handlers (#213)") {
+        spec.it("survives a real wheel turn, which it does not handle") callback {
+            code = uidriver.post_status("/canvas/9/scroll?dx=0&dy=1&real=1")
+            spec.assert_eq(code, 404, "no scroll handler: 404")
+            spec.assert_eq(alive(), 200, "the app still answers")
+        }
+        spec.it("survives a real key release, which it does not handle") callback {
+            code = uidriver.post_status("/canvas/9/keyup?name=a&real=1")
+            spec.assert_eq(code, 404, "no key-up handler: 404")
+            sleep(300)
+            spec.assert_eq(alive(), 200, "the app still answers")
+        }
+        spec.it("has no text handler either") callback {
+            spec.assert_eq(uidriver.post_status("/canvas/9/text?s=x"), 404, "no text handler: 404")
+        }
+    }
+
+    spec.describe(fw, "canvas keys and text (#214)") {
+        spec.it("Shift+A is the key A and the text A") callback {
+            uidriver.post_ok("/canvas/10/key?name=A&real=1", "POST key A")
+            spec.assert_str_eq(wait_label("keys:", "keys: A"), "keys: A", "the key's name keeps Shift")
+            if real_keys() == 1 {
+                spec.assert_str_eq(wait_label("text:", "text:A"), "text:A", "the text the key typed")
+            }
+        }
+        spec.it("punctuation is a key too: comma, and Shift+1 is exclam") callback {
+            uidriver.post_ok("/canvas/10/key?name=comma&real=1", "POST key comma")
+            uidriver.post_ok("/canvas/10/key?name=exclam&real=1", "POST key exclam")
+            spec.assert_str_eq(wait_label("keys:", "keys: A comma exclam"),
+                               "keys: A comma exclam", "both delivered, named as GDK names them")
+            if real_keys() == 1 {
+                spec.assert_str_eq(wait_label("text:", "text:A,!"), "text:A,!",
+                                   "and typed as , and !")
+            }
+        }
+        spec.it("Tab reaches a key canvas that was not registered last") callback {
+            uidriver.post_ok("/canvas/10/key?name=Tab&real=1", "POST key Tab")
+            spec.assert_str_eq(wait_label("keys:", "keys: A comma exclam Tab"),
+                               "keys: A comma exclam Tab", "Tab is the canvas's")
+        }
+        spec.it("control keys are keys, not text") callback {
+            uidriver.post_ok("/canvas/10/key?name=BackSpace&real=1", "POST key BackSpace")
+            spec.assert_str_eq(wait_label("keys:", "keys: A comma exclam Tab BackSpace"),
+                               "keys: A comma exclam Tab BackSpace", "BackSpace is a key")
+            sleep(300)
+            if real_keys() == 1 {
+                spec.assert_str_eq(label("text:"), "text:A,!", "and typed nothing")
+            }
+        }
+        spec.it("key releases carry the same names") callback {
+            uidriver.post_ok("/canvas/10/keyup?name=A&real=1", "POST keyup A")
+            uidriver.post_ok("/canvas/10/keyup?name=comma&real=1", "POST keyup comma")
+            spec.assert_str_eq(wait_label("up:", "up: A comma"), "up: A comma", "each release, by its name")
+        }
+        spec.it("text arrives as committed, joined across code units") callback {
+            // Last of the key steps: on AppKit the text is typed as a key
+            // that produces it, and canvas_on_key hears that key too.
+            before = label("text:")
+            uidriver.post_ok("/canvas/10/text?s=%C3%A9%F0%9F%98%80&real=1", "POST text")
+            want = string.concat(before, "é😀")
+            spec.assert_str_eq(wait_label("text:", want), want, "é and an astral character, whole")
+        }
+        spec.it("the driver's plain text route calls the same closure") callback {
+            uidriver.post_ok("/canvas/10/text?s=ok", "POST text")
+            spec.assert_true(string.ends_with(wait_label("text:", "x"), "ok") == 1, "text appended")
+        }
+    }
+    return spec.run_summary(fw)
+}

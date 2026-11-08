@@ -6363,6 +6363,11 @@ typedef struct {
     // on_double_click on shapes.
     AeClosure* on_right_click;
     AeClosure* on_double_click;
+    // Text input (canvas_on_text, #214): what the input method commits, a
+    // dead key's composition or an IME's word included. `im` is created on
+    // registration and fed every key of the canvas.
+    AeClosure* on_text;
+    GtkIMContext* im;
     // read_pixel replay cache: one rendered surface per (generation,
     // cmd-count, size). gen bumps on canvas_clear (each frame rebuild);
     // within a generation the command list only grows, so gen+count
@@ -7395,6 +7400,9 @@ int aether_ui_canvas_create_impl(int width, int height) {
         canvas_states = realloc(canvas_states, sizeof(CanvasState) * canvas_state_capacity);
     }
     CanvasState* cs = &canvas_states[canvas_state_count];
+    // realloc does not zero; a field added later starts NULL without being
+    // listed below (the Win32 table missed two that way, #213).
+    memset(cs, 0, sizeof *cs);
     cs->cmds = NULL;
     cs->count = 0;
     cs->capacity = 0;
@@ -7921,6 +7929,83 @@ void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     g_signal_connect(keys, "key-released", G_CALLBACK(on_canvas_key_release),
                      boxed_closure);
     gtk_widget_add_controller(w, keys);
+}
+
+// Text input on a canvas (#214): a GtkIMContext (the multicontext, so the
+// user's input method: GtkIMContextSimple's dead keys and compose
+// sequences, IBus, ...) fed every key event of the canvas, its "commit" the
+// text. The feeding controller runs in the CAPTURE phase, before the
+// canvas's own key controllers, and never stops the event, so
+// canvas_on_key still hears every key (a dead key as "dead_acute") and
+// this only adds the text beside it. Control characters are never
+// committed: Return, Tab and BackSpace stay keys.
+static void on_canvas_im_commit(GtkIMContext* im, const char* str, gpointer data) {
+    (void)im;
+    CanvasState* cs = get_canvas_state((int)(intptr_t)data);
+    if (!cs || !cs->on_text || !cs->on_text->fn || !str || !str[0]) return;
+    ((void(*)(void*, const char*))cs->on_text->fn)(cs->on_text->env, str);
+}
+
+static gboolean on_canvas_im_key(GtkEventControllerKey* ctrl, guint keyval,
+                                 guint keycode, GdkModifierType state, gpointer data) {
+    (void)keyval; (void)keycode; (void)state;
+    CanvasState* cs = get_canvas_state((int)(intptr_t)data);
+    GdkEvent* ev = gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(ctrl));
+    if (cs && cs->im && ev) gtk_im_context_filter_keypress(cs->im, ev);
+    return FALSE;   // the canvas's key handlers still get the key
+}
+
+static void on_canvas_im_key_up(GtkEventControllerKey* ctrl, guint keyval,
+                                guint keycode, GdkModifierType state, gpointer data) {
+    on_canvas_im_key(ctrl, keyval, keycode, state, data);
+}
+
+static void on_canvas_im_focus_in(GtkEventControllerFocus* f, gpointer data) {
+    (void)f;
+    CanvasState* cs = get_canvas_state((int)(intptr_t)data);
+    if (cs && cs->im) gtk_im_context_focus_in(cs->im);
+}
+
+static void on_canvas_im_focus_out(GtkEventControllerFocus* f, gpointer data) {
+    (void)f;
+    CanvasState* cs = get_canvas_state((int)(intptr_t)data);
+    if (cs && cs->im) gtk_im_context_focus_out(cs->im);
+}
+
+void aether_ui_canvas_on_text_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_text = (AeClosure*)boxed_closure;
+    if (cs->im) return;   // a second registration replaces the closure only
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return;
+    gpointer id = (gpointer)(intptr_t)canvas_id;
+    cs->im = gtk_im_multicontext_new();
+    gtk_im_context_set_client_widget(cs->im, w);
+    gtk_im_context_set_use_preedit(cs->im, FALSE);
+    g_signal_connect(cs->im, "commit", G_CALLBACK(on_canvas_im_commit), id);
+
+    GtkEventController* keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+    g_signal_connect(keys, "key-pressed", G_CALLBACK(on_canvas_im_key), id);
+    g_signal_connect(keys, "key-released", G_CALLBACK(on_canvas_im_key_up), id);
+    gtk_widget_add_controller(w, keys);
+
+    GtkEventController* focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "enter", G_CALLBACK(on_canvas_im_focus_in), id);
+    g_signal_connect(focus, "leave", G_CALLBACK(on_canvas_im_focus_out), id);
+    gtk_widget_add_controller(w, focus);
+
+    // Take the keyboard as canvas_on_key does: focusable, focus on map and
+    // on a click.
+    gtk_widget_set_focusable(w, TRUE);
+    g_signal_connect(w, "map", G_CALLBACK(on_canvas_map_focus), NULL);
+    if (gtk_widget_get_mapped(w)) gtk_widget_grab_focus(w);
+    GtkGesture* fclick = gtk_gesture_click_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(fclick),
+                                               GTK_PHASE_CAPTURE);
+    g_signal_connect(fclick, "pressed", G_CALLBACK(on_canvas_focus_click), w);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(fclick));
 }
 
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
@@ -10027,6 +10112,20 @@ static gboolean canvas_keyup_idle(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+// The driver's POST /canvas/{id}/text: the same closure a commit reaches.
+static gboolean canvas_text_idle(gpointer data) {
+    CanvasKeyAction* a = (CanvasKeyAction*)data;
+    CanvasState* cs = get_canvas_state(a->canvas_id);
+    if (cs && cs->on_text && cs->on_text->fn) {
+        ((void(*)(void*, const char*))cs->on_text->fn)(cs->on_text->env, a->name);
+        a->result = 0;
+    } else {
+        a->result = 3;
+    }
+    a->done = 1;
+    return G_SOURCE_REMOVE;
+}
+
 // Shutdown — destroy the top-level window on the GTK thread. GtkApplication
 // ends its run loop when the last window goes, so the process exits by the
 // SAME teardown path as a user closing the window. This is how test
@@ -10845,6 +10944,14 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             ka.canvas_id = ctx->handle;
             strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
             canvas_keyup_idle(&ka);
+            ctx->result = ka.result; ctx->done = 1;
+            return;
+        }
+        case AETHER_DRV_CANVAS_TEXT: {
+            CanvasKeyAction ka = {0};
+            ka.canvas_id = ctx->handle;
+            strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
+            canvas_text_idle(&ka);
             ctx->result = ka.result; ctx->done = 1;
             return;
         }

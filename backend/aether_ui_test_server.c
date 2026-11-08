@@ -1511,6 +1511,11 @@ static void handle_request_inner(aether_sock_t client_fd,
         } else if (strstr(path, "/scroll")) {
             ctx.action = AETHER_DRV_CANVAS_SCROLL;
             what = "no canvas scroll handler";
+        } else if (strstr(path, "/text")) {
+            // POST /canvas/{id}/text?s= -- text committed to the canvas, as a
+            // keyboard layout, a dead key or an input method commits it.
+            ctx.action = AETHER_DRV_CANVAS_TEXT;
+            what = "no canvas text handler";
         } else if (strstr(path, "/key")) {
             ctx.action = AETHER_DRV_CANVAS_KEY;
             what = "no canvas key handler";
@@ -1530,6 +1535,15 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (dxs) ctx.dval  = atof(dxs);
         if (dys) ctx.dval2 = atof(dys);
         query_param_decoded(path, "name", ctx.sval, sizeof(ctx.sval), 1);
+        if (ctx.action == AETHER_DRV_CANVAS_TEXT)
+            query_param_decoded(path, "s", ctx.sval, sizeof(ctx.sval), 1);
+        // ?real=1 on /key, /keyup, /text and /scroll: through the platform's
+        // own event path where the backend can make one (AppKit a key event
+        // through the window to the canvas, Win32 the key, char and wheel
+        // messages), as /click's, rather than the closure called; a backend
+        // that cannot calls the closure.
+        const char* rq = extract_query_param(path, "real");
+        aether_ui_driver_real_events_now = rq && atoi(rq) ? 1 : 0;
         // A right click's menu (a vg shape's, a canvas's) is recorded, not
         // shown, as a widget's secondary click's is: AppKit's and Win32's
         // popups would hold this reply in their own modal loop.
@@ -1539,10 +1553,6 @@ static void handle_request_inner(aether_sock_t client_fd,
             aether_ui_last_popup_anchor = 0;
             aether_ui_secondary_from_driver = 1;
         }
-        // ?real=1 on /key and /keyup: a real key event to the canvas, where
-        // the backend can make one (AppKit), as /click's.
-        const char* rq = extract_query_param(path, "real");
-        aether_ui_driver_real_events_now = rq && atoi(rq) ? 1 : 0;
         h->dispatch_action(&ctx);
         aether_ui_driver_real_events_now = 0;
         if (right) aether_ui_secondary_from_driver = 0;

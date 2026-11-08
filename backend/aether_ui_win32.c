@@ -10239,6 +10239,8 @@ typedef struct {
     AeClosure* on_key_release; // key-up hook (same key names)
     AeClosure* on_resize;  // |w, h| — fired from WM_SIZE (canvas rescale)
     AeClosure* on_canvas_scroll; // wheel / precision scroll (dx,dy)
+    AeClosure* on_text;    // committed text (WM_CHAR, UTF-8), canvas_on_text
+    WCHAR text_high;       // a WM_CHAR high surrogate waiting for its low half
     // Last-paint metrics for the compositor instrumentation
     // (GET /canvas/{id}/debug). `last_paint_area` is the pixel area the
     // last paint covered: the summed clip-rect area when the paint was
@@ -10282,9 +10284,19 @@ static void aeui_focus_pending_key_canvas(void) {
     }
 }
 
+// A canvas that takes the keyboard: one with a key or text handler. Its
+// keystrokes go straight to it, Tab, Return and Escape included, as on GTK4
+// and AppKit, where a canvas with a key handler consumes them (#214). This
+// used to be only the canvas registered LAST, so with two key canvases (a 3D
+// view and a colour picker) the dialog manager took Tab from the first.
 static int aeui_hwnd_is_key_canvas(HWND hwnd) {
-    return pending_key_canvas >= 1 && pending_key_canvas <= canvas_count &&
-           hwnd == canvases[pending_key_canvas - 1].hwnd;
+    if (!hwnd) return 0;
+    for (int i = 0; i < canvas_count; i++) {
+        if (canvases[i].hwnd == hwnd)
+            return (canvases[i].on_key && canvases[i].on_key->fn)
+                || (canvases[i].on_text && canvases[i].on_text->fn);
+    }
+    return 0;
 }
 
 static void canvas_free_text(int canvas_id);  // fwd; frees FILL_TEXT strings
@@ -10317,37 +10329,15 @@ int aether_ui_canvas_create_impl(int width, int height) {
         canvases = (Canvas*)realloc(canvases, sizeof(Canvas) * canvas_cap);
     }
     Canvas* cv = &canvases[canvas_count++];
+    /* realloc above does not zero the new slots, and a hand-written list of
+       fields to clear missed on_canvas_scroll and on_key_release (#213): a
+       canvas with no scroll handler then crashed on the first wheel turn over
+       it, reading a stale pointer. Zero the whole slot so a field added to
+       Canvas later starts NULL/0 without anyone remembering to list it. */
+    memset(cv, 0, sizeof *cv);
     cv->hwnd = h;
     cv->width = width;
     cv->height = height;
-    cv->cmds = NULL;
-    cv->cmd_count = 0;
-    cv->cmd_cap = 0;
-    cv->cur_x = cv->cur_y = 0;
-    cv->on_move = NULL;
-    cv->on_click = NULL;
-    cv->on_release = NULL;
-    cv->on_right_click = NULL;
-    cv->on_double_click = NULL;
-    cv->on_key = NULL;
-    cv->on_resize = NULL;
-    cv->paint_clip_rects = NULL;
-    cv->paint_clip_count = 0;
-    cv->paint_clip_cap = 0;
-    // realloc above does not zero, so the metrics need explicit init like
-    // every other field here.
-    cv->last_paint_w = 0;
-    cv->last_paint_h = 0;
-    cv->last_paint_area = 0;
-    cv->last_paint_count = 0;
-    cv->full_paints = 0;
-    cv->clip_paints = 0;
-    cv->last_clip_area = 0;
-    cv->rp_dc = NULL;
-    cv->rp_bmp = NULL;
-    cv->rp_old_bmp = NULL;
-    cv->rp_gen = 0;
-    cv->rp_cache_gen = 0;
     cv->rp_cache_count = -1;
     cv->rp_cache_w = 0;
     cv->rp_cache_h = 0;
@@ -10652,6 +10642,53 @@ void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
 void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
     canvases[canvas_id - 1].on_key_release = (AeClosure*)boxed_closure;
+}
+
+// Text input on a canvas (#214): WM_CHAR, which TranslateMessage makes from
+// the key with the keyboard layout, dead keys and Shift applied, and which
+// an IME's result string arrives as too (DefWindowProc turns WM_IME_CHAR into
+// WM_CHAR). Control characters are keys, not text: Return, Tab, BackSpace,
+// Escape and Ctrl+letter stay with canvas_on_key. Like on_key, the canvas
+// becomes a tab stop that takes the keyboard.
+void aether_ui_canvas_on_text_impl(int canvas_id, void* boxed_closure) {
+    if (canvas_id < 1 || canvas_id > canvas_count || !boxed_closure) return;
+    Canvas* cv = &canvases[canvas_id - 1];
+    cv->on_text = (AeClosure*)boxed_closure;
+    cv->text_high = 0;
+    LONG_PTR st = GetWindowLongPtrW(cv->hwnd, GWL_STYLE);
+    SetWindowLongPtrW(cv->hwnd, GWL_STYLE, st | WS_TABSTOP);
+    if (!pending_key_canvas) pending_key_canvas = canvas_id;
+}
+
+// One WM_CHAR code unit for a canvas: surrogate pairs joined, control
+// characters dropped, the text handed over as UTF-8. 1 if it was text.
+static int w32_canvas_char(Canvas* cv, WCHAR u) {
+    if (!cv->on_text || !cv->on_text->fn) return 0;
+    unsigned cp;
+    if (u >= 0xD800 && u <= 0xDBFF) { cv->text_high = u; return 1; }
+    if (u >= 0xDC00 && u <= 0xDFFF) {
+        if (!cv->text_high) return 0;   // a low half on its own: nothing
+        cp = 0x10000 + (((unsigned)cv->text_high - 0xD800) << 10) + ((unsigned)u - 0xDC00);
+        cv->text_high = 0;
+    } else {
+        cv->text_high = 0;
+        cp = u;
+    }
+    if (cp < 0x20 || cp == 0x7F || (cp >= 0x80 && cp < 0xA0)) return 0;
+    char out[5];
+    int n = 0;
+    if (cp < 0x80) { out[n++] = (char)cp; }
+    else if (cp < 0x800) { out[n++] = (char)(0xC0 | (cp >> 6)); out[n++] = (char)(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) {
+        out[n++] = (char)(0xE0 | (cp >> 12)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[n++] = (char)(0x80 | (cp & 0x3F));
+    } else {
+        out[n++] = (char)(0xF0 | (cp >> 18)); out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); out[n++] = (char)(0x80 | (cp & 0x3F));
+    }
+    out[n] = '\0';
+    ((void(*)(void*, const char*))cv->on_text->fn)(cv->on_text->env, out);
+    return 1;
 }
 
 // Pointer-release on a canvas: WM_LBUTTONUP → (x,y) into the closure.
@@ -13545,35 +13582,13 @@ int aether_ui_canvas_read_pixel_impl(int canvas_id, int px, int py,
     return (255 << 24) | (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c);
 }
 
-// Map a Win32 virtual-key code to the GDK key name the app-side handlers
-// expect (gp/falling_blocks compare against GDK's "Left"/"Return"/"space"…).
-// Returns a static string; writes single letters/digits into `buf`.
-static const char* vk_to_gdk_name(WPARAM vk, char* buf, int buflen) {
-    switch (vk) {
-        case VK_LEFT:   return "Left";
-        case VK_RIGHT:  return "Right";
-        case VK_UP:     return "Up";
-        case VK_DOWN:   return "Down";
-        case VK_RETURN: return "Return";
-        case VK_ESCAPE: return "Escape";
-        case VK_DELETE: return "Delete";
-        case VK_BACK:   return "BackSpace";
-        case VK_TAB:    return "Tab";
-        case VK_SPACE:  return "space";
-        case VK_HOME:   return "Home";
-        case VK_END:    return "End";
-        case VK_PRIOR:  return "Page_Up";
-        case VK_NEXT:   return "Page_Down";
-        default: break;
-    }
-    // Letters (A-Z) and digits (0-9): GDK reports the lowercase char.
-    if ((vk >= 'A' && vk <= 'Z')) {
-        if (buflen >= 2) { buf[0] = (char)(vk + 32); buf[1] = '\0'; return buf; }
-    }
-    if ((vk >= '0' && vk <= '9')) {
-        if (buflen >= 2) { buf[0] = (char)vk; buf[1] = '\0'; return buf; }
-    }
-    return "";
+// A canvas names its keys as window_on_key does (w32_key_from_msg): what the
+// key types with Shift and the layout, named as GDK names it -- "A" for
+// Shift+A, "comma", "exclam" -- and F1..F24. It used to keep a table of its
+// own that lower-cased every letter and dropped every punctuation key (#214).
+static int w32_canvas_key_name(WPARAM vk, char* name, int namesize) {
+    char combo[64];
+    return w32_key_from_msg(vk, combo, sizeof(combo), name, namesize) >= 0;
 }
 
 static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -13732,18 +13747,25 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         case WM_GETDLGCODE:
             // Claim arrow keys and character keys so they arrive as WM_KEYDOWN
             // here (canvas nav) instead of being eaten by dialog navigation.
-            // NOT Tab — Tab must still move focus between the app's widgets.
-            // (Return/Escape reach WM_KEYDOWN via the message loop, which only
-            // special-cases Tab for IsDialogMessage.)
+            // A canvas with a key or text handler takes every key, Tab too,
+            // as GTK4's and AppKit's do (#214): a game's menu tabs through
+            // its own items. One without keeps Tab moving the focus on.
+            if (aeui_hwnd_is_key_canvas(hwnd))
+                return DLGC_WANTALLKEYS | DLGC_WANTARROWS | DLGC_WANTCHARS | DLGC_WANTTAB;
             return DLGC_WANTARROWS | DLGC_WANTCHARS;
+        case WM_CHAR: {
+            int cid = canvas_id_for_hwnd(hwnd);
+            if (cid >= 1 && w32_canvas_char(&canvases[cid - 1], (WCHAR)wp)) return 0;
+            if (cid >= 1 && canvases[cid - 1].on_text) return 0;  // a control char: no beep
+            break;
+        }
         case WM_KEYDOWN: {
             int cid = canvas_id_for_hwnd(hwnd);
             if (cid >= 1) {
                 Canvas* cv = &canvases[cid - 1];
                 if (cv->on_key && cv->on_key->fn) {
-                    char buf[8];
-                    const char* name = vk_to_gdk_name(wp, buf, sizeof(buf));
-                    if (name[0]) {
+                    char name[64];
+                    if (w32_canvas_key_name(wp, name, sizeof(name))) {
                         ((void(*)(void*, const char*))cv->on_key->fn)(
                             cv->on_key->env, name);
                     }
@@ -13758,9 +13780,8 @@ static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             if (cid >= 1) {
                 Canvas* cv = &canvases[cid - 1];
                 if (cv->on_key_release && cv->on_key_release->fn) {
-                    char buf[8];
-                    const char* name = vk_to_gdk_name(wp, buf, sizeof(buf));
-                    if (name[0]) {
+                    char name[64];
+                    if (w32_canvas_key_name(wp, name, sizeof(name))) {
                         ((void(*)(void*, const char*))cv->on_key_release->fn)(
                             cv->on_key_release->env, name);
                     }
@@ -13955,6 +13976,57 @@ void aether_ui_clear_children_impl(int handle) {
 
 #define AE_WM_DRIVER (WM_USER + 0x42)
 #define AE_WM_FILEDROP (WM_USER + 0x46)   // driver file drop → UI thread
+#define AE_WM_KEYSTATE (WM_USER + 0x48)   // a real driver key done: keyboard state back
+
+/* ?real=1 on the driver's canvas key routes: the key as a keyboard sends it.
+   The name is turned back into a virtual key (and Shift, when the layout
+   types it shifted: "A", "exclam"), the keyboard state set to match, and
+   WM_KEYDOWN (/key) or WM_KEYUP (/keyup) POSTED to the canvas, so it goes through the message
+   loop as a real keystroke does: the accelerators and window_on_key first,
+   the dialog manager or not (Tab), TranslateMessage turning the key into
+   WM_CHAR with the layout, then canvas_wnd_proc. The keyboard state is set
+   and put back by messages posted around the key (AE_WM_KEYSTATE), not when
+   the request arrives: two keys asked for back to back would otherwise both
+   be read with the second one's Shift. */
+static BYTE w32_drv_saved_keys[256];
+static int w32_drv_vk_for_name(const char* name, int* shift) {
+    static const struct { const char* n; int vk; } named[] = {
+        {"Left", VK_LEFT}, {"Right", VK_RIGHT}, {"Up", VK_UP}, {"Down", VK_DOWN},
+        {"Return", VK_RETURN}, {"Escape", VK_ESCAPE}, {"Tab", VK_TAB},
+        {"space", VK_SPACE}, {"BackSpace", VK_BACK}, {"Delete", VK_DELETE},
+        {"Home", VK_HOME}, {"End", VK_END}, {"Page_Up", VK_PRIOR}, {"Page_Down", VK_NEXT},
+    };
+    *shift = 0;
+    for (size_t i = 0; i < sizeof(named) / sizeof(named[0]); i++)
+        if (strcmp(name, named[i].n) == 0) return named[i].vk;
+    if (name[0] == 'F' && name[1] >= '1' && name[1] <= '9') {
+        int f = atoi(name + 1);
+        if (f >= 1 && f <= 24) return VK_F1 + f - 1;
+    }
+    int ch = 0;
+    if (name[0] && !name[1]) ch = (unsigned char)name[0];
+    else {
+        char nm[32];
+        for (int c = 0x21; c < 0x7F && !ch; c++)
+            if (aeui_keyname_for_char(c, nm, sizeof(nm)) && strcmp(nm, name) == 0) ch = c;
+    }
+    if (!ch) return 0;
+    SHORT r = VkKeyScanExW((WCHAR)ch, GetKeyboardLayout(0));
+    if (r == -1) return 0;
+    *shift = (HIBYTE(r) & 1) ? 1 : 0;
+    return LOBYTE(r);
+}
+static int w32_drv_post_key(HWND hwnd, const char* name, int down, int up) {
+    int shift = 0;
+    int vk = w32_drv_vk_for_name(name, &shift);
+    if (!vk) return 0;
+    UINT sc = MapVirtualKeyW((UINT)vk, MAPVK_VK_TO_VSC);
+    PostMessageW(driver_host_hwnd, AE_WM_KEYSTATE, 1, (LPARAM)(vk | (shift << 16)));
+    if (down) PostMessageW(hwnd, WM_KEYDOWN, (WPARAM)vk, (LPARAM)(1 | (sc << 16)));
+    if (up)   PostMessageW(hwnd, WM_KEYUP, (WPARAM)vk, (LPARAM)(1 | (sc << 16) | 0xC0000000u));
+    PostMessageW(driver_host_hwnd, AE_WM_KEYSTATE, 0, 0);
+    return 1;
+}
 // AE_WM_DBLCLICK (WM_USER + 0x47), defined at aether_ui_fire_double_click.
 
 static HWND driver_host_hwnd = NULL;   // declared earlier for the double-click hop
@@ -14236,6 +14308,20 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
     if (msg == AE_WM_DBLCLICK) {
         return aether_ui_fire_double_click((int)lp);
     }
+    if (msg == AE_WM_KEYSTATE) {
+        if (wp) {   /* before a driver key: its Shift, and the key held */
+            BYTE ks[256];
+            GetKeyboardState(w32_drv_saved_keys);
+            memcpy(ks, w32_drv_saved_keys, sizeof(ks));
+            int vk = (int)(lp & 0xFFFF), shift = (int)((lp >> 16) & 1);
+            ks[VK_SHIFT] = ks[VK_LSHIFT] = shift ? 0x80 : 0;
+            ks[vk] = 0x80;
+            SetKeyboardState(ks);
+        } else {    /* after it: the keyboard as it was */
+            SetKeyboardState(w32_drv_saved_keys);
+        }
+        return 0;
+    }
     if (msg == AE_WM_DRIVER) {
         AetherDriverActionCtx* ctx = (AetherDriverActionCtx*)lp;
         if (ctx->action == AETHER_DRV_SET_STATE) {
@@ -14479,15 +14565,61 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
             || ctx->action == AETHER_DRV_CANVAS_RELEASE
             || ctx->action == AETHER_DRV_CANVAS_KEY
             || ctx->action == AETHER_DRV_CANVAS_SCROLL
+            || ctx->action == AETHER_DRV_CANVAS_TEXT
             || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
             // Drive the canvas hit-test hooks directly, exactly as a real
             // WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_LBUTTONUP / WM_KEYDOWN would
             // (result 3 = "no such handler wired", so a spec can tell a missed
             // click from an unwired canvas).
             ctx->result = 3;
+            if (ctx->handle >= 1 && ctx->handle <= canvas_count
+                && aether_ui_driver_real_events_now
+                && (ctx->action == AETHER_DRV_CANVAS_KEY
+                    || ctx->action == AETHER_DRV_CANVAS_KEYUP
+                    || ctx->action == AETHER_DRV_CANVAS_SCROLL
+                    || ctx->action == AETHER_DRV_CANVAS_TEXT)) {
+                /* ?real=1: the platform's own messages, posted or sent to
+                   the canvas as Windows would deliver them; the result says
+                   whether a handler is there to hear them (3 when not), but
+                   the message goes either way -- a canvas with no handler
+                   must survive it (#213). */
+                Canvas* cv = &canvases[ctx->handle - 1];
+                HWND ch = cv->hwnd;
+                if (ctx->action == AETHER_DRV_CANVAS_SCROLL) {
+                    int wired = cv->on_canvas_scroll && cv->on_canvas_scroll->fn;
+                    POINT pt = {0, 0};
+                    ClientToScreen(ch, &pt);
+                    /* the DSL's dy < 0 is a push away, WM_MOUSEWHEEL's > 0 */
+                    short delta = (short)(-ctx->dval2 * WHEEL_DELTA);
+                    SendMessageW(ch, WM_MOUSEWHEEL, MAKEWPARAM(0, (WORD)delta),
+                                 MAKELPARAM((WORD)pt.x, (WORD)pt.y));
+                    ctx->result = wired ? 0 : 3;
+                } else if (ctx->action == AETHER_DRV_CANVAS_TEXT) {
+                    int wired = cv->on_text && cv->on_text->fn;
+                    WCHAR wbuf[256];
+                    int n = MultiByteToWideChar(CP_UTF8, 0, ctx->sval, -1, wbuf, 256);
+                    for (int i = 0; i + 1 < n; i++)
+                        PostMessageW(ch, WM_CHAR, (WPARAM)wbuf[i], 1);
+                    ctx->result = wired ? 0 : 3;
+                } else {
+                    int up = ctx->action == AETHER_DRV_CANVAS_KEYUP;
+                    AeClosure* k = up ? cv->on_key_release : cv->on_key;
+                    int wired = k && k->fn;
+                    ctx->result = w32_drv_post_key(ch, ctx->sval, !up, up)
+                                  ? (wired ? 0 : 3) : 3;
+                }
+                ctx->done = 1;
+                return 0;
+            }
             if (ctx->handle >= 1 && ctx->handle <= canvas_count) {
                 Canvas* cv = &canvases[ctx->handle - 1];
-                if (ctx->action == AETHER_DRV_CANVAS_MOVE) {
+                if (ctx->action == AETHER_DRV_CANVAS_TEXT) {
+                    if (cv->on_text && cv->on_text->fn) {
+                        ((void(*)(void*, const char*))cv->on_text->fn)(
+                            cv->on_text->env, ctx->sval);
+                        ctx->result = 0;
+                    }
+                } else if (ctx->action == AETHER_DRV_CANVAS_MOVE) {
                     if (cv->on_move && cv->on_move->fn) {
                         ((void(*)(void*, double, double))cv->on_move->fn)(
                             cv->on_move->env, ctx->dval, ctx->dval2);

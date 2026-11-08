@@ -1,0 +1,77 @@
+// Aether UI canvas-input example: canvas_on_key, canvas_on_key_release and
+// canvas_on_text, and a canvas with no input handlers at all.
+//
+// Two things a canvas that draws its own controls needs from the keyboard,
+// and they are different things:
+//   canvas_on_key(cv, |name|)   the KEY, by GDK name: "A" (Shift+A),
+//                               "comma", "exclam", "Tab", "Left", "BackSpace"
+//   canvas_on_text(cv, |text|)  the TEXT the user committed, as the layout,
+//                               a dead key or an input method made it:
+//                               "A", ",", "!", "é", a whole word from an IME
+// A game's text field (a player name, a chat line) reads text from the
+// second and its editing keys from the first.
+//
+// The first eight canvases fill the backend's first table of canvases, so
+// "bare", the ninth, lives in memory the table grew into (realloc): on Win32
+// a canvas there with no scroll or key-up handler crashed on the first wheel
+// turn when that memory held old bytes (#213). "other" registers a key handler AFTER "input", which on Win32 used
+// to leave Tab to the dialog manager on every key canvas but the last (#214).
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, hstack, text, root_vstack, canvas_create,
+    canvas_on_key, canvas_on_key_release, canvas_on_text,
+    enable_test_server_root, backend_name)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+main() {
+    keys = "keys:"
+    ups = "up:"
+    typed = "text:"
+    keys_label = 0
+    ups_label = 0
+    text_label = 0
+    input = 0
+    other = 0
+
+    main_root = root_vstack(6) {
+        text("Canvas input demo")
+        text(string.concat("backend: ", backend_name()))
+        keys_label = text("keys:")
+        ups_label = text("up:")
+        text_label = text("text:")
+        hstack(2) {
+            i = 0
+            while i < 8 {
+                canvas_create(8, 8)
+                i = i + 1
+            }
+        }
+        canvas_create(60, 20)             // "bare": no handlers at all
+        input = canvas_create(240, 60)     // keys and text
+        other = canvas_create(60, 20)      // a second key canvas, registered last
+    }
+
+    canvas_on_key(input) callback |k: string| {
+        keys = "${keys} ${k}"
+        aether_ui_text_set_string(keys_label, keys)
+    }
+    canvas_on_key_release(input) callback |k: string| {
+        ups = "${ups} ${k}"
+        aether_ui_text_set_string(ups_label, ups)
+    }
+    canvas_on_text(input) callback |t: string| {
+        typed = "${typed}${t}"
+        aether_ui_text_set_string(text_label, typed)
+    }
+    canvas_on_key(other) callback |k: string| { }
+
+    app = ui.app_create("Canvas input demo", 360, 260)
+    if os_getenv("AETHER_UI_TEST_PORT") != null {
+        enable_test_server_root(9222, main_root)
+    }
+    ui.app_start(app, main_root)
+}

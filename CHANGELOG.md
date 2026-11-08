@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`canvas_on_text(cv, cb)`: the text a user commits to a canvas, beside its
+  keys (#214).** `cb(text)` gets each piece of committed text as the keyboard
+  layout, a dead key or an input method makes it ("A", ",", "é", an IME's
+  word); control characters (Return, Tab, BackSpace, Ctrl+letter) stay keys for
+  `canvas_on_key`. Real on every backend: GTK4 a `GtkIMContext` (multicontext)
+  fed the canvas's keys from a capture-phase controller, its `commit`; AppKit
+  the canvas view as an `NSTextInputClient` (`keyDown:` hands the key to
+  `interpretKeyEvents:`, the text arrives in `insertText:`, marked text held
+  for dead keys and IMEs); Win32 `WM_CHAR`, surrogate pairs joined; UIKit the
+  canvas a `UIKeyInput` while it has a text handler (presses passed on to the
+  text system, the software keyboard's Return and delete reported as keys);
+  Android the view a text editor to the input method (`commitText`) and a
+  hardware key's character, dead keys composed. Driver: `POST
+  /canvas/{id}/text?s=`, and `?real=1` on `/text`, `/key`, `/keyup` and
+  `/scroll` sends the platform's own events where the backend can (Win32 posts
+  `WM_KEYDOWN`/`WM_KEYUP` with the keyboard state set, so the loop and
+  `TranslateMessage` make the text; AppKit a key event through the window).
+  `examples/canvasinput_demo` + `tests/canvasinput_demo` (ci.sh, spec_matrix,
+  the iOS simulator list). Verified with real keystrokes: xdotool into GTK4
+  under Xvfb, `adb shell input text` on the Android emulator.
+
 - **`min_width(px)`, `min_height(px)`, `onsecondaryclick()` and `detach(h)` as
   block words.** The floors and the right click were explicit-handle verbs
   only (`set_min_width(h, px)`, `on_secondary_click(h, cb)`), so a widget's
@@ -254,6 +275,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gone and `asks/aether-closure-drain-through-fn-store.md` is RESOLVED.
 
 ### Fixed
+
+- **win32: a canvas with no scroll or key-up handler crashed on the mouse
+  wheel or a key release (#213).** `aether_ui_canvas_create_impl` grows its
+  table with `realloc` and filled each field by hand, and the list missed
+  `on_canvas_scroll` and `on_key_release`: a canvas in memory the table grew
+  into read a stale pointer. The slot is zeroed whole now (GTK4's too).
+  `tests/canvasinput_demo` sends a real `WM_MOUSEWHEEL` and `WM_KEYUP` to the
+  ninth canvas; with the old initialisation and the grown memory dirtied, the
+  app died on the first one.
+- **Canvas key names keep Shift and punctuation, and a key canvas gets Tab,
+  everywhere (#214).** Win32 named canvas keys with a table of its own that
+  lower-cased every letter and dropped every punctuation key; it now names them
+  as its `window_on_key` does ("A", "comma", "exclam", F1..F24). UIKit and
+  Android named punctuation by its character (","), now by GDK's word as the
+  desktops do, and UIKit kept Shift out of a letter. On Win32 only the canvas
+  registered last skipped the dialog manager, so with two key canvases Tab
+  never reached the first; any canvas with a key or text handler takes every
+  key now (`WM_GETDLGCODE` claims Tab), as GTK4's and AppKit's do.
+- **win32: a layout pass re-entered for the same stack no longer finishes with
+  the older pass's positions (#209).** A child's `SetWindowPos` sends it
+  `WM_SIZE`, and a resize callback there (a canvas setting a split position)
+  could lay the same stack out again; the interrupted pass then placed the rest
+  of the children from its stale state, and a splitview's second pane sat over
+  the first. Each widget carries a layout generation; a pass that finds it
+  moved after a `SetWindowPos` stops. `examples/splitreenter_demo` +
+  `tests/splitreenter_demo`.
 
 - **GTK: a widget with edge insets reported its box shifted and grown by
   them.** The driver's x/y/w/h for a widget given `edge_insets` (directly or

@@ -6502,6 +6502,7 @@ typedef struct {
     AeClosure* on_key_release; // key-up (same key names); see keyUp:
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
     AeClosure* on_scroll;  // wheel / two-finger scroll (dx,dy); see scrollWheel:
+    AeClosure* on_text;    // committed text (insertText:), canvas_on_text
     int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
     double* paint_clip_rects;
     int paint_clip_count;
@@ -6603,8 +6604,9 @@ static void aeui_key_name_for_event(NSEvent* ev, char* out, int outsize) {
     }
 }
 
-@interface AetherCanvasView : NSView
+@interface AetherCanvasView : NSView <NSTextInputClient>
 @property (assign) int canvasId;
+@property (strong) NSMutableAttributedString* aeuiMarked;   // a dead key's or an IME's text not yet committed
 @property (assign) BOOL aeuiFocusable;   // set_focusable: a canvas drawn as a control is a stop of Tab
 @end
 
@@ -7259,14 +7261,95 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
 
 - (void)keyDown:(NSEvent*)event {
     CanvasState* cs = get_canvas_state(self.canvasId);
-    if (!cs || !cs->on_key || !cs->on_key->fn) {
+    int keys = cs && cs->on_key && cs->on_key->fn;
+    int text = cs && cs->on_text && cs->on_text->fn;
+    if (!keys && !text) {
         [super keyDown:event];
         return;
     }
-    char name[32];
-    aeui_key_name_for_event(event, name, sizeof(name));
-    ((void(*)(void*, const char*))cs->on_key->fn)(cs->on_key->env, name);
+    if (keys) {
+        char name[32];
+        aeui_key_name_for_event(event, name, sizeof(name));
+        ((void(*)(void*, const char*))cs->on_key->fn)(cs->on_key->env, name);
+    }
+    // The text, beside the key (#214): the input context turns the key into
+    // insertText: (with the layout, a dead key's composition, an IME's
+    // word) or into a command (insertNewline:, insertTab:, deleteBackward:),
+    // which a canvas leaves to its key handler.
+    cs = get_canvas_state(self.canvasId);   // the key handler may have grown the table
+    if (cs && cs->on_text && cs->on_text->fn) [self interpretKeyEvents:@[event]];
 }
+
+// NSTextInputClient: what AppKit's input context needs from a view that
+// takes text. The canvas keeps no text of its own (the app does), so its
+// ranges are empty; only marked text -- a dead key or an IME's word being
+// composed -- is held here until it is committed.
+static void aeui_canvas_text_fire(int canvas_id, NSString* str) {
+    if (!str || [str length] == 0) return;
+    // Control characters are keys, not text (a field editor would never
+    // insert them either).
+    NSMutableString* clean = [NSMutableString string];
+    [str enumerateSubstringsInRange:NSMakeRange(0, [str length])
+                            options:NSStringEnumerationByComposedCharacterSequences
+                         usingBlock:^(NSString* sub, NSRange r, NSRange er, BOOL* stop) {
+        (void)r; (void)er; (void)stop;
+        unichar c = [sub characterAtIndex:0];
+        if (c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF)) return;   // control, function keys
+        [clean appendString:sub];
+    }];
+    if ([clean length] == 0) return;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !cs->on_text || !cs->on_text->fn) return;
+    ((void(*)(void*, const char*))cs->on_text->fn)(cs->on_text->env, [clean UTF8String]);
+}
+
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
+    (void)replacementRange;
+    NSString* str = [string isKindOfClass:[NSAttributedString class]]
+                    ? [(NSAttributedString*)string string] : (NSString*)string;
+    self.aeuiMarked = nil;
+    aeui_canvas_text_fire(self.canvasId, str);
+}
+
+- (void)doCommandBySelector:(SEL)selector {
+    (void)selector;   // Return, Tab, BackSpace...: canvas_on_key's, no beep
+}
+
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange
+     replacementRange:(NSRange)replacementRange {
+    (void)selectedRange; (void)replacementRange;
+    NSAttributedString* a = [string isKindOfClass:[NSAttributedString class]]
+        ? (NSAttributedString*)string
+        : [[NSAttributedString alloc] initWithString:(NSString*)string];
+    self.aeuiMarked = [a length] ? [[NSMutableAttributedString alloc] initWithAttributedString:a] : nil;
+}
+
+- (void)unmarkText {
+    // The composition ends as it stands (focus left mid-word): that text is
+    // committed, as a field editor commits it.
+    NSString* s = self.aeuiMarked ? [self.aeuiMarked string] : nil;
+    self.aeuiMarked = nil;
+    aeui_canvas_text_fire(self.canvasId, s);
+}
+
+- (NSRange)selectedRange { return NSMakeRange(0, 0); }
+- (NSRange)markedRange {
+    return self.aeuiMarked ? NSMakeRange(0, [self.aeuiMarked length]) : NSMakeRange(NSNotFound, 0);
+}
+- (BOOL)hasMarkedText { return self.aeuiMarked != nil; }
+- (NSAttributedString*)attributedSubstringForProposedRange:(NSRange)range
+                                               actualRange:(NSRangePointer)actualRange {
+    (void)range; (void)actualRange;
+    return nil;
+}
+- (NSArray<NSAttributedStringKey>*)validAttributesForMarkedText { return @[]; }
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    (void)range; (void)actualRange;
+    // The IME's candidate window goes under the canvas's top-left corner.
+    NSRect r = [self convertRect:NSMakeRect(0, 0, 1, 20) toView:nil];
+    return self.window ? [self.window convertRectToScreen:r] : r;
+}
+- (NSUInteger)characterIndexForPoint:(NSPoint)point { (void)point; return NSNotFound; }
 
 // The key's release, by the same name: a held key's state for a game.
 - (void)keyUp:(NSEvent*)event {
@@ -7775,6 +7858,17 @@ void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     if (!cs || !boxed_closure) return;
     cs->on_key_release = (AeClosure*)boxed_closure;
 }
+
+// Text input on a canvas (#214): -[AetherCanvasView keyDown:] hands the key
+// to interpretKeyEvents:, and the view, an NSTextInputClient, gets the text
+// in insertText: -- the layout's character, a dead key's composition, an
+// input method's word.
+void aether_ui_canvas_on_text_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_text = (AeClosure*)boxed_closure;
+}
+
 
 /* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
    scroll controller). Stubbed so the ABI stays uniform across backends. */
@@ -9706,6 +9800,18 @@ static NSEvent* aeui_driver_key_event(NSEventType type, const char* kname, int k
     }
     if (!ch) {
         ch = [NSString stringWithUTF8String:kname];
+        // A punctuation key by its GDK name ("comma", "exclam"), as the
+        // canvas reports it: the character it types.
+        if ([ch length] > 1) {
+            char nm[32];
+            for (int c = 0x21; c < 0x7F; c++) {
+                if (aeui_keyname_for_char(c, nm, sizeof(nm)) && strcmp(nm, kname) == 0) {
+                    unichar u = (unichar)c;
+                    ch = [NSString stringWithCharacters:&u length:1];
+                    break;
+                }
+            }
+        }
         // The key's own code on an ANSI keyboard: AppKit matches a
         // Command key equivalent by key code through the layout,
         // so code 0 (the A key) for every letter matched none.
@@ -9920,9 +10026,26 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY:
         case AETHER_DRV_CANVAS_KEYUP:
+        case AETHER_DRV_CANVAS_TEXT:
         case AETHER_DRV_CANVAS_SCROLL: {
             CanvasState* cs = get_canvas_state(ctx->handle);
             AeClosure* c = NULL;
+            if (cs && ctx->action == AETHER_DRV_CANVAS_TEXT && aeui_driver_real_events()) {
+                // ?real=1 text (#214): typed as a key that produces it,
+                // through the window to the canvas as first responder, so
+                // it reaches insertText: by keyDown: and the input context.
+                NSView* tv = (__bridge NSView*)aether_ui_get_widget(cs->widget_handle);
+                if (!cs->on_text || !cs->on_text->fn || ![tv window]) { ctx->result = 3; return; }
+                NSWindow* w = [tv window];
+                [w makeFirstResponder:tv];
+                NSString* t = [NSString stringWithUTF8String:ctx->sval];
+                [w sendEvent:[NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+                    modifierFlags:0 timestamp:[[NSProcessInfo processInfo] systemUptime]
+                    windowNumber:[w windowNumber] context:nil characters:t
+                    charactersIgnoringModifiers:t isARepeat:NO keyCode:0xFFFF]];
+                ctx->result = 0;
+                return;
+            }
             if (cs) {
                 c = (ctx->action == AETHER_DRV_CANVAS_SCROLL)  ? cs->on_scroll
                   : (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
@@ -9931,6 +10054,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                   : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
                   : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
                   : (ctx->action == AETHER_DRV_CANVAS_KEYUP)   ? cs->on_key_release
+                  : (ctx->action == AETHER_DRV_CANVAS_TEXT)    ? cs->on_text
                                                                : cs->on_key;
             }
             if (!c || !c->fn) { ctx->result = 3; return; }  // 404: unwired, not missed
@@ -9950,7 +10074,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                     ctx->action == AETHER_DRV_CANVAS_KEYUP ? NSEventTypeKeyUp : NSEventTypeKeyDown,
                     ctx->sval, 0, w)];
             } else if (ctx->action == AETHER_DRV_CANVAS_KEY
-                || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
+                || ctx->action == AETHER_DRV_CANVAS_KEYUP
+                || ctx->action == AETHER_DRV_CANVAS_TEXT) {
                 ((void(*)(void*, const char*))c->fn)(c->env, ctx->sval);
             } else {
                 ((void(*)(void*, double, double))c->fn)(c->env, ctx->dval, ctx->dval2);

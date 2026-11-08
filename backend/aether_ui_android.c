@@ -7472,6 +7472,7 @@ typedef struct {
     AeClosure* on_key_release;
     AeClosure* on_resize;     // (w, h) on a change of size
     AeClosure* on_scroll;     // wheel (dx, dy), dy < 0 away from the user
+    AeClosure* on_text;       // committed text (canvas_on_text): commitText, a key's character
     AeClosure* probe;         // gesture probe (kind, a, b, mods)
     int last_w, last_h;       // the size on_resize last reported (dp), -1 none yet
     int created_w, created_h;
@@ -7505,6 +7506,7 @@ extern double floatarr_get_raw(void* arr, int i);
 
 static jclass g_canvas_class = NULL;
 static jmethodID g_canvas_init = NULL;
+static jmethodID g_canvas_text = NULL;   // AetherCanvas.setTakesText(boolean)
 
 static CanvasState* get_canvas_state(int canvas_id) {
     if (canvas_id < 1 || canvas_id > canvas_state_count) return NULL;
@@ -8406,6 +8408,9 @@ static int cv_key_name(int code, int unicode, char* out, int n) {
     if (named) { snprintf(out, (size_t)n, "%s", named); return 1; }
     if (code >= 131 && code <= 142) { snprintf(out, (size_t)n, "F%d", code - 130); return 1; }
     if (unicode <= 0) return 0;
+    // Printable ASCII by its GDK name ("comma", "exclam"), as the window's
+    // key handler and every other backend name it (#214).
+    if (unicode < 0x80 && aeui_keyname_for_char(unicode, out, n)) return 1;
     char u[8] = "";
     if (unicode < 0x80) { u[0] = (char)unicode; }
     else if (unicode < 0x800) { u[0] = (char)(0xC0 | (unicode >> 6)); u[1] = (char)(0x80 | (unicode & 63)); }
@@ -8603,6 +8608,36 @@ void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     if (!cs || !boxed_closure) return;
     cs->on_key_release = (AeClosure*)boxed_closure;
     cv_want_keys(cs);
+}
+
+// Text input on a canvas (#214): the View becomes a text editor to the
+// input method (onCreateInputConnection, commitText) and hands a hardware
+// key's character over too (AetherCanvas.typed); both reach
+// native_canvas_text.
+void aether_ui_canvas_on_text_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    cs->on_text = (AeClosure*)boxed_closure;
+    cv_want_keys(cs);
+    AeuiWidget* w = live_widget(cs->widget_handle);
+    JNIEnv* env = (w && g_canvas_text) ? aeui_frame(4) : NULL;
+    if (!env) return;
+    (*env)->CallVoidMethod(env, w->view, g_canvas_text, JNI_TRUE);
+    aeui_check(env, "AetherCanvas.setTakesText");
+    aeui_unframe(env);
+}
+
+static void JNICALL native_canvas_text(JNIEnv* env, jclass cls, jint canvas_id, jbyteArray utf8) {
+    (void)cls;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !cs->on_text || !cs->on_text->fn || !utf8) return;
+    jsize n = (*env)->GetArrayLength(env, utf8);
+    char* buf = (char*)malloc((size_t)n + 1);
+    if (!buf) return;
+    (*env)->GetByteArrayRegion(env, utf8, 0, n, (jbyte*)buf);
+    buf[n] = '\0';
+    ((void (*)(void*, const char*))cs->on_text->fn)(cs->on_text->env, buf);
+    free(buf);
 }
 
 // --- Recording ------------------------------------------------------------------
@@ -8804,9 +8839,11 @@ static int cv_driver_event(AetherDriverActionCtx* ctx) {
                  : ctx->action == AETHER_DRV_CANVAS_MOVE    ? cs->on_move
                  : ctx->action == AETHER_DRV_CANVAS_RELEASE ? cs->on_release
                  : ctx->action == AETHER_DRV_CANVAS_KEYUP   ? cs->on_key_release
+                 : ctx->action == AETHER_DRV_CANVAS_TEXT    ? cs->on_text
                                                             : cs->on_key;
     if (!c || !c->fn) return 3;   // 404: nothing wired, not an event missed
-    if (ctx->action == AETHER_DRV_CANVAS_KEY || ctx->action == AETHER_DRV_CANVAS_KEYUP)
+    if (ctx->action == AETHER_DRV_CANVAS_KEY || ctx->action == AETHER_DRV_CANVAS_KEYUP
+        || ctx->action == AETHER_DRV_CANVAS_TEXT)
         ((void (*)(void*, const char*))c->fn)(c->env, ctx->sval);
     else
         ((void (*)(void*, double, double))c->fn)(c->env, ctx->dval, ctx->dval2);
@@ -9582,6 +9619,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY:
         case AETHER_DRV_CANVAS_KEYUP:
+        case AETHER_DRV_CANVAS_TEXT:
         case AETHER_DRV_CANVAS_SCROLL:
             ctx->result = cv_driver_event(ctx);
             return;
@@ -10289,8 +10327,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
         static const JNINativeMethod canvas_natives[] = {
             { "nativeCanvasDraw", "(ILandroid/graphics/Canvas;II)V", (void*)native_canvas_draw },
             { "nativeCanvasEvent", "(IIIFFFFI)Z", (void*)native_canvas_event },
+            { "nativeCanvasText", "(I[B)V", (void*)native_canvas_text },
         };
-        if ((*env)->RegisterNatives(env, g_canvas_class, canvas_natives, 2) != JNI_OK) {
+        g_canvas_text = M(g_canvas_class, "setTakesText", "(Z)V");
+        if ((*env)->RegisterNatives(env, g_canvas_class, canvas_natives, 3) != JNI_OK) {
             aeui_check(env, "RegisterNatives(AetherCanvas)");
             g_canvas_init = NULL;   // canvas_create answers 0
         }

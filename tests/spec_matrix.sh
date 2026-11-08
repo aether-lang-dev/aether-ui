@@ -116,6 +116,7 @@ SUITES=(
   "frametick|examples/frametick_demo|frametick_demo/spec_frametick_demo|"
   "background|examples/background_demo|background_demo/spec_background_demo|"
   "canvasscroll|examples/canvasscroll_demo|canvasscroll_demo/spec_canvasscroll_demo|"
+  "canvasinput|examples/canvasinput_demo|canvasinput_demo/spec_canvasinput_demo|"
   "canvasclip|examples/canvasclip_demo|canvasclip_demo/spec_canvasclip_demo|"
   "groupalpha|examples/groupalpha_demo|groupalpha_demo/spec_groupalpha_demo|"
   "hoverpaint|examples/hoverpaint_demo|hoverpaint_demo/spec_hoverpaint_demo|"

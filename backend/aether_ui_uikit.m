@@ -106,6 +106,7 @@ typedef struct {
 // Menu items' accelerators (menu_item_accel): Primary is Command here.
 #define AEUI_PRIMARY_IS_CMD 1
 #include "aether_ui_accel.h"
+#include "aether_ui_keynames.h"     // a typed character -> its GDK key name
 // Labels' typography beyond the font's (applied by aeui_typo_apply below).
 #include "aether_ui_typo.h"
 
@@ -678,9 +679,18 @@ static int aeui_press_key_name(UIPress* press, char* out, int outsz) API_AVAILAB
     }
     if (name) snprintf(out, (size_t)outsz, "%s", name);
     else {
-        const char* c = key.charactersIgnoringModifiers.UTF8String;
+        // What the key types with Shift (not Ctrl, Alt or Command), and
+        // printable ASCII by its GDK name ("A", "comma", "exclam"), as the
+        // desktop backends name it (#214); charactersIgnoringModifiers drops
+        // Shift as well, so Shift+A came as "a".
+        NSString* ch = key.charactersIgnoringModifiers;
+        if (!(key.modifierFlags & (UIKeyModifierControl | UIKeyModifierAlternate | UIKeyModifierCommand))
+            && key.characters.length == 1)
+            ch = key.characters;
+        const char* c = ch.UTF8String;
         if (!c || !c[0]) return 0;
-        snprintf(out, (size_t)outsz, "%s", c);
+        if (!c[1] && (unsigned char)c[0] < 0x80 && aeui_keyname_for_char((unsigned char)c[0], out, outsz)) { }
+        else snprintf(out, (size_t)outsz, "%s", c);
     }
     int mods = 0;
     if (key.modifierFlags & UIKeyModifierShift)     mods |= 1;
@@ -2186,6 +2196,7 @@ typedef struct {
     AeClosure* on_key_release; // key-up (same key names; driver-driven for now)
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
     AeClosure* on_scroll;  // wheel / two-finger scroll (dx,dy); see scrollWheel:
+    AeClosure* on_text;    // committed text (UIKeyInput insertText:), canvas_on_text
     int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
     double* paint_clip_rects;
     int paint_clip_count;
@@ -2326,6 +2337,7 @@ static UIFont* aeui_metrics_font(double size) {
 @interface AetherCanvasView : UIView
 @property (assign) int canvasId;
 @property (assign) CGSize aeuiLastSize;
+@property (assign) int aeuiPressesDown;   // hardware keys held: text then came from a press
 @property (assign) BOOL aeuiFocusable;   // set_focusable: a canvas drawn as a control takes the keyboard focus
 @end
 
@@ -2895,7 +2907,7 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
 - (BOOL)canBecomeFirstResponder {
     if (self.aeuiFocusable) return YES;
     CanvasState* cs = get_canvas_state(self.canvasId);
-    return cs && (cs->on_key || cs->on_key_release);
+    return cs && (cs->on_key || cs->on_key_release || cs->on_text);
 }
 - (void)didMoveToWindow {
     [super didMoveToWindow];
@@ -2916,11 +2928,71 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
 }
 - (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
     CanvasState* cs = get_canvas_state(self.canvasId);
-    if (!cs || ![self aeuiPresses:presses closure:cs->on_key]) [super pressesBegan:presses withEvent:event];
+    self.aeuiPressesDown += (int)[presses count];
+    BOOL heard = cs && [self aeuiPresses:presses closure:cs->on_key];
+    // A canvas taking text passes the press on as well: the text system
+    // turns it into insertText: (with the layout and dead keys) only from
+    // super's pressesBegan:.
+    cs = get_canvas_state(self.canvasId);
+    if (!heard || (cs && cs->on_text)) [super pressesBegan:presses withEvent:event];
 }
 - (void)pressesEnded:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
     CanvasState* cs = get_canvas_state(self.canvasId);
-    if (!cs || ![self aeuiPresses:presses closure:cs->on_key_release]) [super pressesEnded:presses withEvent:event];
+    self.aeuiPressesDown -= (int)[presses count];
+    if (self.aeuiPressesDown < 0) self.aeuiPressesDown = 0;
+    BOOL heard = cs && [self aeuiPresses:presses closure:cs->on_key_release];
+    cs = get_canvas_state(self.canvasId);
+    if (!heard || (cs && cs->on_text)) [super pressesEnded:presses withEvent:event];
+}
+- (void)pressesCancelled:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
+    self.aeuiPressesDown -= (int)[presses count];
+    if (self.aeuiPressesDown < 0) self.aeuiPressesDown = 0;
+    [super pressesCancelled:presses withEvent:event];
+}
+
+// Text input (#214). While the canvas has a text handler it is a UIKeyInput,
+// so the system's text input -- a hardware keyboard's layout and dead keys,
+// the software keyboard, dictation -- inserts into it; without one it stays
+// a plain responder, and taking the keyboard does not bring the software
+// keyboard up over a game.
+- (BOOL)conformsToProtocol:(Protocol*)protocol {
+    if (protocol == @protocol(UIKeyInput) || protocol == @protocol(UITextInputTraits)) {
+        CanvasState* cs = get_canvas_state(self.canvasId);
+        return cs && cs->on_text;
+    }
+    return [super conformsToProtocol:protocol];
+}
+- (BOOL)hasText { return YES; }   // so a delete reaches deleteBackward
+- (UITextAutocorrectionType)autocorrectionType { return UITextAutocorrectionTypeNo; }
+- (UITextAutocapitalizationType)autocapitalizationType { return UITextAutocapitalizationTypeNone; }
+- (UITextSpellCheckingType)spellCheckingType { return UITextSpellCheckingTypeNo; }
+// A key the software keyboard sends as text or a delete is reported as the
+// key too, as a hardware keyboard's press is (which pressesBegan: already did).
+static void aeui_canvas_soft_key(int canvas_id, const char* name) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !cs->on_key || !cs->on_key->fn) return;
+    ((void(*)(void*, const char*))cs->on_key->fn)(cs->on_key->env, name);
+}
+- (void)insertText:(NSString*)text {
+    CanvasState* cs = get_canvas_state(self.canvasId);
+    if (!cs || !text) return;
+    NSMutableString* clean = [NSMutableString string];
+    __block BOOL newline = NO;
+    [text enumerateSubstringsInRange:NSMakeRange(0, [text length])
+                             options:NSStringEnumerationByComposedCharacterSequences
+                          usingBlock:^(NSString* sub, NSRange r, NSRange er, BOOL* stop) {
+        (void)r; (void)er; (void)stop;
+        unichar c = [sub characterAtIndex:0];
+        if (c == '\n' || c == '\r') { newline = YES; return; }
+        if (c < 0x20 || c == 0x7F || (c >= 0xF700 && c <= 0xF8FF)) return;   // control, function keys
+        [clean appendString:sub];
+    }];
+    if ([clean length] && cs->on_text && cs->on_text->fn)
+        ((void(*)(void*, const char*))cs->on_text->fn)(cs->on_text->env, [clean UTF8String]);
+    if (newline && self.aeuiPressesDown == 0) aeui_canvas_soft_key(self.canvasId, "Return");
+}
+- (void)deleteBackward {
+    if (self.aeuiPressesDown == 0) aeui_canvas_soft_key(self.canvasId, "BackSpace");
 }
 @end
 
@@ -3149,6 +3221,20 @@ void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure) {
     if (!cs || !boxed_closure) return;
     cs->on_key_release = (AeClosure*)boxed_closure;
     aeui_canvas_want_keys(cs);
+}
+
+// Text input on a canvas (#214): the canvas becomes a UIKeyInput (see
+// -[AetherCanvasView conformsToProtocol:]), so text arrives in insertText:.
+void aether_ui_canvas_on_text_impl(int canvas_id, void* boxed_closure) {
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !boxed_closure) return;
+    int had = cs->on_text != NULL;
+    cs->on_text = (AeClosure*)boxed_closure;
+    UIView* v = (__bridge UIView*)aether_ui_get_widget(cs->widget_handle);
+    // Already the first responder as a key canvas: take the keyboard again,
+    // now as a text input, so the system sees the new protocol.
+    if (!had && v && v.isFirstResponder) { [v resignFirstResponder]; [v becomeFirstResponder]; }
+    else aeui_canvas_want_keys(cs);
 }
 
 /* canvas scroll: GTK4-only for now (a zoom-capable canvas needs a real
@@ -6983,9 +7069,19 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_RELEASE:
         case AETHER_DRV_CANVAS_KEY:
         case AETHER_DRV_CANVAS_KEYUP:
+        case AETHER_DRV_CANVAS_TEXT:
         case AETHER_DRV_CANVAS_SCROLL: {
             CanvasState* cs = get_canvas_state(ctx->handle);
             AeClosure* c = NULL;
+            if (cs && ctx->action == AETHER_DRV_CANVAS_TEXT && aether_ui_driver_real_events_now) {
+                // ?real=1: through the view's UIKeyInput insertText:, where
+                // the text system delivers it (a UIPress cannot be made).
+                AetherCanvasView* tv = (__bridge AetherCanvasView*)aether_ui_get_widget(cs->widget_handle);
+                if (!tv || ![tv conformsToProtocol:@protocol(UIKeyInput)]) { ctx->result = 3; return; }
+                [tv insertText:[NSString stringWithUTF8String:ctx->sval]];
+                ctx->result = 0;
+                return;
+            }
             if (cs) {
                 c = (ctx->action == AETHER_DRV_CANVAS_SCROLL)  ? cs->on_scroll
                   : (ctx->action == AETHER_DRV_CANVAS_CLICK)   ? cs->on_click
@@ -6994,11 +7090,13 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                   : (ctx->action == AETHER_DRV_CANVAS_MOVE)    ? cs->on_move
                   : (ctx->action == AETHER_DRV_CANVAS_RELEASE) ? cs->on_release
                   : (ctx->action == AETHER_DRV_CANVAS_KEYUP)   ? cs->on_key_release
+                  : (ctx->action == AETHER_DRV_CANVAS_TEXT)    ? cs->on_text
                                                                : cs->on_key;
             }
             if (!c || !c->fn) { ctx->result = 3; return; }  // 404: unwired, not missed
             if (ctx->action == AETHER_DRV_CANVAS_KEY
-                || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
+                || ctx->action == AETHER_DRV_CANVAS_KEYUP
+                || ctx->action == AETHER_DRV_CANVAS_TEXT) {
                 ((void(*)(void*, const char*))c->fn)(c->env, ctx->sval);
             } else {
                 ((void(*)(void*, double, double))c->fn)(c->env, ctx->dval, ctx->dval2);

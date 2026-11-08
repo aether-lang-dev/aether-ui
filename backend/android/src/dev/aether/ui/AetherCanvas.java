@@ -13,10 +13,16 @@ package dev.aether.ui;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.text.InputType;
 import android.view.GestureDetector;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import java.nio.charset.StandardCharsets;
 
 final class AetherCanvas extends View {
     // Event kinds; the same numbers are AEUI_CV_* in aether_ui_android.c.
@@ -67,6 +73,69 @@ final class AetherCanvas extends View {
     // true = a handler took the event.
     static native boolean nativeCanvasEvent(int handle, int kind, int count,
                                             float x0, float y0, float x1, float y1, int meta);
+    // Text committed to the canvas (canvas_on_text), as UTF-8: a JNI string
+    // would carry an astral character as two surrogates (modified UTF-8).
+    static native void nativeCanvasText(int handle, byte[] utf8);
+
+    // Text input (canvas_on_text, #214). While the canvas takes text it is a
+    // text editor to the input method -- the software keyboard types into
+    // it, through commitText -- and a hardware key's character (with a dead
+    // key composed in) is its text too. Control characters stay keys.
+    private boolean takesText;
+    private int deadAccent;
+    public void setTakesText(boolean on) { takesText = on; }
+
+    private void text(String s) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); ) {
+            int c = s.codePointAt(i);
+            i += Character.charCount(c);
+            if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0)) continue;
+            b.appendCodePoint(c);
+        }
+        if (b.length() > 0) nativeCanvasText(handle, b.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    // A hardware key's text: what it types with the meta state, a dead key
+    // (COMBINING_ACCENT) held over to compose with the next. true = text.
+    private boolean typed(KeyEvent e) {
+        int u = e.getUnicodeChar();
+        if (u == 0) return false;
+        if ((u & KeyCharacterMap.COMBINING_ACCENT) != 0) {
+            deadAccent = u & KeyCharacterMap.COMBINING_ACCENT_MASK;
+            return true;
+        }
+        if (deadAccent != 0) {
+            int c = KeyCharacterMap.getDeadChar(deadAccent, u);
+            deadAccent = 0;
+            if (c != 0) u = c;
+        }
+        if (u < 0x20 || u == 0x7F) return false;
+        text(new String(Character.toChars(u)));
+        return true;
+    }
+
+    @Override public boolean onCheckIsTextEditor() { return takesText; }
+
+    @Override public InputConnection onCreateInputConnection(EditorInfo out) {
+        if (!takesText) return null;
+        out.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        out.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN;
+        return new BaseInputConnection(this, false) {
+            @Override public boolean commitText(CharSequence t, int newCursorPosition) {
+                if (t != null && t.length() > 0) text(t.toString());
+                return true;
+            }
+            // A soft keyboard's delete: the BackSpace key, as a hardware one.
+            @Override public boolean deleteSurroundingText(int before, int after) {
+                for (int i = 0; i < before; i++) {
+                    sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL));
+                    sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL));
+                }
+                return true;
+            }
+        };
+    }
 
     // The size asked for at creation is a floor the layout measures against,
     // not "all the space offered" (View's default answer to WRAP_CONTENT).
@@ -126,8 +195,9 @@ final class AetherCanvas extends View {
     }
 
     @Override public boolean onKeyDown(int code, KeyEvent e) {
-        if (nativeCanvasEvent(handle, KEY_DOWN, code, e.getUnicodeChar(), 0, 0, 0, e.getMetaState()))
-            return true;
+        boolean took = nativeCanvasEvent(handle, KEY_DOWN, code, e.getUnicodeChar(), 0, 0, 0, e.getMetaState());
+        if (takesText && typed(e)) took = true;
+        if (took) return true;
         return super.onKeyDown(code, e);
     }
 

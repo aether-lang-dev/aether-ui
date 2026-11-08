@@ -100,6 +100,11 @@ typedef enum {
        and a backend that can answers with the handle that has the focus now
        (asked on the UI thread), else the server asks the focused_widget hook. */
     AETHER_DRV_FOCUS_MOVE = 33,
+    /* Text committed to a canvas (#214): sval the UTF-8 text, fired into its
+       canvas_on_text closure (result 3 when it has none). With ?real=1 a
+       backend that can delivers it through the platform's own text path
+       (Win32 WM_CHAR code units, AppKit insertText: by way of keyDown:). */
+    AETHER_DRV_CANVAS_TEXT = 34,
     AETHER_DRV_WIN_FRONT = 32,   /* the window brought to the front and made key: retval 1 key, 2 key and the app active */   /* a widget's secondary click at (dval, dval2): retval 1 if it had one */
 } AetherDriverActionKind;
 
