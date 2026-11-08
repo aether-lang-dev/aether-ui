@@ -6463,7 +6463,7 @@ typedef struct {
     AeClosure* on_right_click;  // secondary click, on its release (x,y)
     AeClosure* on_double_click; // the second press of a double click (x,y)
     AeClosure* on_key;     // key-down (key name: "Left", "a", "space", …)
-    AeClosure* on_key_release; // key-up (same key names; driver-driven for now)
+    AeClosure* on_key_release; // key-up (same key names); see keyUp:
     AeClosure* on_resize;  // allocation change (w,h) — vg re-maps its viewBox
     AeClosure* on_scroll;  // wheel / two-finger scroll (dx,dy); see scrollWheel:
     int last_w, last_h;    // on_resize fires on CHANGE only, never per-frame
@@ -7724,9 +7724,8 @@ void aether_ui_canvas_on_move_impl(int canvas_id, void* boxed_closure) {
     }
 }
 
-// Keyboard input on a canvas. No-op stub for now — the AppKit bridge would
-// route NSView keyDown: → key-name string into the closure (mirrors the GTK4
-// GtkEventControllerKey path). The Linux backend is the reference impl.
+// Key-down on a canvas: -[AetherCanvasView keyDown:] (the canvas takes key
+// focus on a click), and POST /canvas/{id}/key from the driver.
 void aether_ui_canvas_on_key_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs || !boxed_closure) return;
@@ -9650,6 +9649,46 @@ static int aeui_driver_real_events(void) {
     return e && e[0] && strcmp(e, "0") != 0;
 }
 
+// A real key event for the driver: the key name (as aeui_key_name_for_event
+// gives it, or a combo's key) as its virtual key code on an ANSI keyboard and
+// the characters AppKit gives it, the modifier bits (1 shift, 2 ctrl, 4 alt,
+// 8 command) as its flags. Sent through [NSApp sendEvent:], it meets what a
+// person's key meets: the key monitor, the main menu, the first responder.
+static NSEvent* aeui_driver_key_event(NSEventType type, const char* kname, int kmods, NSWindow* w) {
+    static const struct { const char* n; unsigned short code; unichar ch; } K[] = {
+        {"Return", 36, '\r'}, {"Tab", 48, '\t'}, {"Escape", 53, 0x1b}, {"BackSpace", 51, 0x7f},
+        {"space", 49, ' '}, {"Delete", 117, NSDeleteFunctionKey}, {"Home", 115, NSHomeFunctionKey},
+        {"End", 119, NSEndFunctionKey}, {"Page_Up", 116, NSPageUpFunctionKey}, {"Page_Down", 121, NSPageDownFunctionKey},
+        {"Left", 123, NSLeftArrowFunctionKey}, {"Right", 124, NSRightArrowFunctionKey},
+        {"Down", 125, NSDownArrowFunctionKey}, {"Up", 126, NSUpArrowFunctionKey},
+        {"F2", 120, NSF2FunctionKey}, {"F4", 118, NSF4FunctionKey}, {"F6", 97, NSF6FunctionKey},
+    };
+    unsigned short code = 0;
+    NSString* ch = nil;
+    for (size_t i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
+        if (strcasecmp(kname, K[i].n) == 0) { code = K[i].code; unichar u = K[i].ch; ch = [NSString stringWithCharacters:&u length:1]; break; }
+    }
+    if (!ch) {
+        ch = [NSString stringWithUTF8String:kname];
+        // The key's own code on an ANSI keyboard: AppKit matches a
+        // Command key equivalent by key code through the layout,
+        // so code 0 (the A key) for every letter matched none.
+        static const char ansi[] = "asdfhgzxcv\0bqweryt123465=97-80]ou[ip\0lj'k;\\,/nm.";
+        if ([ch length] == 1) {
+            char c = (char)tolower([ch characterAtIndex:0]);
+            for (unsigned short k = 0; k < sizeof(ansi) - 1; k++) if (ansi[k] == c && c) { code = k; break; }
+        }
+        if ([ch length] == 1 && (kmods & 1)) ch = [ch uppercaseString];
+    }
+    NSEventModifierFlags f = 0;
+    if (kmods & 1) f |= NSEventModifierFlagShift;
+    if (kmods & 2) f |= NSEventModifierFlagControl;
+    if (kmods & 4) f |= NSEventModifierFlagOption;
+    if (kmods & 8) f |= NSEventModifierFlagCommand;
+    if (code >= 115 && code <= 126) f |= NSEventModifierFlagFunction | NSEventModifierFlagNumericPad;
+    return [NSEvent keyEventWithType:type location:NSZeroPoint modifierFlags:f timestamp:[[NSProcessInfo processInfo] systemUptime] windowNumber:[w windowNumber] context:nil characters:ch charactersIgnoringModifiers:ch isARepeat:NO keyCode:code];
+}
+
 static void driver_perform(AetherDriverActionCtx* ctx) {
     // Actions with no widget subject, handled before the registry lookup.
     switch (ctx->action) {
@@ -9733,41 +9772,8 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 // "Primary" (Command here), which the shortcut syntax does
                 // not name: the accelerator parse's bits are the same.
                 { char akey[32]; kmods |= aeui_accel_parse(ctx->sval, akey, sizeof(akey)); }
-                static const struct { const char* n; unsigned short code; unichar ch; } K[] = {
-                    {"Return", 36, '\r'}, {"Tab", 48, '\t'}, {"Escape", 53, 0x1b}, {"BackSpace", 51, 0x7f},
-                    {"space", 49, ' '}, {"Delete", 117, NSDeleteFunctionKey}, {"Home", 115, NSHomeFunctionKey},
-                    {"End", 119, NSEndFunctionKey}, {"Page_Up", 116, NSPageUpFunctionKey}, {"Page_Down", 121, NSPageDownFunctionKey},
-                    {"Left", 123, NSLeftArrowFunctionKey}, {"Right", 124, NSRightArrowFunctionKey},
-                    {"Down", 125, NSDownArrowFunctionKey}, {"Up", 126, NSUpArrowFunctionKey},
-                    {"F2", 120, NSF2FunctionKey}, {"F4", 118, NSF4FunctionKey}, {"F6", 97, NSF6FunctionKey},
-                };
-                unsigned short code = 0;
-                NSString* ch = nil;
-                for (size_t i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
-                    if (strcasecmp(kname, K[i].n) == 0) { code = K[i].code; unichar u = K[i].ch; ch = [NSString stringWithCharacters:&u length:1]; break; }
-                }
-                if (!ch) {
-                    ch = [NSString stringWithUTF8String:kname];
-                    // The key's own code on an ANSI keyboard: AppKit matches a
-                    // Command key equivalent by key code through the layout,
-                    // so code 0 (the A key) for every letter matched none.
-                    static const char ansi[] = "asdfhgzxcv\0bqweryt123465=97-80]ou[ip\0lj'k;\\,/nm.";
-                    if ([ch length] == 1) {
-                        char c = (char)tolower([ch characterAtIndex:0]);
-                        for (unsigned short k = 0; k < sizeof(ansi) - 1; k++) if (ansi[k] == c && c) { code = k; break; }
-                    }
-                    if ([ch length] == 1 && (kmods & 1)) ch = [ch uppercaseString];
-                }
-                NSEventModifierFlags f = 0;
-                if (kmods & 1) f |= NSEventModifierFlagShift;
-                if (kmods & 2) f |= NSEventModifierFlagControl;
-                if (kmods & 4) f |= NSEventModifierFlagOption;
-                if (kmods & 8) f |= NSEventModifierFlagCommand;
-                if (code >= 115 && code <= 126) f |= NSEventModifierFlagFunction | NSEventModifierFlagNumericPad;
-                for (int j = 0; j < 2; j++) {
-                    NSEvent* e = [NSEvent keyEventWithType:(j ? NSEventTypeKeyUp : NSEventTypeKeyDown) location:NSZeroPoint modifierFlags:f timestamp:[[NSProcessInfo processInfo] systemUptime] windowNumber:[primary_window windowNumber] context:nil characters:ch charactersIgnoringModifiers:ch isARepeat:NO keyCode:code];
-                    [NSApp sendEvent:e];
-                }
+                for (int j = 0; j < 2; j++)
+                    [NSApp sendEvent:aeui_driver_key_event(j ? NSEventTypeKeyUp : NSEventTypeKeyDown, kname, kmods, primary_window)];
                 ctx->retval = 1;
                 ctx->result = 0;
                 return;
@@ -9892,7 +9898,22 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                                                                : cs->on_key;
             }
             if (!c || !c->fn) { ctx->result = 3; return; }  // 404: unwired, not missed
-            if (ctx->action == AETHER_DRV_CANVAS_KEY
+            NSView* cv = cs ? (__bridge NSView*)aether_ui_get_widget(cs->widget_handle) : nil;
+            if ((ctx->action == AETHER_DRV_CANVAS_KEY || ctx->action == AETHER_DRV_CANVAS_KEYUP)
+                && aeui_driver_real_events() && [cv window] && ctx->sval[0]) {
+                // ?real=1: the key as a real event through the window to
+                // the canvas as first responder (its keyDown: / keyUp:), not
+                // the closure called. A canvas missing the override answers
+                // nothing, so a spec sees the release a person's key makes.
+                // The window's own sendEvent:, not NSApp's: NSApplication
+                // sends a key to the KEY window, which a headless (ordered
+                // out) one never is.
+                NSWindow* w = [cv window];
+                [w makeFirstResponder:cv];
+                [w sendEvent:aeui_driver_key_event(
+                    ctx->action == AETHER_DRV_CANVAS_KEYUP ? NSEventTypeKeyUp : NSEventTypeKeyDown,
+                    ctx->sval, 0, w)];
+            } else if (ctx->action == AETHER_DRV_CANVAS_KEY
                 || ctx->action == AETHER_DRV_CANVAS_KEYUP) {
                 ((void(*)(void*, const char*))c->fn)(c->env, ctx->sval);
             } else {

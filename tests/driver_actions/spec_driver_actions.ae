@@ -140,6 +140,20 @@ main() {
                 "on_key_release saw the up — not re-routed into on_key")
         }
 
+        // The same through the platform's own key dispatch (?real=1): on
+        // AppKit a real key down and up to the canvas as first responder,
+        // which only reaches on_key_release if the canvas view overrides
+        // keyUp: (#215: it did not, and a held key never came up). Backends
+        // that cannot make a real key call the closures as above.
+        spec.it("a real key release reaches canvas_on_key_release (#215)") callback {
+            uidriver.post_ok("/canvas/1/key?name=q&real=1", "real key down q")
+            ok = uidriver.wait_body_contains("/widgets", "down:q", 20)
+            spec.assert_true(ok, "on_key saw the real down")
+            uidriver.post_ok("/canvas/1/keyup?name=q&real=1", "real key up q")
+            ok2 = uidriver.wait_body_contains("/widgets", "up:q", 20)
+            spec.assert_true(ok2, "on_key_release saw the real up")
+        }
+
         // PTR BLIT + REAL SCALING — testable blits a 2x2 solid-orange
         // frame scaled to fill its 120x60 canvas; the centre pixel is only
         // orange if dw/dh actually scale. This probe was briefly weakened

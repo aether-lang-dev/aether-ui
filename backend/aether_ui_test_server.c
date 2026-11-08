@@ -1539,7 +1539,12 @@ static void handle_request_inner(aether_sock_t client_fd,
             aether_ui_last_popup_anchor = 0;
             aether_ui_secondary_from_driver = 1;
         }
+        // ?real=1 on /key and /keyup: a real key event to the canvas, where
+        // the backend can make one (AppKit), as /click's.
+        const char* rq = extract_query_param(path, "real");
+        aether_ui_driver_real_events_now = rq && atoi(rq) ? 1 : 0;
         h->dispatch_action(&ctx);
+        aether_ui_driver_real_events_now = 0;
         if (right) aether_ui_secondary_from_driver = 0;
         if (ctx.result == 3) {
             char err[96];
