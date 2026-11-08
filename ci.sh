@@ -1125,17 +1125,12 @@ echo
 echo "=== Phase 1f: AppKit label retention across list rebuilds (#139) ==="
 # tests/appkit_retention/retention_probe.ae rebuilds a 400-row listbox on a
 # timer and then sits still, and `heap` (Xcode's, in /usr/bin) counts the
-# NSTextField instances alive in it from outside. Rows a rebuild retires are
-# supposed to be freed with it, so the count is a steady state, and a count
-# that tracks the rows ever rendered is the leak #139 describes. The
-# assertion is growth, not a level: the same probe after 10 rebuilds and
-# after 20, with the run loop idle between rebuilds (the shape of an app
-# refreshing a list), may differ by one generation of rows at most -- the
-# 400 the last rebuild retired and the next run-loop turn frees. Ten
-# rebuilds that freed nothing would add 4 000. Two more runs are reported
-# for the record and not asserted: the loop saturated by a period shorter
-# than a rebuild, the shape #139 was measured in; and headless, where no
-# window is ever laid out.
+# labels (AetherLabel, an NSTextField) alive in it from outside. Rows a
+# rebuild retires are freed with it, so the count is the live tree: 401
+# labels, the same after 10, 20 and 40 rebuilds, idle, saturated or headless.
+# The assertion is both growth and level (see the bounds below); the two
+# shapes #139 measured (the loop saturated, headless) and a 100-row list are
+# reported for the record and not asserted.
 # heap(1) and leaks(1) attach to the probe as a debugger does, and on a box
 # where that attach wedges (seen on a macOS beta, 2026-10-16: `heap` hung on
 # ANY pid, even a shell) they never return: one call held this phase, and
@@ -1163,8 +1158,12 @@ bounded() {
     return "$rc"
 }
 retention_count() {
-    # The live NSTextField line of `heap`: COUNT BYTES AVG CLASS_NAME ...
-    bounded 120 heap "$1" | awk '$4 == "NSTextField" { print $1; exit }'
+    # The live labels in `heap` (COUNT BYTES AVG CLASS_NAME ...): ui.text is
+    # an AetherLabel, an NSTextField subclass, since e5681353, and heap counts
+    # by exact class. Counting NSTextField alone read 2 after that, whatever
+    # the rows did, and the gate below passed on nothing; it now also refuses
+    # a count below the rows on screen, so a renamed class fails it loudly.
+    bounded 120 heap "$1" | awk '$4 == "NSTextField" || $4 == "AetherLabel" { n += $1 } END { if (n) print n }'
 }
 retention_run() {
     # $1 = rebuild period (ms), $2 = rebuilds, $3 = label for the log,
@@ -1196,10 +1195,10 @@ retention_run() {
     if [ "$tag" = "idle40" ] && command -v leaks > /dev/null 2>&1; then
         {
             echo "  -- $tag: live view classes"
-            bounded 120 heap "$pid" | awk '$4 ~ /^(NSTextField|AetherStackView|NSTextFieldCell|_NSViewLayoutAux)$/ { print "     " $1, $4 }'
-            echo "  -- $tag: root paths to a sample of live NSTextField"
+            bounded 120 heap "$pid" | awk '$4 ~ /^(NSTextField|AetherLabel|AetherStackView|NSTextFieldCell|_NSViewLayoutAux|NSKeyValueDependency)$/ { print "     " $1, $4 }'
+            echo "  -- $tag: root paths to a sample of live AetherLabel"
             local addrs
-            addrs="$(bounded 120 heap "$pid" --addresses=NSTextField | awk '/^ *0x/ { a=$1; sub(/:$/, "", a); print a }')"
+            addrs="$(bounded 120 heap "$pid" --addresses=AetherLabel | awk '/^ *0x/ { a=$1; sub(/:$/, "", a); print a }')"
             local total
             total="$(printf '%s\n' "$addrs" | grep -c . || true)"
             if [ "$total" -gt 0 ]; then
@@ -1231,12 +1230,22 @@ if [ "$PLATFORM" = "macos" ]; then
         ten="$(retention_run 500 10 idle10)"; ten_rc=$?
         twenty="$(retention_run 500 20 idle20)"; twenty_rc=$?
         forty="$(retention_run 500 40 idle40)"; forty_rc=$?
+        # Since #139's fix the count is the live tree and nothing else (401:
+        # the 400 rows and the probe's heading), at every point. Two bounds:
+        # no growth beyond 40 between points (the leak grew ~9.5 a rebuild,
+        # through the registry's growth retaining every live widget once),
+        # and no more than 40 over the rows on screen (the first generation,
+        # built before the run loop, was kept whole: ~800 alive). And at
+        # least the rows on screen, or the count is not counting labels.
         if [ "$ten_rc" -ne 0 ] || [ "$twenty_rc" -ne 0 ] || [ "$forty_rc" -ne 0 ]; then
             FAIL=$((FAIL + 1))
-        elif [ $((twenty - ten)) -le 400 ] && [ $((forty - twenty)) -le 400 ]; then
-            echo "  OK   NSTextField alive: $ten after 10 rebuilds, $twenty after 20, $forty after 40 (run loop idle between; growth bound 400 per step)"
+        elif [ "$ten" -lt 400 ]; then
+            echo "  FAIL labels alive: $ten after 10 rebuilds, fewer than the 400 rows on screen: the count is not counting them"
+            FAIL=$((FAIL + 1))
+        elif [ $((twenty - ten)) -le 40 ] && [ $((forty - twenty)) -le 40 ] && [ "$forty" -le 440 ]; then
+            echo "  OK   labels alive: $ten after 10 rebuilds, $twenty after 20, $forty after 40 (run loop idle between; growth bound 40 per step, level bound 440)"
         else
-            echo "  FAIL NSTextField alive: $ten after 10 rebuilds, $twenty after 20, $forty after 40 of 400 rows, run loop idle between (growth bound 400 per step)"
+            echo "  FAIL labels alive: $ten after 10 rebuilds, $twenty after 20, $forty after 40 of 400 rows, run loop idle between (growth bound 40 per step, level bound 440)"
             FAIL=$((FAIL + 1))
         fi
         saturated="$(retention_run 10 20 saturated)" || true

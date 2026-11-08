@@ -127,6 +127,31 @@ enum {
 // ---------------------------------------------------------------------------
 static NSView* __strong *widgets = NULL;
 static int* widget_types = NULL;
+
+// The tree an app builds before the run loop starts is built with no
+// autorelease pool of the program's own: main() has none, and the first pool
+// is aether_ui_app_run_raw's. What AppKit autoreleases while it assembles
+// that tree (removed subviews, stack-view bookkeeping, a row once per sibling
+// added after it) went into the thread's bottom page, which nothing pops, so
+// a list's first rows outlived their first rebuild for the life of the
+// process (#139: 400 rows of 400 kept). A pool opened at the first widget
+// and popped as the run loop starts drains it, the same as each run-loop
+// turn drains what a callback autoreleases.
+extern void* objc_autoreleasePoolPush(void);
+extern void objc_autoreleasePoolPop(void* token);
+static void* aeui_build_pool = NULL;
+static int aeui_loop_started = 0;
+static void aeui_build_pool_open(void) {
+    if (!aeui_build_pool && !aeui_loop_started && [NSThread isMainThread])
+        aeui_build_pool = objc_autoreleasePoolPush();
+}
+static void aeui_build_pool_drain(void) {
+    aeui_loop_started = 1;
+    if (aeui_build_pool) {
+        objc_autoreleasePoolPop(aeui_build_pool);
+        aeui_build_pool = NULL;
+    }
+}
 // Per-widget CSS class list — a space-separated string, malloc'd, NULL when
 // the widget has no classes. AppKit has no stylesheet engine, so unlike GTK
 // these classes carry no styling; they exist because the driver's `classes`
@@ -185,6 +210,7 @@ static void aeui_stamp_handle(NSView* v, int h) {
 }
 
 static int register_widget_typed(void* widget, int type) {
+    aeui_build_pool_open();
     if (widget_count >= widget_capacity) {
         int new_cap = widget_capacity == 0 ? 64 : widget_capacity * 2;
         NSView* __strong *new_widgets = (__strong NSView**)calloc(new_cap, sizeof(NSView*));
@@ -195,8 +221,15 @@ static int register_widget_typed(void* widget, int type) {
         int* new_expand = (int*)calloc(new_cap, sizeof(int));
         int* new_group = (int*)calloc(new_cap, sizeof(int));
         if (widgets) {
+            // #139: MOVE the views, do not copy them. A __strong store
+            // (new_widgets[i] = widgets[i]) retains, and free() then drops
+            // the old array without releasing, so every widget alive at a
+            // doubling kept one retain forever: a list rebuild that crossed
+            // a doubling leaked the rows it had made so far, held by nothing
+            // a heap trace can name. memcpy hands the old references over.
+            memcpy((void*)new_widgets, (const void*)widgets,
+                   (size_t)widget_count * sizeof(NSView*));
             for (int i = 0; i < widget_count; i++) {
-                new_widgets[i] = widgets[i];
                 new_types[i] = widget_types[i];
                 new_classes[i] = widget_classes[i];
                 new_clicks[i] = widget_clicks[i];
@@ -939,6 +972,9 @@ static void aeui_bar_with_app_menu(NSMenu* bar) {
 
 void aether_ui_app_run_raw(int app_handle) {
     (void)app_handle;
+    // Before this function's own pool: the build pool is beneath it, and
+    // popping it from inside would pop this one too.
+    aeui_build_pool_drain();
     @autoreleasepool {
         NSApplication* app = [NSApplication sharedApplication];
         [app setDelegate:app_delegate];

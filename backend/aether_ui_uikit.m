@@ -177,8 +177,11 @@ static int register_widget_typed(void* widget, int type) {
         int* nt = (int*)calloc(new_cap, sizeof(int));
         char** nc = (char**)calloc(new_cap, sizeof(char*));
         if (widgets) {
+            // Move, not copy (aether-ui#139): a __strong store retains and
+            // free() would drop the old array without releasing, leaking one
+            // retain on every view alive at a doubling.
+            memcpy((void*)nw, (const void*)widgets, (size_t)widget_count * sizeof(UIView*));
             for (int i = 0; i < widget_count; i++) {
-                nw[i] = widgets[i];
                 nt[i] = widget_types[i];
                 nc[i] = widget_classes[i];
             }
