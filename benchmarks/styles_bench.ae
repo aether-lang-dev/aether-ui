@@ -1,0 +1,76 @@
+// apply_styles cost (#205): an editor-like window of ~640 widgets (rows of a
+// label, a field and a button, under headers), one sheet of a few dozen
+// rules applied to the whole tree, timed from inside the app, five times
+// (alternating two sheets, so every round really changes something), then
+// the app quits.
+//
+//   AETHER_UI_HEADLESS=1 ./styles_bench
+import ui
+import ui(window, vstack, hstack, text, btn, textfield, scrollview, timer, app_quit,
+    create_styles, st_color, st_bg, st_font_size, st_bold, st_font_family, st_radius,
+    apply_styles, add_css_class)
+
+var g_round = 0
+var g_a: ptr = null
+var g_b: ptr = null
+
+sheet(dark: int) -> ptr {
+    s = create_styles()
+    ground = 0xf4f4f4
+    ink = 0x202020
+    if dark == 1 { ground = 0x1b1d20  ink = 0xe4e4e4 }
+    st_bg(s, "root", ground)
+    st_color(s, "root", ink)
+    st_bg(s, "container", ground)
+    st_color(s, "text", ink)
+    st_font_size(s, "text", 11.0)
+    st_color(s, "button", ink)
+    st_bg(s, "button", ground + 0x111111)
+    st_radius(s, "button", 4.0)
+    st_color(s, "textfield", ink)
+    st_bg(s, "textfield", ground - 0x080808)
+    st_font_family(s, "textfield", "Consolas")
+    st_bold(s, ".header")
+    st_font_size(s, ".header", 13.0)
+    st_color(s, ".header", 0x3a7bd5)
+    st_color(s, ".dim", 0x808080)
+    st_font_size(s, ".dim", 10.0)
+    return s
+}
+
+main() {
+    window("styles bench", 600, 700) {
+        scrollview() {
+            vstack(2) {
+                s = 0
+                while s < 16 {
+                    hd = text("section ${s}")
+                    add_css_class(hd, "header")
+                    r = 0
+                    while r < 12 {
+                        hstack(4) {
+                            lb = text("field ${r}")
+                            if r % 3 == 0 { add_css_class(lb, "dim") }
+                            textfield("") callback |_v: string| { }
+                            btn("set") callback { }
+                        }
+                        r = r + 1
+                    }
+                    s = s + 1
+                }
+            }
+        }
+        g_a = sheet(1)
+        g_b = sheet(0)
+        timer(300) callback {
+            sp = g_a
+            if g_round % 2 == 1 { sp = g_b }
+            t0 = clock_ns()
+            apply_styles(0, sp)
+            t1 = clock_ns()
+            println("apply_styles ${g_round}: ${(t1 - t0) / 1000} us")
+            g_round = g_round + 1
+            if g_round >= 6 { app_quit() }
+        }
+    }
+}

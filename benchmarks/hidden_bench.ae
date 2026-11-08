@@ -1,0 +1,77 @@
+// set_hidden cost (#206): an inspector-like column of ~650 widgets in a
+// scrollview, 16 of its 20 sections hidden and shown again, timed from inside
+// the app, five rounds, then the app quits.
+//
+// Each round times the 16 set_hidden calls and then the layout they owe,
+// which a backend that defers it does on the next turn of the run loop: the
+// timer that ends the round runs after that, and its own latency is measured
+// alone and taken off (the "idle" line).
+//
+//   AETHER_UI_HEADLESS=1 ./hidden_bench
+import ui
+import ui(window, vstack, hstack, text, btn, scrollview, set_hidden, timer, timer_once, app_quit)
+import std.intarr
+
+const SECTIONS = 20
+const ROWS = 15
+
+var g_sections: ptr = null
+var g_round = 0
+var g_t0: long = 0
+var g_calls: long = 0
+var g_idle: long = 0
+var g_hidden = 0
+
+
+main() {
+    g_sections, _e = intarr.new(SECTIONS)
+    window("hidden bench", 500, 700) {
+        vstack(4) {
+            text("set_hidden bench")
+            scrollview() {
+                vstack(2) {
+                    s = 0
+                    while s < SECTIONS {
+                        sec = vstack(2) {
+                            text("section ${s}")
+                            r = 0
+                            while r < ROWS {
+                                hstack(4) {
+                                    text("field ${r}")
+                                    btn("set") callback { }
+                                }
+                                r = r + 1
+                            }
+                        }
+                        intarr.intarr_set_raw(g_sections, s, sec)
+                        s = s + 1
+                    }
+                }
+            }
+        }
+        // Round: idle timer first (its latency alone), then the toggle.
+        timer(400) callback {
+            if g_round >= 10 { app_quit() }
+            if g_round % 2 == 0 {
+                g_t0 = clock_ns()
+                timer_once(0) callback {
+                    g_idle = clock_ns() - g_t0
+                    g_t0 = clock_ns()
+                    h = 1 - g_hidden
+                    i = 0
+                    while i < 16 {
+                        set_hidden(intarr.intarr_get_raw(g_sections, i), h)
+                        i = i + 1
+                    }
+                    g_hidden = h
+                    g_calls = clock_ns() - g_t0
+                    timer_once(0) callback {
+                        total = clock_ns() - g_t0 - g_idle
+                        println("round ${g_round / 2}: hidden=${h} calls ${g_calls / 1000} us, calls+layout ${total / 1000} us (timer idle ${g_idle / 1000} us)")
+                    }
+                }
+            }
+            g_round = g_round + 1
+        }
+    }
+}

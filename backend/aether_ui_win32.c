@@ -248,6 +248,7 @@ typedef struct {
 
     // Fonts
     HFONT custom_font;
+    int font_shared;   // custom_font is the font cache's (w32_font_for), never deleted here
     double font_size;
     int font_bold;
     int font_weight_set;      // 1 = bold/normal was EXPLICITLY set (readback)
@@ -3917,7 +3918,11 @@ static void w32_refit_text(Widget* w) {
         HWND parent = GetAncestor(w->hwnd, GA_PARENT);
         Widget* pw = widget_at(handle_for_hwnd(parent));
         if (pw && (w32_is_stack(pw->kind))) {
-            stack_do_layout(parent);
+            // Requested, not run here (#205): a sheet applied to a tree
+            // refits every label in it, and a status line is set every
+            // frame; laid out on the spot, each was a pass of its whole
+            // column. Queued, the column goes once per turn of the loop.
+            w32_request_layout(parent);
         }
     }
 }
@@ -4759,8 +4764,20 @@ void aether_ui_widget_set_hidden(int handle, int hidden) {
     if (((GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_VISIBLE) == 0) == (hidden != 0)) return;
     ShowWindow(w->hwnd, hidden ? SW_HIDE : SW_SHOW);
     // The stack it sits in closes the gap, or opens one, and the view the
-    // stack scrolls in learns its new height.
-    for (parent = GetAncestor(w->hwnd, GA_PARENT); parent; parent = GetAncestor(parent, GA_PARENT)) {
+    // stack scrolls in learns its new height. In a stack that is a layout
+    // REQUESTED, as add_child's is (#160): queued with its ancestors and
+    // flushed once per turn of the run loop, so showing or hiding a dozen
+    // sections of a long column lays the column out once, not a dozen times
+    // (#206), as on GTK4 and AppKit, where a visibility change is a size
+    // request. Measured with benchmarks/hidden_bench.ae. Anything else
+    // (a splitview's pane, a tab page, a wrap) is laid out now, as before.
+    parent = GetAncestor(w->hwnd, GA_PARENT);
+    Widget* pw0 = parent ? widget_at(handle_for_hwnd(parent)) : NULL;
+    if (pw0 && (w32_is_stack(pw0->kind) || pw0->kind == WK_SCROLLVIEW)) {
+        w32_request_layout(parent);
+        return;
+    }
+    for (; parent; parent = GetAncestor(parent, GA_PARENT)) {
         Widget* pw = widget_at(handle_for_hwnd(parent));
         if (!pw) break;
         stack_do_layout(parent);
@@ -5479,11 +5496,14 @@ static void tabs_do_select(TabsState* ts, int index, int fire) {
                 LOGFONTW lf; GetObjectW(base, sizeof(lf), &lf);
                 lf.lfWeight = FW_BOLD;
                 HFONT bold = CreateFontIndirectW(&lf);
-                if (bw->custom_font) DeleteObject(bw->custom_font);
+                if (bw->custom_font && !bw->font_shared) DeleteObject(bw->custom_font);
                 bw->custom_font = bold;
+                bw->font_shared = 0;
                 SendMessageW(bw->hwnd, WM_SETFONT, (WPARAM)bold, TRUE);
             } else {
-                if (bw->custom_font) { DeleteObject(bw->custom_font); bw->custom_font = NULL; }
+                if (bw->custom_font && !bw->font_shared) DeleteObject(bw->custom_font);
+                bw->custom_font = NULL;
+                bw->font_shared = 0;
                 SendMessageW(bw->hwnd, WM_SETFONT, (WPARAM)base, TRUE);
             }
             // A tab strip is ONE tab stop, on the selected tab, and the
@@ -5804,8 +5824,12 @@ static inline COLORREF rgb_from_doubles(double r, double g, double b) {
 // a spacer, a rule, a flat button. Invalidating the container alone left
 // them as they were: a skin switched from dark to light left every divider
 // a dark band across the new ground until something else repainted it.
+// Not while it cannot be seen (#205): a window that is not shown yet, or a
+// section that is hidden, paints all of itself when it is shown, and a sheet
+// applied at startup -- before the window is up, the usual time -- walked
+// every container's subtree to invalidate what nobody could see.
 static void w32_repaint_with_children(Widget* w) {
-    if (w && IsWindow(w->hwnd))
+    if (w && IsWindow(w->hwnd) && IsWindowVisible(w->hwnd))
         RedrawWindow(w->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
@@ -5837,7 +5861,36 @@ void aether_ui_set_text_color(int handle, double r, double g, double b) {
     w->fg.has_value = 1;
     w->fg.color = rgb_from_doubles(r, g, b);
     w32_ensure_owner_draw(w);
-    InvalidateRect(w->hwnd, NULL, TRUE);
+    if (IsWindowVisible(w->hwnd)) InvalidateRect(w->hwnd, NULL, TRUE);   // see w32_repaint_with_children
+}
+
+// One HFONT per distinct LOGFONT, for the life of the process (#205): a
+// sheet applied to a tree set the size, the weight and the family of each
+// label one after another, and each step created a font and deleted the
+// one before -- three CreateFontIndirect calls per widget, for the handful
+// of fonts a sheet actually names. The fonts it holds are few (one per
+// face, size, weight and style an app uses) and are never deleted, so a
+// widget holding one (font_shared) must not delete it either.
+typedef struct { LOGFONTW lf; HFONT font; } W32FontCacheEntry;
+static W32FontCacheEntry* w32_font_cache = NULL;
+static int w32_font_cache_count = 0, w32_font_cache_cap = 0;
+
+static HFONT w32_font_for(const LOGFONTW* lf) {
+    for (int i = 0; i < w32_font_cache_count; i++)
+        if (memcmp(&w32_font_cache[i].lf, lf, sizeof(*lf)) == 0) return w32_font_cache[i].font;
+    HFONT f = CreateFontIndirectW(lf);
+    if (!f) return NULL;
+    if (w32_font_cache_count >= w32_font_cache_cap) {
+        int cap = w32_font_cache_cap ? w32_font_cache_cap * 2 : 16;
+        W32FontCacheEntry* g = (W32FontCacheEntry*)realloc(w32_font_cache, sizeof(*g) * cap);
+        if (!g) return f;   // uncached: still a font, owned by nobody (a leak, not a crash)
+        w32_font_cache = g;
+        w32_font_cache_cap = cap;
+    }
+    w32_font_cache[w32_font_cache_count].lf = *lf;
+    w32_font_cache[w32_font_cache_count].font = f;
+    w32_font_cache_count++;
+    return f;
 }
 
 static void apply_font(Widget* w) {
@@ -5859,8 +5912,21 @@ static void apply_font(Widget* w) {
         wcsncpy(lf.lfFaceName, w->font_family, LF_FACESIZE - 1);
         lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
     }
-    if (w->custom_font) DeleteObject(w->custom_font);
-    w->custom_font = CreateFontIndirectW(&lf);
+    // The cache zero-fills what LOGFONT leaves unset, so equal fonts compare
+    // equal byte for byte.
+    LOGFONTW key;
+    memset(&key, 0, sizeof(key));
+    key = lf;
+    size_t fl = wcsnlen(key.lfFaceName, LF_FACESIZE);
+    if (fl < LF_FACESIZE) memset(key.lfFaceName + fl, 0, (LF_FACESIZE - fl) * sizeof(WCHAR));
+    HFONT f = w32_font_for(&key);
+    if (!f) return;
+    // The same font again (a sheet re-applied, or a step that changed
+    // nothing): no WM_SETFONT, so no repaint and no refit.
+    if (f == w->custom_font && (HFONT)SendMessageW(w->hwnd, WM_GETFONT, 0, 0) == f) return;
+    if (w->custom_font && !w->font_shared) DeleteObject(w->custom_font);
+    w->custom_font = f;
+    w->font_shared = 1;
     SendMessageW(w->hwnd, WM_SETFONT, (WPARAM)w->custom_font, TRUE);
     // A label measured in the default font and then set in a bolder or a
     // larger one no longer fits the width it was given: the sheet is
@@ -6211,6 +6277,10 @@ static LRESULT CALLBACK corner_region_proc(HWND hwnd, UINT msg, WPARAM wp,
 void aether_ui_set_corner_radius(int handle, double radius) {
     Widget* w = widget_at(handle);
     if (!w) return;
+    // The same radius again (a sheet re-applied, a theme swap that keeps the
+    // shapes): the region is already right and tracks every resize, and
+    // remaking it was the largest part of an apply_styles on Win32 (#205).
+    if (w->corner_tracked && w->corner_radius == (int)radius) return;
     w->corner_radius = (int)radius;
     w32_ensure_owner_draw(w);
     // Every size the widget is given from now on, whichever layout gives

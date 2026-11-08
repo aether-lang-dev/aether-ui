@@ -276,6 +276,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **win32: `set_hidden` no longer lays out every ancestor stack per call
+  (#206).** In a stack it requests the layout (the queue `add_child` uses), so
+  hiding or showing a dozen sections of a long column lays it out once per
+  turn of the run loop. `benchmarks/hidden_bench.ae` (16 of 20 sections, ~650
+  widgets, win11 headless): hide ~2.0 s -> 30-65 ms, show ~2.2 s -> ~200 ms.
+- **win32: `apply_styles` ~10x faster (#205).** A label refitting to its new
+  font requests its stack's layout instead of running it (so does
+  `text_set_string`); fonts come from a cache, one per distinct LOGFONT; an
+  unchanged corner radius keeps its region; nothing is invalidated that cannot
+  be seen (a window not shown yet, a hidden section). `benchmarks/styles_bench.ae`
+  (~650 widgets, win11 headless): first apply ~2.2 s -> ~250 ms, later ones
+  ~260 ms -> ~25 ms.
+
 - **win32: a canvas with no scroll or key-up handler crashed on the mouse
   wheel or a key release (#213).** `aether_ui_canvas_create_impl` grows its
   table with `realloc` and filled each field by hand, and the list missed

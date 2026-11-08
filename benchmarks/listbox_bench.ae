@@ -1,0 +1,57 @@
+// listbox_update cost (#207): a hierarchy-like listbox whose row callback
+// builds three widgets (the row's hstack, a flat fixed-width caret button
+// with margins, a label with a class the current sheet styles), updated with
+// 29 and then 84 rows, timed from inside the app, three rounds each.
+//
+//   AETHER_UI_HEADLESS=1 ./listbox_bench
+import ui
+import ui(window, vstack, text, btn, scrollview, listbox, listbox_update, timer, app_quit,
+    create_styles, st_color, st_font_size, use_styles, add_css_class, width, margin_of,
+    style_flat)
+import std.list
+import std.string
+
+var g_lb: ptr = null
+var g_small: ptr = null
+var g_big: ptr = null
+var g_round = 0
+
+main() {
+    g_small = list.new()
+    g_big = list.new()
+    i = 0
+    while i < 84 {
+        if i < 29 { list.add(g_small, g_small) }
+        list.add(g_big, g_big)
+        i = i + 1
+    }
+    s = create_styles()
+    st_color(s, ".node", 0x202020)
+    st_font_size(s, ".node", 11.0)
+    use_styles(s)
+    window("listbox bench", 400, 700) {
+        scrollview() {
+            vstack(0) {
+                g_lb = listbox(0) callback |item: ptr, idx: int, row: int| {
+                    caret = btn(row, ">") callback { }
+                    _ = width(caret, 16)
+                    _ = margin_of(caret, 0, 2, 0, idx % 4 * 12)
+                    _ = style_flat(caret)
+                    lbl = text(row, "node ${idx}")
+                    add_css_class(lbl, "node")
+                }
+            }
+        }
+        timer(300) callback {
+            items = g_small
+            n = 29
+            if g_round % 2 == 1 { items = g_big  n = 84 }
+            t0 = clock_ns()
+            listbox_update(g_lb, items)
+            t1 = clock_ns()
+            println("listbox_update ${n} rows: ${(t1 - t0) / 1000} us")
+            g_round = g_round + 1
+            if g_round >= 6 { app_quit() }
+        }
+    }
+}
