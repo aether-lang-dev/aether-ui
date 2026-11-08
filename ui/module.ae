@@ -10101,6 +10101,11 @@ set_file_icon(handle: int, path: string) {
 // into it, which reads as "the canvas is acting as a strut on its parent" and
 // sends you looking in entirely the wrong place. Reach for canvas_size below,
 // or convert once with canvas_widget(id) before calling any widget function.
+//
+// width and height are the canvas's NATURAL size on every backend, not a
+// floor (#210): a stack or a splitter may give it less, or more. A floor is
+// set_min_width/set_min_height on canvas_widget(id); canvas_size pins it.
+// gpuview_create's size means the same.
 canvas_create(_ctx: ptr, width: int, height: int) {
     cid = aether_ui_canvas_create_impl(width, height)
     wh = aether_ui_canvas_get_widget(cid)

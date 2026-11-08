@@ -1,0 +1,98 @@
+// spec_splitcanvas_demo.ae — a viewport beside an inspector (#210, #211).
+//
+// The demo's canvas and GPU view are made 860 wide in a 900-wide window, the
+// shape of ae3d's editor, which made its viewport at the window's size.
+//
+// #210: the create size is a NATURAL size on every backend. GTK4 alone made
+// it a floor (a drawing area's content size, a GL area's size request), so
+// the window opened wider than asked and the divider could not be dragged
+// toward the viewport at all: split_position answered, the viewport stayed.
+//
+// #211: on_resize means "the allocation changed". The demo's callbacks write
+// the size they were told into labels, so this reads what the APP heard and
+// compares it with what /widgets says the canvas got. Under
+// AETHER_UI_HEADLESS a GTK window is never presented, and a divider moved
+// there answered its new position while neither pane was re-allocated, so
+// the canvas's hook never fired.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/splitcanvas_demo/bin/splitcanvas_demo &
+//   UI_SPEC=splitcanvas_demo/spec_splitcanvas_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.os (os_getenv)
+
+// Wait until the canvas widget's width is within 2 px of `want`.
+wait_canvas_w(cv: int, want: int) -> int {
+    i = 0
+    while i < 30 {
+        w = uidriver.widget_int_field_by_id(cv, "w")
+        if w >= want - 2 && w <= want + 2 { return w }
+        sleep(150)
+        i = i + 1
+    }
+    return uidriver.widget_int_field_by_id(cv, "w")
+}
+
+// The app's own label says "canvas: WxH": the canvas's width as on_resize
+// told it, which must be the width the canvas was given.
+heard(cv: int) -> int {
+    w = uidriver.widget_int_field_by_id(cv, "w")
+    return uidriver.wait_body_contains("/widgets", "\"text\":\"canvas: ${w}x", 30)
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    headless = os_getenv("AETHER_UI_HEADLESS") != null
+
+    spec.describe(fw, "a canvas and GPU view beside an inspector") {
+        spec.it("a viewport made wider than its pane does not widen the window (#210)") callback {
+            uidriver.resize_window(900, 620)
+            sv = uidriver.widget_id_of("splitview", "")
+            spec.assert_gt(sv, 0, "the splitview is in /widgets")
+            root = uidriver.widget_int_field_by_id(sv, "parent")
+            ok = uidriver.wait_body_contains("/widget/${root}", "\"w\":900,", 30)
+            rw = uidriver.widget_int_field_by_id(root, "w")
+            spec.assert_true(ok, "the window is the 900 asked for, not the viewport's floor (root w ${rw})")
+        }
+
+        spec.it("the divider narrows the viewport below its create size (#210)") callback {
+            sv = uidriver.widget_id_of("splitview", "")
+            cv = uidriver.widget_id_of("canvas", "")
+            uidriver.post_ok("/widget/${sv}/split_position?px=400", "divider to 400")
+            ok = uidriver.wait_body_contains("/widget/${sv}", "\"splitPosition\":400", 30)
+            spec.assert_true(ok, "the splitter is at 400")
+            w = wait_canvas_w(cv, 400)
+            spec.assert_true(w >= 398 && w <= 402, "the 860-wide canvas is the pane's 400 (w ${w})")
+        }
+
+        spec.it("on_resize tells the app the new allocation (#211)") callback {
+            cv = uidriver.widget_id_of("canvas", "")
+            spec.assert_true(heard(cv), "the app heard the width the canvas has after the divider moved")
+            sv = uidriver.widget_id_of("splitview", "")
+            uidriver.post_ok("/widget/${sv}/split_position?px=700", "divider to 700")
+            w = wait_canvas_w(cv, 700)
+            spec.assert_true(w >= 698 && w <= 702, "the canvas widened with its pane (w ${w})")
+            spec.assert_true(heard(cv), "and the app heard that too")
+        }
+
+        spec.it("the GPU view's on_resize follows its allocation, or there is none") callback {
+            body = uidriver.get_body("/widgets")
+            if string.contains(body, "gpu: unavailable") == 1 || headless {
+                // No GL here (win32, UIKit, a display without a GL device), or
+                // a window never presented, where no frame is ever rendered.
+                spec.assert_true(1 == 1, "no GPU frame to follow")
+            } else {
+                cv = uidriver.widget_id_of("canvas", "")
+                w = uidriver.widget_int_field_by_id(cv, "w")
+                // PIXELS: the canvas's points on a 1x display, twice them on 2x.
+                ok1 = uidriver.wait_body_contains("/widgets", "\"text\":\"gpu: ${w}x", 20)
+                ok2 = 0
+                if ok1 == 0 { ok2 = uidriver.wait_body_contains("/widgets", "\"text\":\"gpu: ${w * 2}x", 5) }
+                spec.assert_true(ok1 == 1 || ok2 == 1, "the GPU view heard the pane's width (${w} pt)")
+            }
+        }
+    }
+    return spec.run_summary(fw)
+}

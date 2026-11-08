@@ -980,17 +980,88 @@ static void aeui_editable_pin_width(GtkWidget* w) {
     }
 }
 
+// The size a canvas or a GPU view is created with is its NATURAL size, as it
+// is on AppKit and UIKit (an equality at priority 150) and win32 (the
+// measure's answer, w32_canvas_natural), and not a floor (#210). A
+// GtkDrawingArea answers its content size as minimum AND natural, and a size
+// request on a GtkGLArea is a minimum, so on GTK alone a viewport made 880
+// wide held a splitter's side at 880 or more. These two subclasses answer the
+// same natural size with a minimum of nothing; set_min_width/height (a size
+// request) is what floors one, and width()/height() and canvas_size what pin.
+//
+// Inside a scroll view the minimum stays the natural size. A GtkViewport
+// scrolls its child's MINIMUM extent (GTK_SCROLL_MINIMUM), so a canvas
+// larger than the view kept its size and scrolled only because the minimum
+// was the natural size: with none it would be squeezed to the view.
+static gboolean aeui_in_scroller(GtkWidget* w) {
+    return gtk_widget_get_ancestor(w, GTK_TYPE_SCROLLED_WINDOW) != NULL;
+}
+
+typedef struct { GtkDrawingArea parent_instance; } AeuiCanvasArea;
+typedef struct { GtkDrawingAreaClass parent_class; } AeuiCanvasAreaClass;
+G_DEFINE_TYPE(AeuiCanvasArea, aeui_canvas_area, GTK_TYPE_DRAWING_AREA)
+
+static void aeui_canvas_area_measure(GtkWidget* w, GtkOrientation o, int for_size,
+                                     int* min, int* nat, int* min_b, int* nat_b) {
+    GTK_WIDGET_CLASS(aeui_canvas_area_parent_class)->measure(w, o, for_size,
+                                                             min, nat, min_b, nat_b);
+    if (!aeui_in_scroller(w)) *min = 0;
+}
+static void aeui_canvas_area_class_init(AeuiCanvasAreaClass* k) {
+    GTK_WIDGET_CLASS(k)->measure = aeui_canvas_area_measure;
+}
+static void aeui_canvas_area_init(AeuiCanvasArea* a) { (void)a; }
+
+typedef struct { GtkGLArea parent_instance; int nat_w, nat_h; } AeuiGpuArea;
+typedef struct { GtkGLAreaClass parent_class; } AeuiGpuAreaClass;
+G_DEFINE_TYPE(AeuiGpuArea, aeui_gpu_area, GTK_TYPE_GL_AREA)
+#define AEUI_IS_GPU_AREA(w) G_TYPE_CHECK_INSTANCE_TYPE((w), aeui_gpu_area_get_type())
+
+static void aeui_gpu_area_measure(GtkWidget* w, GtkOrientation o, int for_size,
+                                  int* min, int* nat, int* min_b, int* nat_b) {
+    (void)for_size;
+    AeuiGpuArea* a = (AeuiGpuArea*)w;
+    int n = o == GTK_ORIENTATION_HORIZONTAL ? a->nat_w : a->nat_h;
+    *nat = n;
+    *min = aeui_in_scroller(w) ? n : 0;
+    if (min_b) *min_b = -1;
+    if (nat_b) *nat_b = -1;
+}
+// A GtkGLArea emits resize from its snapshot, and only when it renders, so a
+// view whose app draws on demand (auto_render off) never heard of a new
+// allocation until it next asked for a frame (#211). Asking for one when the
+// allocation changes makes resize follow the allocation, with the context
+// current as the signal promises.
+static void aeui_gpu_area_size_allocate(GtkWidget* w, int width, int height, int baseline) {
+    int ow = gtk_widget_get_width(w), oh = gtk_widget_get_height(w);
+    GTK_WIDGET_CLASS(aeui_gpu_area_parent_class)->size_allocate(w, width, height, baseline);
+    if ((ow != width || oh != height) && gtk_widget_get_realized(w))
+        gtk_gl_area_queue_render(GTK_GL_AREA(w));
+}
+static void aeui_gpu_area_class_init(AeuiGpuAreaClass* k) {
+    GTK_WIDGET_CLASS(k)->measure = aeui_gpu_area_measure;
+    GTK_WIDGET_CLASS(k)->size_allocate = aeui_gpu_area_size_allocate;
+}
+static void aeui_gpu_area_init(AeuiGpuArea* a) { a->nat_w = a->nat_h = 1; }
+
 // A canvas given a width() or height() is that size, smaller than it was made
-// too. A GtkDrawingArea's content size is its minimum (and natural) size, and
-// a size request only raises a minimum, so a canvas made 200 x 200 and then
-// pinned to 120 stayed 200 (GTK 4.6; vg.resize on a scene shrinking it).
-// Moving the content size to the request makes the pinned size the floor.
+// too. A size request only raises a minimum, so a canvas made 200 x 200 and
+// then pinned to 120 still wanted 200 (GTK 4.6; vg.resize on a scene
+// shrinking it). Moving the natural size to the request makes the pinned size
+// the size; the request itself is the floor. The same for a GPU view.
 static void aeui_drawing_area_pin_size(GtkWidget* w) {
-    if (!w || !GTK_IS_DRAWING_AREA(w)) return;
+    if (!w) return;
     int rw = -1, rh = -1;
     gtk_widget_get_size_request(w, &rw, &rh);
-    if (rw > 0) gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(w), rw);
-    if (rh > 0) gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(w), rh);
+    if (GTK_IS_DRAWING_AREA(w)) {
+        if (rw > 0) gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(w), rw);
+        if (rh > 0) gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(w), rh);
+    } else if (AEUI_IS_GPU_AREA(w)) {
+        AeuiGpuArea* a = (AeuiGpuArea*)w;
+        if (rw > 0) a->nat_w = rw;
+        if (rh > 0) a->nat_h = rh;
+        gtk_widget_queue_resize(w);
+    }
 }
 
 void aether_ui_text_set_truncate(int handle, int mode) {
@@ -6335,10 +6406,11 @@ typedef struct {
     int widget_handle;
     // Resize hook — the AeVG vg{} scope registers a closure here so it can
     // re-map its viewBox and re-flush its shapes at the new canvas size. Fired
-    // from the draw func when the allocation differs from last_w/last_h.
+    // when the allocation differs from last_w/last_h (canvas_fire_resize).
     AeClosure* on_resize;
     int last_w;
     int last_h;
+    int resize_idle;         // canvas_resize_idle is queued
     // Click hook — AeVG's vg{} scope registers a closure here to receive
     // canvas-local (x, y) on a single click, so it can hit-test shapes and
     // dispatch per-element handlers (the widget-level on_click gives no coords).
@@ -6887,9 +6959,9 @@ int aether_ui_canvas_render_range_rgba_impl(int canvas_id, int start, int end,
 }
 
 // The canvas's resize hook, if it has one and the size is not the one it was
-// last told: fired from the draw func, and from the driver's layout settle for
-// a window that is never presented (AETHER_UI_HEADLESS), whose canvases are
-// allocated but never drawn.
+// last told: fired from size-allocate (canvas_area_resized), from the draw
+// func, and from the driver's layout settle for a window that is never
+// presented (AETHER_UI_HEADLESS), whose canvases are allocated but never drawn.
 static void canvas_fire_resize(CanvasState* cs, int width, int height) {
     if (cs && cs->on_resize && cs->on_resize->fn &&
         (width != cs->last_w || height != cs->last_h)) {
@@ -6899,6 +6971,33 @@ static void canvas_fire_resize(CanvasState* cs, int width, int height) {
         ((void(*)(void*, double, double))cs->on_resize->fn)(
             cs->on_resize->env, (double)width, (double)height);
     }
+}
+
+// After the layout pass, not inside it: the hook usually changes the UI (a
+// vg scene re-flushes, an app sets a label), and a resize queued while GTK is
+// still allocating is the "snapshot ... without a current allocation" warning
+// and a frame drawn half laid out. If the canvas is drawn first, the draw
+// func has told the hook already and this finds nothing new to say.
+static gboolean canvas_resize_idle(gpointer data) {
+    int canvas_id = (int)(intptr_t)data;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs) return G_SOURCE_REMOVE;
+    cs->resize_idle = 0;
+    GtkWidget* w = aether_ui_get_widget(cs->widget_handle);
+    if (!w) return G_SOURCE_REMOVE;
+    int width = gtk_widget_get_width(w), height = gtk_widget_get_height(w);
+    if (width > 0 && height > 0) canvas_fire_resize(cs, width, height);
+    return G_SOURCE_REMOVE;
+}
+
+static void canvas_area_resized(GtkDrawingArea* area, int width, int height,
+                                gpointer data) {
+    (void)area; (void)width; (void)height;
+    int canvas_id = (int)(intptr_t)data;
+    CanvasState* cs = get_canvas_state(canvas_id);
+    if (!cs || !cs->on_resize || cs->resize_idle) return;
+    cs->resize_idle = 1;
+    g_idle_add(canvas_resize_idle, (gpointer)(intptr_t)canvas_id);
 }
 
 static void canvas_draw_func(GtkDrawingArea* area, cairo_t* cr,
@@ -7378,16 +7477,16 @@ int aether_ui_canvas_last_paint_h_impl(int canvas_id) {
 
 int aether_ui_canvas_create_impl(int width, int height) {
     ensure_gtk_init();
-    GtkWidget* da = gtk_drawing_area_new();
+    GtkWidget* da = g_object_new(aeui_canvas_area_get_type(), NULL);
     // Focusable so it can receive key events (canvas_on_key); a GtkDrawingArea
     // isn't focusable by default. Harmless for canvases that never take keys.
     gtk_widget_set_focusable(da, TRUE);
-    // content_width/height is the canvas's NATURAL (minimum) size — used when
-    // no parent forces a size (headless PNG, canvas in a scroll view). But a
-    // GtkDrawingArea won't grow past its content size on its own, so a canvas
-    // in a window would stay 400x300 and just center. Make it expand + fill so
-    // it takes the whole allocation; the draw func then gets the real size and
-    // the resize hook fires, letting the vg scene rescale.
+    // content_width/height is the canvas's NATURAL size (its minimum is
+    // nothing, AeuiCanvasArea, #210) -- used when no parent forces a size
+    // (headless PNG, canvas in a scroll view). But a GtkDrawingArea won't grow
+    // past its content size on its own, so a canvas in a window would stay
+    // 400x300 and just center. Make it expand + fill so it takes the whole
+    // allocation; the resize hook then hears the real size.
     gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(da), width);
     gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(da), height);
     gtk_widget_set_hexpand(da, TRUE);
@@ -7407,6 +7506,7 @@ int aether_ui_canvas_create_impl(int width, int height) {
     cs->count = 0;
     cs->capacity = 0;
     cs->on_resize = NULL;
+    cs->resize_idle = 0;
     cs->on_move = NULL;
     cs->on_key = NULL;
     cs->on_key_release = NULL;
@@ -7443,6 +7543,12 @@ int aether_ui_canvas_create_impl(int width, int height) {
 
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(da), canvas_draw_func,
                                     (gpointer)(intptr_t)canvas_id, NULL);
+    // The resize hook follows the ALLOCATION (#211): GtkDrawingArea::resize is
+    // emitted from size-allocate, so an app that draws only when something
+    // changed still hears that its canvas was re-laid out. The draw func's
+    // own check stays as the fallback.
+    g_signal_connect(da, "resize", G_CALLBACK(canvas_area_resized),
+                     (gpointer)(intptr_t)canvas_id);
     return canvas_id;
 }
 
@@ -7549,14 +7655,16 @@ int aether_ui_gpuview_available_impl(void) {
 }
 
 int aether_ui_gpuview_create_impl(int width, int height) {
-    GtkWidget* area = gtk_gl_area_new();
+    GtkWidget* area = g_object_new(aeui_gpu_area_get_type(), NULL);
     if (!area) return 0;
     if (width  <= 0) width  = 1;
     if (height <= 0) height = 1;
     gtk_gl_area_set_required_version(GTK_GL_AREA(area), 3, 2);
     gtk_gl_area_set_has_depth_buffer(GTK_GL_AREA(area), TRUE);
     gtk_gl_area_set_auto_render(GTK_GL_AREA(area), FALSE);   /* app drives frames */
-    gtk_widget_set_size_request(area, width, height);
+    /* The natural size, not a size request, which is a floor (#210). */
+    ((AeuiGpuArea*)area)->nat_w = width;
+    ((AeuiGpuArea*)area)->nat_h = height;
     gtk_widget_set_hexpand(area, TRUE);
     gtk_widget_set_vexpand(area, TRUE);
 
@@ -7628,8 +7736,8 @@ int aether_ui_canvas_get_widget(int canvas_id) {
 }
 
 // Register a resize hook on a canvas. The boxed Aether closure takes (w, h)
-// and is fired from the draw func when the allocation changes (see
-// canvas_draw_func). AeVG's vg{} scope uses this to rescale its scene.
+// and is fired when the allocation changes (canvas_area_resized, with the
+// draw func as fallback). AeVG's vg{} scope uses this to rescale its scene.
 void aether_ui_canvas_on_resize_impl(int canvas_id, void* boxed_closure) {
     CanvasState* cs = get_canvas_state(canvas_id);
     if (!cs) return;
@@ -10519,6 +10627,17 @@ static void aeui_drv_settle_layout(void) {
                 }
                 if (dw > 0 && dh > 0) { ww = dw; wh = dh; }
                 else { ww = 0; wh = 0; }
+                // And re-laid out INSIDE, not only at the top. A window never
+                // presented is not visible, and GTK neither carries a child's
+                // queued allocation up past an invisible widget nor walks
+                // down from one (gtk_widget_needs_allocate), so allocating
+                // it again at the same size reached nothing below: a divider
+                // moved by split_position answered its new position while
+                // both panes kept their old widths, and a canvas in one
+                // never heard of a resize (#211). Queueing the window's own
+                // allocation makes this pass allocate its child, and from
+                // there GTK reaches every widget that queued one.
+                if (pass == 0) gtk_widget_queue_allocate(win);
             }
             if (gtk_widget_get_realized(win) && ww > 0 && wh > 0)
                 gtk_widget_allocate(win, ww, wh, -1, NULL);

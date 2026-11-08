@@ -1,0 +1,60 @@
+// A viewport beside an inspector, the shape of ae3d's editor (#210, #211).
+//
+// The left pane holds a canvas and, where the display has GL, a GPU view, each
+// made WIDER than the pane will end up: their create size is a natural size
+// (canvas_size and set_min_width are what pin and floor), so the splitter must
+// be able to narrow them (#210). Each one's on_resize writes the size it was
+// told into a label, so the spec reads what the APP heard, not only what the
+// toolkit allocated: dragging the divider must tell the app (#211), even
+// though nothing here draws in between.
+
+import ui
+import ui (window, vstack, text, splitview, canvas_create, canvas_widget,
+    canvas_on_resize, canvas_fill_rect, gpuview_available, gpuview_create,
+    gpuview_widget, gpuview_on_resize, gpuview_on_render, fill_width,
+    fill_height, set_text, a11y_label, enable_test_server)
+import std.os (os_getenv)
+
+extern glClearColor(r: f32, g: f32, b: f32, a: f32)
+extern glClear(mask: int)
+extern glViewport(x: int, y: int, w: int, h: int)
+
+const GL_COLOR_BUFFER_BIT = 16384
+
+main() {
+    window("split canvas", 900, 620) {
+        _sv = splitview("h") {
+            vstack(0) {
+                cv_lbl = text("canvas: none")
+                gpu_lbl = text("gpu: none")
+                cv = canvas_create(860, 260)
+                _ = a11y_label(canvas_widget(cv), "viewport canvas")
+                canvas_fill_rect(cv, 0.0, 0.0, 4000.0, 4000.0, 0.2, 0.4, 0.8, 1.0)
+                canvas_on_resize(cv) callback |w: float, h: float| {
+                    set_text(cv_lbl, "canvas: ${w as int}x${h as int}")
+                }
+                if gpuview_available() == 1 {
+                    gpu = gpuview_create(860, 260)
+                    fill_width(gpuview_widget(gpu))
+                    fill_height(gpuview_widget(gpu))
+                    _ = a11y_label(gpuview_widget(gpu), "viewport gpu")
+                    gpuview_on_resize(gpu) callback |w: int, h: int| {
+                        glViewport(0, 0, w, h)
+                        set_text(gpu_lbl, "gpu: ${w}x${h}")
+                    }
+                    gpuview_on_render(gpu) callback |_dt: float| {
+                        glClearColor(0.0, 1.0, 0.0, 1.0)
+                        glClear(GL_COLOR_BUFFER_BIT)
+                    }
+                } else {
+                    set_text(gpu_lbl, "gpu: unavailable")
+                }
+            }
+            vstack(4) {
+                _i1 = text("inspector")
+                _i2 = text("transform")
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
