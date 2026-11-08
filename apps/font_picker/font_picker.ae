@@ -35,9 +35,10 @@ import ui (
     picker, picker_add, enable_test_server, shortcut, scrollview, height,
     edge_insets, content_inset, style_corner_radius, style_border, style_bg_color,
     style_text_color, style_hover,
-    ui_state_s, ui_set_s, bind_text
+    ui_state_s, ui_set_s, bind_text, set_min_height, canvas_widget
 )
 import vg.font
+import vg (scene_canvas)
 import vg.live (vg, canvas_region, region_set_animated)
 import vg (
     view_box, rect, fill, use_font, typeface, text_paths_width, text_paths,
@@ -498,6 +499,10 @@ main() {
                 // keep a ~60fps loop redrawing an unchanging preview.
                 region_set_animated(prv, 0)
             }
+            // A canvas's size is a natural size, not a floor (#210), and on
+            // GTK this window's controls want more than its 720 px: without
+            // a floor the preview is what gives way, down to a sliver.
+            _pvh = set_min_height(canvas_widget(scene_canvas(app.scene)), 95)
 
             t_sel = text("no selection")
             bind_text(t_sel, seltext)
