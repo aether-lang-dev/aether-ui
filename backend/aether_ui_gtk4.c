@@ -11069,7 +11069,7 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_TEXT: {
             CanvasKeyAction ka = {0};
             ka.canvas_id = ctx->handle;
-            strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
+            g_strlcpy(ka.name, ctx->sval, sizeof(ka.name));
             canvas_text_idle(&ka);
             ctx->result = ka.result; ctx->done = 1;
             return;
