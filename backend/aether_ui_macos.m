@@ -1845,6 +1845,10 @@ static int aeui_combo_split(const char* canonical, char* name, int namesize) {
     return mods;
 }
 
+// Set when the monitor below consumes a key: the driver's headless key
+// delivery (aeui_driver_deliver_key) reads it to know the key was taken.
+static int aeui_key_monitor_consumed = 0;
+
 // One local key-down monitor serves every accelerator AND the chord layer.
 // Swallow the event when consumed so the key doesn't also reach the focused
 // control (a Ctrl+B accelerator must not type "b" into the focused entry).
@@ -1854,7 +1858,7 @@ static void ensure_shortcut_monitor(void) {
         handler:^NSEvent*(NSEvent* ev) {
             char canonical[64];
             event_to_combo(ev, canonical, sizeof(canonical));
-            if (shortcut_dispatch(canonical)) return nil;  // consumed
+            if (shortcut_dispatch(canonical)) { aeui_key_monitor_consumed = 1; return nil; }  // consumed
             // No accelerator wanted it: offer it to the any-key handler, and
             // pass the event on regardless so the focused control still sees
             // what was typed.
@@ -1872,7 +1876,7 @@ static void ensure_shortcut_monitor(void) {
                 // A handler that used the key claims it (key_claim): AppKit
                 // then does not also act on it (the key view loop, a scroll
                 // view's arrows, a default button's Return).
-                if (aether_ui_key_claim_take()) return nil;
+                if (aether_ui_key_claim_take()) { aeui_key_monitor_consumed = 1; return nil; }
             }
             return ev;
         }];
@@ -9874,6 +9878,32 @@ static NSEvent* aeui_driver_key_event(NSEventType type, const char* kname, int k
     return [NSEvent keyEventWithType:type location:NSZeroPoint modifierFlags:f timestamp:[[NSProcessInfo processInfo] systemUptime] windowNumber:[w windowNumber] context:nil characters:ch charactersIgnoringModifiers:ch isARepeat:NO keyCode:code];
 }
 
+// Deliver a driver-made key event to window `w` as a person's key reaches
+// the key window. When `w` IS the key window, NSApplication does it all. When
+// it is not -- a headless window is never ordered in, so it can never become
+// key -- NSApp still runs the local key monitors (the shortcut and any-key
+// layer) and the main menu's key equivalents, then hands the key to a key
+// window that does not exist, and the focused control never sees it. So NSApp
+// does its part, and the rest of the key-window path is done here if nothing
+// took the key on the way: the toolkit's monitor says when it consumed it
+// (aeui_key_monitor_consumed), and the menu's NSMenuDidSendActionNotification
+// says an item fired. (A sentinel monitor of our own cannot stand in for
+// either: the order monitors run in is not the order they were added.)
+static void aeui_driver_deliver_key(NSEvent* e, NSWindow* w) {
+    if (!e || !w) return;
+    if ([NSApp keyWindow] == w) { [NSApp sendEvent:e]; return; }
+    __block int menu_fired = 0;
+    id obs = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSMenuDidSendActionNotification object:nil queue:nil
+                usingBlock:^(NSNotification* n) { (void)n; menu_fired = 1; }];
+    aeui_key_monitor_consumed = 0;
+    [NSApp sendEvent:e];
+    [[NSNotificationCenter defaultCenter] removeObserver:obs];
+    if (aeui_key_monitor_consumed || menu_fired) return;
+    if ([e type] == NSEventTypeKeyDown && [w performKeyEquivalent:e]) return;
+    [w sendEvent:e];
+}
+
 static void driver_perform(AetherDriverActionCtx* ctx) {
     // Actions with no widget subject, handled before the registry lookup.
     switch (ctx->action) {
@@ -9958,7 +9988,7 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 // not name: the accelerator parse's bits are the same.
                 { char akey[32]; kmods |= aeui_accel_parse(ctx->sval, akey, sizeof(akey)); }
                 for (int j = 0; j < 2; j++)
-                    [NSApp sendEvent:aeui_driver_key_event(j ? NSEventTypeKeyUp : NSEventTypeKeyDown, kname, kmods, primary_window)];
+                    aeui_driver_deliver_key(aeui_driver_key_event(j ? NSEventTypeKeyUp : NSEventTypeKeyDown, kname, kmods, primary_window), primary_window);
                 ctx->retval = 1;
                 ctx->result = 0;
                 return;
@@ -10104,18 +10134,15 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
             NSView* cv = cs ? (__bridge NSView*)aether_ui_get_widget(cs->widget_handle) : nil;
             if ((ctx->action == AETHER_DRV_CANVAS_KEY || ctx->action == AETHER_DRV_CANVAS_KEYUP)
                 && aeui_driver_real_events() && [cv window] && ctx->sval[0]) {
-                // ?real=1: the key as a real event through the window to
+                // ?real=1: the key as a real event (aeui_driver_deliver_key) to
                 // the canvas as first responder (its keyDown: / keyUp:), not
                 // the closure called. A canvas missing the override answers
                 // nothing, so a spec sees the release a person's key makes.
-                // The window's own sendEvent:, not NSApp's: NSApplication
-                // sends a key to the KEY window, which a headless (ordered
-                // out) one never is.
                 NSWindow* w = [cv window];
                 [w makeFirstResponder:cv];
-                [w sendEvent:aeui_driver_key_event(
+                aeui_driver_deliver_key(aeui_driver_key_event(
                     ctx->action == AETHER_DRV_CANVAS_KEYUP ? NSEventTypeKeyUp : NSEventTypeKeyDown,
-                    ctx->sval, 0, w)];
+                    ctx->sval, 0, w), w);
             } else if (ctx->action == AETHER_DRV_CANVAS_KEY
                 || ctx->action == AETHER_DRV_CANVAS_KEYUP
                 || ctx->action == AETHER_DRV_CANVAS_TEXT) {
@@ -10205,9 +10232,29 @@ static void driver_perform(AetherDriverActionCtx* ctx) {
                 // its closure called: what a person's click does.
                 NSWindow* w = [v window];
                 NSPoint c = [v convertPoint:NSMakePoint(NSMidX([v bounds]), NSMidY([v bounds])) toView:nil];
+                // AppKit dispatches no mouse event to a window that is not
+                // ordered in, so under AETHER_UI_HEADLESS (never ordered in)
+                // the click went nowhere. For the click alone the window is
+                // ordered in fully transparent and click-through (hardware
+                // clicks pass to whatever is under it; synthesized ones still
+                // land), then ordered out again: nothing shows, and the
+                // headless contract holds outside the action.
+                BOOL hidden = ![w isVisible];
+                CGFloat alpha = [w alphaValue];
+                BOOL ignores = [w ignoresMouseEvents];
+                if (hidden) {
+                    [w setAlphaValue:0.0];
+                    [w setIgnoresMouseEvents:YES];
+                    [w orderFrontRegardless];
+                }
                 for (int k = 0; k < 2; k++) {
                     NSEvent* e = [NSEvent mouseEventWithType:(k ? NSEventTypeLeftMouseUp : NSEventTypeLeftMouseDown) location:c modifierFlags:0 timestamp:[[NSProcessInfo processInfo] systemUptime] windowNumber:[w windowNumber] context:nil eventNumber:0 clickCount:1 pressure:(k ? 0.0f : 1.0f)];
                     [NSApp sendEvent:e];
+                }
+                if (hidden) {
+                    [w orderOut:nil];
+                    [w setIgnoresMouseEvents:ignores];
+                    [w setAlphaValue:alpha];
                 }
                 break;
             }
