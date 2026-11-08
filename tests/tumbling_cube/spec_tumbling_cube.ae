@@ -75,10 +75,18 @@ main() {
 
         spec.it("a TAP on the projected Spin checkbox flips the REAL toggle") callback {
             // The Spin box centre at the frozen pose is viewBox (213.7, 214.9);
-            // scale to canvas pixels. Click+release at one point = a tap.
+            // map it to canvas pixels as the scene does: one scale, the
+            // smaller side's, and the square viewBox centred in the canvas.
+            // (Scaling both by the width alone held only while the canvas was
+            // square-ish; its 440 x 440 is a natural size, not a floor, so a
+            // window whose chrome is taller gives some of it up -- 470 x 433
+            // on GTK 4.24.) Click+release at one point = a tap.
             cwf = uidriver.canvas_w() * 1.0
-            tx = 213.7 * cwf / 420.0
-            ty = 214.9 * cwf / 420.0
+            chf = uidriver.canvas_h() * 1.0
+            sc = cwf / 420.0
+            if chf < cwf { sc = chf / 420.0 }
+            tx = (cwf - 420.0 * sc) / 2.0 + 213.7 * sc
+            ty = (chf - 420.0 * sc) / 2.0 + 214.9 * sc
             uidriver.click(tx, ty)
             uidriver.post_ok("/canvas/1/release?x=${tx}&y=${ty}", "tap release")
             spec.assert_true(uidriver.wait_body_contains("/widgets", "\"active\":false", 20),
