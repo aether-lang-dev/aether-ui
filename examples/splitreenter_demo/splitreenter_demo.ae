@@ -1,0 +1,43 @@
+// Aether UI example: a layout call made from inside a layout (#209).
+//
+// The left pane of a splitview holds a canvas whose resize callback sets the
+// divider. The splitview's layout pass resizes the pane, the pane resizes the
+// canvas, and the canvas's callback lays the splitview out again, inside the
+// pass that is still placing its panes. The newer pass has to win: on Win32
+// the older one used to finish its loop with the divider position it had
+// computed first, and the right pane was left at the old position, over the
+// left one. Any callback run from a resize can do this (canvas_on_resize, a
+// gpuview's), and an app should not have to know it is unsafe.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+
+import ui
+import ui (window, vstack, text, splitview, split_set_position, canvas_create,
+    canvas_on_resize, enable_test_server)
+import std.os (os_getenv)
+
+main() {
+    sv = 0
+    cv = 0
+    window("split re-entry demo", 640, 300) {
+        vstack(0) {
+            sv = splitview("h") {
+                vstack(0) {
+                    text("left pane")
+                    cv = canvas_create(100, 100)
+                }
+                vstack(0) {
+                    text("right pane")
+                }
+            }
+        }
+        // Set from inside the resize: the divider goes to 400 whatever the
+        // pass that resized the canvas had computed.
+        canvas_on_resize(cv) callback |w: float, h: float| {
+            split_set_position(sv, 400)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null {
+            enable_test_server(9222)
+        }
+    }
+}

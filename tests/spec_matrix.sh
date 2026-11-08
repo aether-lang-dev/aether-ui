@@ -126,6 +126,7 @@ SUITES=(
   "navstack|examples/navstackdemo|navstackdemo/spec_navstackdemo|"
   "table|examples/table_demo|table_demo/spec_table_demo|"
   "split|examples/split_demo|split_demo/spec_split_demo|"
+  "splitreenter|examples/splitreenter_demo|splitreenter_demo/spec_splitreenter_demo|"
   "bindings|examples/bindings_demo|bindings_demo/spec_bindings_demo|"
   "tabs|examples/tabs_demo|tabs_demo/spec_tabs_demo|"
   "menu|examples/menu|menu/spec_menu|"

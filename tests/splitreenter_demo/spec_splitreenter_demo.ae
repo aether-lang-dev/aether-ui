@@ -1,0 +1,63 @@
+// spec_splitreenter_demo.ae — drives the splitreenter_demo example (#209).
+//
+// The left pane's canvas sets the divider from its resize callback, so the
+// splitview is laid out again from inside its own layout pass. Whatever the
+// divider ends at, the panes have to agree with it: the left pane as wide as
+// the divider's position, the right one starting after it. On Win32 the
+// interrupted pass used to finish with its own, older position, and the
+// right pane was left over the left one.
+//
+//   AETHER_UI_TEST_PORT=9222 ./build/splitreenter_demo &
+//   UI_SPEC=splitreenter_demo/spec_splitreenter_demo tests/run_spec.sh
+import std.spec
+import uidriver
+import std.string
+import std.json
+
+pane_of(label: string) -> int {
+    t = uidriver.widget_id_by_text(label)
+    if t <= 0 { return 0 }
+    return uidriver.widget_int_field_by_id(t, "parent")
+}
+
+split_pos(sv: int) -> int {
+    v, _e = json.parse(uidriver.get_body("/widget/${sv}"))
+    if v == null { return -1 }
+    p = uidriver.field_int(v, "splitPosition")
+    json.json_free(v)
+    return p
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "a splitview laid out again from inside its own layout") {
+        spec.it("ends with its panes where its divider is") callback {
+            lp = pane_of("left pane")
+            rp = pane_of("right pane")
+            spec.assert_gt(lp, 0, "left pane found")
+            spec.assert_gt(rp, 0, "right pane found")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            pos = split_pos(sv)
+            lx = uidriver.widget_int_field_by_id(lp, "x")
+            lw = uidriver.widget_int_field_by_id(lp, "w")
+            rx = uidriver.widget_int_field_by_id(rp, "x")
+            spec.assert_eq(pos, 400, "the divider is where the callback put it (${pos})")
+            spec.assert_true(lw >= pos - 1 && lw <= pos + 1, "the left pane is the divider's width (${lw} for ${pos})")
+            spec.assert_true(rx >= lx + lw, "the right pane starts after the left one ends (${rx} vs ${lx}+${lw})")
+        }
+        spec.it("and still after the window is resized") callback {
+            uidriver.resize_window(720, 300)
+            ok = uidriver.wait_body_contains("/widgets", "\"w\":720", 30)
+            spec.assert_true(ok, "window at 720")
+            lp = pane_of("left pane")
+            rp = pane_of("right pane")
+            lx = uidriver.widget_int_field_by_id(lp, "x")
+            lw = uidriver.widget_int_field_by_id(lp, "w")
+            rx = uidriver.widget_int_field_by_id(rp, "x")
+            spec.assert_true(rx >= lx + lw, "the right pane starts after the left one ends (${rx} vs ${lx}+${lw})")
+        }
+    }
+    return spec.run_summary(fw)
+}

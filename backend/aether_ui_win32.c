@@ -343,6 +343,14 @@ typedef struct {
     // A layout is owed to this stack (w32_request_layout) and has not yet
     // run. Cleared by stack_do_layout on entry.
     int layout_pending;
+    /* Bumped by every stack_do_layout of this widget (#209). A pass that
+       finds it moved after one of its SetWindowPos calls was re-entered --
+       the move sent a child WM_SIZE, and something in that (an app's resize
+       callback setting a split position, a parent laid out from a child's
+       size change) laid this widget out again -- and stops: the newer pass
+       placed every child from the current state, and the rest of the older
+       one would put them back where the old state had them. */
+    unsigned layout_gen;
 
     // Painting is held (WM_SETREDRAW FALSE) while the layout is owed, so the
     // children a rebuild attaches do not each invalidate the tree on the
@@ -1484,12 +1492,21 @@ static void w32_flush_layout(void) {
 // showed -- for a row rebuilt in place, the previous row's text, which then
 // sat in the 2px gap between the new rows as the bottom of glyphs that were
 // no longer there (#151). A moved child is repainted instead.
+// A layout pass of widget `h` begun at generation `gen` was overtaken by a
+// newer pass of the same widget (#209), or the widget went away under it.
+static int w32_layout_stale(int h, unsigned gen) {
+    Widget* w = widget_at(h);
+    return !w || w->dead || w->layout_gen != gen;
+}
+
 static void stack_do_layout(HWND stack_hwnd) {
     int h = handle_for_hwnd(stack_hwnd);
     if (h == 0) return;
     Widget* sw = widget_at(h);
     if (!sw) return;
     sw->layout_pending = 0;
+    unsigned gen = ++sw->layout_gen;
+    int hdl = h;   /* `h` is a child's height in the row/column loop below */
     StackLayout* sl = &sw->stack;
     int orientation = sl->orientation;
 
@@ -1529,6 +1546,7 @@ static void stack_do_layout(HWND stack_hwnd) {
         SetWindowPos(children[0], NULL,
                      sl->padding_left, sl->padding_top,
                      avail_w, header_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+        if (w32_layout_stale(h, gen)) { free(children); return; }
         int content_y = sl->padding_top + header_h + sl->spacing;
         int content_h = (client.bottom - client.top) - content_y - sl->padding_bottom;
         if (content_h < 0) content_h = 0;
@@ -1536,6 +1554,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, content_y,
                          avail_w, content_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+            if (w32_layout_stale(h, gen)) break;
         }
         free(children);
         return;
@@ -1582,6 +1601,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, sl->padding_top - sw->scroll_y,
                          doc_w, doc_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+            if (w32_layout_stale(h, gen)) { free(children); return; }
             w32_note_layout(children[i], doc_w, doc_h);
         }
         // Everything the move uncovered, and every child that moved, is
@@ -1608,6 +1628,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             }
             SetWindowPos(children[i], NULL, cx, cy, mw, mh,
                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+            if (w32_layout_stale(h, gen)) { free(children); return; }
             w32_note_layout(children[i], mw, mh);
             cx += mw + sl->spacing;
             if (mh > row_h) row_h = mh;
@@ -1669,6 +1690,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             if (chh < 0) chh = 0;
             SetWindowPos(children[i], NULL, x, y, cw, chh,
                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+            if (w32_layout_stale(h, gen)) break;
             w32_note_layout(children[i], cw, chh);
         }
         free(children);
@@ -1714,6 +1736,7 @@ static void stack_do_layout(HWND stack_hwnd) {
                 measure_widget(cw, &pw, &ph);
                 SetWindowPos(children[i], NULL, cw->place_x, cw->place_y, pw, ph,
                              SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+                if (w32_layout_stale(h, gen)) break;
                 w32_note_layout(children[i], pw, ph);
                 continue;
             }
@@ -1725,6 +1748,7 @@ static void stack_do_layout(HWND stack_hwnd) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left + ml, sl->padding_top + mt,
                          cwid, chgt, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+            if (w32_layout_stale(h, gen)) break;
             w32_note_layout(children[i], cwid, chgt);
         }
         free(children);
@@ -1953,6 +1977,7 @@ static void stack_do_layout(HWND stack_hwnd) {
         if (mc[i].kind == WK_PICKER) wh = h + w32_px(children[i], 176);
         SetWindowPos(children[i], NULL, x, y, w, wh,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+        if (w32_layout_stale(hdl, gen)) { wrap_again = 0; break; }
         w32_note_layout(children[i], w, h);
         // Height for width: a label that wraps at the width it is given
         // was measured at the width it had before this pass. If its lines
