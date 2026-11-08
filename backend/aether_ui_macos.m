@@ -4208,11 +4208,54 @@ int aether_ui_text_decor_get_impl(int handle, int* edges, double* bar, int* bar_
     return 1;
 }
 
+// A corner radius is held to half the view's shorter side, as CSS holds a
+// border-radius to its box (GTK) and a round-rect region is held to its rect
+// (win32). On screen Core Animation clamps a larger one itself, which is why a
+// "pill" made with style_corner_radius(h, 999) looks right; -renderInContext:
+// does not, and the driver's /screenshot renders through it, so the same
+// button came out as a window-sized blue arc over everything (#222). The
+// requested radius is kept and re-applied, clamped, whenever the frame
+// changes, so the layer's model value is what is drawn by either route.
+static void aeui_apply_corner_radius(NSView* v) {
+    NSNumber* req = objc_getAssociatedObject(v, "aeui-corner-req");
+    if (!req || !v.layer) return;
+    double r = [req doubleValue];
+    NSSize s = v.bounds.size;
+    double cap = MIN(s.width, s.height) / 2.0;
+    if (r > cap) r = cap > 0.0 ? cap : 0.0;
+    v.layer.cornerRadius = r;
+}
+
+@interface AeuiCornerKeeper : NSObject
+@property (nonatomic, weak) NSView* view;
+@end
+@implementation AeuiCornerKeeper
+- (void)frameChanged:(NSNotification*)n {
+    (void)n;
+    NSView* v = self.view;
+    if (v) aeui_apply_corner_radius(v);
+}
+@end
+
 void aether_ui_set_corner_radius(int handle, double radius) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return;
     [v setWantsLayer:YES];
-    v.layer.cornerRadius = radius;
+    objc_setAssociatedObject(v, "aeui-corner-req", @(radius),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!objc_getAssociatedObject(v, "aeui-corner-keeper")) {
+        AeuiCornerKeeper* k = [AeuiCornerKeeper new];
+        k.view = v;
+        [v setPostsFrameChangedNotifications:YES];
+        // Selector-based, so the centre drops it when the keeper goes, which
+        // is when the view does (it holds the keeper).
+        [[NSNotificationCenter defaultCenter] addObserver:k
+            selector:@selector(frameChanged:) name:NSViewFrameDidChangeNotification
+            object:v];
+        objc_setAssociatedObject(v, "aeui-corner-keeper", k,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    aeui_apply_corner_radius(v);
     v.layer.masksToBounds = YES;
 }
 

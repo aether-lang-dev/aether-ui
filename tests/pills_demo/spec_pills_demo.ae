@@ -15,6 +15,34 @@
 import std.spec
 import uidriver
 import std.string
+import std.os
+import std.fs
+
+// The window as a PNG; "" when the backend has no /screenshot. A capture can
+// miss a frame in flight (GTK under Xvfb), so it is taken again.
+snapshot(name: string) -> string {
+    dir = "${os.os_getenv("PWD")}/target/pills-snapshots"
+    _mk = fs.mkdir_p(dir)   // not `mkdir -p`: Windows runs os.exec through cmd.exe
+    tries = 0
+    while tries < 5 {
+        out, _ce = os.exec("curl -s -o ${dir}/${name}.png -w '%{http_code}' ${uidriver.url_of("/screenshot")}")
+        if string.contains(out, "200") == 1 { return "${dir}/${name}.png" }
+        tries = tries + 1
+        sleep(300)
+    }
+    return ""
+}
+
+// The pixels in a rectangle of the capture (given in points; a retina
+// capture is 2x) that differ from its top-left one.
+ink(png: string, x: int, y: int, w: int, h: int) -> int {
+    root = uidriver.widget_int_field_by_id(1, "w")
+    sw, _se = os.exec("python3 -I ../lib/png_pixel.py ${png} width")
+    pw, _pe = string.to_int(string.trim(sw))
+    out, _e = os.exec("python3 -I ../lib/png_pixel.py ${png} ink ${x * pw / root} ${y * pw / root} ${w * pw / root} ${h * pw / root}")
+    n, _ne = string.to_int(string.trim(out))
+    return n
+}
 
 main() {
     fw = spec.init()
@@ -80,6 +108,35 @@ main() {
             spec.assert_contains(body, "\"borderWidth\":2", "2px from the sheet")
             spec.assert_contains(body, "\"borderColor\":\"#2176fe\"", "sheet colour")
             spec.assert_contains(body, "\"classes\":\"chip\"", "class carried")
+        }
+
+        spec.it("a capsule radius is drawn as a capsule in /screenshot (#222)") callback {
+            // Every chip asks for a radius of 999, far more than half its
+            // height. On screen AppKit clamps that itself; -renderInContext:,
+            // which /screenshot renders through, did not, and drew the chips
+            // as window-sized arcs and lines over the whole window (the
+            // font picker's Select button came out as a solid blue fill).
+            png = snapshot("pills")
+            if string.length(png) == 0 {
+                spec.assert_true(false, "screenshot failed after 5 tries")
+                return
+            }
+            // Below the last line of text the window is empty: no ink at all.
+            last = uidriver.widget_id_by_text("A ring, a fill, a cleared border, and interaction states.")
+            spec.assert_gt(last, 0, "the last caption")
+            y0 = uidriver.widget_int_field_by_id(last, "y") + uidriver.widget_int_field_by_id(last, "h") + 8
+            rw = uidriver.widget_int_field_by_id(1, "w")
+            rh = uidriver.widget_int_field_by_id(1, "h")
+            below = ink(png, 4, y0, rw - 8, rh - y0 - 4)
+            spec.assert_eq(below, 0, "nothing is drawn in the empty part of the window (${below} px)")
+            // And the filled chip is drawn where it is.
+            b = uidriver.widget_id_of("button", "Sans-serif")
+            bx = uidriver.widget_int_field_by_id(b, "x")
+            by = uidriver.widget_int_field_by_id(b, "y")
+            bw = uidriver.widget_int_field_by_id(b, "w")
+            bh = uidriver.widget_int_field_by_id(b, "h")
+            chip = ink(png, bx, by, bw, bh)
+            spec.assert_gt(chip, bw * bh / 4, "the filled chip is drawn in its own box (${chip} px)")
         }
     }
     return spec.run_summary(fw)
