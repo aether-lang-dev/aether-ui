@@ -734,6 +734,30 @@ else
 fi
 
 echo
+echo "=== Phase 1d2: GTK4 backend has no truncation warnings (#220) ==="
+# Downstream apps (ae3d's editor) compile the GTK4 backend with
+# -Wall -Wextra -Werror, so a -Wformat-truncation or -Wstringop-truncation
+# warning here is a broken build there, and the format one was a CSS rule
+# GTK received cut short. gcc diagnoses both only with the optimiser on,
+# hence -O2. The rest of -Wextra is not held to zero here (unused
+# parameters in GTK callbacks); these two are.
+if [ "$PLATFORM" = "linux" ] && command -v gcc > /dev/null 2>&1 \
+        && pkg-config --exists gtk4 2> /dev/null; then
+    # shellcheck disable=SC2046
+    if gcc -O2 -Wall -Wextra -Werror=format-truncation -Werror=stringop-truncation \
+            -c -o /dev/null -I"$ROOT/backend" $(pkg-config --cflags gtk4) \
+            "$ROOT/backend/aether_ui_gtk4.c" > /tmp/ci_gtk4_trunc.log 2>&1; then
+        echo "  OK   aether_ui_gtk4.c (gcc -O2 -Werror=format-truncation,stringop-truncation)"
+    else
+        echo "  FAIL aether_ui_gtk4.c"
+        grep -E "error:" /tmp/ci_gtk4_trunc.log | head -10 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo "  SKIP not Linux with gcc and gtk4"
+fi
+
+echo
 echo "=== Phase 1c2: backend ABI parity across all five backends ==="
 # Compiling and linking a backend proves it builds; it proves nothing about
 # what it OMITS. A missing entry point is invisible to every other phase,

@@ -3593,15 +3593,15 @@ static void aeui_typo_apply(int handle, const AeuiTypo* t) {
         // other side (GTK 4.6 draws Pango's rise nowhere): padding below a
         // centred label lifts its text by half of it.
         pango_attr_list_insert(attrs, pango_attr_scale_new(0.66));
-        // Sized for the longest rule: cls is "aui-ty-" and a handle (at most
-        // 18 bytes), the property name 14, the pixel count an int (11).
-        char pad[96];
-        snprintf(pad, sizeof(pad), "label.%s.aui-ty-script { %s: %dpx; }", cls,
+        // Allocated to fit, so the rule is never cut short whatever the
+        // class name's length (#220).
+        char* pad = g_strdup_printf("label.%s.aui-ty-script { %s: %dpx; }", cls,
                  t->script == 1 ? "padding-bottom" : "padding-top", (int)(px * (t->script == 1 ? 0.66 : 0.4) + 0.5));
-        char key[48];
-        snprintf(key, sizeof(key), "%s-script", cls);
+        char* key = g_strdup_printf("%s-script", cls);
         gtk_widget_add_css_class(w, "aui-ty-script");
         global_css_set_keyed(key, pad);
+        g_free(key);
+        g_free(pad);
     } else if (gtk_widget_has_css_class(w, "aui-ty-script")) {
         gtk_widget_remove_css_class(w, "aui-ty-script");
     }
@@ -10798,7 +10798,7 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
     ta.handle = ctx->handle;
     ta.dval   = ctx->dval;
     ta.ival   = ctx->ival;
-    strncpy(ta.sval, ctx->sval, sizeof(ta.sval) - 1);
+    g_strlcpy(ta.sval, ctx->sval, sizeof(ta.sval));
 
     int supported = 1;
     switch (ctx->action) {
@@ -10927,7 +10927,7 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_KEY: {
             CanvasKeyAction ka = {0};
             ka.canvas_id = ctx->handle;
-            strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
+            g_strlcpy(ka.name, ctx->sval, sizeof(ka.name));
             canvas_key_idle(&ka);
             ctx->result = ka.result; ctx->done = 1;
             return;
@@ -10942,7 +10942,7 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
         case AETHER_DRV_CANVAS_KEYUP: {
             CanvasKeyAction ka = {0};
             ka.canvas_id = ctx->handle;
-            strncpy(ka.name, ctx->sval, sizeof(ka.name) - 1);
+            g_strlcpy(ka.name, ctx->sval, sizeof(ka.name));
             canvas_keyup_idle(&ka);
             ctx->result = ka.result; ctx->done = 1;
             return;
