@@ -9889,8 +9889,8 @@ static NSEvent* aeui_driver_key_event(NSEventType type, const char* kname, int k
 
 // Deliver a driver-made key event to window `w` as a person's key reaches
 // the key window. When `w` IS the key window, NSApplication does it all. When
-// it is not -- a headless window is never ordered in, so it can never become
-// key -- NSApp still runs the local key monitors (the shortcut and any-key
+// it is not and is not on screen -- a headless window is never ordered in, so
+// it can never become key -- NSApp still runs the local key monitors (the shortcut and any-key
 // layer) and the main menu's key equivalents, then hands the key to a key
 // window that does not exist, and the focused control never sees it. So NSApp
 // does its part, and the rest of the key-window path is done here if nothing
@@ -9900,7 +9900,10 @@ static NSEvent* aeui_driver_key_event(NSEventType type, const char* kname, int k
 // either: the order monitors run in is not the order they were added.)
 static void aeui_driver_deliver_key(NSEvent* e, NSWindow* w) {
     if (!e || !w) return;
-    if ([NSApp keyWindow] == w) { [NSApp sendEvent:e]; return; }
+    // A window that is on screen gets the key from NSApp whether or not it is
+    // the key window (macOS 27 routes it by the event's window number), so
+    // doing the key-window path again below delivered every key twice.
+    if ([NSApp keyWindow] == w || [w isVisible]) { [NSApp sendEvent:e]; return; }
     __block int menu_fired = 0;
     id obs = [[NSNotificationCenter defaultCenter]
         addObserverForName:NSMenuDidSendActionNotification object:nil queue:nil
