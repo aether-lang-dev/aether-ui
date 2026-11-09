@@ -40,6 +40,7 @@ typedef SOCKET aether_sock_t;
 #define aether_socket_send(s, buf, len) send((s), (buf), (len), 0)
 #else
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -702,10 +703,32 @@ static void handle_request_trampoline(void* arg) {
  * 5.8 GB while the hooks still ran here. */
 #endif
 
+/* The server answers one connection at a time, and the answer is written from
+ * the UI thread, so a client that stalls holds more than this thread: one
+ * that connects and never sends held every later request (and the specs
+ * with them) forever, and one that stops reading a large answer held the UI
+ * thread in send(). Both are bounded; a spec client sends at once and reads
+ * at once. */
+#define AEUI_CLIENT_IO_TIMEOUT_MS 5000
+static void bound_client_io(aether_sock_t fd) {
+#ifdef _WIN32
+    DWORD ms = AEUI_CLIENT_IO_TIMEOUT_MS;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&ms, sizeof(ms));
+#else
+    struct timeval tv;
+    tv.tv_sec = AEUI_CLIENT_IO_TIMEOUT_MS / 1000;
+    tv.tv_usec = (AEUI_CLIENT_IO_TIMEOUT_MS % 1000) * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+}
+
 static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) {
 #ifdef __APPLE__
     void* pool = objc_autoreleasePoolPush();
 #endif
+    bound_client_io(client_fd);
     char req[4096];
     int n = (int)aether_socket_recv(client_fd, req, sizeof(req) - 1);
     if (n <= 0) {

@@ -315,6 +315,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moved after a `SetWindowPos` stops. `examples/splitreenter_demo` +
   `tests/splitreenter_demo`.
 
+- **The driver's client sockets are bounded (5 s).** The server answers one
+  connection at a time, and a client that connected and never sent held every
+  later request for good (a port probe, a harness that died between connect
+  and send); with every answer now written from the UI thread, one that stopped
+  reading a large answer would also have held the UI in `send`. Reads and
+  writes time out. `tests/driver_threads/silent_client.py` (ci.sh Phase 5e5c):
+  without the bound the second client is never answered.
+- **AppKit: a real canvas key to a visible window that is not the key window
+  arrived twice.** `aeui_driver_deliver_key` ran the key-window path again
+  after NSApp had delivered the key; canvasinput_demo's spec failed 8 checks
+  (ci.sh Phase 5e12b).
+
 - **AppKit and Win32: the driver read widgets off the UI thread, and AppKit
   crashed for it.** sae-driver died in `objc_release` while spraedsheet's
   spec_sheet walked Tab (2026-11-05): the driver's HTTP thread read
