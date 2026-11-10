@@ -53,7 +53,7 @@ import ui.icons (
 import picker_engine
 import std.string
 import std.list
-import std.fs (list_dir, dir_list_count, dir_list_get)
+import std.fs (list_dir, dir_list_count, dir_list_get, dir_exists)
 import std.os (os_getenv)
 
 extern malloc(size: int) -> ptr
@@ -141,6 +141,23 @@ scan_dir(app: *App, dir: string, cat: string, subsets: string) -> int {
                 if picker_engine.pl_add(app.list, fam) == 1 { added = added + 1 }
             }
         }
+        i = i + 1
+    }
+    return added
+}
+
+// scan_dir over `dir` and every directory below it, `depth` levels deep (a
+// bound, so a symlink loop in a font tree cannot run away).
+scan_tree(app: *App, dir: string, subsets: string, depth: int) -> int {
+    added = scan_dir(app, dir, "sans-serif", subsets)
+    if depth <= 0 { return added }
+    dl, err = list_dir(dir)
+    if string.length(err) > 0 { return added }
+    n = dir_list_count(dl)
+    i = 0
+    while i < n {
+        sub = "${dir}/${dir_list_get(dl, i)}"
+        if dir_exists(sub) == 1 { added = added + scan_tree(app, sub, subsets, depth - 1) }
         i = i + 1
     }
     return added
@@ -356,11 +373,16 @@ main() {
     // Every platform's usual font homes; missing dirs are skipped silently,
     // so the same binary populates on Linux, BSD, Windows and macOS.
     found = scan_dir(app, "fonts", "sans-serif", "latin")
-    found = found + scan_dir(app, "/usr/share/fonts/truetype/dejavu", "sans-serif", "latin,greek,cyrillic")
-    found = found + scan_dir(app, "/usr/share/fonts/truetype/liberation", "sans-serif", "latin")
-    found = found + scan_dir(app, "/usr/local/share/fonts/dejavu", "sans-serif", "latin")
-    found = found + scan_dir(app, "/usr/local/share/fonts/DejaVu", "sans-serif", "latin")
-    found = found + scan_dir(app, "/usr/local/share/fonts/liberation-fonts-ttf", "sans-serif", "latin")
+    // Linux/BSD keep fonts in a distro-specific tree (Debian: truetype/<family>,
+    // Arch: TTF/ and liberation/, FreeBSD: /usr/local/share/fonts/<family>), so
+    // walk the fontconfig roots instead of naming each family's directory.
+    found = found + scan_tree(app, "/usr/share/fonts", "latin", 4)
+    found = found + scan_tree(app, "/usr/local/share/fonts", "latin", 4)
+    home = os_getenv("HOME")
+    if home != null {
+        found = found + scan_tree(app, "${home}/.local/share/fonts", "latin", 4)
+        found = found + scan_tree(app, "${home}/.fonts", "latin", 4)
+    }
     found = found + scan_dir(app, "C:/Windows/Fonts", "sans-serif", "latin")
     found = found + scan_dir(app, "/System/Library/Fonts", "sans-serif", "latin")
     found = found + scan_dir(app, "/Library/Fonts", "sans-serif", "latin")
