@@ -9909,7 +9909,28 @@ typedef struct {
     int retval;  // action-specific return (ctx: mapped/count)
 } TestAction;
 
+static gboolean test_action_idle_body(gpointer data);
+
+// A driver action runs the widget's own handler, and the handler may throw
+// the widget away (ticking a task re-renders the whole task list, the
+// checkbox just ticked included). gtk_check_button_set_active goes on to
+// notify "active" on its instance after "toggled" returns, and gtk_button's
+// click does the same after "clicked"; the emission itself only holds a
+// reference while it runs a handler, not between them, so a widget the
+// handler destroyed is touched after it is freed (g_type_check_instance in
+// g_signal_emit: a SIGBUS on FreeBSD, silent on glibc). A real click is
+// protected by the event that carries it; this path has none, so it holds
+// its own reference across the action.
 static gboolean test_action_idle(gpointer data) {
+    TestAction* ta = (TestAction*)data;
+    GtkWidget* held = aether_ui_get_widget(ta->handle);
+    if (held) g_object_ref(held);
+    gboolean again = test_action_idle_body(data);
+    if (held) g_object_unref(held);
+    return again;
+}
+
+static gboolean test_action_idle_body(gpointer data) {
     TestAction* ta = (TestAction*)data;
     GtkWidget* w = aether_ui_get_widget(ta->handle);
 
@@ -10987,7 +11008,9 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
             /* Return in a field: the same "activate" a key press emits. */
             GtkWidget* w = aether_ui_get_widget(ctx->handle);
             if (w && (GTK_IS_ENTRY(w) || GTK_IS_PASSWORD_ENTRY(w))) {
+                g_object_ref(w);   // on_submit may re-render the field away (see test_action_idle)
                 g_signal_emit_by_name(w, "activate");
+                g_object_unref(w);
                 ctx->result = 0;
             } else {
                 ctx->result = 3;

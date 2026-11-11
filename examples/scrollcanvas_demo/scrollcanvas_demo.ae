@@ -1,0 +1,45 @@
+// scrollcanvas_demo -- a spacer-centred canvas in a scrolled page keeps its size.
+//
+// sae's pages: a column in a scrollview, the page's own column holding a
+// row of spacer / canvas / spacer, then a button. The window is taller than
+// the page, so the scrollview's content has vertical slack. Where the content
+// is held to the viewport's height (Win32), that slack went to the row (a
+// stack holding a canvas is greedy) and the canvas, so the 400 x 400 scene
+// came out 400 x 449 and spec_aevg_parity compared a stretched picture. The
+// canvas asked for 200 x 200 here and must be 200 x 200, centred; a canvas
+// alone in a row (nothing centring it) still fills the row's width.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/scrollcanvas_demo/bin/scrollcanvas_demo &
+//   UI_SPEC=scrollcanvas_demo/spec_scrollcanvas_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, hstack, text, btn, spacer, divider, scrollview, enable_test_server)
+import vg.live (vg)
+import vg
+import vg (view_box, rect, fill)
+import std.os (os_getenv)
+
+main() {
+    window("scroll canvas", 700, 600) {
+        vstack(6) {
+            text("a browser's chrome")
+            divider()
+            scrollview() {
+                vstack(0) {
+                    vstack(0) {
+                        text("page")
+                        hstack(0) {
+                            spacer()
+                            vg(view_box(0, 0, 200, 200), 200, 200) {
+                                rect(0, 0, 200, 200) { fill("#3366cc") }
+                            }
+                            spacer()
+                        }
+                        _h = btn("Home") callback { }
+                    }
+                }
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

@@ -1575,7 +1575,14 @@ static void stack_do_layout(HWND stack_hwnd) {
         int mw = 0, mh = 0;
         if (cw) {
             measure_widget(cw, &mw, &mh);
-            if (mh > doc_h) doc_h = mh;
+            // The document is as tall as its content, and no taller when the
+            // content is shorter than the view: GTK4's viewport and AppKit's
+            // document view (pinned top and width, "height left to the
+            // content") both leave the room under a short page empty. Filling
+            // the view gave that slack to the page's greedy children: a
+            // spacer / canvas / spacer row asked for 400 x 400 and was handed
+            // 400 x 449 (sae's corpus pages, spec_aevg_parity).
+            doc_h = mh;
         }
         if (doc_h > avail_h) {
             if (sw->scroll_y > doc_h - avail_h) sw->scroll_y = doc_h - avail_h;
@@ -1597,7 +1604,6 @@ static void stack_do_layout(HWND stack_hwnd) {
         GetClientRect(stack_hwnd, &client);
         doc_w = (client.right - client.left) - sl->padding_left - sl->padding_right;
         avail_h = (client.bottom - client.top) - sl->padding_top - sl->padding_bottom;
-        if (doc_h < avail_h) doc_h = avail_h;
         for (int i = 0; i < nchildren; i++) {
             SetWindowPos(children[i], NULL,
                          sl->padding_left, sl->padding_top - sw->scroll_y,
@@ -3524,6 +3530,7 @@ static void apply_window_theme(HWND hwnd) {
 static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
                             char* name, int namesize);
 static int aeui_win32_fire_shortcut(const char* combo);
+static int aeui_win32_fire_resolved(const char* combo);
 
 /* #93: the thread running the message loop. PostQuitMessage only affects the
    CALLING thread, so a quit requested from anywhere else has to be posted to
@@ -4576,7 +4583,17 @@ static int w32_key_from_msg(WPARAM vk, char* combo, int combosize,
     return (ctrl ? 2 : 0) | (shift ? 1 : 0) | (alt ? 4 : 0) | (super ? 8 : 0);
 }
 
-static int aeui_win32_fire_shortcut(const char* combo) {
+static int aeui_win32_fire_shortcut(const char* combo_in) {
+    // Registered combos have Primary resolved to Ctrl (w32_resolve_primary);
+    // a key named with it (the driver's "Primary+K", as the other backends
+    // take it) has to be resolved the same way or it matches nothing.
+    char* resolved = w32_resolve_primary(combo_in);
+    int fired = aeui_win32_fire_resolved(resolved);
+    free(resolved);
+    return fired;
+}
+
+static int aeui_win32_fire_resolved(const char* combo) {
     if (w32_chord_feed(combo)) return 1;
     int fired = 0;
     for (int i = 0; i < w32_shortcut_count; i++) {
@@ -4619,9 +4636,25 @@ void aether_ui_on_focus_change_impl(int handle, void* boxed_closure) {
     if (!w32_focus_last) w32_focus_last = GetFocus();
 }
 
+// A window that is only there to hold or show things (a stack, a label, a
+// divider) is not somewhere the keyboard goes unless set_focusable gave it
+// WS_TABSTOP: GTK4's gtk_widget_grab_focus and AppKit's makeFirstResponder
+// both refuse such a widget, but SetFocus takes any window, so a stack that
+// set_focusable(stack, 0) had taken the keyboard from kept taking it.
+static int w32_focus_refused(const Widget* w) {
+    switch (w->kind) {
+        case WK_VSTACK: case WK_HSTACK: case WK_ZSTACK: case WK_FORM:
+        case WK_FORM_SECTION: case WK_NAVSTACK: case WK_WRAP: case WK_TEXT:
+        case WK_IMAGE: case WK_SPACER: case WK_DIVIDER: case WK_PROGRESSBAR:
+            return !(GetWindowLongPtrW(w->hwnd, GWL_STYLE) & WS_TABSTOP);
+        default:
+            return 0;
+    }
+}
+
 void aether_ui_focus_impl(int handle) {
     Widget* w = widget_at(handle);
-    if (w) SetFocus(w->hwnd);
+    if (w && w->hwnd && !w32_focus_refused(w)) SetFocus(w->hwnd);
     w32_focus_poll();
 }
 void aether_ui_context_menu_item_accel_impl(int handle, const char* label,
@@ -14464,6 +14497,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     int kmods = 0;
                     for (;;) {
                         if      (strncmp(rest, "Ctrl+",  5) == 0) { kmods |= 2; rest += 5; }
+                        else if (strncmp(rest, "Primary+", 8) == 0) { kmods |= 2; rest += 8; }
                         else if (strncmp(rest, "Shift+", 6) == 0) { kmods |= 1; rest += 6; }
                         else if (strncmp(rest, "Alt+",   4) == 0) { kmods |= 4; rest += 4; }
                         else if (strncmp(rest, "Super+", 6) == 0) { kmods |= 8; rest += 6; }
@@ -14475,7 +14509,7 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                     // writes a shortcut, but on_key compares k == "k" -- and
                     // was handed "K" from here alone, so a driven Ctrl+K never
                     // matched what a typed one does.
-                    char kname[64];
+                    char kname[512];   // sval's own size: nothing here is cut short
                     snprintf(kname, sizeof(kname), "%s", rest);
                     if (kname[0] >= 'A' && kname[0] <= 'Z' && kname[1] == '\0')
                         kname[0] = (char)(kname[0] + 32);
@@ -14989,7 +15023,15 @@ static LRESULT CALLBACK driver_host_proc(HWND hwnd, UINT msg,
                 if (w->kind != WK_TEXTFIELD && w->kind != WK_SECUREFIELD) {
                     ctx->result = 3; ctx->done = 1; return 0;
                 }
-                PostMessageW(w->hwnd, WM_KEYDOWN, VK_RETURN, 0x001C0001);
+                // Straight to the field's on_submit (GTK4's "activate" on the
+                // entry, NSTextField's action): the field's own Return, which
+                // does not depend on which widget has the focus. It used to be
+                // a WM_KEYDOWN posted to the field and sent through the message
+                // loop's key path, where the window's key handlers see the key
+                // first and judge it by the focus: with the focus on a grid
+                // (or any widget whose handler claims Return) the grid took
+                // the Return aimed at a field elsewhere and on_submit never ran.
+                w32_fire_submit(w);
                 break;
             default: break;
         }

@@ -71,7 +71,9 @@ static double aeui_sb_proportion(const AeuiScrollbar* s) {
     double p = s->page / span;
     return p > 1 ? 1 : (p < 0 ? 0 : p);
 }
-static double aeui_sb_fraction(const AeuiScrollbar* s) {
+/* inline: AppKit, UIKit and Android read it, GTK4 and Win32 do not, and an
+ * unused static function fails -Wall -Werror there. */
+static inline double aeui_sb_fraction(const AeuiScrollbar* s) {
     double room = aeui_sb_top(s) - s->min;
     return room <= 0 ? 0 : (s->value - s->min) / room;
 }

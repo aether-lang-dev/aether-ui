@@ -75,7 +75,7 @@ fi
 # -------------------------------------------------------------------------
 
 # All examples that must compile in Phase 1.
-EXAMPLES=(aecs_dark_demo disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo scrollwide_demo keyhandler_demo focus_order_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo splitreenter_demo bindings_demo tabs_demo scrollbar_demo secondary_demo typography_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo settle_demo frametick_demo background_demo canvasscroll_demo canvasinput_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo splitcanvas_demo quit_demo panelsize_demo pinsize_demo cssbatch_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo reorderable_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
+EXAMPLES=(aecs_dark_demo disclosure_demo icons_demo pills_demo textpath_demo counter form picker styled system canvas testable calculator context_menu overlay_demo vg_tooltip each_demo rebuild_demo fileicon_demo scrollbg_demo scrollwide_demo keyhandler_demo focus_order_demo focusable_demo selfrebuild_demo scrollcanvas_demo imagefill_demo filedrop_demo barfill_demo listbox_demo table_demo transitions_demo split_demo splitreenter_demo bindings_demo tabs_demo scrollbar_demo secondary_demo typography_demo menu rbind_demo typo_demo multiselect_demo selmode_demo dblclick_demo tree_demo tabledeleg_demo weightclamp_demo flexround_demo shortcut_demo polish_demo vlist_demo wshortcut_demo multiwindow_demo timer_demo settle_demo frametick_demo background_demo canvasscroll_demo canvasinput_demo canvasclip_demo canvasresetclip_demo styledbg_demo gpuview_demo gpuanim_demo native_view_demo panelcanvas_demo resizecb_demo splitcanvas_demo quit_demo panelsize_demo pinsize_demo cssbatch_demo insets_demo blitborrow_demo groupalpha_demo hoverpaint_demo gradspread_demo placeholder_demo multikey_demo sheet_demo winmenu_demo reorder_demo reorderable_demo overlaytr_demo a11y_demo material_demo themes_demo csssem_demo zen_demo states_demo undo_demo roles_demo command_demo clipboard window_title openurl_demo prompt_demo)
 # Examples without a test server — Phase 2 smoke-launches each.
 # calculator and testable are exercised through their HTTP drivers in
 # Phases 3-4, so they are not smoke-tested here.
@@ -688,7 +688,11 @@ if [ -n "$W32_CC" ]; then
     for src in backend/aether_ui_win32.c \
                backend/aether_ui_test_server.c \
                backend/aether_ui_system_extras.c; do
-        if "$W32_CC" -fsyntax-only -Wall -Werror -Ibackend "$ROOT/$src" \
+        # -O2 -c, not -fsyntax-only: -Wformat-truncation and the unused-
+        # function check need the optimiser's flow analysis, and the MSYS2
+        # build on win11 has it (a truncating snprintf passed -fsyntax-only
+        # and failed there).
+        if "$W32_CC" -O2 -c -o /dev/null -Wall -Werror -Ibackend "$ROOT/$src" \
                 > "/tmp/ci_w32_$(basename "$src").log" 2>&1; then
             echo "  OK   $(basename "$src")"
         else
@@ -1646,6 +1650,41 @@ if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=spacercanvas_demo/spec_spacercanvas_demo \
     run_server_test "$(EX_BIN spacercanvas_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" spacercanvas_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9d2: AetherUIDriver spacer-centred canvas in a scrolled page ==="
+# A scrollview's content on Win32 is held to the viewport's height, and the
+# slack went to the row holding the canvas: a 200 x 200 scene came out 200 x
+# 449 (sae's spec_aevg_parity). The canvas keeps its size on every backend.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=scrollcanvas_demo/spec_scrollcanvas_demo \
+    run_server_test "$(EX_BIN scrollcanvas_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" scrollcanvas_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9d3: AetherUIDriver set_focusable + Return into a field ==="
+# set_focusable(stack, 0) takes the keyboard from a stack on every backend
+# (Win32's SetFocus ignored it), and a field's on_submit runs through the
+# driver whichever widget has the focus (Win32 ran it through the window's
+# key handlers, where a focused stack's Return handler took it).
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=focusable_demo/spec_focusable_demo \
+    run_server_test "$(EX_BIN focusable_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" focusable_demo || FAIL=$((FAIL + 1))
+fi
+
+echo
+echo "=== Phase 5e9d4: AetherUIDriver action on a widget whose handler re-renders it ==="
+# Ticking a checkbox whose handler rebuilds its whole list destroys the
+# checkbox inside its own signal emission; GTK4 then notified a freed widget
+# (SIGBUS on FreeBSD under sae's spec_pomatez). The driver holds a reference
+# across an action, and the rebuilt rows must answer.
+if [ "$SPEC_OK" -eq 1 ]; then
+    UI_SPEC=selfrebuild_demo/spec_selfrebuild_demo \
+    run_server_test "$(EX_BIN selfrebuild_demo)" \
+                    "$SCRIPT_DIR/tests/run_spec.sh" selfrebuild_demo || FAIL=$((FAIL + 1))
 fi
 
 echo

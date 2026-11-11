@@ -1,0 +1,50 @@
+// selfrebuild_demo -- a widget's own callback throws its row away.
+//
+// A task list: each row is a checkbox, and ticking it re-renders the whole
+// list (clear_children, then a fresh row per task), the checkbox that was
+// just ticked included. A button does the same from its click. The driver's
+// toggle and click run the widget's own action, so the widget is destroyed
+// INSIDE its own signal emission: GTK4's gtk_check_button_set_active goes on
+// to notify "active" on it after "toggled" returns, and GtkButton likewise
+// after "clicked"; on a widget freed under it that is a use-after-free,
+// which FreeBSD's allocator turns into a SIGBUS (sae's spec_pomatez ticking
+// a task). The driver holds a reference across the action.
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+//   UI_SPEC=selfrebuild_demo/spec_selfrebuild_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, text, btn, toggle, clear_children, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+extern aether_ui_text_set_string(handle: int, text: string)
+
+fill(list: int, gen: int, status: int) {
+    i = 0
+    while i < 3 {
+        nm = "task g${gen} #${i}"
+        _t = toggle(nm) callback |on: int| {
+            clear_children(list)
+            fill(list, gen + 1, status)
+            aether_ui_text_set_string(status, "ticked ${nm}, rebuilt g${gen + 1}")
+        }
+        i = i + 1
+    }
+    _b = btn("clear g${gen}") callback {
+        clear_children(list)
+        fill(list, gen + 1, status)
+        aether_ui_text_set_string(status, "cleared g${gen}, rebuilt g${gen + 1}")
+    }
+}
+
+main() {
+    window("selfrebuild", 360, 300) {
+        vstack(8) {
+            status = text("status: idle")
+            list = vstack(4) { }
+            fill(list, 0, status)
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

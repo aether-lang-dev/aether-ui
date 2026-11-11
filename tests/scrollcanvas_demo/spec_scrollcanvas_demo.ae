@@ -1,0 +1,36 @@
+// spec_scrollcanvas_demo.ae -- a canvas between spacers, in a scrolled page
+// taller than its content, is the size it asked for (200 x 200), not stretched
+// to the slack, and is centred in its row. Geometry from /widgets.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/scrollcanvas_demo/bin/scrollcanvas_demo &
+//   UI_SPEC=scrollcanvas_demo/spec_scrollcanvas_demo tests/run_spec.sh
+import std.spec
+import std.string
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "a spacer-centred canvas in a scrolled page") {
+        spec.it("is as wide as it asked for, centred in its row") callback {
+            c = uidriver.widget_id_of("canvas", "")
+            spec.assert_gt(c, 0, "the canvas")
+            row = uidriver.widget_int_field_by_id(c, "parent")
+            row_x = uidriver.widget_int_field_by_id(row, "x")
+            row_w = uidriver.widget_int_field_by_id(row, "w")
+            w = uidriver.widget_int_field_by_id(c, "w")
+            spec.assert_eq(w, 200, "200 wide (the row is ${row_w})")
+            left = uidriver.widget_int_field_by_id(c, "x") - row_x
+            right = row_w - (left + w)
+            d = left - right
+            if d < 0 { d = 0 - d }
+            spec.assert_true(d <= 2, "centred: ${left} px left of it, ${right} right")
+        }
+        spec.it("is as tall as it asked for, not as tall as the page's slack") callback {
+            c = uidriver.widget_id_of("canvas", "")
+            h = uidriver.widget_int_field_by_id(c, "h")
+            spec.assert_eq(h, 200, "200 tall (got ${h}; the window is 600 tall)")
+        }
+    }
+    return spec.run_summary(fw)
+}

@@ -276,6 +276,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GTK4 driver: an action whose handler destroys its own widget no longer
+  touches freed memory.** The driver's toggle, click and submit ran the
+  widget's handler with no reference held; a handler that re-rendered the list
+  the widget sat in (ticking a task) freed the check button inside its own
+  `set_active`, which then notified it: a SIGBUS in `g_signal_emit` on FreeBSD
+  (sae's spec_pomatez), silent on glibc. The action now holds a reference.
+  `selfrebuild_demo` guards it; the ghostbsd repro (sae spec_pomatez) went
+  from 8 passing, 10 failing and a SIGBUS to 10 passing.
+- **Win32: four divergences from GTK4 and AppKit that sae's specs found.**
+  `focus(stack)` no longer takes the keyboard for a stack (or label, divider,
+  image) that `set_focusable` has not made focusable, or has taken it from
+  again; `SetFocus` took any window. The driver's `POST /widget/{id}/submit`
+  runs the field's `on_submit` directly instead of posting a Return that went
+  through the window's key handlers first, where a focused grid (or any widget
+  whose handler claims Return) took it. A key named with `Primary` (the
+  driver's `Primary+K`) is resolved to Ctrl before it meets a shortcut or a
+  chord, as registrations always were. A scrollview's document is as tall as
+  its content and no taller, as GTK4's viewport and AppKit's document view
+  leave it, so a spacer / canvas / spacer row in a page shorter than the
+  window keeps the canvas's size (400 x 449 became 400 x 400). The two
+  `-Wall -Werror` failures on MSYS2 (an unused `aeui_sb_fraction`, a
+  truncating `snprintf` in the driver's key path) are gone, and ci.sh's
+  Win32 cross-compile gate now compiles at -O2, where those warnings live.
+  Specs: `focusable_demo`, `scrollcanvas_demo`, and a `Primary` chord in
+  `shortcut_demo`, each failing on win11 before and passing after.
+
 - **win32: `set_hidden` no longer lays out every ancestor stack per call
   (#206).** In a stack it requests the layout (the queue `add_child` uses), so
   hiding or showing a dozen sections of a long column lays it out once per

@@ -1,0 +1,45 @@
+// focusable_demo -- set_focusable, and Return into a field while the focus
+// is somewhere else.
+//
+// A stack is not a place the keyboard goes until the app says so:
+// set_focusable(box, 1) makes it one (a toolbar's single Tab stop), and
+// set_focusable(box, 0) takes that away again, after which focus(box) leaves
+// the focus where it was. The box also has a key handler (on_key) that uses
+// Return -- it claims it, as a grid's does, to open a cell editor.
+//
+// A field's on_submit is the field's own, whichever widget has the focus:
+// the driver's POST /widget/{id}/submit does not go through the focused
+// widget's keys, so the box's Return handler must not swallow it. (Win32
+// posted a real Return to the field and ran it through the window's key
+// handlers first, where the box's handler, scoped to the focus, took it.)
+//
+//   AetherUIDriver: set AETHER_UI_TEST_PORT to arm the HTTP test server (9222).
+//   UI_SPEC=focusable_demo/spec_focusable_demo tests/run_spec.sh
+
+import ui
+import ui (window, vstack, hstack, text, btn, textfield, on_submit, on_key, key_claim,
+    set_focusable, focus, ui_state_s, ui_set_s, text_bound, enable_test_server)
+import std.os (os_getenv)
+import std.string
+
+main() {
+    said = ui_state_s("nothing yet")
+    window("focusable", 360, 240) {
+        vstack(8) {
+            box = hstack(2) { _t = text("a stack that takes the focus") }
+            set_focusable(box, 1)
+            on_key(box) callback |k: string, m: int| {
+                if string.equals(k, "Return") == 1 {
+                    key_claim()
+                    _s = ui_set_s(said, "box took Return")
+                }
+            }
+            _b1 = btn("Focus the stack") callback { focus(box) }
+            _b2 = btn("Stack off") callback { set_focusable(box, 0) }
+            f = textfield("type, then Return") callback |t: string| { }
+            on_submit(f) callback |t: string| { _s = ui_set_s(said, "field submitted ${t}") }
+            text_bound(said, "said: ", "")
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}

@@ -1,0 +1,39 @@
+// spec_selfrebuild_demo.ae -- ticking a checkbox whose handler re-renders its
+// own list, then acting on what the re-render made; the same from a button.
+// The app must survive each action (a use-after-free in the emission killed
+// the GTK4 driver on FreeBSD) and the NEW widgets must answer.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/selfrebuild_demo/bin/selfrebuild_demo &
+//   UI_SPEC=selfrebuild_demo/spec_selfrebuild_demo tests/run_spec.sh
+import std.spec
+import uidriver
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+    spec.describe(fw, "a callback that re-renders the widget it came from") {
+        spec.it("ticking a checkbox re-renders the list and the app lives") callback {
+            t = uidriver.widget_id_by_text("task g0 #0")
+            spec.assert_gt(t, 0, "the first row")
+            uidriver.post_ok("/widget/${t}/toggle", "tick it")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "ticked task g0 #0, rebuilt g1", 20), "the handler ran")
+            spec.assert_gt(uidriver.widget_id_by_text("task g1 #0"), 0, "and the new rows are there")
+        }
+        spec.it("the rebuilt rows answer: tick one again") callback {
+            t = uidriver.widget_id_by_text("task g1 #1")
+            spec.assert_gt(t, 0, "a new row")
+            uidriver.post_ok("/widget/${t}/toggle", "tick the new row")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "ticked task g1 #1, rebuilt g2", 20), "and again")
+        }
+        spec.it("a button that re-renders its own list, then a row of the result") callback {
+            b = uidriver.widget_id_by_text("clear g2")
+            spec.assert_gt(b, 0, "the button")
+            uidriver.post_ok("/widget/${b}/click", "click it")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "cleared g2, rebuilt g3", 20), "the handler ran")
+            t = uidriver.widget_id_by_text("task g3 #2")
+            uidriver.post_ok("/widget/${t}/toggle", "tick a row of the result")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "ticked task g3 #2, rebuilt g4", 20), "which answers")
+        }
+    }
+    return spec.run_summary(fw)
+}

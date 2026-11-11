@@ -1,6 +1,7 @@
 // Aether UI shortcut scopes + chords.
 //   - shortcut_when: "Ctrl+E" only fires while the "edit mode" flag is on.
-//   - shortcut_chord: "Ctrl+K" then "Ctrl+S" fires a save action.
+//   - shortcut_chord: "Ctrl+K" then "Ctrl+S" fires a save action; so does
+//     "Primary+J" then "Primary+B" (Primary is the platform's command key).
 // The driver fires keys via POST /window/key?combo=... and reads a status
 // label to see which handlers ran.
 import ui
@@ -37,6 +38,13 @@ main() {
             // Chord: Ctrl+K Ctrl+S → save.
             shortcut_chord("Ctrl+K", "Ctrl+S") callback {
                 aether_ui_text_set_string(status, "status: saved")
+            }
+
+            // A chord written with Primary (Command on macOS, Ctrl elsewhere):
+            // the driver's keys say "Primary+J" and every backend must take it
+            // for the platform's own key.
+            shortcut_chord("Primary+J", "Primary+B") callback {
+                aether_ui_text_set_string(status, "status: primary chord")
             }
         }
         if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }

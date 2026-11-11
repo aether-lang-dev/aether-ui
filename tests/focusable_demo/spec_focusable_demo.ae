@@ -1,0 +1,47 @@
+// spec_focusable_demo.ae -- set_focusable on a stack: it takes the keyboard
+// focus when it is given it, and not once it is taken away; and a field's
+// on_submit runs when the focus is on a stack whose key handler claims Return.
+// The evidence is the driver's /focus (the focused widget's type) and the
+// page's own "said:" label at each step.
+//
+//   AETHER_UI_TEST_PORT=9222 ./target/build/examples/focusable_demo/bin/focusable_demo &
+//   UI_SPEC=focusable_demo/spec_focusable_demo tests/run_spec.sh
+import std.spec
+import std.string
+import uidriver
+
+focus_is_stack() -> int {
+    return string.contains(uidriver.get_body("/focus"), "\"type\":\"hstack\"")
+}
+
+main() {
+    fw = spec.init()
+    uidriver.wait_server()
+
+    spec.describe(fw, "set_focusable on a stack") {
+        spec.it("a stack made focusable takes the focus when given it") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Focus the stack")}/click", "Focus the stack")
+            sleep(200)
+            spec.assert_eq(focus_is_stack(), 1, "the stack has the focus: ${uidriver.get_body("/focus")}")
+        }
+        spec.it("Return into a field with the focus on that stack: the field's on_submit runs, not the stack's Return handler") callback {
+            f = uidriver.widget_id_of("textfield", "")
+            uidriver.post_ok("/widget/${f}/set_text?v=hello", "type hello")
+            uidriver.post_ok("/widget/${f}/submit", "press Return")
+            spec.assert_true(uidriver.wait_body_contains("/widgets", "said: field submitted hello", 20),
+                "the field's handler ran (focus: ${uidriver.get_body("/focus")})")
+        }
+        spec.it("a field takes the focus from the stack") callback {
+            uidriver.focus_widget(uidriver.widget_id_of("textfield", ""))
+            sleep(200)
+            spec.assert_eq(focus_is_stack(), 0, "and the field has it after: ${uidriver.get_body("/focus")}")
+        }
+        spec.it("a stack taken off does not take it") callback {
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Stack off")}/click", "Stack off")
+            uidriver.post_ok("/widget/${uidriver.widget_id_by_text("Focus the stack")}/click", "Focus the stack")
+            sleep(200)
+            spec.assert_eq(focus_is_stack(), 0, "not the stack: ${uidriver.get_body("/focus")}")
+        }
+    }
+    return spec.run_summary(fw)
+}

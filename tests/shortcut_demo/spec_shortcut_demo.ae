@@ -11,6 +11,7 @@ status() -> string {
     // Find the status label text.
     if string.contains(b, "\"text\":\"status: saved\"") == 1 { return "saved" }
     if string.contains(b, "\"text\":\"status: edit fired\"") == 1 { return "edit fired" }
+    if string.contains(b, "\"text\":\"status: primary chord\"") == 1 { return "primary chord" }
     return "idle"
 }
 
@@ -41,6 +42,15 @@ main() {
             uidriver.window_key("Ctrl+S")
             ok = uidriver.wait_body_contains("/widgets", "status: saved", 20)
             spec.assert_true(ok, "Ctrl+K Ctrl+S fired the chord")
+        }
+
+        spec.it("a chord registered with Primary fires on Primary+J, Primary+B") callback {
+            uidriver.window_key("Primary+J")
+            spec.assert_true(string.equals(status(), "primary chord") == 0,
+                "not fired on the prefix key alone")
+            uidriver.window_key("Primary+B")
+            ok = uidriver.wait_body_contains("/widgets", "status: primary chord", 20)
+            spec.assert_true(ok, "Primary+J Primary+B fired the chord")
         }
     }
     return spec.run_summary(fw)

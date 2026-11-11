@@ -580,8 +580,7 @@ static int activate_on_ui_thread(const AetherDriverHooks* h,
     ctx.action = kind;
     ctx.handle = handle;
     if (label) {
-        strncpy(ctx.sval, label, sizeof(ctx.sval) - 1);
-        ctx.sval[sizeof(ctx.sval) - 1] = '\0';
+        snprintf(ctx.sval, sizeof(ctx.sval), "%s", label);
     }
     h->dispatch_action(&ctx);
     return ctx.retval;
