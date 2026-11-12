@@ -170,7 +170,9 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
         if i % 5 == 0 { r0 = DIAL - 9.0 }
         tk = line(rn, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
                   CX + DIAL * math.cos(a), CY + DIAL * math.sin(a))
-        stroke(tk, "#ffffff", 0.6)
+        width = 0.6
+        if i % 5 == 0 { width = 1.0 }
+        stroke(tk, "#ffffff", width)
         i = i + 1
     }
     hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
