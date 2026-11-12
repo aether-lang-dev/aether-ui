@@ -101,11 +101,19 @@ hemi(k: int) -> float { if k > 6 { return 1.0 }; return -1.0 }
 // lanes. Interpolate their scale geometrically as the minutes advance;
 // changing time cannot change its pitch relative to the hour markers.
 draw_spiral(rn: ptr, k: int, mins: float) {
+    draw_spiral_layer(rn, k, mins, 0)
+}
+
+draw_spiral_layer(rn: ptr, k: int, mins: float, dial_only: int) {
     r = arc_r(ring(k))
     if ring(k) < 6 { r = r * math.pow(1.247, mins / 60.0) }
     axis = hour_axis(k)
     start = axis + math.log(r / 3.0) / math.log(PHI) * math.pi() / 2.0
-    stroked(path(rn, spiral_segment(r, axis, start, axis - 0.65)), SPIRAL, 4.0)
+    end = axis - 0.65
+    if dial_only == 1 {
+        end = axis + math.log(r / DIAL) / math.log(PHI) * math.pi() / 2.0
+    }
+    stroked(path(rn, spiral_segment(r, axis, start, end)), SPIRAL, 4.0)
 }
 
 hand(rn: ptr, frac: float, len: float, color: string, w: float) {
@@ -157,6 +165,7 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
         k = k + 1
     }
 
+    draw_spiral(rn, h12, mins)
     draw_markers(rn, h12)
 
     face = circle(rn, CX, CY, DIAL)
@@ -191,8 +200,9 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
     hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
     fill(circle(rn, CX, CY, 8.0), HOT)
 
-    // The spiral is the foreground layer, above the dial and its details.
-    draw_spiral(rn, h12, mins)
+    // Bring the spiral above the classic dial while preserving the
+    // exclusion around the outer hour markers. Both passes share geometry.
+    draw_spiral_layer(rn, h12, mins, 1)
 
     fill(text_anchored(rn, CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral"), SPIRAL)
     fill(text_anchored(rn, CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13"), "#8a8a8a")
