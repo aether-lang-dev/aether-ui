@@ -10,6 +10,7 @@ import vg
 import vg (view_box, rect, circle, line, path, fill, stroke, linecap,
            text_anchored, vg_root, node_scene)
 import std.math
+import std.list
 import std.string
 import std.os (os_getenv, now_local)
 
@@ -20,6 +21,34 @@ const PHI: float = 1.6180339887
 const INK: string = "#3a3a3a"
 const HOT: string = "#f26b5b"
 const SPIRAL: string = "#4fb3d0"
+
+// Shared time and references to the retained arc segments.
+struct ClockTime { hour: int minute: int second: int arcs: ptr }
+struct HourArc { hour: int left: ptr right: ptr }
+extern malloc(size: int) -> ptr
+
+clock_time() -> *ClockTime {
+    clock = malloc(sizeof(ClockTime)) as *ClockTime
+    clock.arcs = list.new()
+    update_clock(clock)
+    return clock
+}
+
+set_clock_time(clock: *ClockTime, hour: int, minute: int, second: int) {
+    clock.hour = hour
+    clock.minute = minute
+    clock.second = second
+    i = 0
+    while i < list.size(clock.arcs) {
+        item, _ = list.get(clock.arcs, i)
+        arc = item as *HourArc
+        color = INK
+        if arc.hour == hour { color = HOT }
+        stroke(arc.left, color, 3.5)
+        stroke(arc.right, color, 3.5)
+        i = i + 1
+    }
+}
 
 // Geometric spacing leaves the inner labels legible and fits all twelve
 // lanes inside the portrait. Opposite hours share a radius.
@@ -61,14 +90,22 @@ stroked(n: ptr, color: string, w: float) {
 }
 
 // Split each lane around its numeral, with the lower half rotated 180°.
-hour_arc(_ctx: ptr, k: int, current_hour: int) {
+hour_arc(_ctx: ptr, k: int, clock: @keep *ClockTime) {
     r = arc_r(ring(k))
     axis = hour_axis(k)
     gap = 16.0 / r
+    left = path(_ctx, spiral_segment(r, axis, axis - 0.65, axis - gap))
+    right = path(_ctx, spiral_segment(r, axis, axis + gap, axis + 0.70))
     color = INK
-    if k == current_hour { color = HOT }
-    stroked(path(_ctx, spiral_segment(r, axis, axis - 0.65, axis - gap)), color, 3.5)
-    stroked(path(_ctx, spiral_segment(r, axis, axis + gap, axis + 0.70)), color, 3.5)
+    if k == clock.hour { color = HOT }
+    stroked(left, color, 3.5)
+    stroked(right, color, 3.5)
+    // Keep the nodes so time changes recolour them without rebuilding paths.
+    arc = malloc(sizeof(HourArc)) as *HourArc
+    arc.hour = k
+    arc.left = left
+    arc.right = right
+    _ = list.add(clock.arcs, arc as ptr)
 }
 
 // Reserve a padded background for each hour-lane label.
@@ -101,18 +138,11 @@ hemi(k: int) -> float { if k > 6 { return 1.0 }; return -1.0 }
 // lanes. Interpolate their scale geometrically as the minutes advance;
 // changing time cannot change its pitch relative to the hour markers.
 draw_spiral(_ctx: ptr, k: int, mins: float) {
-    draw_spiral_layer(_ctx, k, mins, 0)
-}
-
-draw_spiral_layer(_ctx: ptr, k: int, mins: float, dial_only: int) {
     r = arc_r(ring(k))
     if ring(k) < 6 { r = r * math.pow(1.247, mins / 60.0) }
     axis = hour_axis(k)
     start = axis + math.log(r / 3.0) / math.log(PHI) * math.pi() / 2.0
     end = axis - 0.65
-    if dial_only == 1 {
-        end = axis + math.log(r / DIAL) / math.log(PHI) * math.pi() / 2.0
-    }
     stroked(path(_ctx, spiral_segment(r, axis, start, end)), SPIRAL, 4.0)
 }
 
@@ -127,7 +157,7 @@ two(n: int) -> string {
     return "${n}"
 }
 
-draw(rn: ptr) {
+update_clock(clock: *ClockTime) {
     t = now_local()
     h12 = t.hour % 12
     if h12 == 0 { h12 = 12 }
@@ -146,7 +176,7 @@ draw(rn: ptr) {
             }
         }
     }
-    draw_at(rn, h12, minute, second)
+    set_clock_time(clock, h12, minute, second)
 }
 
 // Function-first builders return the drawing scope for their trailing block.
@@ -193,58 +223,56 @@ dial_numerals(_ctx: ptr, size: float, radius: float) {
     }
 }
 
-// Shared by the live clock and deterministic rendering checks. Source order
-// declares the layers; the two spiral passes preserve outer label clearance.
-draw_at(rn: ptr, h12: int, minute: int, second: int) {
-    mins = minute + second / 60.0
-
-    clock_face(rn) {
-        text_anchored(CX, 56.0, 64.0, "middle", "Fibonacci Clock") {
-            fill("#ffffff")
-        }
-        text_anchored(CX, 122.0, 42.0, "middle", "${two(h12)}:${two(minute)}") {
-            fill(HOT)
-        }
-
-        for hour in [1, 2, 3, 4, 5, 6] {
-            hour_arc(hour, h12)
-        }
-        for hour in [7, 8, 9, 10, 11, 12] {
-            hour_arc(hour, h12)
-        }
-        draw_spiral(h12, mins)
-        draw_markers(h12)
-
-        classic_dial(1.25) {
-            tick_marks(0.6, 1.0)
-            dial_numerals(16.0, 64.0)
-            hand((h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
-            circle(CX, CY, 8.0) { fill(HOT) }
-        }
-        draw_spiral_layer(h12, mins, 1)
-
-        text_anchored(CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral") {
-            fill(SPIRAL)
-        }
-        text_anchored(CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13") {
-            fill("#8a8a8a")
-        }
-    }
+// Only time-dependent foreground shapes are rebuilt on each second.
+clock_foreground(_ctx: ptr, clock: *ClockTime) {
+    h12 = clock.hour
+    mins = clock.minute + clock.second / 60.0
+    fill(text_anchored(_ctx, CX, 122.0, 42.0, "middle", "${two(h12)}:${two(clock.minute)}"), HOT)
+    hand(_ctx, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
+    fill(circle(_ctx, CX, CY, 8.0), HOT)
+    draw_spiral(_ctx, h12, mins)
+    draw_markers(_ctx, h12)
 }
 
 main() {
+    clock = clock_time()
     window("Fibonacci Clock", 460, 798) {
         bg_color(0.0, 0.0, 0.0, 1.0)
         vg(view_box(0, 0, 600, 1040), 460, 798) {
             root = vg_root(node_scene(rect(0, 0, 0, 0)))
-            region = canvas_region(root, 0.0, 0.0, 600.0, 1040.0) callback |rn: ptr, t: float| {
-                draw(rn)
+            clock_face(root) {
+                text_anchored(CX, 56.0, 64.0, "middle", "Fibonacci Clock") {
+                    fill("#ffffff")
+                }
+
+                for hour in [1, 2, 3, 4, 5, 6] {
+                    hour_arc(hour, clock)
+                }
+                for hour in [7, 8, 9, 10, 11, 12] {
+                    hour_arc(hour, clock)
+                }
+
+                classic_dial(1.25) {
+                    tick_marks(0.6, 1.0)
+                    dial_numerals(16.0, 64.0)
+                }
+                text_anchored(CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral") {
+                    fill(SPIRAL)
+                }
+                text_anchored(CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13") {
+                    fill("#8a8a8a")
+                }
             }
-            // Nothing changes between seconds. Avoid rebuilding paths/text
-            // sixty times a second; resizing still redraws the whole scene.
+
+            // Static artwork above is declared once. The foreground region
+            // shares its time state with the retained arcs' stroke colours.
+            region = canvas_region(root, 0.0, 0.0, 600.0, 1040.0) callback |rn: ptr, t: float| {
+                clock_foreground(rn, clock)
+            }
             region_set_animated(region, 0)
             scene = node_scene(root)
             ui.timer(1000) callback {
+                update_clock(clock)
                 _ = vg.scene_refresh(scene)
             }
         }
