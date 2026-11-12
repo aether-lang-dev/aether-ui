@@ -61,14 +61,14 @@ stroked(n: ptr, color: string, w: float) {
 }
 
 // Split each lane around its numeral, with the lower half rotated 180°.
-draw_hour(rn: ptr, k: int, lit: int) {
+hour_arc(_ctx: ptr, k: int, current_hour: int) {
     r = arc_r(ring(k))
     axis = hour_axis(k)
     gap = 16.0 / r
     color = INK
-    if lit == 1 { color = HOT }
-    stroked(path(rn, spiral_segment(r, axis, axis - 0.65, axis - gap)), color, 3.5)
-    stroked(path(rn, spiral_segment(r, axis, axis + gap, axis + 0.70)), color, 3.5)
+    if k == current_hour { color = HOT }
+    stroked(path(_ctx, spiral_segment(r, axis, axis - 0.65, axis - gap)), color, 3.5)
+    stroked(path(_ctx, spiral_segment(r, axis, axis + gap, axis + 0.70)), color, 3.5)
 }
 
 // Reserve a padded background for each hour-lane label.
@@ -161,16 +161,6 @@ classic_dial(_ctx: ptr, outline_width: float) -> ptr {
     return vg_root(node_scene(_ctx))
 }
 
-hour_lanes(_ctx: ptr, hour: int) {
-    k = 1
-    while k <= 12 {
-        lit = 0
-        if k == hour { lit = 1 }
-        draw_hour(_ctx, k, lit)
-        k = k + 1
-    }
-}
-
 tick_marks(_ctx: ptr, minute_width: float, hour_width: float) {
     i = 0
     while i < 60 {
@@ -216,7 +206,12 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
             fill(HOT)
         }
 
-        hour_lanes(h12)
+        for hour in [1, 2, 3, 4, 5, 6] {
+            hour_arc(hour, h12)
+        }
+        for hour in [7, 8, 9, 10, 11, 12] {
+            hour_arc(hour, h12)
+        }
         draw_spiral(h12, mins)
         draw_markers(h12)
 
