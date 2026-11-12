@@ -162,7 +162,7 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
     draw_markers(rn, h12)
 
     face = circle(rn, CX, CY, DIAL)
-    stroked(face, "#ffffff", 2.5)
+    stroked(face, "#ffffff", 1.25)
     i = 0
     while i < 60 {
         a = i * math.pi() / 30.0
@@ -170,7 +170,7 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
         if i % 5 == 0 { r0 = DIAL - 9.0 }
         tk = line(rn, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
                   CX + DIAL * math.cos(a), CY + DIAL * math.sin(a))
-        stroke(tk, "#ffffff", 1.2)
+        stroke(tk, "#ffffff", 0.6)
         i = i + 1
     }
     hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
