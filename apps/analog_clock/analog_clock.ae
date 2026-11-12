@@ -1,180 +1,116 @@
-// aevg/analog_clock.ae — declarative analog clock, ported from Tsyne CVG's
-// cosyne/demos/svg-clock.ts (the most elegant DSL clock in that tree).
-//
-// Three layers of reuse, mirroring the original:
-//   1. marker_line / hand_line — pure geometry
-//   2. draw_clock_face(node, time_fn) — a reusable component drawing into the
-//      current vg scene
-//   3. clock_window() — the standalone live window
-//
-// The hands use bind_pos (re-evaluated each frame) and the scene is marked
-// refreshing (the live analogue of the original's poll(1000)), so the clock
-// ticks on its own.
-//
-//   DISPLAY=:0 ./build/analog_clock
-//
-// Headless one-frame proof: analog_clock_png.
+// Analog clock — scoped declarations with retained markers and bound hands.
+// Only time changes once per second; the face and geometry are built once.
+// Headless rendering uses the same verbs in apps/analog_clock_png.
 
 import ui
 import ui (window, enable_test_server)
 import vg.live
-import vg.live (vg, canvas_region)
+import vg.live (vg)
 import vg
-import vg (view_box, circle, line, fill, stroke, bind_pos)
+import vg (view_box, circle, line, fill, stroke, bind_pos, vg_root, node_scene)
 import std.math
 import std.map
 import std.string
-import std.os
 import std.os (os_getenv, now_local)
 
-// ─── Constants ───────────────────────────────────────────────
-
-// NB: no `SIZE` const here. Aether consts lower to `#define`, and the win32
-// backend includes <windows.h>, whose windef.h defines `struct tagSIZE`/`SIZE`.
-// A `const SIZE` therefore macro-clobbers the system type and the Windows build
-// dies in the headers. (This one was dead code, so it simply went.)
+// Avoid SIZE: Aether constants become C macros and clash with Win32's SIZE.
 const CENTER: float = 100.0
 const RADIUS: float = 90.0
 
-// ─── A time source: real local wall-clock ───────────────────────
-//
-// CVG passes `() => new Date()`. The equivalent here is os.now_local() (Aether
-// 0.203): a *LocalTime with hour/minute/second fields, one localtime_r call.
-// The bind closures read `clk.secs` (seconds since local midnight), which the
-// per-frame tick sets from now_local() — so the clock shows the actual time.
-struct Clock { secs: float }   // seconds since local midnight
+struct Clock { secs: float }
 extern malloc(size: int) -> ptr
-mk_clock() -> *Clock { c = malloc(sizeof(Clock)) as *Clock; c.secs = now_secs(); return c }
 
-// Seconds since local midnight (0..86399) from the host's wall clock.
+clock_time() -> *Clock {
+    clock = malloc(sizeof(Clock)) as *Clock
+    clock.secs = now_secs()
+    return clock
+}
+
 now_secs() -> float {
     t = now_local()
     return (t.hour * 3600 + t.minute * 60 + t.second) / 1.0
 }
 
-// Hand rotations in [0,1) (0 = 12 o'clock), derived from elapsed seconds.
-// 60s sweep for the second hand; minute/hour scaled from it.
-hour_rot(c: *Clock) -> float { return frac((c.secs / 3600.0) / 12.0) }
-min_rot(c: *Clock)  -> float { return frac((c.secs / 60.0) / 60.0) }
-sec_rot(c: *Clock)  -> float { return frac(c.secs / 60.0) }
-
 frac(v: float) -> float { return v - math.floor(v) }
 
-// ─── Geometry (pure) ─────────────────────────────────────────
-//
-// A Pt4 holds an (x1,y1)->(x2,y2) line segment as 4 floats (Aether structs
-// cross fn boundaries as heap pointers; no float-tuple returns).
-struct Pt4 { x1: float y1: float x2: float y2: float }
-mk_pt4(x1: float, y1: float, x2: float, y2: float) -> *Pt4 {
-    p = malloc(sizeof(Pt4)) as *Pt4
-    p.x1 = x1; p.y1 = y1; p.x2 = x2; p.y2 = y2
-    return p
+// Builders return a drawing scope for the verbs in their trailing block.
+clock_face(_ctx: ptr) -> ptr {
+    circle(_ctx, CENTER, CENTER, RADIUS) {
+        fill("#f5f5f5")
+        stroke("#333333", 3.0)
+    }
+    return vg_root(node_scene(_ctx))
 }
 
-// An hour-marker tick line (hour 0..11).
-marker_line(hour: int) -> *Pt4 {
+hour_marker(_ctx: ptr, hour: int) {
     angle = (hour / 12.0) * 2.0 * math.pi() - math.pi() / 2.0
     r0 = RADIUS * 0.85
     r1 = RADIUS * 0.95
-    return mk_pt4(CENTER + math.cos(angle) * r0, CENTER + math.sin(angle) * r0,
-                  CENTER + math.cos(angle) * r1, CENTER + math.sin(angle) * r1)
+    width = 1.0
+    if hour % 3 == 0 { width = 3.0 }
+    line(_ctx, CENTER + math.cos(angle) * r0, CENTER + math.sin(angle) * r0,
+               CENTER + math.cos(angle) * r1, CENTER + math.sin(angle) * r1) {
+        stroke("#333333", width)
+    }
 }
 
-// A hand endpoint segment for a rotation in [0,1) and a length.
-hand_line(rotation: float, len: float) -> *Pt4 {
+// Each hand owns one position map for its whole lifetime. Refreshing updates
+// its two entries directly, without allocating temporary geometry or maps.
+hand_position(position: @keep ptr, rotation: float, length: float) -> ptr {
     angle = rotation * 2.0 * math.pi() - math.pi() / 2.0
-    return mk_pt4(CENTER, CENTER,
-                  CENTER + math.cos(angle) * len, CENTER + math.sin(angle) * len)
+    _ = map.put(position, "x2", string.from_float(CENTER + math.cos(angle) * length))
+    _ = map.put(position, "y2", string.from_float(CENTER + math.sin(angle) * length))
+    return position
 }
 
-// The bind_pos geometry map {x2,y2} for a hand at this rotation/length. Only x2/
-// y2 move (x1/y1 stay at centre); the engine merges these into the line's geo.
-hand_pos_map(rotation: float, len: float) -> ptr {
-    p = hand_line(rotation, len)
-    m = map.new()
-    _ = map.put(m, "x2", string.from_float(p.x2))
-    _ = map.put(m, "y2", string.from_float(p.y2))
-    return m
+clock_hand(_ctx: ptr, clock: @keep *Clock, period: float,
+           length: float, color: string, width: float) {
+    angle = frac(clock.secs / period) * 2.0 * math.pi() - math.pi() / 2.0
+    position = map.new()
+    line(_ctx, CENTER, CENTER, CENTER + math.cos(angle) * length,
+                               CENTER + math.sin(angle) * length) {
+        stroke(color, width)
+        bind_pos() callback {
+            return hand_position(position, frac(clock.secs / period), length)
+        }
+    }
 }
 
-// ─── Reusable component ──────────────────────────────────────
-//
-// Draw a clock face into the vg scene rooted at `root`, with hands bound to
-// `clk`. Mirrors CVG's drawClockFace(s, time).
-draw_clock_face(root: ptr, clk: *Clock) {
-    // Face.
-    fc = vg.circle(root, CENTER, CENTER, RADIUS)
-    vg.fill(fc, "#f5f5f5")
-    vg.stroke(fc, "#333333", 3.0)
-
-    // Hour markers (every 3rd thicker).
-    i = 0
-    while i < 12 {
-        ml = marker_line(i)
-        ln = vg.line(root, ml.x1, ml.y1, ml.x2, ml.y2)
-        w = 1.0
-        if (i % 3) == 0 { w = 3.0 }
-        vg.stroke(ln, "#333333", w)
-        i = i + 1
-    }
-
-    // Hands — bound positions, re-evaluated each frame (the original's
-    // .bindPos). The bind closure returns {x2,y2} for the current rotation;
-    // recompute_bounds re-drives the line's endpoint. Capture-free except `clk`
-    // (a stable heap struct), per the closure rules.
-    hh = make_hand(root, hour_rot(clk), RADIUS * 0.5, "#333333", 4.0)
-    vg.bind_pos(hh) callback {
-        return hand_pos_map(hour_rot(clk), RADIUS * 0.5)
-    }
-    mh = make_hand(root, min_rot(clk), RADIUS * 0.75, "#333333", 3.0)
-    vg.bind_pos(mh) callback {
-        return hand_pos_map(min_rot(clk), RADIUS * 0.75)
-    }
-    sh = make_hand(root, sec_rot(clk), RADIUS * 0.85, "#e74c3c", 1.0)
-    vg.bind_pos(sh) callback {
-        return hand_pos_map(sec_rot(clk), RADIUS * 0.85)
-    }
-
-    // Center dot.
-    cd = vg.circle(root, CENTER, CENTER, 5.0)
-    vg.fill(cd, "#333333")
+hour_hand(_ctx: ptr, clock: @keep *Clock) {
+    clock_hand(_ctx, clock, 43200.0, RADIUS * 0.5, "#333333", 4.0)
 }
 
-make_hand(root: ptr, rot: float, len: float, color: string, width: float) -> ptr {
-    hl = hand_line(rot, len)
-    ln = vg.line(root, hl.x1, hl.y1, hl.x2, hl.y2)
-    vg.stroke(ln, color, width)
-    return ln
+minute_hand(_ctx: ptr, clock: @keep *Clock) {
+    clock_hand(_ctx, clock, 3600.0, RADIUS * 0.75, "#333333", 3.0)
 }
 
-// ─── Standalone live window ──────────────────────────────────
+second_hand(_ctx: ptr, clock: @keep *Clock) {
+    clock_hand(_ctx, clock, 60.0, RADIUS * 0.85, "#e74c3c", 1.0)
+}
+
+centre_pin(_ctx: ptr) {
+    circle(_ctx, CENTER, CENTER, 5.0) { fill("#333333") }
+}
 
 main() {
-    clk = mk_clock()
+    clock = clock_time()
     window("AeVG — analog clock", 280, 280) {
         vg(view_box(0, 0, 200, 200), 250, 250) {
-            // A bare verb gets the vg root injected as _ctx; derive the root
-            // node from it (the root is not a nameable variable in the block).
-            bgdot = circle(100, 100, 0)   // invisible anchor (r=0); just for the root
-            root = vg.vg_root(vg.node_scene(bgdot))
-            draw_clock_face(root, clk)
-            advance_clock(root, clk)
+            face = clock_face() {
+                for hour in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
+                    hour_marker(hour)
+                }
+                hour_hand(clock)
+                minute_hand(clock)
+                second_hand(clock)
+                centre_pin()
+            }
+            scene = node_scene(face)
+            ui.timer(1000) callback {
+                clock.secs = now_secs()
+                _ = vg.scene_refresh(scene)
+            }
         }
-        test_port = os_getenv("AETHER_UI_TEST_PORT")
-        if test_port != null { enable_test_server(9222) }
-    }
-}
-
-// Wire the per-frame tick: mark the scene refreshing (so the live loop re-evals
-// bindings) and drive clk.secs from a draw-region's t (a capture-free hook that
-// runs each frame). The draw region emits nothing — it just advances the clock.
-advance_clock(root: ptr, clk: *Clock) {
-    scene = vg.node_scene(root)
-    vg.scene_set_refreshing(scene, 1)
-    // Each frame, snap the clock to the host's current local time. (The `t`
-    // arg is the monotonic frame clock; we ignore it and read wall time, so the
-    // hands track the actual time, not elapsed-since-launch.)
-    canvas_region(root, 0.0, 0.0, 1.0, 1.0) callback |rn: ptr, t: float| {
-        clk.secs = now_secs()
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
     }
 }
