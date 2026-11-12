@@ -175,6 +175,21 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
         stroke(tk, "#ffffff", width)
         i = i + 1
     }
+    // Conventional dial numbers: twelve at the top, increasing clockwise.
+    // Their backgrounds keep the spiral clear of these markers too.
+    n = 1
+    while n <= 12 {
+        a = n * math.pi() / 6.0 - math.pi() / 2.0
+        x = CX + 64.0 * math.cos(a)
+        baseline = CY + 64.0 * math.sin(a) + 5.0
+        w = vg.text_width(16.0, "${n}")
+        ascent = vg.font_ascent(16.0)
+        descent = vg.font_descent(16.0)
+        fill(rect(rn, x - w / 2.0 - 2.0, baseline - ascent - 1.0,
+                  w + 4.0, ascent + descent + 2.0), "#000000")
+        fill(text_anchored(rn, x, baseline, 16.0, "middle", "${n}"), "#ffffff")
+        n = n + 1
+    }
     hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
     fill(circle(rn, CX, CY, 8.0), HOT)
 
