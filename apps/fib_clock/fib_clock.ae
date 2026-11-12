@@ -1,4 +1,4 @@
-// Fibonacci Clock — offset hour arcs and a counterclockwise golden spiral.
+// Fibonacci Clock — one golden-spiral family for the hour lanes and hand.
 // Run: aeb apps/fib_clock && target/build/apps/fib_clock/bin/fib_clock
 // FIB_CLOCK_TIME=04:30 freezes the clock for a reference screenshot.
 
@@ -31,22 +31,30 @@ pt(d: string, cmd: string, a: float, r: float) -> string {
     return string.concat(d, "${cmd}${x} ${y} ")
 }
 
-// The reference's arcs are offset circles, not concentric rings: upper
-// centres lean left, lower centres lean right. Each crosses x=CX at ±r.
-arc_d(r: float, side: float, a0: float, a1: float) -> string {
+// Every curve shares this polar equation and centre. `radius` is its
+// distance from the dial centre at the label axis. Scaling that radius
+// makes nested lanes with the same pitch; rotating by pi mirrors 7–12.
+spiral_radius(radius: float, delta: float) -> float {
+    return radius * math.pow(PHI, -delta * 2.0 / math.pi())
+}
+
+spiral_segment(radius: float, axis: float, a0: float, a1: float) -> string {
     d = ""
+    // Keep angular sampling identical for short lanes and the full hand.
+    steps = (math.abs_float(a1 - a0) / 0.025) as int + 1
     i = 0
-    while i <= 64 {
-        a = a0 + (a1 - a0) * i / 64.0
-        x = CX + side * 0.45 * r + 1.09658561 * r * math.cos(a)
-        y = CY + 1.09658561 * r * math.sin(a)
+    while i <= steps {
+        a = a0 + (a1 - a0) * i / (steps * 1.0)
+        r = spiral_radius(radius, a - axis)
         cmd = "L"
         if i == 0 { cmd = "M" }
-        d = string.concat(d, "${cmd}${x} ${y} ")
+        d = pt(d, cmd, a, r)
         i = i + 1
     }
     return d
 }
+
+hour_axis(k: int) -> float { return hemi(k) * math.pi() / 2.0 }
 
 stroked(n: ptr, color: string, w: float) {
     fill(n, "none"); stroke(n, color, w); linecap(n, "round")
@@ -55,15 +63,12 @@ stroked(n: ptr, color: string, w: float) {
 // Split each lane around its numeral, with the lower half rotated 180°.
 draw_hour(rn: ptr, k: int, lit: int) {
     r = arc_r(ring(k))
-    side = hemi(k)
-    rotation = 0.0
-    if side > 0.0 { rotation = math.pi() }
-    axis = -1.1479424 + rotation
-    gap = 16.0 / (1.09658561 * r)
+    axis = hour_axis(k)
+    gap = 16.0 / r
     color = INK
     if lit == 1 { color = HOT }
-    stroked(path(rn, arc_d(r, side, -1.86 + rotation, axis - gap)), color, 3.5)
-    stroked(path(rn, arc_d(r, side, axis + gap, -0.63 + rotation)), color, 3.5)
+    stroked(path(rn, spiral_segment(r, axis, axis - 0.65, axis - gap)), color, 3.5)
+    stroked(path(rn, spiral_segment(r, axis, axis + gap, axis + 0.70)), color, 3.5)
 }
 
 // Labels own their background above every curve. Reserve the complete
@@ -93,38 +98,15 @@ draw_markers(rn: ptr, hour: int) {
 ring(k: int) -> int { if k > 6 { return k - 6 }; return k }
 hemi(k: int) -> float { if k > 6 { return 1.0 }; return -1.0 }
 
-// Grow toward the next lane during the hour. Stop at the outer lane so
-// six/twelve cannot run outside the viewport. The tip follows the left
-// shoulder above the dial and the opposite shoulder below it.
+// The hand uses the SAME equation and angular shoulder as the hour
+// lanes. Interpolate their scale geometrically as the minutes advance;
+// changing time cannot change its pitch relative to the hour markers.
 draw_spiral(rn: ptr, k: int, mins: float) {
     r = arc_r(ring(k))
-    if ring(k) < 6 { r = r + (arc_r(ring(k) + 1) - r) * mins / 60.0 }
-    side = hemi(k)
-    a = -1.86
-    if side > 0.0 { a = a + math.pi() }
-    dx = side * 0.45 * r + 1.09658561 * r * math.cos(a)
-    dy = 1.09658561 * r * math.sin(a)
-    reach = math.sqrt(dx * dx + dy * dy)
-    tip = math.atan2(dy, dx)
-    stroked(path(rn, spiral_d(reach, tip)), SPIRAL, 4.0)
-}
-
-// Golden spiral from the dial's centre out to radius `reach`, turned so it
-// ends at angle `tip`.
-spiral_d(reach: float, tip: float) -> string {
-    a0 = 3.0
-    turn = math.log(reach / a0) / math.log(PHI) * math.pi() / 2.0   // θ where r = reach
-    d = ""
-    i = 0
-    while i <= 160 {
-        th = turn * i / 160.0
-        r = a0 * math.pow(PHI, th * 2.0 / math.pi())
-        cmd = "L"
-        if i == 0 { cmd = "M" }
-        d = pt(d, cmd, tip + turn - th, r)
-        i = i + 1
-    }
-    return d
+    if ring(k) < 6 { r = r * math.pow(1.247, mins / 60.0) }
+    axis = hour_axis(k)
+    start = axis + math.log(r / 3.0) / math.log(PHI) * math.pi() / 2.0
+    stroked(path(rn, spiral_segment(r, axis, start, axis - 0.65)), SPIRAL, 4.0)
 }
 
 hand(rn: ptr, frac: float, len: float, color: string, w: float) {
