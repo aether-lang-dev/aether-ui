@@ -74,20 +74,20 @@ draw_hour(rn: ptr, k: int, lit: int) {
 // Reserve a padded background for each hour-lane label.
 // Paint ALL backgrounds before ANY labels:
 // adjacent inner labels can have overlapping font boxes.
-draw_markers(rn: ptr, hour: int) {
+draw_markers(_ctx: ptr, hour: int) {
     k = 1
     while k <= 12 {
         baseline = CY + hemi(k) * arc_r(ring(k)) + 9.0
         w = vg.text_width(30.0, "${k}")
         ascent = vg.font_ascent(30.0)
         descent = vg.font_descent(30.0)
-        fill(rect(rn, CX - w / 2.0 - 6.0, baseline - ascent - 4.0,
+        fill(rect(_ctx, CX - w / 2.0 - 6.0, baseline - ascent - 4.0,
                   w + 12.0, ascent + descent + 8.0), "#000000")
         k = k + 1
     }
     k = 1
     while k <= 12 {
-        num = text_anchored(rn, CX, CY + hemi(k) * arc_r(ring(k)) + 9.0,
+        num = text_anchored(_ctx, CX, CY + hemi(k) * arc_r(ring(k)) + 9.0,
                             30.0, "middle", "${k}")
         if k == hour { fill(num, HOT) } else { fill(num, "#b8b8b8") }
         k = k + 1
@@ -100,11 +100,11 @@ hemi(k: int) -> float { if k > 6 { return 1.0 }; return -1.0 }
 // The hand uses the SAME equation and angular shoulder as the hour
 // lanes. Interpolate their scale geometrically as the minutes advance;
 // changing time cannot change its pitch relative to the hour markers.
-draw_spiral(rn: ptr, k: int, mins: float) {
-    draw_spiral_layer(rn, k, mins, 0)
+draw_spiral(_ctx: ptr, k: int, mins: float) {
+    draw_spiral_layer(_ctx, k, mins, 0)
 }
 
-draw_spiral_layer(rn: ptr, k: int, mins: float, dial_only: int) {
+draw_spiral_layer(_ctx: ptr, k: int, mins: float, dial_only: int) {
     r = arc_r(ring(k))
     if ring(k) < 6 { r = r * math.pow(1.247, mins / 60.0) }
     axis = hour_axis(k)
@@ -113,12 +113,12 @@ draw_spiral_layer(rn: ptr, k: int, mins: float, dial_only: int) {
     if dial_only == 1 {
         end = axis + math.log(r / DIAL) / math.log(PHI) * math.pi() / 2.0
     }
-    stroked(path(rn, spiral_segment(r, axis, start, end)), SPIRAL, 4.0)
+    stroked(path(_ctx, spiral_segment(r, axis, start, end)), SPIRAL, 4.0)
 }
 
-hand(rn: ptr, frac: float, len: float, color: string, w: float) {
+hand(_ctx: ptr, frac: float, len: float, color: string, w: float) {
     a = frac * 2.0 * math.pi() - math.pi() / 2.0
-    h = line(rn, CX, CY, CX + len * math.cos(a), CY + len * math.sin(a))
+    h = line(_ctx, CX, CY, CX + len * math.cos(a), CY + len * math.sin(a))
     stroke(h, color, w); linecap(h, "round")
 }
 
@@ -149,63 +149,92 @@ draw(rn: ptr) {
     draw_at(rn, h12, minute, second)
 }
 
-// Shared by the live clock and deterministic rendering checks.
-draw_at(rn: ptr, h12: int, minute: int, second: int) {
-    mins = minute + second / 60.0
+// Function-first builders return the drawing scope for their trailing block.
+// The block's verbs receive _ctx implicitly, just like window() and vg().
+clock_face(_ctx: ptr) -> ptr {
+    fill(rect(_ctx, 0.0, 0.0, 600.0, 1040.0), "#000000")
+    return vg_root(node_scene(_ctx))
+}
 
-    fill(rect(rn, 0.0, 0.0, 600.0, 1040.0), "#000000")
-    fill(text_anchored(rn, CX, 56.0, 64.0, "middle", "Fibonacci Clock"), "#ffffff")
-    fill(text_anchored(rn, CX, 122.0, 42.0, "middle", "${two(h12)}:${two(minute)}"), HOT)
+classic_dial(_ctx: ptr, outline_width: float) -> ptr {
+    stroked(circle(_ctx, CX, CY, DIAL), "#ffffff", outline_width)
+    return vg_root(node_scene(_ctx))
+}
 
+hour_lanes(_ctx: ptr, hour: int) {
     k = 1
     while k <= 12 {
         lit = 0
-        if k == h12 { lit = 1 }
-        draw_hour(rn, k, lit)
+        if k == hour { lit = 1 }
+        draw_hour(_ctx, k, lit)
         k = k + 1
     }
+}
 
-    draw_spiral(rn, h12, mins)
-    draw_markers(rn, h12)
-
-    face = circle(rn, CX, CY, DIAL)
-    stroked(face, "#ffffff", 1.25)
+tick_marks(_ctx: ptr, minute_width: float, hour_width: float) {
     i = 0
     while i < 60 {
         a = i * math.pi() / 30.0
         r0 = DIAL - 4.0
         if i % 5 == 0 { r0 = DIAL - 9.0 }
-        tk = line(rn, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
+        tk = line(_ctx, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
                   CX + DIAL * math.cos(a), CY + DIAL * math.sin(a))
-        width = 0.6
-        if i % 5 == 0 { width = 1.0 }
+        width = minute_width
+        if i % 5 == 0 { width = hour_width }
         stroke(tk, "#ffffff", width)
         i = i + 1
     }
-    // Conventional dial numbers: twelve at the top, increasing clockwise.
-    // Seat the numbers on the dial below the foreground spiral.
+}
+
+// Conventional numerals sit below the foreground spiral.
+dial_numerals(_ctx: ptr, size: float, radius: float) {
     n = 1
     while n <= 12 {
         a = n * math.pi() / 6.0 - math.pi() / 2.0
-        x = CX + 64.0 * math.cos(a)
-        baseline = CY + 64.0 * math.sin(a) + 5.0
-        w = vg.text_width(16.0, "${n}")
-        ascent = vg.font_ascent(16.0)
-        descent = vg.font_descent(16.0)
-        fill(rect(rn, x - w / 2.0 - 2.0, baseline - ascent - 1.0,
+        x = CX + radius * math.cos(a)
+        baseline = CY + radius * math.sin(a) + 5.0
+        w = vg.text_width(size, "${n}")
+        ascent = vg.font_ascent(size)
+        descent = vg.font_descent(size)
+        fill(rect(_ctx, x - w / 2.0 - 2.0, baseline - ascent - 1.0,
                   w + 4.0, ascent + descent + 2.0), "#000000")
-        fill(text_anchored(rn, x, baseline, 16.0, "middle", "${n}"), "#ffffff")
+        fill(text_anchored(_ctx, x, baseline, size, "middle", "${n}"), "#ffffff")
         n = n + 1
     }
-    hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
-    fill(circle(rn, CX, CY, 8.0), HOT)
+}
 
-    // Bring the spiral above the classic dial while preserving the
-    // exclusion around the outer hour markers. Both passes share geometry.
-    draw_spiral_layer(rn, h12, mins, 1)
+// Shared by the live clock and deterministic rendering checks. Source order
+// declares the layers; the two spiral passes preserve outer label clearance.
+draw_at(rn: ptr, h12: int, minute: int, second: int) {
+    mins = minute + second / 60.0
 
-    fill(text_anchored(rn, CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral"), SPIRAL)
-    fill(text_anchored(rn, CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13"), "#8a8a8a")
+    clock_face(rn) {
+        text_anchored(CX, 56.0, 64.0, "middle", "Fibonacci Clock") {
+            fill("#ffffff")
+        }
+        text_anchored(CX, 122.0, 42.0, "middle", "${two(h12)}:${two(minute)}") {
+            fill(HOT)
+        }
+
+        hour_lanes(h12)
+        draw_spiral(h12, mins)
+        draw_markers(h12)
+
+        classic_dial(1.25) {
+            tick_marks(0.6, 1.0)
+            dial_numerals(16.0, 64.0)
+            hand((h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
+            circle(CX, CY, 8.0) { fill(HOT) }
+        }
+        draw_spiral_layer(h12, mins, 1)
+
+        text_anchored(CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral") {
+            fill(SPIRAL)
+        }
+        text_anchored(CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13") {
+            fill("#8a8a8a")
+        }
+    }
 }
 
 main() {
