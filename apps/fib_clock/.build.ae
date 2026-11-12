@@ -1,0 +1,18 @@
+import bldr
+import aether
+import aether (source, output, no_closure_regen, lib)
+import build_support.aetherui (ui_backend)
+
+main() {
+    bldr.build() {
+        root = _get("root")
+        aether.program() {
+            source("fib_clock.ae")
+            output("fib_clock")
+            lib("${root}")
+            no_closure_regen()
+            ui_backend(root)
+        }
+        return 0
+    }
+}

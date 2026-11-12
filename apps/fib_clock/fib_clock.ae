@@ -1,0 +1,219 @@
+// Fibonacci Clock — offset hour arcs and a counterclockwise golden spiral.
+// Run: aeb apps/fib_clock && target/build/apps/fib_clock/bin/fib_clock
+// FIB_CLOCK_TIME=04:30 freezes the clock for a reference screenshot.
+
+import ui
+import ui (window, enable_test_server, bg_color)
+import vg.live
+import vg.live (vg, canvas_region, region_set_animated)
+import vg
+import vg (view_box, rect, circle, line, path, fill, stroke, linecap,
+           text_anchored, vg_root, node_scene)
+import std.math
+import std.string
+import std.os (os_getenv, now_local)
+
+const CX: float = 300.0
+const CY: float = 540.0
+const DIAL: float = 86.0
+const PHI: float = 1.6180339887
+const INK: string = "#3a3a3a"
+const HOT: string = "#f26b5b"
+const SPIRAL: string = "#4fb3d0"
+
+// Geometric spacing leaves the inner labels legible and fits all twelve
+// lanes inside the portrait. Opposite hours share a radius.
+arc_r(k: int) -> float { return 118.0 * math.pow(1.247, k - 1.0) }
+
+pt(d: string, cmd: string, a: float, r: float) -> string {
+    x = string.from_float(CX + r * math.cos(a))
+    y = string.from_float(CY + r * math.sin(a))
+    return string.concat(d, "${cmd}${x} ${y} ")
+}
+
+// The reference's arcs are offset circles, not concentric rings: upper
+// centres lean left, lower centres lean right. Each crosses x=CX at ±r.
+arc_d(r: float, side: float, a0: float, a1: float) -> string {
+    d = ""
+    i = 0
+    while i <= 64 {
+        a = a0 + (a1 - a0) * i / 64.0
+        x = CX + side * 0.45 * r + 1.09658561 * r * math.cos(a)
+        y = CY + 1.09658561 * r * math.sin(a)
+        cmd = "L"
+        if i == 0 { cmd = "M" }
+        d = string.concat(d, "${cmd}${x} ${y} ")
+        i = i + 1
+    }
+    return d
+}
+
+stroked(n: ptr, color: string, w: float) {
+    fill(n, "none"); stroke(n, color, w); linecap(n, "round")
+}
+
+// Split each lane around its numeral, with the lower half rotated 180°.
+draw_hour(rn: ptr, k: int, lit: int) {
+    r = arc_r(ring(k))
+    side = hemi(k)
+    rotation = 0.0
+    if side > 0.0 { rotation = math.pi() }
+    axis = -1.1479424 + rotation
+    gap = 16.0 / (1.09658561 * r)
+    color = INK
+    if lit == 1 { color = HOT }
+    stroked(path(rn, arc_d(r, side, -1.86 + rotation, axis - gap)), color, 3.5)
+    stroked(path(rn, arc_d(r, side, axis + gap, -0.63 + rotation)), color, 3.5)
+}
+
+// Labels own their background above every curve. Reserve the complete
+// measured glyph box plus padding, so neither the spiral nor another lane
+// can cross a marker at any time. Paint ALL backgrounds before ANY labels:
+// adjacent inner labels can have overlapping font boxes.
+draw_markers(rn: ptr, hour: int) {
+    k = 1
+    while k <= 12 {
+        baseline = CY + hemi(k) * arc_r(ring(k)) + 9.0
+        w = vg.text_width(30.0, "${k}")
+        ascent = vg.font_ascent(30.0)
+        descent = vg.font_descent(30.0)
+        fill(rect(rn, CX - w / 2.0 - 6.0, baseline - ascent - 4.0,
+                  w + 12.0, ascent + descent + 8.0), "#000000")
+        k = k + 1
+    }
+    k = 1
+    while k <= 12 {
+        num = text_anchored(rn, CX, CY + hemi(k) * arc_r(ring(k)) + 9.0,
+                            30.0, "middle", "${k}")
+        if k == hour { fill(num, HOT) } else { fill(num, "#b8b8b8") }
+        k = k + 1
+    }
+}
+
+ring(k: int) -> int { if k > 6 { return k - 6 }; return k }
+hemi(k: int) -> float { if k > 6 { return 1.0 }; return -1.0 }
+
+// Grow toward the next lane during the hour. Stop at the outer lane so
+// six/twelve cannot run outside the viewport. The tip follows the left
+// shoulder above the dial and the opposite shoulder below it.
+draw_spiral(rn: ptr, k: int, mins: float) {
+    r = arc_r(ring(k))
+    if ring(k) < 6 { r = r + (arc_r(ring(k) + 1) - r) * mins / 60.0 }
+    side = hemi(k)
+    a = -1.86
+    if side > 0.0 { a = a + math.pi() }
+    dx = side * 0.45 * r + 1.09658561 * r * math.cos(a)
+    dy = 1.09658561 * r * math.sin(a)
+    reach = math.sqrt(dx * dx + dy * dy)
+    tip = math.atan2(dy, dx)
+    stroked(path(rn, spiral_d(reach, tip)), SPIRAL, 4.0)
+}
+
+// Golden spiral from the dial's centre out to radius `reach`, turned so it
+// ends at angle `tip`.
+spiral_d(reach: float, tip: float) -> string {
+    a0 = 3.0
+    turn = math.log(reach / a0) / math.log(PHI) * math.pi() / 2.0   // θ where r = reach
+    d = ""
+    i = 0
+    while i <= 160 {
+        th = turn * i / 160.0
+        r = a0 * math.pow(PHI, th * 2.0 / math.pi())
+        cmd = "L"
+        if i == 0 { cmd = "M" }
+        d = pt(d, cmd, tip + turn - th, r)
+        i = i + 1
+    }
+    return d
+}
+
+hand(rn: ptr, frac: float, len: float, color: string, w: float) {
+    a = frac * 2.0 * math.pi() - math.pi() / 2.0
+    h = line(rn, CX, CY, CX + len * math.cos(a), CY + len * math.sin(a))
+    stroke(h, color, w); linecap(h, "round")
+}
+
+two(n: int) -> string {
+    if n < 10 { return "0${n}" }
+    return "${n}"
+}
+
+draw(rn: ptr) {
+    t = now_local()
+    h12 = t.hour % 12
+    if h12 == 0 { h12 = 12 }
+    minute = t.minute
+    second = t.second
+    fixed = os_getenv("FIB_CLOCK_TIME")
+    if fixed != null {
+        if string.length(fixed) == 5 && string.substring(fixed, 2, 3) == ":" {
+            hh, he = string.to_int(string.substring(fixed, 0, 2))
+            mm, me = string.to_int(string.substring(fixed, 3, 5))
+            if he == "" && me == "" && hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 {
+                h12 = hh % 12
+                if h12 == 0 { h12 = 12 }
+                minute = mm
+                second = 0
+            }
+        }
+    }
+    draw_at(rn, h12, minute, second)
+}
+
+// Shared by the live clock and deterministic rendering checks.
+draw_at(rn: ptr, h12: int, minute: int, second: int) {
+    mins = minute + second / 60.0
+
+    fill(rect(rn, 0.0, 0.0, 600.0, 1040.0), "#000000")
+    fill(text_anchored(rn, CX, 56.0, 64.0, "middle", "Fibonacci Clock"), "#ffffff")
+    fill(text_anchored(rn, CX, 122.0, 42.0, "middle", "${two(h12)}:${two(minute)}"), HOT)
+
+    k = 1
+    while k <= 12 {
+        lit = 0
+        if k == h12 { lit = 1 }
+        draw_hour(rn, k, lit)
+        k = k + 1
+    }
+
+    draw_spiral(rn, h12, mins)
+    draw_markers(rn, h12)
+
+    face = circle(rn, CX, CY, DIAL)
+    stroked(face, "#ffffff", 2.5)
+    i = 0
+    while i < 60 {
+        a = i * math.pi() / 30.0
+        r0 = DIAL - 4.0
+        if i % 5 == 0 { r0 = DIAL - 9.0 }
+        tk = line(rn, CX + r0 * math.cos(a), CY + r0 * math.sin(a),
+                  CX + DIAL * math.cos(a), CY + DIAL * math.sin(a))
+        stroke(tk, "#ffffff", 1.2)
+        i = i + 1
+    }
+    hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
+    fill(circle(rn, CX, CY, 8.0), HOT)
+
+    fill(text_anchored(rn, CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral"), SPIRAL)
+    fill(text_anchored(rn, CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13"), "#8a8a8a")
+}
+
+main() {
+    window("Fibonacci Clock", 460, 798) {
+        bg_color(0.0, 0.0, 0.0, 1.0)
+        vg(view_box(0, 0, 600, 1040), 460, 798) {
+            root = vg_root(node_scene(rect(0, 0, 0, 0)))
+            region = canvas_region(root, 0.0, 0.0, 600.0, 1040.0) callback |rn: ptr, t: float| {
+                draw(rn)
+            }
+            // Nothing changes between seconds. Avoid rebuilding paths/text
+            // sixty times a second; resizing still redraws the whole scene.
+            region_set_animated(region, 0)
+            scene = node_scene(root)
+            ui.timer(1000) callback {
+                _ = vg.scene_refresh(scene)
+            }
+        }
+        if os_getenv("AETHER_UI_TEST_PORT") != null { enable_test_server(9222) }
+    }
+}
