@@ -71,9 +71,8 @@ draw_hour(rn: ptr, k: int, lit: int) {
     stroked(path(rn, spiral_segment(r, axis, axis + gap, axis + 0.70)), color, 3.5)
 }
 
-// Labels own their background above every curve. Reserve the complete
-// measured glyph box plus padding, so neither the spiral nor another lane
-// can cross a marker at any time. Paint ALL backgrounds before ANY labels:
+// Reserve a padded background for each hour-lane label.
+// Paint ALL backgrounds before ANY labels:
 // adjacent inner labels can have overlapping font boxes.
 draw_markers(rn: ptr, hour: int) {
     k = 1
@@ -158,7 +157,6 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
         k = k + 1
     }
 
-    draw_spiral(rn, h12, mins)
     draw_markers(rn, h12)
 
     face = circle(rn, CX, CY, DIAL)
@@ -176,7 +174,7 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
         i = i + 1
     }
     // Conventional dial numbers: twelve at the top, increasing clockwise.
-    // Their backgrounds keep the spiral clear of these markers too.
+    // Seat the numbers on the dial below the foreground spiral.
     n = 1
     while n <= 12 {
         a = n * math.pi() / 6.0 - math.pi() / 2.0
@@ -192,6 +190,9 @@ draw_at(rn: ptr, h12: int, minute: int, second: int) {
     }
     hand(rn, (h12 % 12 + mins / 60.0) / 12.0, DIAL * 0.8, "#ffffff", 3.0)
     fill(circle(rn, CX, CY, 8.0), HOT)
+
+    // The spiral is the foreground layer, above the dial and its details.
+    draw_spiral(rn, h12, mins)
 
     fill(text_anchored(rn, CX, 972.0, 36.0, "middle", "Time, drawn by a Fibonacci spiral"), SPIRAL)
     fill(text_anchored(rn, CX, 1030.0, 36.0, "middle", "1   1   2   3   5   8   13"), "#8a8a8a")
