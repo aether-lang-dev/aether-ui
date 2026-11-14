@@ -355,7 +355,12 @@ jobs:
           # so bldr.begin/build and the node entry transform-ae writes declare
           # it @keep; with v0.332 every node here failed to compile (46
           # failures). A tag again, same code.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.333' }}
+          # v0.345 (2026-11-14): v0.333's sources pass ptrs read from lists and
+          # maps as strings, which Aether 0.914.0 refuses (E0202, aether#3694),
+          # so aeb did not build against the v0.914.0 AETHER_REF above. v0.345
+          # reads them with list.get_string/map.get_string. Verified: ci.sh,
+          # all phases, on macOS, cachyos and ae-x64.
+          AEB_REF: ${{ vars.AEB_REF || 'v0.345' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
