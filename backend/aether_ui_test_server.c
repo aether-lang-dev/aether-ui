@@ -881,9 +881,9 @@ static void handle_request_inner(aether_sock_t client_fd,
                 int hlen = snprintf(header, sizeof(header),
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: image/png\r\n"
-                    "Content-Length: %zu\r\n"
+                    "Content-Length: %lu\r\n"
                     "Access-Control-Allow-Origin: *\r\n"
-                    "Connection: close\r\n\r\n", len);
+                    "Connection: close\r\n\r\n", (unsigned long)len);
                 send_all(client_fd, header, hlen);
                 send_all(client_fd, (const char*)data, (int)len);  // PNG can be large
                 free(data);
