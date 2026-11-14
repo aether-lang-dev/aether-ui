@@ -317,8 +317,8 @@ jobs:
       # orchestrator used to be one serial gcc run over 171 node entry files,
       # about 7.5 minutes on every run whether the nodes hit the cache or not.
       # Locally, fresh clone: cold 7:39 -> 2:36, restored cache 7:37 -> 0:31.
-      # Back to a tag when the next aeb release is cut.
-      AEB_REF: ${{ vars.AEB_REF || 'f8d138f89723aa3b519f02f4dcebea5e79d53ee5' }}
+      # v0.346 (2026-11-14): the first tag with f8d138f, same code.
+      AEB_REF: ${{ vars.AEB_REF || 'v0.346' }}
     # A hung step otherwise runs until the 6 hour default. Linux runs the full
     # pipeline in about 25 minutes; 45 leaves room without letting a hang sit.
     # The macOS runner rebuilt every aeb node cold and was still passing
@@ -416,6 +416,32 @@ jobs:
           # every unchanged node and object.
           restore-keys: |
             aeb-${{ runner.os }}-${{ env.AETHER_REF }}-${{ env.AEB_REF }}-
+
+      # Phase 1e2 boots an iOS simulator and drives listbox_demo in it: 13.5
+      # of the macOS leg's ~37 minutes (2026-11-14), at the macOS minute rate.
+      # A push runs it only when something it builds changed; a manual run,
+      # a pull request, a new branch or an unreadable diff always runs it.
+      # ./ci.sh run locally always runs it.
+      - name: Decide whether the iOS simulator run is needed
+        if: runner.os == 'macOS'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          skip=0
+          if [ "${{ github.event_name }}" = push ] && [ -n "$BEFORE" ] \
+             && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] \
+             && git fetch --quiet --depth=1 origin "$BEFORE" \
+             && changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA"); then
+            skip=1
+            for f in $changed; do
+              case "$f" in
+                ui/*|backend/aether_ui_uikit.m|backend/*.h|backend/aether_ui_test_server.c|backend/aether_ui_system_extras.c|tests/ios/*|tests/listbox_demo/*|examples/listbox_demo/*|ci.sh|.github/workflows/ci.yml)
+                  skip=0; echo "iOS simulator run needed: $f changed"; break ;;
+              esac
+            done
+          fi
+          [ "$skip" = 1 ] && echo "iOS simulator run skipped: no UIKit input changed"
+          echo "AETHER_UI_SKIP_IOS_SIM=$skip" >> "$GITHUB_ENV"
 
       - name: Run the UI test pipeline
         run: ./ci.sh

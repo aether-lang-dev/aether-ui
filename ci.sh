@@ -948,6 +948,8 @@ if [ "$PLATFORM" != "macos" ] || [ -z "$IOS_SDK" ] || [ ! -d "$IOS_SDK" ]; then
     echo "  SKIP needs a Mac with the iOS simulator SDK"
 elif [ "$ios_fail" -ne 0 ]; then
     echo "  SKIP Phase 1e failed"
+elif [ "${AETHER_UI_SKIP_IOS_SIM:-0}" = 1 ]; then
+    echo "  SKIP AETHER_UI_SKIP_IOS_SIM=1 (CI: nothing the simulator run builds changed in this push)"
 elif ! ae build --help 2>&1 | grep -q "ios-simulator"; then
     echo "  SKIP this ae has no iOS target (aether #1385)"
 else
