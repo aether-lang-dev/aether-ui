@@ -1872,6 +1872,16 @@ if [ "$SPEC_OK" -eq 1 ]; then
     AETHER_UI_HEADLESS=1 UI_SPEC=splitcanvas_demo/spec_splitcanvas_demo \
     run_server_test "$(EX_BIN splitcanvas_demo)" \
                     "$SCRIPT_DIR/tests/run_spec.sh" splitcanvas_demo || FAIL=$((FAIL + 1))
+    # Again on Apple's software GL, which is all a macOS VM (GitHub's runner)
+    # has. Its drawable is the window's backing store, and a zero-area GPU view
+    # aborted the app at launch there (CABackingStoreEndUpdate) while a Mac
+    # with a GPU passed. AETHER_UI_GL_SOFTWARE=1 makes a real Mac take that
+    # renderer, so the bug shows here and not first on CI.
+    if [ "$PLATFORM" = macos ]; then
+        AETHER_UI_GL_SOFTWARE=1 UI_SPEC=splitcanvas_demo/spec_splitcanvas_demo \
+        run_server_test "$(EX_BIN splitcanvas_demo)" \
+                        "$SCRIPT_DIR/tests/run_spec.sh" splitcanvas_demo || FAIL=$((FAIL + 1))
+    fi
 
     # An app that ends itself needs no driver: the whole assertion is that the
     # run loop RETURNS and the process exits 0. Before app_quit the only way

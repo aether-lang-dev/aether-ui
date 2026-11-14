@@ -7568,6 +7568,29 @@ static void gpu_fire_wh(void* boxed, int w, int h) {
     return [self convertRectToBacking:b].size;
 }
 
+/* Never zero area: one pixel is the least a GL surface is.
+ *
+ * Apple's software renderer (all a macOS VM has: GitHub's runner, a Tart
+ * guest) makes its drawable a lock on the window's backing store, and a
+ * zero-area view has no bits to lock. Attaching it (AppKit's own
+ * -[NSOpenGLContext update] on every geometry change) or flushing a frame
+ * into it then unlocks what was never locked, and CoreAnimation aborts the
+ * process:
+ *   Assertion failed: (CABackStoreIsUpdating_ (b)), CABackingStoreEndUpdate
+ * A GPU context shrugs it off, which is why this only ever showed on CI.
+ * A viewport reaches zero easily: a pane dragged shut, or a stack that
+ * squeezes it to nothing (splitcanvas_demo's GPU view, 0 pt tall, aborted at
+ * launch). Clamped here because every path that sizes a view lands here:
+ * Auto Layout, an autoresizing pane, a caller's setFrame. The view overhangs
+ * an empty parent by a pixel, clipped, and its size reads as what the
+ * surface really is (1), not what was asked (0). AETHER_UI_GL_SOFTWARE=1
+ * reproduces it on a Mac with a GPU. */
+- (void)setFrameSize:(NSSize)size {
+    if (size.width  < 1) size.width  = 1;
+    if (size.height < 1) size.height = 1;
+    [super setFrameSize:size];
+}
+
 - (void)reshape {
     [super reshape];
     GpuState* st = get_gpu_state(self.gpuId);
@@ -7641,16 +7664,30 @@ int aether_ui_gpuview_create_impl(int width, int height) {
         NSOpenGLPFADepthSize, 24,
         NSOpenGLPFADoubleBuffer, NSOpenGLPFAAccelerated, 0
     };
-    NSOpenGLPixelFormat* pf =
-        [[NSOpenGLPixelFormat alloc] initWithAttributes:accel];
+    /* AETHER_UI_GL_SOFTWARE=1 asks for Apple's software renderer even where a
+     * GPU is present. A macOS VM (GitHub's runner, a Tart guest) has no
+     * accelerated format and always lands there, and that renderer behaves
+     * differently enough (see -setFrameSize:) that a bug in it is invisible
+     * on a real Mac unless something forces it. ci.sh does, for the GPU specs. */
+    const char* soft_env = getenv("AETHER_UI_GL_SOFTWARE");
+    NSOpenGLPixelFormat* pf = (soft_env && soft_env[0] && soft_env[0] != '0')
+        ? nil : [[NSOpenGLPixelFormat alloc] initWithAttributes:accel];
     if (!pf) {
         /* No accelerated format: a VM or a headless runner. A software context
          * still renders correctly, which is what a test asserts on. */
         NSOpenGLPixelFormatAttribute soft[] = {
             NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
             NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8,
-            NSOpenGLPFADepthSize, 24, NSOpenGLPFADoubleBuffer, 0
+            NSOpenGLPFADepthSize, 24, NSOpenGLPFADoubleBuffer,
+            /* Forced: name the software renderer, or a Mac with a GPU
+             * picks the GPU again for a format that merely omits the
+             * accelerated bit. Unforced (a VM): left open, as before. */
+            0, 0, 0
         };
+        if (soft_env && soft_env[0] && soft_env[0] != '0') {
+            soft[9]  = NSOpenGLPFARendererID;
+            soft[10] = kCGLRendererGenericFloatID;
+        }
         pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:soft];
     }
     if (!pf) return 0;
