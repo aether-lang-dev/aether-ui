@@ -25,17 +25,22 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # A hung step otherwise runs until the 6 hour default. The full pipeline is
-    # roughly 20 minutes; 45 leaves room without letting a hang sit there.
-    timeout-minutes: 45
+    # A hung step otherwise runs until the 6 hour default. Linux runs the full
+    # pipeline in about 25 minutes; 45 leaves room without letting a hang sit.
+    # The macOS runner rebuilds every aeb node cold and was still passing
+    # specs at 45 minutes (2026-11-10 to 11-14), so it gets 60 until the build
+    # output is cached between runs.
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false   # a GTK4 failure should not hide an AppKit one
       matrix:
         include:
           - name: linux-gtk4
             os: ubuntu-latest
+            timeout: 45
           - name: macos-appkit
             os: macos-latest
+            timeout: 60
     steps:
       - uses: actions/checkout@v4
 
