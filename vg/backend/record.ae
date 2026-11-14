@@ -130,7 +130,7 @@ backend_opt_get(p: ptr, i: int, key: string) -> string {
     item, _ = list.get(b.calls, i)
     if item == null { return "" }
     c = item as *RecordedCall
-    v, _ = map.get(c.opts, key)
+    v, _ = map.get_string(c.opts, key)
     if v == null { return "" }
     return v
 }
@@ -169,7 +169,7 @@ record_one(p: ptr, kind: string, opts: ptr) -> ptr {
         i = 0
         while i < n {
             k = string_array_get(ks, i)
-            v, _ = map.get(opts, k)
+            v, _ = map.get_string(opts, k)
             if v != null {
                 cv = string.copy(v)
                 _ = map.put(snap, k, cv)

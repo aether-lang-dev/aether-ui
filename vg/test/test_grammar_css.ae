@@ -37,7 +37,7 @@ mk_test_ctx() -> ptr {
 
 // Pull a property out of a get_css_props result map.
 mp_get(m: ptr, k: string) -> string {
-    v, _ = map.get(m, k)
+    v, _ = map.get_string(m, k)
     if v == null { return "" }
     return v
 }

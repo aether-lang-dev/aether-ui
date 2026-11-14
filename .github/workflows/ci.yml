@@ -288,7 +288,7 @@ jobs:
           # pattern compiles; 0.840.0 and older cannot parse `@keep` in a
           # function type. Verified: ci.sh on macOS and the aether-linux lane
           # against 0.841.0.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.841.0' }}
+          AETHER_REF: ${{ vars.AETHER_REF || 'v0.914.0' }}
           # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
           # verified building the whole fan-out under it (full matrix green).
           # Strict forward move from v0.296. aeb is not implicated in any of the

@@ -649,7 +649,7 @@ image_box(node: ptr, x: float, y: float, w: float, h: float) {
 // transform, fit the pixels into it, blit, and give the element the box's
 // canvas bounds for hit-testing. Shared by the eager verb and the flush.
 draw_image_el(ctx: ptr, be: ptr, a: ptr, el: ptr) {
-    tf, _tfe = map.get(a, "transform")
+    tf, _tfe = map.get_string(a, "transform")
     did_push = 0
     if tf != null { rendering.push_transform_str(ctx, tf); did_push = 1 }
     x = attr_f(a, "x")
@@ -1095,7 +1095,7 @@ css(_ctx: ptr, text: string) {
 
 // Read a float attr recorded by a shape verb (put_f wrote the string).
 attr_f(a: ptr, key: string) -> float {
-    v, _af = map.get(a, key)
+    v, _af = map.get_string(a, key)
     if v == null { return 0.0 }
     parsed, e = string.to_double(v)
     if e != "" { return 0.0 }
@@ -2074,7 +2074,7 @@ _pending_bbox(pend: *VgPending) -> (int, float, float, float, float) {
         return 1, lx, ly, wx, wy
     }
     if pend.kind == 3 {
-        dstr, _sd = map.get(a, "d")
+        dstr, _sd = map.get_string(a, "d")
         if dstr != null {
             bb, _bbe = floatarr.new(4)
             ok = rasterize.path_bounds(dstr, bb as ptr)

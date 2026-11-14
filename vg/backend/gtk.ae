@@ -203,7 +203,7 @@ gtk_backend_redraw(p: ptr) {
 // ─── opts helpers ────────────────────────────────────────────────
 
 opt_f(opts: ptr, key: string, dflt: float) -> float {
-    v, _ = map.get(opts, key)
+    v, _ = map.get_string(opts, key)
     if v == null { return dflt }
     if string.length(v) == 0 { return dflt }
     parsed, e = string.to_double(v)
@@ -212,13 +212,13 @@ opt_f(opts: ptr, key: string, dflt: float) -> float {
 }
 
 opt_s(opts: ptr, key: string) -> string {
-    v, _ = map.get(opts, key)
+    v, _ = map.get_string(opts, key)
     if v == null { return "" }
     return v
 }
 
 opt_i(opts: ptr, key: string, dflt: int) -> int {
-    v, _ = map.get(opts, key)
+    v, _ = map.get_string(opts, key)
     if v == null { return dflt }
     if string.length(v) == 0 { return dflt }
     parsed, e = string.to_int(v)

@@ -72,7 +72,7 @@ extern aether_ui_text_measure(size: float, text: string) -> float
 // → default fallback in a small helper.
 
 attr_str_or(attrs: ptr, key: string, default_val: string) -> string {
-    v, _ = map.get(attrs, key)
+    v, _ = map.get_string(attrs, key)
     if v == null { return default_val }
     return v
 }
@@ -121,7 +121,7 @@ emit_stroke_caps(opts: ptr, style: ptr) {
 // ─── Transform-push helper (push only if attrs has transform) ────
 
 maybe_push_transform(ctx: ptr, attrs: ptr) -> int {
-    t, _ = map.get(attrs, "transform")
+    t, _ = map.get_string(attrs, "transform")
     if t == null { return 0 }
     rendering.push_transform_str(ctx, t)
     return 1
@@ -723,7 +723,7 @@ shape_line(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
 // path-bounds, dispatches to canvas_path.
 
 shape_path(ctx: ptr, backend: ptr, attrs: ptr) -> ptr {
-    d, _ = map.get(attrs, "d")
+    d, _ = map.get_string(attrs, "d")
     if d == null {
         // No d → return an empty AevgElement (no backend call).
         return element.element_new(null)
@@ -1225,15 +1225,15 @@ emit_tspans(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr,
             if string.length(t_text) > 0 {
                 t_attrs = parser.node_attrs(child)
                 // x resets, dx adds, dy adds.
-                tx_str, _ = map.get(t_attrs, "x")
+                tx_str, _ = map.get_string(t_attrs, "x")
                 if tx_str != null {
                     cur_x = rendering.parse_len_x(ctx, tx_str)
                 }
-                dx_str, _ = map.get(t_attrs, "dx")
+                dx_str, _ = map.get_string(t_attrs, "dx")
                 if dx_str != null {
                     cur_x = cur_x + utils.parse_dy_em(dx_str, base_font_size)
                 }
-                dy_str, _ = map.get(t_attrs, "dy")
+                dy_str, _ = map.get_string(t_attrs, "dy")
                 if dy_str != null {
                     cur_y = cur_y + utils.parse_dy_em(dy_str, base_font_size)
                 }

@@ -569,7 +569,7 @@ import std.map
 // Read a numeric style property, defaulting to `default_val`.
 // Exported under its more-explicit name for cross-module use.
 style_num_default(style: ptr, key: string, default_val: float) -> float {
-    v, _ = map.get(style, key)
+    v, _ = map.get_string(style, key)
     if v == null { return default_val }
     return parse_length_to_px(v)
 }
@@ -639,7 +639,7 @@ resolve_fill_color(style: ptr) -> string {
 }
 
 resolve_stroke_color(style: ptr) -> string {
-    s, _ = map.get(style, "stroke")
+    s, _ = map.get_string(style, "stroke")
     if s == null { return "" }
     if string.equals(s, "none") == 1 { return "" }
     base = s

@@ -47,11 +47,11 @@ main() {
     // ─── parse_style_attr ────────────────────────────────────────
     sty = utils.parse_style_attr("fill: red; stroke-width: 2; opacity:0.5")
     assert_eq_int("style count", map.size(sty), 3)
-    v1, _ = map.get(sty, "fill")
+    v1, _ = map.get_string(sty, "fill")
     assert_eq_str("style fill", v1, "red")
-    v2, _ = map.get(sty, "stroke-width")
+    v2, _ = map.get_string(sty, "stroke-width")
     assert_eq_str("style stroke-width", v2, "2")
-    v3, _ = map.get(sty, "opacity")
+    v3, _ = map.get_string(sty, "opacity")
     assert_eq_str("style opacity", v3, "0.5")
 
     // Empty string → empty map
@@ -61,7 +61,7 @@ main() {
     // Whitespace-only entries skipped
     sty_ws = utils.parse_style_attr(" ; fill: blue ; ")
     assert_eq_int("style trim", map.size(sty_ws), 1)
-    v4, _ = map.get(sty_ws, "fill")
+    v4, _ = map.get_string(sty_ws, "fill")
     assert_eq_str("style trim fill", v4, "blue")
 
     // ─── parse_length_to_px ──────────────────────────────────────

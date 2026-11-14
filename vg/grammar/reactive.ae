@@ -110,8 +110,8 @@ refresh_element_bindings(ctx: ptr, el: ptr) -> int {
         // stroke_map: ptr to std.map with "color" and optional "width"
         // as string values. Width defaults to 0.0 if missing.
         if stroke_map != null {
-            color_v, _ = map.get(stroke_map, "color")
-            width_v, _ = map.get(stroke_map, "width")
+            color_v, _ = map.get_string(stroke_map, "color")
+            width_v, _ = map.get_string(stroke_map, "width")
             sw = 0.0
             if string.length(width_v) > 0 {
                 sw_parsed, _ = string.to_double(width_v)
@@ -255,7 +255,7 @@ recompute_bounds(ctx: ptr, el: ptr, pos_map: ptr) {
 // Merge one property from the pos map into a geo slot, if present.
 // Missing keys leave the slot at its prior value.
 merge_geo(el: ptr, pos_map: ptr, key: string, slot: int) {
-    v, _ = map.get(pos_map, key)
+    v, _ = map.get_string(pos_map, key)
     if string.length(v) > 0 {
         parsed, e = string.to_double(v)
         if e == "" {

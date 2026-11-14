@@ -67,21 +67,21 @@ cascade_one(out: ptr, key: string, attrs: ptr, inline_style: ptr, css: ptr, pare
     // its values. Without the copy, `out` held bare pointers into the source
     // maps, which forced them to leak (freeing them would dangle `out`) —
     // megabytes/second under a 60fps draw region.
-    av, _ = map.get(attrs, key)
+    av, _ = map.get_string(attrs, key)
     if av != null {
         c1 = string.copy(av)
         e1 = map.put(out, key, c1)
         if string.length(e1) > 0 { } // ignore
         return
     }
-    sv, _ = map.get(inline_style, key)
+    sv, _ = map.get_string(inline_style, key)
     if sv != null {
         c2 = string.copy(sv)
         e2 = map.put(out, key, c2)
         if string.length(e2) > 0 { }
         return
     }
-    cv, _ = map.get(css, key)
+    cv, _ = map.get_string(css, key)
     if cv != null {
         c3 = string.copy(cv)
         e3 = map.put(out, key, c3)
@@ -89,7 +89,7 @@ cascade_one(out: ptr, key: string, attrs: ptr, inline_style: ptr, css: ptr, pare
         return
     }
     if parent != null {
-        pv, _ = map.get(parent, key)
+        pv, _ = map.get_string(parent, key)
         if pv != null {
             c4 = string.copy(pv)
             e4 = map.put(out, key, c4)
@@ -115,7 +115,7 @@ get_css_props(ctx: ptr, tag: string, class_name: string) -> ptr {
 // As get_css_props, plus the element's `id` attribute's `#id` rule (the most
 // specific selector, so it merges last).
 css_props_for(ctx: ptr, attrs: ptr, tag: string, class_name: string) -> ptr {
-    idv, _ = map.get(attrs, "id")
+    idv, _ = map.get_string(attrs, "id")
     if idv == null { return css.get_css_props(ctx, tag, class_name) }
     return css.get_css_props_id(ctx, tag, class_name, idv)
 }
@@ -134,7 +134,7 @@ push_style(ctx: ptr, attrs: ptr, tag: string, class_name: string) {
 
     // The `style` attribute is a sub-mini-language: parse it into a
     // separate map and use it as the second-priority source.
-    inline_style_str, _ = map.get(attrs, "style")
+    inline_style_str, _ = map.get_string(attrs, "style")
     inline_style = map.new()
     if inline_style_str != null {
         inline_style = utils.parse_style_attr(inline_style_str)
@@ -184,7 +184,7 @@ resolve_style(ctx: ptr, attrs: ptr, tag: string, class_name: string) -> ptr {
     parent = context.style_top(ctx)
     merged = map.new()
 
-    inline_style_str, _ = map.get(attrs, "style")
+    inline_style_str, _ = map.get_string(attrs, "style")
     inline_style = map.new()
     if inline_style_str != null {
         inline_style = utils.parse_style_attr(inline_style_str)
@@ -225,7 +225,7 @@ resolve_style(ctx: ptr, attrs: ptr, tag: string, class_name: string) -> ptr {
 // callers needing the absent-vs-empty distinction use style_has.
 
 style_get(style: ptr, key: string) -> string {
-    v, _ = map.get(style, key)
+    v, _ = map.get_string(style, key)
     if v == null { return "" }
     return v
 }

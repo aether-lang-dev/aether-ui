@@ -96,14 +96,14 @@ main() {
                 cells() callback |r: int, c: int| {
                     if c == 0 { return string.from_int(r + 1) }
                     if c == 6 && r == 3 { return "a long note that wraps" }
-                    v, _e = map.get(edits, "${r},${c}")
+                    v, _e = map.get_string(edits, "${r},${c}")
                     if v != null { return shown(v) }
                     return "R${r}C${c}"
                 }
                 // An editor starts with what was typed (a formula), not
                 // what the cell shows (its value).
                 edit_text() callback |r: int, c: int| {
-                    v, _e = map.get(edits, "${r},${c}")
+                    v, _e = map.get_string(edits, "${r},${c}")
                     if v != null { return v }
                     return "R${r}C${c}"
                 }
@@ -126,7 +126,7 @@ main() {
                     if c == 4 && r == 16 { return "--fill: -0.25" }
                     if c == 4 && r == 17 { return "--corner: #d00" }
                     if c == 6 && r == 3 { return "white-space: normal" }
-                    v, _e = map.get(edits, "${r},${c}")
+                    v, _e = map.get_string(edits, "${r},${c}")
                     if v != null && string.starts_with(v, "=") == 1 { return "text-align: end" }
                     return ""
                 }

@@ -225,9 +225,9 @@ walk_defs_children(ctx: ptr, backend: ptr, node_h: ptr) {
 // existing transform attr.
 walk_use(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr) {
     // Get href (try xlink:href first, then plain href).
-    href, _ = map.get(attrs, "xlink:href")
+    href, _ = map.get_string(attrs, "xlink:href")
     if href == null {
-        href, _ = map.get(attrs, "href")
+        href, _ = map.get_string(attrs, "href")
     }
     if href == null { return }
     // Strip leading '#'.
@@ -246,12 +246,12 @@ walk_use(ctx: ptr, backend: ptr, node_h: ptr, attrs: ptr) {
     uy = 0.0
     has_xy = 0
     if map.has(attrs, "x") == 1 {
-        xv, _ = map.get(attrs, "x")
+        xv, _ = map.get_string(attrs, "x")
         ux = utils.parse_length_to_px(xv)
         if ux != 0.0 { has_xy = 1 }
     }
     if map.has(attrs, "y") == 1 {
-        yv, _ = map.get(attrs, "y")
+        yv, _ = map.get_string(attrs, "y")
         uy = utils.parse_length_to_px(yv)
         if uy != 0.0 { has_xy = 1 }
     }
@@ -318,7 +318,7 @@ index_nodes(ctx: ptr, node_h: @keep ptr) {
 // Convert a polyline/polygon attrs to a path-string attrs map and
 // dispatch through shape_path.
 emit_poly(ctx: ptr, backend: ptr, attrs: ptr, closed: int) {
-    pts, _ = map.get(attrs, "points")
+    pts, _ = map.get_string(attrs, "points")
     if pts == null { return }
     d = utils.points_to_path(pts, closed)
     if string.length(d) == 0 { return }
@@ -346,7 +346,7 @@ emit_ellipse(ctx: ptr, backend: ptr, attrs: ptr) {
 }
 
 ellipse_num(attrs: ptr, key: string) -> float {
-    v, _ = map.get(attrs, key)
+    v, _ = map.get_string(attrs, key)
     if v == null { return 0.0 }
     return utils.parse_length_to_px(v)
 }
@@ -375,7 +375,7 @@ clone_attrs_replacing_points(attrs: ptr, d: string) -> ptr {
 }
 
 copy_if_present(dst: ptr, src: ptr, key: string) {
-    v, _ = map.get(src, key)
+    v, _ = map.get_string(src, key)
     if v != null { _ = map.put(dst, key, v) }
 }
 
