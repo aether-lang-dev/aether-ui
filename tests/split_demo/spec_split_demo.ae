@@ -44,6 +44,30 @@ main() {
             spec.assert_contains(b, "splitPosition", "splitPosition reported")
         }
 
+        spec.it("a splitview takes the height the window gives it, not its panes' content height") callback {
+            // The panes hold two or three short rows (about 64 pt). Given a
+            // tall window the splitview has to grow with it, as GtkPaned
+            // does; AppKit kept it at its tallest pane's content height.
+            lp = pane_of("left pane")
+            rp = pane_of("right pane")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            uidriver.resize_window(640, 900)
+            okg = uidriver.wait_body_contains("/widgets", "geometry: 640x8", 30)
+            spec.assert_true(okg, "window pinned at 640x900")
+            i = 0
+            h = 0
+            while i < 30 && h < 300 {
+                h = uidriver.widget_int_field_by_id(sv, "h")
+                sleep(150)
+                i = i + 1
+            }
+            spec.assert_true(h >= 300, "the splitview grew with the window (h ${h})")
+            lh = uidriver.widget_int_field_by_id(lp, "h")
+            rh = uidriver.widget_int_field_by_id(rp, "h")
+            spec.assert_true(lh >= h - 2 && lh <= h + 2, "left pane is as tall as the splitview (${lh} for ${h})")
+            spec.assert_true(rh >= h - 2 && rh <= h + 2, "right pane is as tall as the splitview (${rh} for ${h})")
+        }
+
         spec.it("a widget with insets reports its frame, its children inside it") callback {
             // root carries the 12 px gutter (content_inset). Its box in
             // /widgets is the window's, 0 to 640, with the insets inside

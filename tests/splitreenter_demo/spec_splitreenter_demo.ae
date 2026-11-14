@@ -47,6 +47,29 @@ main() {
             spec.assert_true(lw >= pos - 1 && lw <= pos + 1, "the left pane is the divider's width (${lw} for ${pos})")
             spec.assert_true(rx >= lx + lw, "the right pane starts after the left one ends (${rx} vs ${lx}+${lw})")
         }
+        spec.it("fills the window's height, its canvas with it") callback {
+            // AppKit's splitview was 16 pt tall in this 300 pt window and the
+            // canvas 0: nothing in the right pane expands, and that pane
+            // held the splitview to its label's height.
+            lp = pane_of("left pane")
+            sv = uidriver.widget_int_field_by_id(lp, "parent")
+            root = uidriver.widget_int_field_by_id(sv, "parent")
+            rh = uidriver.widget_int_field_by_id(root, "h")
+            i = 0
+            h = 0
+            while i < 30 && h < rh - 60 {
+                h = uidriver.widget_int_field_by_id(sv, "h")
+                sleep(150)
+                i = i + 1
+            }
+            spec.assert_true(h >= rh - 60, "the splitview fills the window (h ${h} of ${rh})")
+            cv = uidriver.canvas_widget_id()
+            ch = uidriver.widget_int_field_by_id(cv, "h")
+            spec.assert_true(ch >= 150, "the canvas has its height, not 0 (h ${ch})")
+            rp = pane_of("right pane")
+            rph = uidriver.widget_int_field_by_id(rp, "h")
+            spec.assert_true(rph >= h - 2 && rph <= h + 2, "the right pane is the splitview's height (${rph} for ${h})")
+        }
         spec.it("and still after the window is resized") callback {
             uidriver.resize_window(720, 300)
             ok = uidriver.wait_body_contains("/widgets", "\"w\":720", 30)

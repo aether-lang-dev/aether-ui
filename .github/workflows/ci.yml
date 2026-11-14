@@ -321,9 +321,12 @@ jobs:
       AEB_REF: ${{ vars.AEB_REF || 'f8d138f89723aa3b519f02f4dcebea5e79d53ee5' }}
     # A hung step otherwise runs until the 6 hour default. Linux runs the full
     # pipeline in about 25 minutes; 45 leaves room without letting a hang sit.
-    # The macOS runner rebuilds every aeb node cold and was still passing
-    # specs at 45 minutes (2026-11-10 to 11-14), so it gets 60 until the build
-    # output is cached between runs.
+    # The macOS runner rebuilt every aeb node cold and was still passing
+    # specs at 45 minutes (2026-11-10 to 11-14), so it got 60. aeb's output is
+    # cached between runs now (2026-11-14), but macOS stayed at 60: with a full
+    # cache hit the leg took 37.5 minutes (28.8 on the run before, which had
+    # rebuilt Phase 1 from a partial hit), and 13.5 of those are Phase 1e2, the
+    # iOS simulator run, which no build cache touches. Not comfortably under 45.
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false   # a GTK4 failure should not hide an AppKit one

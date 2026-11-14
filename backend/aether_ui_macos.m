@@ -2150,6 +2150,16 @@ void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure) {
 #define AEUI_SLACK_BASE 160.0f   // > canvas natural size (150), < button hugging (200)
 #define AEUI_SLACK_MAX_DEPTH 30  // keeps the deepest box below 200
 #define AEUI_SLACK_EXPANDING 155.0f  // a stack asked to expand: under every default box
+// A split view's pane is stretched to the split view's own length along the
+// pane's axis whatever it holds (GtkPaned allocates each child the full pane),
+// so its leftover is not its parent's to claim. At a default box's price
+// (BASE + depth) a pane that holds no expander -- an inspector of two labels --
+// kept its content size and, being exactly as tall as the split view, dragged
+// the split view down to it: 36 pt in a 620 pt window, its sibling pane's
+// canvas squeezed to 4. Priced below the split view's own parent slack
+// (AEUI_SLACK_EXPANDING) so the split view takes THAT leftover first, and above
+// a canvas's natural size (150) so a canvas in the pane still takes the rest.
+#define AEUI_SLACK_PANE 153.0f
 
 static BOOL aeui_is_slack(NSView* v) {
     NSView* p = v ? [v superview] : nil;
@@ -2169,6 +2179,7 @@ static NSLayoutPriority aeui_slack_priority(NSView* stack) {
         && [(NSStackView*)stack orientation] == NSUserInterfaceLayoutOrientationVertical;
     NSLayoutPriority hug = [stack contentHuggingPriorityForOrientation:vertical
         ? NSLayoutConstraintOrientationVertical : NSLayoutConstraintOrientationHorizontal];
+    if ([[stack superview] isKindOfClass:[NSSplitView class]]) return AEUI_SLACK_PANE;
     if (hug < AEUI_SLACK_BASE) return AEUI_SLACK_EXPANDING;
     int depth = 0;
     for (NSView* p = [stack superview]; p && depth < AEUI_SLACK_MAX_DEPTH; p = [p superview]) {

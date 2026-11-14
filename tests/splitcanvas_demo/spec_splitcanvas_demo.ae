@@ -34,6 +34,18 @@ wait_canvas_w(cv: int, want: int) -> int {
     return uidriver.widget_int_field_by_id(cv, "w")
 }
 
+// Wait until the widget's height is at least `want`; returns the last height.
+wait_h_ge(id: int, want: int) -> int {
+    i = 0
+    while i < 30 {
+        h = uidriver.widget_int_field_by_id(id, "h")
+        if h >= want { return h }
+        sleep(150)
+        i = i + 1
+    }
+    return uidriver.widget_int_field_by_id(id, "h")
+}
+
 // The app's own label says "canvas: WxH": the canvas's width as on_resize
 // told it, which must be the width the canvas was given.
 heard(cv: int) -> int {
@@ -55,6 +67,29 @@ main() {
             ok = uidriver.wait_body_contains("/widget/${root}", "\"w\":900,", 30)
             rw = uidriver.widget_int_field_by_id(root, "w")
             spec.assert_true(ok, "the window is the 900 asked for, not the viewport's floor (root w ${rw})")
+        }
+
+        spec.it("the splitview fills the window's height, and its panes and canvas with it") callback {
+            // On AppKit the splitview came out 36 pt tall in this 620 pt
+            // window (its canvas 4, its GPU view 0), because the inspector
+            // pane, two labels, was priced as a box with nothing to expand and
+            // held the whole splitview to its own content height. GtkPaned
+            // gives its panes the full height; every backend must.
+            sv = uidriver.widget_id_of("splitview", "")
+            cv = uidriver.widget_id_of("canvas", "")
+            root = uidriver.widget_int_field_by_id(sv, "parent")
+            rh = uidriver.widget_int_field_by_id(root, "h")
+            h = wait_h_ge(sv, rh - 40)
+            spec.assert_true(h >= rh - 40 && h <= rh, "the splitview is the window's height, banner aside (h ${h} of ${rh})")
+            ch = wait_h_ge(cv, 200)
+            spec.assert_true(ch >= 200, "the canvas is at least its 260 natural height less labels, not 4 (h ${ch})")
+            pane = uidriver.widget_int_field_by_id(cv, "parent")
+            ph = uidriver.widget_int_field_by_id(pane, "h")
+            spec.assert_true(ph >= h - 2 && ph <= h + 2, "the pane is as tall as its splitview (${ph} for ${h})")
+            ins = uidriver.widget_id_by_text("inspector")
+            ipane = uidriver.widget_int_field_by_id(ins, "parent")
+            iph = uidriver.widget_int_field_by_id(ipane, "h")
+            spec.assert_true(iph >= h - 2 && iph <= h + 2, "so is the inspector pane (${iph} for ${h})")
         }
 
         spec.it("the divider narrows the viewport below its create size (#210)") callback {
