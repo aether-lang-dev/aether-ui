@@ -25,6 +25,300 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # Job-level so the cache key below and the toolchain install read the same
+    # pins (they used to be env of the install step alone).
+    env:
+      # Pin to keep a green run reproducible; bump deliberately.
+      #
+      # These were empty, so get.sh resolved "the latest vX.Y.Z tag" on
+      # every run. That makes this pipeline's colour depend on whatever
+      # upstream published most recently: v0.552.0 shipped the codegen bug
+      # in aether#1657, which crashed apps/rubiks_cube here with no change
+      # in this repo. A default pin means upstream lands in this pipeline
+      # when someone bumps this line, not whenever a release is cut.
+      #
+      # v0.553.0 was the first release carrying the aether#1658 fix, so the
+      # pin became a tag again rather than the commit it was pinned to
+      # while that release was still being cut. A repository variable
+      # still overrides, for testing a candidate without a commit.
+      #
+      # v0.613.0 (2026-08-31): std.spec's run_summary RETURNS its verdict
+      # (0 green / 1 failed) instead of exit(1)-ing, so cleanup after the
+      # run — arena.destroy, server_stop, sqlite.close — stops being
+      # skipped on exactly the failing runs where a leaked arena or an
+      # orphaned listener does the most damage.
+      #
+      # THE FOOTGUN v0.613.0 CARRIED, and why every spec here changed
+      # with it: a BARE `spec.run_summary(fw)` as the last statement
+      # silently turns a failing suite GREEN. main() has no return
+      # annotation and its return value is the process exit status, so
+      # dropping the verdict exits 0 regardless of results. All 81 call
+      # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`;
+      # a new spec MUST return it too.
+      #
+      # v0.645.0 (2026-09-06). Strict forward move from v0.643.0. It ships
+      # b92d4e43, the compiler lint we asked for in the 0.643.0 write-up:
+      # a warning on `malloc(<integer-literal>) as *T` pointing at
+      # `malloc(sizeof(T))` (the compiler cannot compute sizeof itself, so
+      # it lints the SHAPE, not the arithmetic — no layout change can fool
+      # it). Our 158-site sweep below already satisfies it: the tree builds
+      # SILENT under the lint (verified — reverting any one site to a literal
+      # makes it fire). So this pin ACTIVATES a guard we already pass, and
+      # any future `malloc(<literal>) as *T` here becomes a build-time nudge
+      # instead of a heap-corruption hunt. 0.644.0 in between was crypto
+      # wycheproof tests only. See asks/REPLY2-0643-lint-verified-loop-
+      # closed.md.
+      #
+      # v0.643.0 (2026-09-06). The bump to this release forced a fleet-wide
+      # source change and root-caused an aether regression along the way;
+      # both are recorded here because they are inseparable from the pin.
+      #
+      # aether 1307dfa8 (the first commit after v0.642.0, "Place heap
+      # trackers inline...") moved each hidden `int _heap_<field>` tracker
+      # from a TRAILING block to INLINE (right after its string field).
+      # That is correct for the struct-prefix-punning bug it targets, but it
+      # GREW the sizeof of pure-Aether structs carrying a string field not
+      # in last position — a mid-struct int + its padding costs more than
+      # end-packing the trackers. This repo allocated ~158 structs with a
+      # HAND-COMPUTED byte count (`malloc(40) as *SvgNode`), each sized for
+      # the trailing layout. Under inline layout every one under-allocated
+      # and the final tracker store ran off the end of the block: ASan shows
+      # a 4-byte heap-buffer-overflow in SvgNode (needs 48, we malloc'd 40),
+      # surfacing as glibc `malloc assertion failure in sysmalloc` /
+      # `invalid size` / `free(): invalid pointer` across 14 vg suites.
+      # Bisected 0.641 GOOD / 0.642 GOOD / 0.643 BAD, culprit confirmed by
+      # building 1307dfa8 directly. See asks/REGRESSION-0643-inline-heap-
+      # tracker-grows-struct.md.
+      #
+      # Fix on OUR side (the durable one, independent of any aether choice):
+      # all 158 sites swept `malloc(N)` -> `malloc(sizeof(T))`, which is
+      # layout-exact and immune to future tracker-placement changes. Raw
+      # `malloc(8)` byte buffers (no struct cast) left alone. Full 4-platform
+      # matrix re-verified all-green on 0.643.0 + aeb v0.296.
+      #
+      # Two earlier pins, still relevant history:
+      # - v0.627.0 skipped known-bad 0.624.0-0.626.0: #1866 made a setter's
+      #   store READ an uninitialised `_heap_<field>` tracker (this repo's
+      #   `malloc(n) as *T` boxes never set it) -> free of garbage; fixed by
+      #   e932c61c (#1873). The sizeof sweep above ALSO hardens against that
+      #   class, since the boxes are now correctly sized.
+      # - v0.626.0 shipped `math.lrint(x) -> long`; vg/ still carries 30
+      #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
+      #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
+      #   math.lrint remains follow-up, not done here.
+      # v0.684.0 (2026-09-18). Forced by the aeb move below, not chosen:
+      # every aeb since v0.302 compiles its own `aeb-main` against
+      # `bldr`, which imports std.zip (0.667), std.strarr (0.675) and
+      # calls os.arch() (0.681), so `make install` of that aeb needs
+      # at least 0.681 on PATH. Scanned the 0.646-0.681 notes: additive
+      # stdlib (std.zip, std.strarr, std.cbor, std.resp, fs.find_ext &
+      # co.), a 4.5x faster type-check (0.666), @c_callback emitted
+      # weak (0.677, two TUs sharing one callback no longer collide at
+      # link), -fPIC on --emit=lib objects (0.680).
+      #
+      # WHY NOT 0.681 OR 0.682: 0.667 added E0200, "block setter called
+      # as a node builder", discriminating by "the callee's module also
+      # defines a builder". ui/module.ae has four builders (window,
+      # render_to, record, nav_page) beside ~50 _ctx-first containers,
+      # so under 0.667-0.682 every `ui.vstack(10) { ... }` in every app
+      # is a compile error and the whole fan-out is red (#147's first
+      # run; the diagnostic was buried under make's own lines, see the
+      # ci.sh fix in the same PR). 0.683.0 carries aether#2060: the rule
+      # also requires the callee to yield no value, which is what
+      # separates a container (returns the handle its block runs
+      # inside) from a setter. All 260 .ae sources here type-check
+      # under it. The one genuine casualty of the move was LisMusic's
+      # audio_position_ms/audio_duration_ms colliding with std.audio's
+      # (E1001), renamed in the same PR.
+      #
+      # WHY NOT 0.683: under 0.682-0.683 table_demo aborts at startup on
+      # macOS AND Linux (free(): invalid pointer). 0.682's #2054 made a
+      # `-> string` function that returns `cb(...)` through a bare fn
+      # own its result, on the promise that a string-returning closure
+      # copies out whatever it returns. The table's cell callback returns
+      # string.from_int(p.kb) on one path (declared `-> ptr`) and p.name
+      # on the other, was typed by its FIRST return, and so was not a
+      # string closure: the literal reached the caller uncopied and was
+      # free()d. Reproduced natively on Windows (STATUS_HEAP_CORRUPTION)
+      # and root-caused with gdb; 0.684.0 carries aether#2070 (any
+      # string-typed return site makes the closure a string closure).
+      #
+      # v0.737.0 (2026-09-28). A REAL floor move, not a drive-by bump:
+      # v0.684.0 could not build apps/frames_demo at all. `ui/frames.ae`
+      # imports both `vg.geom.region` (selectively) and `vg.region`
+      # (whole module) — two local modules sharing the last segment
+      # "region" — and the v0.730-0.734 basename-collision rework (see
+      # asks/REGRESSION-0730-region-module-basename-collision.md and its
+      # REPLY) let whichever import's rewrite ran first claim every
+      # `region.name` in the file, including the other's, so
+      # `region.region_set_rect` etc. resolved against a module that
+      # never defined them. `vg/live.ae`'s same-named forwarding
+      # wrappers (`region_set_animated(region: ptr, on: int) {
+      # region.region_set_animated(region, on) }`) hit a second bug in
+      # the same rework: the shadow guard skipped rewriting the call
+      # entirely because `region` was also the parameter name. Both
+      # fixed upstream in aether PR #2268 (merged, released in
+      # v0.736.0/v0.737.0) with a new regression test
+      # (tests/integration/region_basename_collision_shadow) — this repo
+      # did not change to accommodate it; the fix is entirely
+      # compiler-side. Verified against the real v0.737.0 build: `aeb
+      # .all.ae` is 140/140 clean (frames_demo included), and
+      # tests/spec_matrix.sh is 413/417 (the two red — `background`'s
+      # worker-thread timing and LisMusic's missing binary — are
+      # unrelated pre-existing flakiness, not this move).
+      # v0.766.0 (2026-10-03): the family-wide floor Paul set for every
+      # Aether repo, so they all build against one known release. No
+      # aether-ui source change needed. Verified: ./ci.sh, all phases
+      # passed against 0.766.0 (macOS arm64), with the macOS closure-box
+      # and picker-driver fixes that landed the same day.
+      # v0.778.0 (2026-10-05): the family-wide floor again, moved with the
+      # whole family (bootstrap.sh's MIN_AE too); no aether-ui source
+      # change. ./ci.sh, all phases passed against the released 0.778.0
+      # toolchain (macOS arm64).
+      # v0.791.0 (2026-10-08): a real floor move. The Android shim now
+      # starts an app through the --emit=lib entry aether_main /
+      # aether_main_exit (aether#2489, 0.789.0+) instead of renaming its
+      # main(), so the Aether start-up (args, actor scheduler) runs on
+      # Android; 0.791.0 also carries #2511 (pure-Aether TLS for
+      # std.http.client without OpenSSL, and the aether_main rerun
+      # actor-leak fix).
+      # v0.801.0 (2026-10-10): a REAL floor move. 0.796.0-0.800.x crash
+      # vg click handlers with captures: aether #2670/#2671 gave the
+      # alias in aether-ui's workaround (`kept = h; e.cb = kept`) a
+      # reference of its own, released as the setter returned, so a
+      # capturing closure stored on an element was freed and the click
+      # read freed memory (macOS too, not only glibc). 0.801.0 carries
+      # #2703 (a closure boxed into a ptr field takes its own reference),
+      # so vg's setters store directly again and the aliases are gone
+      # (asks/aether-closure-drain-through-fn-store.md, RESOLVED). Anything
+      # older than 0.801.0 builds this tree and then crashes on a click.
+      # v0.818.0 (2026-10-16): a REAL floor move. 0.818.0's ownership
+      # rework (aether #2916/#2926) borrows a `ptr` parameter for the
+      # call unless it is declared `p: @keep ptr` (E0902), and this tree
+      # now says `@keep` on every one it keeps (stored in a field or a
+      # list, returned, captured, or passed on to another keeper),
+      # applied until the checker found no more, as upstream did std.
+      # 0.817.0 and older cannot parse `@keep`, so nothing older builds
+      # this tree, and everything building it (sae, ae3d) moves with it.
+      # Three shapes the checker refuses outright were rewritten rather
+      # than annotated: a function with a `@keep` parameter used as a
+      # value (the drawn-chrome toggle cell now takes the callback as a
+      # `fn`), and a closure handing its own `ptr` parameter to a keeper
+      # (a closure's cannot be `@keep`: the animate ticks set the element
+      # they captured, LisMusic's Play button keeps the song's title).
+      # Self-declared string_substring/string_to_lower externs say
+      # `@heap`, as std's do.
+      # v0.824.0 (2026-10-17): a tracking move, not a floor this tree
+      # needs a primitive from: the whole family moves to 0.824.0
+      # (Paul). It carries 0.823.0's use-after-free fix (a string field
+      # read in a loop beside a call, released twice) and #2940's
+      # (generated helpers in the reserved `_aether_` namespace, so a
+      # function named like one no longer breaks the C; E0900 seeing a
+      # slice that dangles through a closure). Verified: ci.sh on macOS
+      # and the Linux and Windows lanes.
+      # v0.830.0 (2026-10-19): a REAL floor move. This tree reads its
+      # map values as strings through the typed accessors
+      # (`map.get_string`, aether#2981; 0.829.0 and older do not have them,
+      # and warn W1005 where a `ptr` is read as text, an error in a later
+      # release), so nothing older builds it. Verified: ci.sh on macOS and
+      # the Linux lane.
+      # v0.840.0 (2026-10-23): a REAL floor move (aether-ui#221). From
+      # 0.838.0 a function that keeps a closure parameter declares it
+      # `@keep fn` (ui.background, background_for, background_detached
+      # hand theirs to worker.run, which keeps them; every vg and ui
+      # setter that stores a callback), and from 0.840.0 a borrowed `ptr`
+      # put in a list or a map is kept (list.add, map.put are @retain);
+      # a parameter named like a module hides it (vg/live.ae's `region`),
+      # map.remove and list.remove return nothing, and std.os's argv
+      # accessors are args_count/args_get (0.836.0). Nothing older than
+      # 0.836.0 builds the tree. Verified: ci.sh, all phases, on macOS
+      # and the aether-linux lane against 0.840.0.
+      # v0.841.0 (2026-10-23): a REAL floor move. vg's animate types its
+      # tick `fn(@keep ptr, float)` (aether#2980), so the documented
+      # `animate(...) callback |el, t| { vg.element_set_fill(el, ...) }`
+      # pattern compiles; 0.840.0 and older cannot parse `@keep` in a
+      # function type. Verified: ci.sh on macOS and the aether-linux lane
+      # against 0.841.0.
+      AETHER_REF: ${{ vars.AETHER_REF || 'v0.914.0' }}
+      # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
+      # verified building the whole fan-out under it (full matrix green).
+      # Strict forward move from v0.296. aeb is not implicated in any of the
+      # aether-side history below — the fan-out just orchestrates aetherc.
+      #
+      # History: v0.283 was the first release carrying aeb's `bldr` module
+      # (9c84d786 converted all build nodes to Shape A `bldr.build() {}`;
+      # v0.282 had no `bldr`, so every node failed with
+      # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
+      # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
+      # links). v0.297 carries all of that, so this is a strict move forward.
+      #
+      # 9bfd8e88 (2026-09-18, main after aeb#15) was the prior pin — a SHA,
+      # not a tag — carrying the fan-out orchestrator token-limit fix: the
+      # orchestrator is one generated main file that aetherc lexes into a
+      # fixed 50,000-token array; the old generator spent ~360 tokens/node,
+      # so #140 (tests/min_size) tipped the tree over with "source file
+      # exceeds maximum token limit" naming no file. The generator now emits
+      # the per-node bookkeeping once (7,227 tokens). aether#2059 asks for
+      # the compiler-side cap to go too.
+      #
+      # v0.322 (2026-09-21) is a tag past 9bfd8e88, so it keeps that
+      # orchestrator fix AND returns the pin to a tag. It is a strict
+      # superset of the reverted v0.321 and carries three things this tree
+      # wants:
+      #  (a) -fno-ipa-bit-cp gated on REAL gcc (aeb a3d5fb7). v0.321 added
+      #      that gcc-16 workaround UNCONDITIONALLY to the literal-`gcc`
+      #      link; on macOS `gcc` is Apple clang, which rejects it
+      #      ("unknown argument: '-fno-ipa-bit-cp'"), so v0.321 turned the
+      #      AppKit leg red at every link. v0.322 probes `gcc --version`
+      #      (FSF banner = real gcc, "clang"/"Apple" = shim), memoized, and
+      #      adds the flag only for real gcc — verified on real macOS by the
+      #      aeb line (Apple clang 17, link clean, flag absent). This is why
+      #      v0.321 was reverted and why the re-pin lands as v0.322.
+      #      (asks were aeb-side: fno-ipa-bit-cp-is-gcc-only-breaks-clang.)
+      #  (b) strip_unused() (aeb 3651206, v0.321) — opt-in gc-sections
+      #      dead-strip, 18-45% smaller binaries (aether-ui #192). Available
+      #      here now; wiring our apps in is a follow-up.
+      #  (c) a clear diagnostic for the retired `build` grammar (aeb #16).
+      # aeb-link now enforces an Aether 0.681 floor on the LINKED
+      # libaether.a; a stale ~/.local/lib/aether/libaether.a gets a legible
+      # "archive older than 0.681" error, cleared by a clean toolchain
+      # reinstall (matters on boxes with an old shadow install, not CI).
+      # aeb main at 1abdb31 (2026-09-30), by commit because no tag has it
+      # yet: v0.322's tools/aeb-link.ae calls file.mtime, which Aether
+      # 0.713 moved to fs.file_mtime, so `make install` of v0.322 failed
+      # against the 0.737 pinned above and both legs were red from that
+      # bump on. aeb 3faaf02 is the fix; ebdfb22 keeps macOS's keg-only
+      # -L directories.
+      # v0.325 (2026-10-05): 1abdb31 predates Aether 0.758's byte[] slices,
+      # so `make install` died on fs.write_atomic's argument count and both
+      # legs were red from the 0.766 bump on. v0.325 is the aeb the whole
+      # family pins with 0.778.0 (verified there: 152/152 + the CI itests).
+      # v0.326 (2026-10-10): the aeb released alongside Aether 0.801.0 and
+      # the one the family pins with it; moved with the 0.801.0 floor.
+      # v0.327 (2026-10-18): v0.326's tools/aeb-main.ae captures a borrowed
+      # `dst` ptr in a closure, which Aether 0.824's E0902 refuses, so
+      # `make install` failed and both legs were red from the 0.824 bump
+      # (8ca06029's parent) on. v0.327 is the aeb sae pins with 0.824.0 and
+      # what this tree's lanes were verified with.
+      # v0.333 (2026-10-23): the first tag with aeb 3f5acf4, which this
+      # tree was pinned to by commit until then. On Aether 0.840.0 a build
+      # node's session handle goes into a map (bldr.begin's "_session"),
+      # so bldr.begin/build and the node entry transform-ae writes declare
+      # it @keep; with v0.332 every node here failed to compile (46
+      # failures). A tag again, same code.
+      # v0.345 (2026-11-14): v0.333's sources pass ptrs read from lists and
+      # maps as strings, which Aether 0.914.0 refuses (E0202, aether#3694),
+      # so aeb did not build against the v0.914.0 AETHER_REF above. v0.345
+      # reads them with list.get_string/map.get_string. Verified: ci.sh,
+      # all phases, on macOS, cachyos and ae-x64.
+      # f8d138f (2026-11-14), by commit because no tag has it yet: aeb-link now
+      # compiles the fan-out's translation units in parallel and caches each
+      # object by the sha256 of its preprocessed text (tools/aeb-cc.sh). The
+      # orchestrator used to be one serial gcc run over 171 node entry files,
+      # about 7.5 minutes on every run whether the nodes hit the cache or not.
+      # Locally, fresh clone: cold 7:39 -> 2:36, restored cache 7:37 -> 0:31.
+      # Back to a tag when the next aeb release is cut.
+      AEB_REF: ${{ vars.AEB_REF || 'f8d138f89723aa3b519f02f4dcebea5e79d53ee5' }}
     # A hung step otherwise runs until the 6 hour default. Linux runs the full
     # pipeline in about 25 minutes; 45 leaves room without letting a hang sit.
     # The macOS runner rebuilds every aeb node cold and was still passing
@@ -81,291 +375,6 @@ jobs:
       # .build.ae files through aeb, so ae alone is not enough. Installed
       # directly rather than via bootstrap.sh, which would also run a build.
       - name: Install the Aether toolchain
-        env:
-          # Pin to keep a green run reproducible; bump deliberately.
-          #
-          # These were empty, so get.sh resolved "the latest vX.Y.Z tag" on
-          # every run. That makes this pipeline's colour depend on whatever
-          # upstream published most recently: v0.552.0 shipped the codegen bug
-          # in aether#1657, which crashed apps/rubiks_cube here with no change
-          # in this repo. A default pin means upstream lands in this pipeline
-          # when someone bumps this line, not whenever a release is cut.
-          #
-          # v0.553.0 was the first release carrying the aether#1658 fix, so the
-          # pin became a tag again rather than the commit it was pinned to
-          # while that release was still being cut. A repository variable
-          # still overrides, for testing a candidate without a commit.
-          #
-          # v0.613.0 (2026-08-31): std.spec's run_summary RETURNS its verdict
-          # (0 green / 1 failed) instead of exit(1)-ing, so cleanup after the
-          # run — arena.destroy, server_stop, sqlite.close — stops being
-          # skipped on exactly the failing runs where a leaked arena or an
-          # orphaned listener does the most damage.
-          #
-          # THE FOOTGUN v0.613.0 CARRIED, and why every spec here changed
-          # with it: a BARE `spec.run_summary(fw)` as the last statement
-          # silently turns a failing suite GREEN. main() has no return
-          # annotation and its return value is the process exit status, so
-          # dropping the verdict exits 0 regardless of results. All 81 call
-          # sites under tests/ and vg/test/ are `return spec.run_summary(fw)`;
-          # a new spec MUST return it too.
-          #
-          # v0.645.0 (2026-09-06). Strict forward move from v0.643.0. It ships
-          # b92d4e43, the compiler lint we asked for in the 0.643.0 write-up:
-          # a warning on `malloc(<integer-literal>) as *T` pointing at
-          # `malloc(sizeof(T))` (the compiler cannot compute sizeof itself, so
-          # it lints the SHAPE, not the arithmetic — no layout change can fool
-          # it). Our 158-site sweep below already satisfies it: the tree builds
-          # SILENT under the lint (verified — reverting any one site to a literal
-          # makes it fire). So this pin ACTIVATES a guard we already pass, and
-          # any future `malloc(<literal>) as *T` here becomes a build-time nudge
-          # instead of a heap-corruption hunt. 0.644.0 in between was crypto
-          # wycheproof tests only. See asks/REPLY2-0643-lint-verified-loop-
-          # closed.md.
-          #
-          # v0.643.0 (2026-09-06). The bump to this release forced a fleet-wide
-          # source change and root-caused an aether regression along the way;
-          # both are recorded here because they are inseparable from the pin.
-          #
-          # aether 1307dfa8 (the first commit after v0.642.0, "Place heap
-          # trackers inline...") moved each hidden `int _heap_<field>` tracker
-          # from a TRAILING block to INLINE (right after its string field).
-          # That is correct for the struct-prefix-punning bug it targets, but it
-          # GREW the sizeof of pure-Aether structs carrying a string field not
-          # in last position — a mid-struct int + its padding costs more than
-          # end-packing the trackers. This repo allocated ~158 structs with a
-          # HAND-COMPUTED byte count (`malloc(40) as *SvgNode`), each sized for
-          # the trailing layout. Under inline layout every one under-allocated
-          # and the final tracker store ran off the end of the block: ASan shows
-          # a 4-byte heap-buffer-overflow in SvgNode (needs 48, we malloc'd 40),
-          # surfacing as glibc `malloc assertion failure in sysmalloc` /
-          # `invalid size` / `free(): invalid pointer` across 14 vg suites.
-          # Bisected 0.641 GOOD / 0.642 GOOD / 0.643 BAD, culprit confirmed by
-          # building 1307dfa8 directly. See asks/REGRESSION-0643-inline-heap-
-          # tracker-grows-struct.md.
-          #
-          # Fix on OUR side (the durable one, independent of any aether choice):
-          # all 158 sites swept `malloc(N)` -> `malloc(sizeof(T))`, which is
-          # layout-exact and immune to future tracker-placement changes. Raw
-          # `malloc(8)` byte buffers (no struct cast) left alone. Full 4-platform
-          # matrix re-verified all-green on 0.643.0 + aeb v0.296.
-          #
-          # Two earlier pins, still relevant history:
-          # - v0.627.0 skipped known-bad 0.624.0-0.626.0: #1866 made a setter's
-          #   store READ an uninitialised `_heap_<field>` tracker (this repo's
-          #   `malloc(n) as *T` boxes never set it) -> free of garbage; fixed by
-          #   e932c61c (#1873). The sizeof sweep above ALSO hardens against that
-          #   class, since the boxes are now correctly sized.
-          # - v0.626.0 shipped `math.lrint(x) -> long`; vg/ still carries 30
-          #   `extern lrint(x: float) -> long` (unspellable libm prototype: an
-          #   ERROR on macOS/iOS where long is long long). Migrating those 30 to
-          #   math.lrint remains follow-up, not done here.
-          # v0.684.0 (2026-09-18). Forced by the aeb move below, not chosen:
-          # every aeb since v0.302 compiles its own `aeb-main` against
-          # `bldr`, which imports std.zip (0.667), std.strarr (0.675) and
-          # calls os.arch() (0.681), so `make install` of that aeb needs
-          # at least 0.681 on PATH. Scanned the 0.646-0.681 notes: additive
-          # stdlib (std.zip, std.strarr, std.cbor, std.resp, fs.find_ext &
-          # co.), a 4.5x faster type-check (0.666), @c_callback emitted
-          # weak (0.677, two TUs sharing one callback no longer collide at
-          # link), -fPIC on --emit=lib objects (0.680).
-          #
-          # WHY NOT 0.681 OR 0.682: 0.667 added E0200, "block setter called
-          # as a node builder", discriminating by "the callee's module also
-          # defines a builder". ui/module.ae has four builders (window,
-          # render_to, record, nav_page) beside ~50 _ctx-first containers,
-          # so under 0.667-0.682 every `ui.vstack(10) { ... }` in every app
-          # is a compile error and the whole fan-out is red (#147's first
-          # run; the diagnostic was buried under make's own lines, see the
-          # ci.sh fix in the same PR). 0.683.0 carries aether#2060: the rule
-          # also requires the callee to yield no value, which is what
-          # separates a container (returns the handle its block runs
-          # inside) from a setter. All 260 .ae sources here type-check
-          # under it. The one genuine casualty of the move was LisMusic's
-          # audio_position_ms/audio_duration_ms colliding with std.audio's
-          # (E1001), renamed in the same PR.
-          #
-          # WHY NOT 0.683: under 0.682-0.683 table_demo aborts at startup on
-          # macOS AND Linux (free(): invalid pointer). 0.682's #2054 made a
-          # `-> string` function that returns `cb(...)` through a bare fn
-          # own its result, on the promise that a string-returning closure
-          # copies out whatever it returns. The table's cell callback returns
-          # string.from_int(p.kb) on one path (declared `-> ptr`) and p.name
-          # on the other, was typed by its FIRST return, and so was not a
-          # string closure: the literal reached the caller uncopied and was
-          # free()d. Reproduced natively on Windows (STATUS_HEAP_CORRUPTION)
-          # and root-caused with gdb; 0.684.0 carries aether#2070 (any
-          # string-typed return site makes the closure a string closure).
-          #
-          # v0.737.0 (2026-09-28). A REAL floor move, not a drive-by bump:
-          # v0.684.0 could not build apps/frames_demo at all. `ui/frames.ae`
-          # imports both `vg.geom.region` (selectively) and `vg.region`
-          # (whole module) — two local modules sharing the last segment
-          # "region" — and the v0.730-0.734 basename-collision rework (see
-          # asks/REGRESSION-0730-region-module-basename-collision.md and its
-          # REPLY) let whichever import's rewrite ran first claim every
-          # `region.name` in the file, including the other's, so
-          # `region.region_set_rect` etc. resolved against a module that
-          # never defined them. `vg/live.ae`'s same-named forwarding
-          # wrappers (`region_set_animated(region: ptr, on: int) {
-          # region.region_set_animated(region, on) }`) hit a second bug in
-          # the same rework: the shadow guard skipped rewriting the call
-          # entirely because `region` was also the parameter name. Both
-          # fixed upstream in aether PR #2268 (merged, released in
-          # v0.736.0/v0.737.0) with a new regression test
-          # (tests/integration/region_basename_collision_shadow) — this repo
-          # did not change to accommodate it; the fix is entirely
-          # compiler-side. Verified against the real v0.737.0 build: `aeb
-          # .all.ae` is 140/140 clean (frames_demo included), and
-          # tests/spec_matrix.sh is 413/417 (the two red — `background`'s
-          # worker-thread timing and LisMusic's missing binary — are
-          # unrelated pre-existing flakiness, not this move).
-          # v0.766.0 (2026-10-03): the family-wide floor Paul set for every
-          # Aether repo, so they all build against one known release. No
-          # aether-ui source change needed. Verified: ./ci.sh, all phases
-          # passed against 0.766.0 (macOS arm64), with the macOS closure-box
-          # and picker-driver fixes that landed the same day.
-          # v0.778.0 (2026-10-05): the family-wide floor again, moved with the
-          # whole family (bootstrap.sh's MIN_AE too); no aether-ui source
-          # change. ./ci.sh, all phases passed against the released 0.778.0
-          # toolchain (macOS arm64).
-          # v0.791.0 (2026-10-08): a real floor move. The Android shim now
-          # starts an app through the --emit=lib entry aether_main /
-          # aether_main_exit (aether#2489, 0.789.0+) instead of renaming its
-          # main(), so the Aether start-up (args, actor scheduler) runs on
-          # Android; 0.791.0 also carries #2511 (pure-Aether TLS for
-          # std.http.client without OpenSSL, and the aether_main rerun
-          # actor-leak fix).
-          # v0.801.0 (2026-10-10): a REAL floor move. 0.796.0-0.800.x crash
-          # vg click handlers with captures: aether #2670/#2671 gave the
-          # alias in aether-ui's workaround (`kept = h; e.cb = kept`) a
-          # reference of its own, released as the setter returned, so a
-          # capturing closure stored on an element was freed and the click
-          # read freed memory (macOS too, not only glibc). 0.801.0 carries
-          # #2703 (a closure boxed into a ptr field takes its own reference),
-          # so vg's setters store directly again and the aliases are gone
-          # (asks/aether-closure-drain-through-fn-store.md, RESOLVED). Anything
-          # older than 0.801.0 builds this tree and then crashes on a click.
-          # v0.818.0 (2026-10-16): a REAL floor move. 0.818.0's ownership
-          # rework (aether #2916/#2926) borrows a `ptr` parameter for the
-          # call unless it is declared `p: @keep ptr` (E0902), and this tree
-          # now says `@keep` on every one it keeps (stored in a field or a
-          # list, returned, captured, or passed on to another keeper),
-          # applied until the checker found no more, as upstream did std.
-          # 0.817.0 and older cannot parse `@keep`, so nothing older builds
-          # this tree, and everything building it (sae, ae3d) moves with it.
-          # Three shapes the checker refuses outright were rewritten rather
-          # than annotated: a function with a `@keep` parameter used as a
-          # value (the drawn-chrome toggle cell now takes the callback as a
-          # `fn`), and a closure handing its own `ptr` parameter to a keeper
-          # (a closure's cannot be `@keep`: the animate ticks set the element
-          # they captured, LisMusic's Play button keeps the song's title).
-          # Self-declared string_substring/string_to_lower externs say
-          # `@heap`, as std's do.
-          # v0.824.0 (2026-10-17): a tracking move, not a floor this tree
-          # needs a primitive from: the whole family moves to 0.824.0
-          # (Paul). It carries 0.823.0's use-after-free fix (a string field
-          # read in a loop beside a call, released twice) and #2940's
-          # (generated helpers in the reserved `_aether_` namespace, so a
-          # function named like one no longer breaks the C; E0900 seeing a
-          # slice that dangles through a closure). Verified: ci.sh on macOS
-          # and the Linux and Windows lanes.
-          # v0.830.0 (2026-10-19): a REAL floor move. This tree reads its
-          # map values as strings through the typed accessors
-          # (`map.get_string`, aether#2981; 0.829.0 and older do not have them,
-          # and warn W1005 where a `ptr` is read as text, an error in a later
-          # release), so nothing older builds it. Verified: ci.sh on macOS and
-          # the Linux lane.
-          # v0.840.0 (2026-10-23): a REAL floor move (aether-ui#221). From
-          # 0.838.0 a function that keeps a closure parameter declares it
-          # `@keep fn` (ui.background, background_for, background_detached
-          # hand theirs to worker.run, which keeps them; every vg and ui
-          # setter that stores a callback), and from 0.840.0 a borrowed `ptr`
-          # put in a list or a map is kept (list.add, map.put are @retain);
-          # a parameter named like a module hides it (vg/live.ae's `region`),
-          # map.remove and list.remove return nothing, and std.os's argv
-          # accessors are args_count/args_get (0.836.0). Nothing older than
-          # 0.836.0 builds the tree. Verified: ci.sh, all phases, on macOS
-          # and the aether-linux lane against 0.840.0.
-          # v0.841.0 (2026-10-23): a REAL floor move. vg's animate types its
-          # tick `fn(@keep ptr, float)` (aether#2980), so the documented
-          # `animate(...) callback |el, t| { vg.element_set_fill(el, ...) }`
-          # pattern compiles; 0.840.0 and older cannot parse `@keep` in a
-          # function type. Verified: ci.sh on macOS and the aether-linux lane
-          # against 0.841.0.
-          AETHER_REF: ${{ vars.AETHER_REF || 'v0.914.0' }}
-          # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
-          # verified building the whole fan-out under it (full matrix green).
-          # Strict forward move from v0.296. aeb is not implicated in any of the
-          # aether-side history below — the fan-out just orchestrates aetherc.
-          #
-          # History: v0.283 was the first release carrying aeb's `bldr` module
-          # (9c84d786 converted all build nodes to Shape A `bldr.build() {}`;
-          # v0.282 had no `bldr`, so every node failed with
-          # `Undefined function 'bldr.build'`). v0.282 itself carried b1bfa5e
-          # (encode_name ae-escapes a dot-prefixed fan-out root so `.all.ae`
-          # links). v0.297 carries all of that, so this is a strict move forward.
-          #
-          # 9bfd8e88 (2026-09-18, main after aeb#15) was the prior pin — a SHA,
-          # not a tag — carrying the fan-out orchestrator token-limit fix: the
-          # orchestrator is one generated main file that aetherc lexes into a
-          # fixed 50,000-token array; the old generator spent ~360 tokens/node,
-          # so #140 (tests/min_size) tipped the tree over with "source file
-          # exceeds maximum token limit" naming no file. The generator now emits
-          # the per-node bookkeeping once (7,227 tokens). aether#2059 asks for
-          # the compiler-side cap to go too.
-          #
-          # v0.322 (2026-09-21) is a tag past 9bfd8e88, so it keeps that
-          # orchestrator fix AND returns the pin to a tag. It is a strict
-          # superset of the reverted v0.321 and carries three things this tree
-          # wants:
-          #  (a) -fno-ipa-bit-cp gated on REAL gcc (aeb a3d5fb7). v0.321 added
-          #      that gcc-16 workaround UNCONDITIONALLY to the literal-`gcc`
-          #      link; on macOS `gcc` is Apple clang, which rejects it
-          #      ("unknown argument: '-fno-ipa-bit-cp'"), so v0.321 turned the
-          #      AppKit leg red at every link. v0.322 probes `gcc --version`
-          #      (FSF banner = real gcc, "clang"/"Apple" = shim), memoized, and
-          #      adds the flag only for real gcc — verified on real macOS by the
-          #      aeb line (Apple clang 17, link clean, flag absent). This is why
-          #      v0.321 was reverted and why the re-pin lands as v0.322.
-          #      (asks were aeb-side: fno-ipa-bit-cp-is-gcc-only-breaks-clang.)
-          #  (b) strip_unused() (aeb 3651206, v0.321) — opt-in gc-sections
-          #      dead-strip, 18-45% smaller binaries (aether-ui #192). Available
-          #      here now; wiring our apps in is a follow-up.
-          #  (c) a clear diagnostic for the retired `build` grammar (aeb #16).
-          # aeb-link now enforces an Aether 0.681 floor on the LINKED
-          # libaether.a; a stale ~/.local/lib/aether/libaether.a gets a legible
-          # "archive older than 0.681" error, cleared by a clean toolchain
-          # reinstall (matters on boxes with an old shadow install, not CI).
-          # aeb main at 1abdb31 (2026-09-30), by commit because no tag has it
-          # yet: v0.322's tools/aeb-link.ae calls file.mtime, which Aether
-          # 0.713 moved to fs.file_mtime, so `make install` of v0.322 failed
-          # against the 0.737 pinned above and both legs were red from that
-          # bump on. aeb 3faaf02 is the fix; ebdfb22 keeps macOS's keg-only
-          # -L directories.
-          # v0.325 (2026-10-05): 1abdb31 predates Aether 0.758's byte[] slices,
-          # so `make install` died on fs.write_atomic's argument count and both
-          # legs were red from the 0.766 bump on. v0.325 is the aeb the whole
-          # family pins with 0.778.0 (verified there: 152/152 + the CI itests).
-          # v0.326 (2026-10-10): the aeb released alongside Aether 0.801.0 and
-          # the one the family pins with it; moved with the 0.801.0 floor.
-          # v0.327 (2026-10-18): v0.326's tools/aeb-main.ae captures a borrowed
-          # `dst` ptr in a closure, which Aether 0.824's E0902 refuses, so
-          # `make install` failed and both legs were red from the 0.824 bump
-          # (8ca06029's parent) on. v0.327 is the aeb sae pins with 0.824.0 and
-          # what this tree's lanes were verified with.
-          # v0.333 (2026-10-23): the first tag with aeb 3f5acf4, which this
-          # tree was pinned to by commit until then. On Aether 0.840.0 a build
-          # node's session handle goes into a map (bldr.begin's "_session"),
-          # so bldr.begin/build and the node entry transform-ae writes declare
-          # it @keep; with v0.332 every node here failed to compile (46
-          # failures). A tag again, same code.
-          # v0.345 (2026-11-14): v0.333's sources pass ptrs read from lists and
-          # maps as strings, which Aether 0.914.0 refuses (E0202, aether#3694),
-          # so aeb did not build against the v0.914.0 AETHER_REF above. v0.345
-          # reads them with list.get_string/map.get_string. Verified: ci.sh,
-          # all phases, on macOS, cachyos and ae-x64.
-          AEB_REF: ${{ vars.AEB_REF || 'v0.345' }}
         run: |
           curl -fsSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh \
             | PREFIX="$HOME/.local" sh
@@ -378,8 +387,42 @@ jobs:
           ae --version
           aeb --version
 
+      # aeb's build output, kept between runs (2026-11-14). Phase 1 rebuilt every
+      # node cold: on macOS that plus the specs ran past 45 minutes. aeb caches
+      # by CONTENT, not mtime, so a fresh checkout's new mtimes do not matter:
+      # a node's binary is keyed on the sha256 of its source, its transitive
+      # imports and the toolchain, and each fan-out object (aeb-cc.sh) on the
+      # sha256 of its preprocessed C. A node whose inputs changed therefore
+      # misses and rebuilds whatever this cache holds; the key below only
+      # decides which snapshot to START from. ~/.cache/aeb is aeb's default
+      # store (tools/aeb-cc.sh and lib/cache), named here so it is explicit.
+      #
+      # Restore and save are separate steps, and save runs `if: always()`: the
+      # default save-on-success would throw away Phase 1's output exactly when
+      # a later phase fails, which is when the next run needs it most.
+      # The toolchain install steps above still run every time, so a cache can
+      # never stand in for them (the cache holds build output, not the toolchain).
+      # Linux shares the same config; it is cheaper there but not free.
+      - name: Restore aeb's build cache
+        id: aeb-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/aeb
+          key: aeb-${{ runner.os }}-${{ env.AETHER_REF }}-${{ env.AEB_REF }}-${{ hashFiles('**/*.ae', 'backend/**') }}
+          # A partial hit (same OS and toolchain, older sources) still holds
+          # every unchanged node and object.
+          restore-keys: |
+            aeb-${{ runner.os }}-${{ env.AETHER_REF }}-${{ env.AEB_REF }}-
+
       - name: Run the UI test pipeline
         run: ./ci.sh
+
+      - name: Save aeb's build cache
+        if: always() && steps.aeb-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/aeb
+          key: ${{ steps.aeb-cache.outputs.cache-primary-key }}
 
   # The Win32 backend is the one nobody can run here. There is no Windows leg
   # (ci.sh's Windows path needs the aether repo's `make
