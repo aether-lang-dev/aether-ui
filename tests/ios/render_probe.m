@@ -22,6 +22,7 @@
 #import <UIKit/UIKit.h>
 
 void* aether_ui_get_widget(int handle);
+void aether_ui_widget_set_child_impl(int parent, int child);
 void aether_ui_canvas_on_key_release_impl(int canvas_id, void* boxed_closure);
 
 double floatarr_get_raw(void* a, int i) { (void)a; (void)i; return 0.0; }
@@ -148,6 +149,37 @@ static void check_keys(void) {
     }
 }
 
+// A vertical scroller must derive content width from its viewport and content
+// height from its child, including after resize and child replacement.
+static void check_scroll_layout(void) {
+    UIView *host=[[UIView alloc] initWithFrame:CGRectMake(0,0,361,700)];
+    int sh=aether_ui_scrollview_create();
+    UIScrollView *scroll=(__bridge UIScrollView *)aether_ui_get_widget(sh);
+    [host addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.leadingAnchor constraintEqualToAnchor:host.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:host.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:host.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:host.bottomAnchor]]];
+    int child=aether_ui_vstack_create(0);
+    aether_ui_set_height(child,900);
+    aether_ui_widget_add_child_ctx((void *)(intptr_t)sh,child);
+    [host layoutIfNeeded];
+    UIView *content=(__bridge UIView *)aether_ui_get_widget(child);
+    if (fabs(content.frame.size.width-361)>1 || fabs(scroll.contentSize.height-900)>1) {
+        printf("FAIL scroll content geometry: width=%g height=%g\n",content.frame.size.width,scroll.contentSize.height); failures++;
+    }
+    host.frame=CGRectMake(0,0,280,600);
+    [host setNeedsLayout]; [host layoutIfNeeded];
+    if (fabs(content.frame.size.width-280)>1) { printf("FAIL scroll resize width=%g\n",content.frame.size.width); failures++; }
+    int replacement=aether_ui_vstack_create(0);
+    aether_ui_set_height(replacement,1100);
+    aether_ui_widget_set_child_impl(sh,replacement);
+    [host setNeedsLayout]; [host layoutIfNeeded];
+    UIView *next=(__bridge UIView *)aether_ui_get_widget(replacement);
+    if (fabs(next.frame.size.width-280)>1 || fabs(scroll.contentSize.height-1100)>1) { printf("FAIL replacement scroll geometry: width=%g height=%g\n",next.frame.size.width,scroll.contentSize.height); failures++; }
+}
+
 int main(void) {
     const int N = 300;
     int cid = aether_ui_canvas_create_impl(N, N);
@@ -170,6 +202,7 @@ int main(void) {
     expect_rgb(cid, N,  10,  10,  26,  26,  26, "background");
 
     check_keys();
+    check_scroll_layout();
 
     const char* png = getenv("AETHER_UI_RENDER_PROBE_PNG");
     if (png && png[0]) {

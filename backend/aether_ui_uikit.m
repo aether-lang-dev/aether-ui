@@ -957,6 +957,22 @@ int aether_ui_divider_create(void) {
 
 static const char kGridCols;   // a grid's column count (associated object key)
 
+// Scroll containers are vertical: content follows viewport width, while its
+// natural/explicit height defines the scroll range. Pinning to the scroll view's
+// own bottom instead would force content to viewport height and prevent scroll.
+static void aeui_scroll_attach(UIScrollView *scroll, UIView *child) {
+    child.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:child];
+    UILayoutGuide *content = scroll.contentLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [child.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [child.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [child.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [child.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+        [child.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+    ]];
+}
+
 void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     int parent_handle = (int)(intptr_t)parent_ctx;
     UIView* parent = (__bridge UIView*)aether_ui_get_widget(parent_handle);
@@ -979,6 +995,8 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     }
     if ([parent isKindOfClass:[UIStackView class]]) {
         [(UIStackView*)parent addArrangedSubview:child];
+    } else if ([parent isKindOfClass:[UIScrollView class]]) {
+        aeui_scroll_attach((UIScrollView *)parent, child);
     } else if (get_widget_type(parent_handle) == AUI_WRAP) {
         // Flow layout positions children by frame, so they must NOT be driven
         // by Auto Layout — flip the child back to autoresizing.
@@ -2032,7 +2050,7 @@ char* aether_ui_textarea_get_text(int handle) {
 }
 
 // --- Scroll view — UIScrollView ---------------------------------------------
-// A bare scroller for now; content sizing/inner stack is a pass-3 refinement.
+// Content is attached to the content/frame layout guides by aeui_scroll_attach.
 int aether_ui_scrollview_create(void) {
     UIScrollView* sv = [[UIScrollView alloc] init];
     sv.translatesAutoresizingMaskIntoConstraints = NO;
@@ -4982,6 +5000,10 @@ void aether_ui_widget_set_child_impl(int parent_handle, int child_handle) {
         if (k == child) continue;
         aeui_unregister_view_tree(k);
         [k removeFromSuperview];
+    }
+    if ([parent isKindOfClass:[UIScrollView class]]) {
+        aeui_scroll_attach((UIScrollView *)parent, child);
+        return;
     }
     child.translatesAutoresizingMaskIntoConstraints = NO;
     [parent addSubview:child];
