@@ -318,7 +318,12 @@ jobs:
       # about 7.5 minutes on every run whether the nodes hit the cache or not.
       # Locally, fresh clone: cold 7:39 -> 2:36, restored cache 7:37 -> 0:31.
       # v0.346 (2026-11-14): the first tag with f8d138f, same code.
-      AEB_REF: ${{ vars.AEB_REF || 'v0.346' }}
+      # v0.347 (2026-11-15): tracking bump. A build file with an unclosed or
+      # nested builder block is an error and test counts add up, so a skipped
+      # test can no longer pass silently (nib-code's suite had done so).
+      # Verified: ./ci.sh, all phases, on macOS arm64 with a get.sh install
+      # of v0.347.
+      AEB_REF: ${{ vars.AEB_REF || 'v0.347' }}
     # A hung step otherwise runs until the 6 hour default. Linux runs the full
     # pipeline in about 25 minutes; 45 leaves room without letting a hang sit.
     # The macOS runner rebuilt every aeb node cold and was still passing
