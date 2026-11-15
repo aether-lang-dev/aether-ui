@@ -18,8 +18,8 @@
 #      sibling modules such as apps/rubiks_cube/cube_engine.ae resolve from the
 #      source's directory), compiled for arm64-apple-ios with the UIKit backend,
 #      the shared system extras and the driver (AETHER_UI_WITH_DRIVER=1) or the
-#      no-control stub. The app's own main() stays main(): the backend's
-#      ui.app_run calls UIApplicationMain, as in the simulator run.
+#      no-control stub. The app's main is renamed; a small entry shim starts
+#      UIApplicationMain before the app constructs controls in didFinishLaunching.
 #   3. A generated, throwaway Xcode project (target/ios/<app>/<App>.xcodeproj)
 #      whose one target compiles a one-line stub and LINKS the objects from 2
 #      and the runtime from 1. Its only job is what nothing but Xcode can do on
@@ -101,12 +101,15 @@ INCS="$("$AE" cflags | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print
 OBJS=()
 for s in "$OUT/obj/$APP.c" \
          "$ROOT/backend/aether_ui_uikit.m" \
+         "$ROOT/backend/aether_ui_ios_entry.c" \
          "$ROOT/backend/$CONTROL" \
          "$ROOT/backend/aether_ui_system_extras.c"; do
     o="$OUT/obj/$(basename "${s%.*}").o"
+    ENTRY_FLAGS=()
+    if [ "$s" = "$OUT/obj/$APP.c" ]; then ENTRY_FLAGS=(-Dmain=aether_ui_program_main); fi
     # shellcheck disable=SC2086
     "$CLANG" -c -fobjc-arc -O2 -g -target "$TGT" -isysroot "$SDK" $INCS -I"$ROOT/backend" \
-        -Wno-incompatible-library-redeclaration "$s" -o "$o" 2> "$o.log" \
+        -Wno-incompatible-library-redeclaration ${ENTRY_FLAGS[@]+"${ENTRY_FLAGS[@]}"} "$s" -o "$o" 2> "$o.log" \
         || { grep -E "error" "$o.log" | head -20 >&2; exit 1; }
     OBJS+=("$o")
 done

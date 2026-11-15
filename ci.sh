@@ -998,9 +998,13 @@ else
         #    runtime archive, the frameworks. The same clang line as Phase 1e's
         #    link check, with the real runtime where tests/ios/link_stub.c stood.
         if [ "$sim_fail" -eq 0 ]; then
-            if "$IOS_CLANG" -fobjc-arc -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
+            if "$IOS_CLANG" -c -Dmain=aether_ui_program_main -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
                     $(ae cflags | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print;p=1;next} /^-I/{print}' | tr '\n' ' ') -Ibackend \
-                    "$SIM_DIR/$SIM_EX.c" \
+                    "$SIM_DIR/$SIM_EX.c" -o "$SIM_DIR/$SIM_EX.o" > /tmp/ci_ios_sim_app.log 2>&1 \
+               && "$IOS_CLANG" -fobjc-arc -target "$SIM_CLANG_TGT" -isysroot "$IOS_SDK" \
+                    $(ae cflags | tr ' ' '\n' | awk 'p{print;p=0;next} /^-idirafter$/{print;p=1;next} /^-I/{print}' | tr '\n' ' ') -Ibackend \
+                    "$SIM_DIR/$SIM_EX.o" \
+                    "$ROOT/backend/aether_ui_ios_entry.c" \
                     "$ROOT/backend/aether_ui_uikit.m" \
                     "$ROOT/backend/aether_ui_test_server.c" \
                     "$ROOT/backend/aether_ui_system_extras.c" \

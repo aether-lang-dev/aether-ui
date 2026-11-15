@@ -337,6 +337,14 @@ static void aeui_own_helper(id owner, id helper) {
 static int g_root_handle = 0;
 static int g_want_w = 0;
 static int g_want_h = 0;
+// Signed apps enter UIKit before executing the Aether builder. Scroll/text
+// controls created before UIApplicationMain can capture uninitialised touch
+// delivery state, then raise inside _delayTouchesForEvent on the first tap.
+static int (*aeui_program_main)(int, char **) = NULL;
+static int aeui_program_argc;
+static char **aeui_program_argv;
+static int aeui_program_started;
+
 
 // The root view controller hosting the app body — shared by the scene path
 // (modern, iOS 13+/iPad/Catalyst) and the legacy app-delegate path.
@@ -396,6 +404,13 @@ API_AVAILABLE(ios(13.0))
 - (BOOL)application:(UIApplication*)application
         didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
     (void)application; (void)launchOptions;
+    if (aeui_program_main) {
+        int (*entry)(int,char **)=aeui_program_main;
+        aeui_program_main=NULL;
+        aeui_program_started=1;
+        int result=entry(aeui_program_argc,aeui_program_argv);
+        if (result!=0) exit(result);
+    }
     // Legacy fallback: only used when no scene manifest is present (the scene
     // path handles the window otherwise). A pre-scenes runtime lands here.
     if (@available(iOS 13.0, *)) return YES;
@@ -469,6 +484,9 @@ static void aeui_prime_canvases(void);
 
 void aether_ui_app_run_raw(int app_handle) {
     (void)app_handle;
+    // UIKit already owns the event loop. Return to didFinishLaunching so scene
+    // connection can present the completed tree, never call UIApplicationMain twice.
+    if (aeui_program_started) return;
     // Headless: there is no host to run a UIApplication against, but the process
     // must STAY ALIVE so the driver test server (started before this in
     // surface_run_impl) can serve — the widget tree and canvas command buffer
@@ -500,6 +518,18 @@ void aether_ui_app_run_raw(int app_handle) {
         char* argv[] = { arg0, NULL };
         UIApplicationMain(1, argv, nil,
                           NSStringFromClass([AetherAppDelegate class]));
+    }
+}
+
+// iOS packaging entry point; the generated app C is compiled with its main
+// renamed, while this C/ObjC shim remains the process's actual main.
+int aether_ui_ios_main(int argc,char **argv,int (*entry)(int,char **)) {
+    if (aeui_is_headless()) return entry(argc,argv);
+    aeui_program_main=entry;
+    aeui_program_argc=argc;
+    aeui_program_argv=argv;
+    @autoreleasepool {
+        return UIApplicationMain(argc,argv,nil,NSStringFromClass([AetherAppDelegate class]));
     }
 }
 
