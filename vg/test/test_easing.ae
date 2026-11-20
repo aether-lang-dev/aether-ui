@@ -155,3 +155,4 @@ main() {
     // Confirms zero-pad: 0x05 → "05" not "5"
     cpad = easing.lerp_color("#000000", "#0a0b0c", 1.0)
     assert_eq_str("lerp_color zero-pad", cpad, "#0a0b0c")
+}
