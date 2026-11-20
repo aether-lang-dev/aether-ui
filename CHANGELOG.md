@@ -276,6 +276,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Driver: an answer is written from the HTTP thread, never from the UI
+  thread.** Every backend services a request on the UI thread
+  (`run_on_ui_thread`), and the handlers wrote the answer there, so a large
+  one held the UI thread in `send()` until the client read it, up to the 5 s
+  send timeout per stall, then cut it short. A client on the UI thread itself
+  can never read it: sae's control bus forwards `@ui GET /widgets` from the UI
+  thread and reads the answer a tick at a time, and spraedsheet's /widgets
+  (345 KB) is larger than FreeBSD's loopback buffers (32 KiB sent, 64 KiB
+  received, grown only as the reader reads), so spraedsheet's
+  `spec_app_sheet_bus` got "the UI driver did not answer in 10 s" on FreeBSD
+  (Linux's larger loopback buffers hid it). A handler now builds its answer in
+  the request's own buffer, and `handle_request` writes it and closes the
+  connection from the HTTP thread once the handler has returned. Verified on
+  FreeBSD 15.1 (GTK 4.20): `spec_app_sheet_bus` passes, and sae's
+  `tests/run_all.sh` on this driver.
+
 - **GTK4 driver: an action whose handler destroys its own widget no longer
   touches freed memory.** The driver's toggle, click and submit ran the
   widget's handler with no reference held; a handler that re-rendered the list

@@ -253,22 +253,52 @@ static int query_param_decoded(const char* path, const char* key,
 // ---------------------------------------------------------------------------
 // JSON emission + HTTP response send.
 // ---------------------------------------------------------------------------
-// Write the WHOLE buffer, looping over partial sends. A single send()/write()
-// may transfer fewer bytes than asked — especially on Windows loopback for a
-// large /widgets body — silently truncating the JSON so the spec's json.parse
-// sees a cut-off array and widget_id_by_text misses everything past the cut.
-// (The GTK4 embedded server learned this the hard way with its own write_all;
-// the shared server behind win32/macOS never had the loop.)
-static void send_all(aether_sock_t fd, const char* buf, int len) {
-    int off = 0;
-    while (off < len) {
-        int n = (int)aether_socket_send(fd, buf + off, len - off);
-        if (n <= 0) break;   // peer closed / fatal error — nothing more to do
-        off += n;
+// An answer is built here, not written as it is made. A handler runs on the
+// UI thread (run_on_ui_thread), and writing a large answer from there held
+// that thread in send() until the client read it: a client that is itself on
+// the UI thread can never read it. sae's control bus forwards "@ui GET
+// /widgets" from the UI thread and reads the driver's answer a tick at a
+// time; spraedsheet's /widgets is larger than FreeBSD's loopback buffers
+// (32 KiB sent, 64 KiB received, grown only as the reader reads), so the
+// driver blocked in send(), sae's tick never ran to read, and the bus
+// answered "the UI driver did not answer in 10 s" (Linux's larger loopback
+// buffers hid it). The reply is the request's own buffer; handle_request
+// writes it from the HTTP thread once the handler has returned.
+typedef struct {
+    char* buf;
+    size_t len;
+    size_t cap;
+} AeuiReply;
+
+static void send_all(AeuiReply* out, const char* buf, int len) {
+    if (len <= 0) return;
+    if (out->len + (size_t)len > out->cap) {
+        size_t cap = out->cap ? out->cap : 4096;
+        while (cap < out->len + (size_t)len) cap *= 2;
+        char* nb = (char*)realloc(out->buf, cap);
+        if (!nb) return;   // out of memory: the answer is cut short
+        out->buf = nb;
+        out->cap = cap;
+    }
+    memcpy(out->buf + out->len, buf, (size_t)len);
+    out->len += (size_t)len;
+}
+
+// Write the WHOLE buffer to the client, looping over partial sends. A single
+// send()/write() may transfer fewer bytes than asked -- especially on Windows
+// loopback for a large /widgets body -- silently truncating the JSON so the
+// spec's json.parse sees a cut-off array and widget_id_by_text misses
+// everything past the cut.
+static void write_reply(aether_sock_t fd, const AeuiReply* out) {
+    size_t off = 0;
+    while (off < out->len) {
+        int n = (int)aether_socket_send(fd, out->buf + off, (int)(out->len - off));
+        if (n <= 0) break;   // peer closed / fatal error -- nothing more to do
+        off += (size_t)n;
     }
 }
 
-static void send_http(aether_sock_t fd, int status, const char* status_text,
+static void send_http(AeuiReply* out, int status, const char* status_text,
                       const char* content_type, const char* body) {
     char header[512];
     int bodylen = body ? (int)strlen(body) : 0;
@@ -280,8 +310,8 @@ static void send_http(aether_sock_t fd, int status, const char* status_text,
         "Connection: close\r\n"
         "\r\n",
         status, status_text, content_type, bodylen);
-    send_all(fd, header, hlen);
-    if (body && bodylen > 0) send_all(fd, body, bodylen);
+    send_all(out, header, hlen);
+    if (body && bodylen > 0) send_all(out, body, bodylen);
 }
 
 // Append `s` to body at pos as a quoted JSON string, escaping '"', '\\' and
@@ -586,7 +616,7 @@ static int activate_on_ui_thread(const AetherDriverHooks* h,
     return ctx.retval;
 }
 
-static void dispatch_and_reply(aether_sock_t client_fd,
+static void dispatch_and_reply(AeuiReply* out,
                                 const AetherDriverHooks* h,
                                 AetherDriverActionCtx* ctx,
                                 const char* ok_msg) {
@@ -599,7 +629,7 @@ static void dispatch_and_reply(aether_sock_t client_fd,
     // already know how to answer honestly.
     if (!h->dispatch_action) {
         ctx->result = 3;
-        send_http(client_fd, 404, "Not Found", "application/json",
+        send_http(out, 404, "Not Found", "application/json",
                   "{\"error\":\"no action dispatcher on this backend\"}");
         return;
     }
@@ -609,19 +639,19 @@ static void dispatch_and_reply(aether_sock_t client_fd,
     // backends: success → {"ok":true}; seal/banner/not-found → {"error":...}.
     switch (ctx->result) {
         case 0:
-            send_http(client_fd, 200, "OK", "application/json",
+            send_http(out, 200, "OK", "application/json",
                       "{\"ok\":true}");
             break;
         case 1:
-            send_http(client_fd, 403, "Forbidden", "application/json",
+            send_http(out, 403, "Forbidden", "application/json",
                       "{\"error\":\"widget is sealed\"}");
             break;
         case 2:
-            send_http(client_fd, 403, "Forbidden", "application/json",
+            send_http(out, 403, "Forbidden", "application/json",
                       "{\"error\":\"banner cannot be manipulated\"}");
             break;
         default:
-            send_http(client_fd, 404, "Not Found", "application/json",
+            send_http(out, 404, "Not Found", "application/json",
                       "{\"error\":\"widget not found\"}");
             break;
     }
@@ -629,13 +659,13 @@ static void dispatch_and_reply(aether_sock_t client_fd,
 
 /* Payload for the UI-thread hop. See handle_request just below. */
 typedef struct {
-    aether_sock_t client_fd;
+    AeuiReply* out;
     const AetherDriverHooks* h;
     int method;
     const char* path;
 } AeuiRequestCall;
 
-static void handle_request_inner(aether_sock_t client_fd,
+static void handle_request_inner(AeuiReply* out,
                                  const AetherDriverHooks* h,
                                  int method, const char* path);
 
@@ -652,7 +682,7 @@ static void handle_request_trampoline(void* arg) {
        not whenever the main run loop next turns (spec_driver_rss). */
     void* pool = objc_autoreleasePoolPush();
 #endif
-    handle_request_inner(c->client_fd, c->h, c->method, c->path);
+    handle_request_inner(c->out, c->h, c->method, c->path);
 #ifdef __APPLE__
     objc_autoreleasePoolPop(pool);
 #endif
@@ -702,12 +732,12 @@ static void handle_request_trampoline(void* arg) {
  * 5.8 GB while the hooks still ran here. */
 #endif
 
-/* The server answers one connection at a time, and the answer is written from
- * the UI thread, so a client that stalls holds more than this thread: one
- * that connects and never sends held every later request (and the specs
- * with them) forever, and one that stops reading a large answer held the UI
- * thread in send(). Both are bounded; a spec client sends at once and reads
- * at once. */
+/* The server answers one connection at a time, so a client that stalls holds
+ * every later request: one that connects and never sends held them (and the
+ * specs with them) forever, and one that stops reading a large answer holds
+ * this thread in send() (the answer is written here, not from the UI thread:
+ * see AeuiReply). Both are bounded; a spec client sends at once and reads at
+ * once. */
 #define AEUI_CLIENT_IO_TIMEOUT_MS 5000
 static void bound_client_io(aether_sock_t fd) {
 #ifdef _WIN32
@@ -730,28 +760,31 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
     bound_client_io(client_fd);
     char req[4096];
     int n = (int)aether_socket_recv(client_fd, req, sizeof(req) - 1);
-    if (n <= 0) {
-        aether_close_socket(client_fd);
-    } else {
+    if (n > 0) {
         req[n] = '\0';
         char path[1024];
+        AeuiReply out = { NULL, 0, 0 };
         int method = parse_http_request(req, path, sizeof(path));
         if (method < 0) {
-            send_http(client_fd, 400, "Bad Request", "text/plain", "bad request");
-            aether_close_socket(client_fd);
+            send_http(&out, 400, "Bad Request", "text/plain", "bad request");
         } else if (h && h->run_on_ui_thread) {
-            AeuiRequestCall call = { client_fd, h, method, path };
+            AeuiRequestCall call = { &out, h, method, path };
             h->run_on_ui_thread(handle_request_trampoline, &call);
         } else {
-            handle_request_inner(client_fd, h, method, path);
+            handle_request_inner(&out, h, method, path);
         }
+        // Written here, on the HTTP thread, after the handler has returned:
+        // the UI thread is free again however slowly the client reads.
+        write_reply(client_fd, &out);
+        free(out.buf);
     }
+    aether_close_socket(client_fd);
 #ifdef __APPLE__
     objc_autoreleasePoolPop(pool);
 #endif
 }
 
-static void handle_request_inner(aether_sock_t client_fd,
+static void handle_request_inner(AeuiReply* out,
                                  const AetherDriverHooks* h,
                                  int method, const char* path) {
 
@@ -781,19 +814,19 @@ static void handle_request_inner(aether_sock_t client_fd,
             pos += widget_to_json(h, i, body + pos, 4096);
         }
         pos += sprintf(body + pos, "]");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 0 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/children")) {
         int id = extract_id_from_path(path, "/widget/");
         if (!h->widget_children) {
-            send_http(client_fd, 501, "Not Implemented", "text/plain",
+            send_http(out, 501, "Not Implemented", "text/plain",
                       "/children not supported by this backend");
         } else {
             int kids[256];
             int n = h->widget_children(id, kids, 256);
             if (n < 0) {
-                send_http(client_fd, 404, "Not Found", "text/plain",
+                send_http(out, 404, "Not Found", "text/plain",
                           "widget not found");
             } else {
                 char* body = (char*)malloc((size_t)n * 4096 + 64);
@@ -804,7 +837,7 @@ static void handle_request_inner(aether_sock_t client_fd,
                     pos += widget_to_json(h, kids[i], body + pos, 4096);
                 }
                 pos += sprintf(body + pos, "]");
-                send_http(client_fd, 200, "OK", "application/json", body);
+                send_http(out, 200, "OK", "application/json", body);
                 free(body);
             }
         }
@@ -815,7 +848,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         // /widget/{id} GET, whose match is a prefix of this path.
         int id = extract_id_from_path(path, "/widget/");
         if (!h->widget_a11y) {
-            send_http(client_fd, 501, "Not Implemented", "text/plain",
+            send_http(out, 501, "Not Implemented", "text/plain",
                       "/a11y not supported by this backend");
         } else {
             char role[64] = "", name[512] = "", desc[512] = "", said[512] = "";
@@ -841,14 +874,14 @@ static void handle_request_inner(aether_sock_t client_fd,
             snprintf(body, sizeof(body),
                      "{\"role\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"announced\":\"%s\",\"announcements\":%d}",
                      role, ne, de, se, nsaid);
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         }
     } else if (method == 0 && (strcmp(path, "/screenshot") == 0 || strcmp(path, "/screenshot?b64=1") == 0)) {
         // ?b64=1: the PNG as base64 text, for a client that carries text (a
         // string-typed HTTP client, a control bus's answer).
         int as_b64 = strchr(path, '?') != NULL;
         if (!h->screenshot_png) {
-            send_http(client_fd, 501, "Not Implemented", "text/plain",
+            send_http(out, 501, "Not Implemented", "text/plain",
                       "/screenshot not supported by this backend");
         } else {
             unsigned char* data = NULL;
@@ -857,23 +890,23 @@ static void handle_request_inner(aether_sock_t client_fd,
             if (shot && as_b64) {
                 static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
                 size_t olen = ((len + 2) / 3) * 4;
-                char* out = (char*)malloc(olen + 1);
-                if (out) {
+                char* b64 = (char*)malloc(olen + 1);
+                if (b64) {
                     size_t o = 0;
                     for (size_t i = 0; i < len; i += 3) {
                         unsigned v = (unsigned)data[i] << 16;
                         if (i + 1 < len) v |= (unsigned)data[i + 1] << 8;
                         if (i + 2 < len) v |= data[i + 2];
-                        out[o++] = tbl[(v >> 18) & 63];
-                        out[o++] = tbl[(v >> 12) & 63];
-                        out[o++] = (i + 1 < len) ? tbl[(v >> 6) & 63] : '=';
-                        out[o++] = (i + 2 < len) ? tbl[v & 63] : '=';
+                        b64[o++] = tbl[(v >> 18) & 63];
+                        b64[o++] = tbl[(v >> 12) & 63];
+                        b64[o++] = (i + 1 < len) ? tbl[(v >> 6) & 63] : '=';
+                        b64[o++] = (i + 2 < len) ? tbl[v & 63] : '=';
                     }
-                    out[o] = 0;
-                    send_http(client_fd, 200, "OK", "text/plain", out);
-                    free(out);
+                    b64[o] = 0;
+                    send_http(out, 200, "OK", "text/plain", b64);
+                    free(b64);
                 } else {
-                    send_http(client_fd, 500, "Error", "text/plain", "out of memory");
+                    send_http(out, 500, "Error", "text/plain", "out of memory");
                 }
                 free(data);
             } else if (shot) {
@@ -884,11 +917,11 @@ static void handle_request_inner(aether_sock_t client_fd,
                     "Content-Length: %lu\r\n"
                     "Access-Control-Allow-Origin: *\r\n"
                     "Connection: close\r\n\r\n", (unsigned long)len);
-                send_all(client_fd, header, hlen);
-                send_all(client_fd, (const char*)data, (int)len);  // PNG can be large
+                send_all(out, header, hlen);
+                send_all(out, (const char*)data, (int)len);  // PNG can be large
                 free(data);
             } else {
-                send_http(client_fd, 500, "Error", "text/plain",
+                send_http(out, 500, "Error", "text/plain",
                           "screenshot capture failed");
             }
         }
@@ -899,23 +932,23 @@ static void handle_request_inner(aether_sock_t client_fd,
            "text"}...]. 404 when nothing was published (not a vg canvas). */
         char* j = nodes_copy(extract_id_from_path(path, "/canvas/"));
         if (j) {
-            send_http(client_fd, 200, "OK", "application/json", j);
+            send_http(out, 200, "OK", "application/json", j);
             free(j);
         } else {
-            send_http(client_fd, 404, "Not Found", "application/json",
+            send_http(out, 404, "Not Found", "application/json",
                       "{\"error\":\"no vg nodes for this canvas\"}");
         }
     } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
                && strstr(path, "/debug")) {
         if (!h->canvas_debug) {
-            send_http(client_fd, 501, "Not Implemented", "application/json",
+            send_http(out, 501, "Not Implemented", "application/json",
                       "{\"error\":\"canvas debug metrics not wired on this backend\"}");
         } else {
             int id = extract_id_from_path(path, "/canvas/");
             int area = -1, commands = -1, w = -1, ht = -1;
             int ok = h->canvas_debug(id, &area, &commands, &w, &ht);
             if (ok != 0) {
-                send_http(client_fd, 404, "Not Found", "application/json",
+                send_http(out, 404, "Not Found", "application/json",
                           "{\"error\":\"canvas not found\"}");
             } else {
                 // painted_pixels comes straight from the backend rather
@@ -943,7 +976,7 @@ static void handle_request_inner(aether_sock_t client_fd,
                          "\"clip_paints\":%d,\"last_clip_area\":%d}",
                          area, commands, w, ht, painted,
                          full_paints, clip_paints, last_clip_area);
-                send_http(client_fd, 200, "OK", "application/json", body);
+                send_http(out, 200, "OK", "application/json", body);
             }
         }
     } else if (method == 0 && strncmp(path, "/gpuview/", 9) == 0
@@ -964,7 +997,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int val = aether_ui_gpuview_read_pixel_impl(id, px, py);
         char body[64];
         snprintf(body, sizeof(body), "{\"pixel\":%d}", val);
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
                && strstr(path, "/pixel") && !strstr(path, "/pixelgrid")) {
         /* GET /canvas/{id}/pixel?x=&y=&w=&h= — one rendered pixel, packed
@@ -1002,7 +1035,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int val = aether_ui_canvas_read_pixel_impl(id, px, py, pw, ph);
         char body[64];
         snprintf(body, sizeof(body), "{\"pixel\":%d}", val);
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strncmp(path, "/canvas/", 8) == 0
                && strstr(path, "/pixelgrid")) {
         /* GET /canvas/{id}/pixelgrid?w=&h=&step=
@@ -1032,13 +1065,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         int st = ss ? atoi(ss) : 8;
         if (st < 1) st = 1;
         if (gw < 1 || gh < 1 || id < 1) {
-            send_http(client_fd, 400, "Bad Request", "application/json",
+            send_http(out, 400, "Bad Request", "application/json",
                       "{\"error\":\"bad pixelgrid params\"}");
         } else {
             size_t cap = (size_t)((gw / st) + 1) * ((gh / st) + 1) * 10 + 64;
             char* body = (char*)malloc(cap);
             if (!body) {
-                send_http(client_fd, 500, "Internal Server Error",
+                send_http(out, 500, "Internal Server Error",
                           "application/json", "{\"error\":\"oom\"}");
             } else {
                 size_t n = 0;
@@ -1050,7 +1083,7 @@ static void handle_request_inner(aether_sock_t client_fd,
                     }
                 }
                 body[n < cap ? n : cap - 1] = '\0';
-                send_http(client_fd, 200, "OK", "text/plain", body);
+                send_http(out, 200, "OK", "text/plain", body);
                 free(body);
             }
         }
@@ -1059,9 +1092,9 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (id > 0) {
             char body[4096];
             widget_to_json(h, id, body, sizeof(body));
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         } else {
-            send_http(client_fd, 404, "Not Found", "text/plain",
+            send_http(out, 404, "Not Found", "text/plain",
                       "widget not found");
         }
     // NB every widget action below is anchored on the /widget/ prefix, not on
@@ -1077,7 +1110,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int fired = aether_ui_fire_double_click(id);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/drop")) {
         // POST /widget/{id}/drop?src=N — drop row N onto this row (row
@@ -1087,7 +1120,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int fired = aether_ui_fire_row_drop(id, s ? atoi(s) : -1);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && (strcmp(path, "/undo") == 0
                                || strcmp(path, "/redo") == 0)) {
         // Step the edit stack via the backend's marshalled fire.
@@ -1096,14 +1129,14 @@ static void handle_request_inner(aether_sock_t client_fd,
         snprintf(body, sizeof(body),
                  "{\"did\":%d,\"undo_depth\":%d,\"redo_depth\":%d}",
                  did, aether_ui_undo_depth_impl(), aether_ui_redo_depth_impl());
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strcmp(path, "/undo_state") == 0) {
         char body[192];
         snprintf(body, sizeof(body),
                  "{\"undo_depth\":%d,\"redo_depth\":%d,\"label\":\"%s\"}",
                  aether_ui_undo_depth_impl(), aether_ui_redo_depth_impl(),
                  aether_ui_undo_label_impl());
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/appearance", 11) == 0) {
         // POST /appearance?dark=N — steer the OS-appearance override
         // headlessly (AeCS styles_for_mode re-theme; see the GTK4 twin).
@@ -1111,7 +1144,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int fired = aether_ui_fire_appearance(v ? atoi(v) : 0);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/scroll") && !extract_query_param(path, "by")) {
         // (?by= is a scrollbar's, below.)
@@ -1122,7 +1155,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int fired = aether_ui_fire_scroll(id, s ? atoi(s) : 0);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/click")) {
         // ?mods=N (1 shift, 2 ctrl, 4 alt, 8 super/command): the modifier
@@ -1137,7 +1170,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         // than the widget's click closure called.
         const char* rq = extract_query_param(path, "real");
         aether_ui_driver_real_events_now = rq && atoi(rq) ? 1 : 0;
-        dispatch_and_reply(client_fd, h, &ctx, "clicked");
+        dispatch_and_reply(out, h, &ctx, "clicked");
         aether_ui_driver_real_events_now = 0;
         if (mq) aether_ui_modifiers_override_set(-1);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
@@ -1148,7 +1181,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_HOVER;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        dispatch_and_reply(client_fd, h, &ctx, "hovered");
+        dispatch_and_reply(out, h, &ctx, "hovered");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/press")) {
         // POST /widget/{id}/press — hold the button down (no release), so
@@ -1156,13 +1189,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_PRESS;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        dispatch_and_reply(client_fd, h, &ctx, "pressed");
+        dispatch_and_reply(out, h, &ctx, "pressed");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/unpress")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_RELEASE;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        dispatch_and_reply(client_fd, h, &ctx, "released");
+        dispatch_and_reply(out, h, &ctx, "released");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/drag")) {
         // POST /widget/{id}/drag?x=&y=&dx=&dy= -- press at (x, y) inside the
@@ -1199,7 +1232,7 @@ static void handle_request_inner(aether_sock_t client_fd,
             ctx.dval = aether_ui_scrollbar_info(ctx.handle, 0)
                      + (room > 0 ? d / room * (top - min) : 0.0);
         }
-        dispatch_and_reply(client_fd, h, &ctx, "dragged");
+        dispatch_and_reply(out, h, &ctx, "dragged");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/secondary_click")) {
         // POST /widget/{id}/secondary_click[?x=&y=] -- a right click (a long
@@ -1217,13 +1250,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.dval = xs ? atof(xs) : rw / 2.0;
         ctx.dval2 = ys ? atof(ys) : rh / 2.0;
         if (!h->dispatch_action) {
-            send_http(client_fd, 404, "Not Found", "application/json", "{\"error\":\"no action dispatcher\"}");
+            send_http(out, 404, "Not Found", "application/json", "{\"error\":\"no action dispatcher\"}");
         } else {
             h->dispatch_action(&ctx);
             char body[96];
             snprintf(body, sizeof(body), "{\"fired\":%s,\"popup\":%d}",
                      ctx.retval ? "true" : "false", ctx.retval ? aether_ui_last_popup_menu : 0);
-            send_http(client_fd, ctx.retval ? 200 : 404, ctx.retval ? "OK" : "Not Found", "application/json", body);
+            send_http(out, ctx.retval ? 200 : 404, ctx.retval ? "OK" : "Not Found", "application/json", body);
         }
     } else if (method == 1 && strcmp(path, "/window/front") == 0) {
         // POST /window/front -- the app's window brought to the front and
@@ -1234,33 +1267,33 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (h->dispatch_action) h->dispatch_action(&ctx);
         char body[64];
         snprintf(body, sizeof(body), "{\"key\":%s,\"active\":%s}", ctx.retval >= 1 ? "true" : "false", ctx.retval >= 2 ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strcmp(path, "/popup") == 0) {
         // GET /popup -- the last menu menu_popup popped, and for which widget.
         char body[96];
         snprintf(body, sizeof(body), "{\"menu\":%d,\"anchor\":%d}",
                  aether_ui_last_popup_menu, aether_ui_last_popup_anchor);
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/submit")) {
         // POST /widget/{id}/submit -- Return in a text field: on_submit.
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_SUBMIT;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        dispatch_and_reply(client_fd, h, &ctx, "submitted");
+        dispatch_and_reply(out, h, &ctx, "submitted");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/set_text")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_SET_TEXT;
         ctx.handle = extract_id_from_path(path, "/widget/");
         query_param_decoded(path, "v", ctx.sval, sizeof(ctx.sval), 1);
-        dispatch_and_reply(client_fd, h, &ctx, "set");
+        dispatch_and_reply(out, h, &ctx, "set");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/toggle")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_TOGGLE;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        dispatch_and_reply(client_fd, h, &ctx, "toggled");
+        dispatch_and_reply(out, h, &ctx, "toggled");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/set_value")) {
         AetherDriverActionCtx ctx = {0};
@@ -1271,7 +1304,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         // A scrollbar's value is set as a person moves it (on_change told).
         const char* ty = ctx.handle > 0 ? h->widget_type(ctx.handle) : "";
         if (ty && strcmp(ty, "scrollbar") == 0) ctx.action = AETHER_DRV_SCROLLBAR_SET;
-        dispatch_and_reply(client_fd, h, &ctx, "set");
+        dispatch_and_reply(out, h, &ctx, "set");
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/scroll?")) {
         // POST /widget/{id}/scroll?by=step|-step|page|-page: a scrollbar
@@ -1282,7 +1315,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         const char* ty = ctx.handle > 0 ? h->widget_type(ctx.handle) : "";
         const char* by = extract_query_param(path, "by");
         if (!ty || strcmp(ty, "scrollbar") != 0 || !by) {
-            send_http(client_fd, 400, "Bad Request", "text/plain", "/scroll: a scrollbar, and by=step|-step|page|-page");
+            send_http(out, 400, "Bad Request", "text/plain", "/scroll: a scrollbar, and by=step|-step|page|-page");
         } else {
             double d = 0;
             if (strncmp(by, "-step", 5) == 0) d = -aether_ui_scrollbar_info(ctx.handle, 4);
@@ -1290,7 +1323,7 @@ static void handle_request_inner(aether_sock_t client_fd,
             else if (strncmp(by, "-page", 5) == 0) d = -aether_ui_scrollbar_info(ctx.handle, 5);
             else if (strncmp(by, "page", 4) == 0) d = aether_ui_scrollbar_info(ctx.handle, 5);
             ctx.dval = aether_ui_scrollbar_info(ctx.handle, 0) + d;
-            dispatch_and_reply(client_fd, h, &ctx, "scrolled");
+            dispatch_and_reply(out, h, &ctx, "scrolled");
         }
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/context_menu")) {
@@ -1313,7 +1346,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (!idx_s) {
             char body[64];
             snprintf(body, sizeof(body), "{\"mapped\":%d}", mapped);
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         } else {
             int idx = atoi(idx_s + 1);
             AetherDriverActionCtx act = {0};
@@ -1322,13 +1355,13 @@ static void handle_request_inner(aether_sock_t client_fd,
             act.ival = idx;
             h->dispatch_action(&act);
             if (!act.retval) {
-                send_http(client_fd, 404, "Not Found", "application/json",
+                send_http(out, 404, "Not Found", "application/json",
                           "{\"error\":\"no such context menu item\"}");
             } else {
                 char body[96];
                 snprintf(body, sizeof(body),
                          "{\"mapped\":%d,\"activated\":%d}", mapped, idx);
-                send_http(client_fd, 200, "OK", "application/json", body);
+                send_http(out, 200, "OK", "application/json", body);
             }
         }
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
@@ -1344,7 +1377,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         h->dispatch_action(&ctx);
         char body[64];
         snprintf(body, sizeof(body), "{\"ok\":true,\"position\":%d}", ctx.retval);
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/widget/", 8) == 0
                && strstr(path, "/tab_select")) {
         // POST /widget/{id}/tab_select?i=N — switch the active tab. Marshaled
@@ -1359,7 +1392,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         h->dispatch_action(&ctx);
         char body[64];
         snprintf(body, sizeof(body), "{\"ok\":true,\"tabSelected\":%d}", ctx.retval);
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strncmp(path, "/focus", 6) == 0) {
         // GET /focus — who has keyboard focus (parity with the GTK server).
         if (h->focused_widget) {
@@ -1367,9 +1400,9 @@ static void handle_request_inner(aether_sock_t client_fd,
             char body[128];
             snprintf(body, sizeof(body), "{\"handle\":%d,\"type\":\"%s\"}",
                      fh, fh > 0 ? h->widget_type(fh) : "none");
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         } else {
-            send_http(client_fd, 501, "Not Implemented", "application/json",
+            send_http(out, 501, "Not Implemented", "application/json",
                       "{\"error\":\"focus introspection not wired on this backend\"}");
         }
     } else if (method == 1 && strncmp(path, "/focus/move", 11) == 0) {
@@ -1388,12 +1421,12 @@ static void handle_request_inner(aether_sock_t client_fd,
                     strcmp(dir, "prev") == 0 || strcmp(dir, "previous") == 0 ||
                     strcmp(dir, "shift_tab") == 0) ? 1 : 0;
         if (!h->dispatch_action || !h->focused_widget) {
-            send_http(client_fd, 501, "Not Implemented", "application/json",
+            send_http(out, 501, "Not Implemented", "application/json",
                       "{\"error\":\"focus order not wired on this backend\"}");
         } else {
             h->dispatch_action(&ctx);
             if (ctx.result == 3) {
-                send_http(client_fd, 501, "Not Implemented", "application/json",
+                send_http(out, 501, "Not Implemented", "application/json",
                           "{\"error\":\"focus order not wired on this backend\"}");
             } else {
                 // Asked of the UI thread by the backend when it can (AppKit's first responder is
@@ -1409,14 +1442,14 @@ static void handle_request_inner(aether_sock_t client_fd,
                     n += widget_to_json(h, fh, wbody + n, (int)sizeof(wbody) - n - 4);
                 }
                 snprintf(wbody + n, sizeof(wbody) - n, "}");
-                send_http(client_fd, 200, "OK", "application/json", wbody);
+                send_http(out, 200, "OK", "application/json", wbody);
             }
         }
     } else if (method == 1 && strstr(path, "/widget/") && strstr(path, "/focus")) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_FOCUS;
         ctx.handle = extract_id_from_path(path, "/widget/");
-        dispatch_and_reply(client_fd, h, &ctx, "focused");
+        dispatch_and_reply(out, h, &ctx, "focused");
     } else if (method == 1 && strncmp(path, "/window/resize", 14) == 0) {
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_WIN_RESIZE;
@@ -1426,9 +1459,9 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.ival2 = hs ? atoi(hs) : 0;
         if (ctx.ival > 0 && ctx.ival2 > 0) {
             h->dispatch_action(&ctx);
-            send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+            send_http(out, 200, "OK", "application/json", "{\"ok\":true}");
         } else {
-            send_http(client_fd, 400, "Bad Request", "application/json",
+            send_http(out, 400, "Bad Request", "application/json",
                       "{\"error\":\"need w>0, h>0\"}");
         }
     } else if (method == 1 && strncmp(path, "/window/key", 11) == 0) {
@@ -1447,7 +1480,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}",
                  ctx.retval ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strncmp(path, "/window/pick", 12) == 0) {
         // GET /window/pick?x=&y= — a REAL hit-test at window-local coords.
         // This is what proves a modal scrim blocks input by z-order rather
@@ -1461,7 +1494,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         ctx.ival2 = ys ? atoi(ys) : 0;
         h->dispatch_action(&ctx);
         if (ctx.result == 3) {
-            send_http(client_fd, 501, "Not Implemented", "application/json",
+            send_http(out, 501, "Not Implemented", "application/json",
                       "{\"error\":\"window pick not wired on this backend\"}");
         } else {
             char body[160];
@@ -1471,7 +1504,7 @@ static void handle_request_inner(aether_sock_t client_fd,
                      ctx.ival2 ? "scrim"
                                : (ctx.retval > 0 ? h->widget_type(ctx.retval) : "none"),
                      ctx.ival2 ? 1 : 0);
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         }
     } else if (method == 0 && strncmp(path, "/text_extent", 12) == 0) {
         // GET /text_extent?size=&s= — the metrics vg.text_extent() reports.
@@ -1489,7 +1522,7 @@ static void handle_request_inner(aether_sock_t client_fd,
                  aether_ui_font_ascent(size),
                  aether_ui_font_descent(size),
                  aether_ui_font_height(size));
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/window/filedrop", 16) == 0) {
         // A real drag cannot be synthesised on a headless machine, so the
         // driver hands the SAME closure a real drop would. paths= is
@@ -1503,7 +1536,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         int fired = aether_ui_window_file_drop_deliver(decoded);
         char body[64];
         snprintf(body, sizeof(body), "{\"fired\":%s}", fired ? "true" : "false");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 0 && strcmp(path, "/overlays") == 0) {
         // Overlay handles are 1-based and monotonic; the table is never
         // compacted, so a closed overlay stays listed with "live":0. Specs
@@ -1523,12 +1556,12 @@ static void handle_request_inner(aether_sock_t client_fd,
                             aether_ui_overlay_material_effective_impl(i));
         }
         snprintf(body + pos, sizeof(body) - pos, "]}");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
     } else if (method == 1 && strncmp(path, "/overlay/", 9) == 0
                && strstr(path, "/dismiss")) {
         int id = extract_id_from_path(path, "/overlay/");
         aether_ui_overlay_close_impl(id);
-        send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+        send_http(out, 200, "OK", "application/json", "{\"ok\":true}");
     } else if (method == 1 && strncmp(path, "/canvas/", 8) == 0) {
         // POST /canvas/{id}/click|rightclick|dblclick|move|release|key — drive the canvas's
         // registered hit-test closures. A backend with no handler answers 404,
@@ -1571,7 +1604,7 @@ static void handle_request_inner(aether_sock_t client_fd,
             ctx.action = AETHER_DRV_CANVAS_KEY;
             what = "no canvas key handler";
         } else {
-            send_http(client_fd, 400, "Bad Request", "application/json",
+            send_http(out, 400, "Bad Request", "application/json",
                       "{\"error\":\"unknown canvas action\"}");
             return;
         }
@@ -1610,13 +1643,13 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (ctx.result == 3) {
             char err[96];
             snprintf(err, sizeof(err), "{\"error\":\"%s\"}", what);
-            send_http(client_fd, 404, "Not Found", "application/json", err);
+            send_http(out, 404, "Not Found", "application/json", err);
         } else if (right) {
             char body[64];
             snprintf(body, sizeof(body), "{\"ok\":true,\"popup\":%d}", aether_ui_last_popup_menu);
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         } else {
-            send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+            send_http(out, 200, "OK", "application/json", "{\"ok\":true}");
         }
     } else if (method == 1 && strcmp(path, "/shutdown") == 0) {
         // Reply BEFORE closing: the app exits by the same path a user-close
@@ -1624,7 +1657,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         // leaves a zombie holding 9222 and the next suite in the matrix
         // interrogates the previous app — a whole family of impossible
         // failures.
-        send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+        send_http(out, 200, "OK", "application/json", "{\"ok\":true}");
         AetherDriverActionCtx ctx = {0};
         ctx.action = AETHER_DRV_SHUTDOWN;
         h->dispatch_action(&ctx);
@@ -1669,9 +1702,9 @@ static void handle_request_inner(aether_sock_t client_fd,
                 snprintf(body, sizeof(body), "{\"id\":%d,\"value\":%.6f}",
                          id, aether_ui_state_get(id));
             }
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         } else {
-            send_http(client_fd, 404, "Not Found", "application/json",
+            send_http(out, 404, "Not Found", "application/json",
                       "{\"error\":\"state not found\"}");
         }
     } else if (method == 1 && strstr(path, "/state/") && strstr(path, "/set")) {
@@ -1681,7 +1714,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (query_param_decoded(path, "v", ctx.sval, sizeof(ctx.sval), 1))
             ctx.dval = atof(ctx.sval);
         h->dispatch_action(&ctx);
-        send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+        send_http(out, 200, "OK", "application/json", "{\"ok\":true}");
 
     // --- /menus ---
     // GET  /menus                          → every menu with its item labels
@@ -1703,13 +1736,13 @@ static void handle_request_inner(aether_sock_t client_fd,
                 aether_ui_window_is_open_impl(i) ? "true" : "false");
         }
         sprintf(body + pos, "]");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 1 && strncmp(path, "/window/", 8) == 0
                && strstr(path, "/close")) {
         int id = extract_id_from_path(path, "/window/");
         aether_ui_close_window_by_handle_impl(id);
-        send_http(client_fd, 200, "OK", "application/json", "{\"ok\":true}");
+        send_http(out, 200, "OK", "application/json", "{\"ok\":true}");
     } else if (method == 0 && strcmp(path, "/menus") == 0) {
         int handles[64];
         int nh = aether_ui_menu_handles(handles, 64);
@@ -1747,7 +1780,7 @@ static void handle_request_inner(aether_sock_t client_fd,
             pos += sprintf(body + pos, "]}");
         }
         sprintf(body + pos, "]");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 1 && strncmp(path, "/menu/", 6) == 0
                && strstr(path, "/native_activate")) {
@@ -1763,15 +1796,15 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (!h->dispatch_action) ctx.result = 3;
         else h->dispatch_action(&ctx);
         if (ctx.result == 3)
-            send_http(client_fd, 501, "Not Implemented", "text/plain",
+            send_http(out, 501, "Not Implemented", "text/plain",
                       "no native menu on this backend");
         else if (ctx.retval == 0)
-            send_http(client_fd, 200, "OK", "application/json",
+            send_http(out, 200, "OK", "application/json",
                       "{\"ok\":true,\"native\":true}");
         else if (ctx.retval == 4)
-            send_http(client_fd, 409, "Conflict", "text/plain",
+            send_http(out, 409, "Conflict", "text/plain",
                       "menu item has no bound native action");
-        else send_http(client_fd, 404, "Not Found", "text/plain",
+        else send_http(out, 404, "Not Found", "text/plain",
                        "no such menu item");
     } else if (method == 1 && strncmp(path, "/menu/", 6) == 0
                && strstr(path, "/activate")) {
@@ -1784,11 +1817,11 @@ static void handle_request_inner(aether_sock_t client_fd,
         int r = activate_on_ui_thread(h, AETHER_DRV_MENU_ACTIVATE,
                                       handle, label);
         if (r < 0) r = aether_ui_menu_item_invoke(handle, label);
-        if (r == 0) send_http(client_fd, 200, "OK", "application/json",
+        if (r == 0) send_http(out, 200, "OK", "application/json",
                               "{\"ok\":true}");
-        else if (r == 4) send_http(client_fd, 200, "OK", "application/json",
+        else if (r == 4) send_http(out, 200, "OK", "application/json",
                               "{\"ok\":true,\"noClosure\":true}");
-        else send_http(client_fd, 404, "Not Found", "text/plain",
+        else send_http(out, 404, "Not Found", "text/plain",
                        "no such menu item");
 
     // --- /tray ---
@@ -1816,17 +1849,17 @@ static void handle_request_inner(aether_sock_t client_fd,
                 aether_ui_tray_is_sealed(i)   ? "true" : "false");
         }
         sprintf(body + pos, "]");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 0 && strncmp(path, "/tray/", 6) == 0
                && strstr(path, "/icon")) {
         int id = extract_id_from_path(path, "/tray/");
         const char* icon = aether_ui_tray_current_icon(id);
-        send_http(client_fd, 200, "OK", "text/plain", icon);
+        send_http(out, 200, "OK", "text/plain", icon);
     } else if (method == 0 && strncmp(path, "/tray/", 6) == 0) {
         int id = extract_id_from_path(path, "/tray/");
         if (id < 1 || id > aether_ui_tray_count()) {
-            send_http(client_fd, 404, "Not Found", "text/plain", "tray not found");
+            send_http(out, 404, "Not Found", "text/plain", "tray not found");
         } else {
             char body[1024];
             snprintf(body, sizeof(body),
@@ -1838,17 +1871,17 @@ static void handle_request_inner(aether_sock_t client_fd,
                 aether_ui_tray_current_icon(id),
                 aether_ui_tray_is_template(id) ? "true" : "false",
                 aether_ui_tray_is_sealed(id)   ? "true" : "false");
-            send_http(client_fd, 200, "OK", "application/json", body);
+            send_http(out, 200, "OK", "application/json", body);
         }
     } else if (method == 1 && strncmp(path, "/tray/", 6) == 0
                && strstr(path, "/click")) {
         int id = extract_id_from_path(path, "/tray/");
         int r = aether_ui_tray_emit_click(id);
-        if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "clicked");
-        else if (r == 1) send_http(client_fd, 403, "Forbidden", "text/plain",
+        if (r == 0) send_http(out, 200, "OK", "text/plain", "clicked");
+        else if (r == 1) send_http(out, 403, "Forbidden", "text/plain",
                                     "tray is sealed");
-        else if (r == 4) send_http(client_fd, 204, "No Content", "text/plain", "");
-        else send_http(client_fd, 404, "Not Found", "text/plain", "tray not found");
+        else if (r == 4) send_http(out, 204, "No Content", "text/plain", "");
+        else send_http(out, 404, "Not Found", "text/plain", "tray not found");
     } else if (method == 1 && strncmp(path, "/tray/", 6) == 0
                && strstr(path, "/menu/activate")) {
         int id = extract_id_from_path(path, "/tray/");
@@ -1856,18 +1889,18 @@ static void handle_request_inner(aether_sock_t client_fd,
         query_param_decoded(path, "label", label, sizeof(label), 1);
         int r = activate_on_ui_thread(h, AETHER_DRV_TRAY_ACTIVATE, id, label);
         if (r < 0) r = aether_ui_tray_menu_activate(id, label);
-        if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "activated");
-        else if (r == 1) send_http(client_fd, 403, "Forbidden", "text/plain",
+        if (r == 0) send_http(out, 200, "OK", "text/plain", "activated");
+        else if (r == 1) send_http(out, 403, "Forbidden", "text/plain",
                                     "tray is sealed");
-        else if (r == 4) send_http(client_fd, 204, "No Content", "text/plain", "");
-        else send_http(client_fd, 404, "Not Found", "text/plain", "item not found");
+        else if (r == 4) send_http(out, 204, "No Content", "text/plain", "");
+        else send_http(out, 404, "Not Found", "text/plain", "item not found");
     } else if (method == 1 && strncmp(path, "/tray/", 6) == 0
                && strstr(path, "/set_tooltip")) {
         int id = extract_id_from_path(path, "/tray/");
         char text[256] = "";
         query_param_decoded(path, "v", text, sizeof(text), 1);
         aether_ui_tray_set_tooltip_reg(id, text);
-        send_http(client_fd, 200, "OK", "text/plain", "set");
+        send_http(out, 200, "OK", "text/plain", "set");
 
     // --- /frame_clock ---
     // GET /frame_clock → {"source":S,"frames":N,"subscribers":K,"running":R}:
@@ -1882,7 +1915,7 @@ static void handle_request_inner(aether_sock_t client_fd,
                  "{\"source\":\"%s\",\"frames\":%d,\"subscribers\":%d,\"running\":%d}",
                  aether_ui_frame_source_impl(), aether_ui_frame_count_impl(),
                  aether_ui_frame_subscribers_impl(), aether_ui_frame_running_impl());
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
 
     // --- /clipboard ---
     // GET /clipboard → the headless clipboard's text (text/plain);
@@ -1894,17 +1927,17 @@ static void handle_request_inner(aether_sock_t client_fd,
     // Otherwise: 409.
     } else if (strcmp(path, "/clipboard") == 0 || strncmp(path, "/clipboard?", 11) == 0) {
         if (!aether_ui_clipboard_is_headless()) {
-            send_http(client_fd, 409, "Conflict", "text/plain", "the clipboard is the system's unless AETHER_UI_HEADLESS or AETHER_UI_TEST_CLIPBOARD is set");
+            send_http(out, 409, "Conflict", "text/plain", "the clipboard is the system's unless AETHER_UI_HEADLESS or AETHER_UI_TEST_CLIPBOARD is set");
         } else if (method == 0) {
             char* t = aether_ui_clipboard_headless_read();
-            send_http(client_fd, 200, "OK", "text/plain", t);
+            send_http(out, 200, "OK", "text/plain", t);
             free(t);
         } else {
             char* text = (char*)calloc(1, 65536);
             query_param_decoded(path, "text", text, 65536, 1);
             aether_ui_clipboard_headless_write(text);
             free(text);
-            send_http(client_fd, 200, "OK", "text/plain", "set");
+            send_http(out, 200, "OK", "text/plain", "set");
         }
 
     // --- /opened_urls ---
@@ -1929,7 +1962,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         }
         body[pos++] = ']';
         body[pos] = '\0';
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 0 && strcmp(path, "/opened_urls") == 0) {
         int n = aether_ui_opened_url_count();
@@ -1944,7 +1977,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         }
         body[pos++] = ']';
         body[pos] = '\0';
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
 
     // --- /prompts ---
@@ -1964,14 +1997,14 @@ static void handle_request_inner(aether_sock_t client_fd,
         if (r == 0) {
             char ok[64];
             snprintf(ok, sizeof(ok), "{\"queued\":%d}", aether_ui_prompt_queued(kind));
-            send_http(client_fd, 200, "OK", "application/json", ok);
+            send_http(out, 200, "OK", "application/json", ok);
         } else if (r == -2) {
-            send_http(client_fd, 400, "Bad Request", "text/plain",
+            send_http(out, 400, "Bad Request", "text/plain",
                       "an alert takes no answer; it is recorded in GET /prompts");
         } else if (r == -3) {
-            send_http(client_fd, 409, "Conflict", "text/plain", "answer queue full");
+            send_http(out, 409, "Conflict", "text/plain", "answer queue full");
         } else {
-            send_http(client_fd, 400, "Bad Request", "text/plain",
+            send_http(out, 400, "Bad Request", "text/plain",
                       "kind must be open, save or folder");
         }
 
@@ -2007,7 +2040,7 @@ static void handle_request_inner(aether_sock_t client_fd,
         }
         body[pos++] = ']';
         body[pos] = '\0';
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
 
     // --- /notifications ---
@@ -2025,28 +2058,26 @@ static void handle_request_inner(aether_sock_t client_fd,
                 aether_ui_notif_dismissed(i) ? "true" : "false");
         }
         sprintf(body + pos, "]");
-        send_http(client_fd, 200, "OK", "application/json", body);
+        send_http(out, 200, "OK", "application/json", body);
         free(body);
     } else if (method == 1 && strncmp(path, "/notifications/", 15) == 0
                && strstr(path, "/click")) {
         int id = extract_id_from_path(path, "/notifications/");
         int r = aether_ui_notif_emit_click(id);
-        if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "clicked");
-        else if (r == 4) send_http(client_fd, 204, "No Content", "text/plain", "");
-        else send_http(client_fd, 404, "Not Found", "text/plain", "notification not found");
+        if (r == 0) send_http(out, 200, "OK", "text/plain", "clicked");
+        else if (r == 4) send_http(out, 204, "No Content", "text/plain", "");
+        else send_http(out, 404, "Not Found", "text/plain", "notification not found");
     } else if (method == 1 && strncmp(path, "/notifications/", 15) == 0
                && strstr(path, "/dismiss")) {
         int id = extract_id_from_path(path, "/notifications/");
         int r = aether_ui_notif_mark_dismissed(id);
-        if (r == 0) send_http(client_fd, 200, "OK", "text/plain", "dismissed");
-        else send_http(client_fd, 404, "Not Found", "text/plain", "notification not found");
+        if (r == 0) send_http(out, 200, "OK", "text/plain", "dismissed");
+        else send_http(out, 404, "Not Found", "text/plain", "notification not found");
 
     } else {
-        send_http(client_fd, 404, "Not Found", "text/plain",
+        send_http(out, 404, "Not Found", "text/plain",
                   "unknown endpoint");
     }
-
-    aether_close_socket(client_fd);
 }
 
 // ---------------------------------------------------------------------------
