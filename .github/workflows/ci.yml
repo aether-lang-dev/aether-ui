@@ -239,7 +239,13 @@ jobs:
       # pattern compiles; 0.840.0 and older cannot parse `@keep` in a
       # function type. Verified: ci.sh on macOS and the aether-linux lane
       # against 0.841.0.
-      AETHER_REF: ${{ vars.AETHER_REF || 'v0.914.0' }}
+      # v0.931.0 (2026-11-20): a tracking move, no new primitive needed and no
+      # source change (the floor stays bootstrap.sh's MIN_AE, 0.841.0).
+      # Verified: ci.sh on ae-x64 (Ubuntu 22.04 x86_64, xvfb, a loaded 4-core
+      # host) with aeb v0.347: every phase passed except 5e4a3 (cssbatch_demo's
+      # "applied by under 100 ms" check, 143 to 204 ms there), which fails the
+      # same way on 0.923.0 on that host, so it is the host's speed.
+      AETHER_REF: ${{ vars.AETHER_REF || 'v0.931.0' }}
       # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
       # verified building the whole fan-out under it (full matrix green).
       # Strict forward move from v0.296. aeb is not implicated in any of the
