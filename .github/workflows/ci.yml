@@ -245,7 +245,11 @@ jobs:
       # host) with aeb v0.347: every phase passed except 5e4a3 (cssbatch_demo's
       # "applied by under 100 ms" check, 143 to 204 ms there), which fails the
       # same way on 0.923.0 on that host, so it is the host's speed.
-      AETHER_REF: ${{ vars.AETHER_REF || 'v0.931.0' }}
+      # v0.933.0 (2026-11-21): a tracking move again, no new primitive needed and no
+      # source change (the floor stays bootstrap.sh's MIN_AE, 0.841.0). Verified:
+      # ci.sh on cachyos (rolling Linux, xvfb, aeb v0.349): CI result, all phases
+      # passed; Phase 7's LisMusic spec skips there (no libaether_sqlite).
+      AETHER_REF: ${{ vars.AETHER_REF || 'v0.933.0' }}
       # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
       # verified building the whole fan-out under it (full matrix green).
       # Strict forward move from v0.296. aeb is not implicated in any of the
