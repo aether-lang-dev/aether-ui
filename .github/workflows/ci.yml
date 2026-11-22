@@ -255,7 +255,10 @@ jobs:
       # and 0.935.0 (the receiver rule that now puts a name the program binds before a
       # trailing block's receiver export changes none of them), so the `cb` setter
       # rename that rule once forced is not needed either. Verified: see the commit.
-      AETHER_REF: ${{ vars.AETHER_REF || 'v0.935.0' }}
+      # v0.936.0 (2026-11-22): a tracking move again, no new primitive needed and no
+      # source change (the floor stays bootstrap.sh's MIN_AE, 0.841.0). Verified: see
+      # the commit.
+      AETHER_REF: ${{ vars.AETHER_REF || 'v0.936.0' }}
       # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
       # verified building the whole fan-out under it (full matrix green).
       # Strict forward move from v0.296. aeb is not implicated in any of the
