@@ -286,6 +286,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **macOS: closing the last window, Quit, or the driver's `/shutdown`
+  returns from `window()`, as GTK's run does.** AppKit's `terminate:` called
+  `exit()` from inside the run loop, so whatever a program did after its
+  window closed, its state saved say, ran on GTK and never on macOS. The app
+  delegate's `applicationShouldTerminate:` now stops the loop
+  (`aether_ui_app_quit_impl`) and cancels the terminate: `[app run]` returns,
+  the program goes on from its `window()` and ends itself. Verified with an
+  app that saves its state as its window closes: by the driver's
+  `/window/1/close` and by `/shutdown`, the state was written and the
+  process ended.
+
 - **Driver: an answer is written from the HTTP thread, never from the UI
   thread.** Every backend services a request on the UI thread
   (`run_on_ui_thread`), and the handlers wrote the answer there, so a large

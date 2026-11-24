@@ -850,6 +850,17 @@ static NSLayoutConstraint* aeui_win_cap_h = nil;
     }
 }
 
+// The last window closed, Quit, or the driver's /shutdown: the run loop
+// stops and [app run] returns to the program, which goes on from its
+// window() and ends itself, as g_application_run returns on GTK. AppKit's
+// own terminate: exit()s inside the loop, so what a program does after its
+// window closes, its state saved say, never ran on macOS alone.
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
+    (void)sender;
+    aether_ui_app_quit_impl();
+    return NSTerminateCancel;
+}
+
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
     (void)sender;
     // Headless apps are driven by the test server and exit via /shutdown, never
