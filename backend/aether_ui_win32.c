@@ -6729,6 +6729,9 @@ void aether_ui_set_border(int handle, double width, double r, double g, double b
 
 // (width<<24) | flag | rgb, or -1 when unset — mirrors the GTK4 encoding so
 // /widgets JSON reads identically on every backend.
+// No style sheets here: each style call styles its widget directly.
+int aether_ui_style_loads_impl(void) { return 0; }
+
 int aether_ui_styled_border_impl(int handle) {
     Widget* w = widget_at(handle);
     if (!w || !w->border_set) return -1;

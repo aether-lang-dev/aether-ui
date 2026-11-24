@@ -4292,6 +4292,9 @@ void aether_ui_set_border(int handle, double width, double r, double g, double b
 }
 
 // (width<<24) | flag | rgb, or -1 — same encoding as GTK4/win32.
+// No style sheets here: each style call styles its widget directly.
+int aether_ui_style_loads_impl(void) { return 0; }
+
 int aether_ui_styled_border_impl(int handle) {
     NSView* v = (__bridge NSView*)aether_ui_get_widget(handle);
     if (!v) return -1;

@@ -6004,6 +6004,9 @@ int aether_ui_styled_opacity_impl(int handle) {
     NSNumber* n = objc_getAssociatedObject(v, "aeui_styled_opacity");
     return (n && n.intValue > 0) ? n.intValue - 1 : -1;
 }
+// No style sheets here: each style call styles its widget directly.
+int aether_ui_style_loads_impl(void) { return 0; }
+
 int aether_ui_styled_border_impl(int handle) {
     UIView* v = (__bridge UIView*)aether_ui_get_widget(handle);
     if (!v) return -1;

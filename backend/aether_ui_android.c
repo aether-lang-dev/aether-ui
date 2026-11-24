@@ -3016,6 +3016,9 @@ int aether_ui_styled_bg_impl(int handle) {
 }
 int aether_ui_styled_fg_impl(int handle) { AeuiWidget* w = live_widget(handle); return w ? w->styled_fg : -1; }
 int aether_ui_styled_opacity_impl(int handle) { AeuiWidget* w = live_widget(handle); return w ? w->styled_opacity : -1; }
+// No style sheets here: each style call styles its widget directly.
+int aether_ui_style_loads_impl(void) { return 0; }
+
 int aether_ui_styled_border_impl(int handle) { AeuiWidget* w = live_widget(handle); return w ? w->styled_border : -1; }
 const char* aether_ui_styled_weight_impl(int handle) {
     AeuiWidget* w = live_widget(handle);

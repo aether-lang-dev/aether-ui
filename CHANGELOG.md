@@ -253,6 +253,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`tests/cssbatch_demo` holds a restyle to its sheet loads, not to a time.**
+  The spec asserted that a 500-label restyle reached the next timer tick
+  within 100 ms; on a busy ae-x64 it took 40 to 220 ms while the batching
+  worked (64 sheet loads, 20 to 70 ms of GTK parsing there, plus waits for the
+  CPU), and ~18 ms idle on cachyos. The GTK4 backend now counts loads of its
+  style-rule sheets and the driver reports them (`GET /style_loads` ->
+  `{"loads":N}`; AppKit, Win32, UIKit and Android have no sheets and report
+  0), and each round is held to 1 to 64 loads, where a reload per rule was
+  3,000. The times are still reported.
+
 - **`datagrid` is written declaratively.** `datagrid(rows, cols, vis_rows,
   vis_cols, frozen) { ... }`: the grid is the receiver of its block, as a
   button is of its own, with verbs `cells()`, `headers()`, `column_width()`,

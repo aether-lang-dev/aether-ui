@@ -3364,6 +3364,9 @@ static unsigned css_bucket(const char* text) {
 // app_start, a headless program) there is no idle to wait for, and it loads
 // at once.
 static guint css_flush_source = 0;
+static int css_loads = 0;   // sheets loaded so far (aether_ui_style_loads_impl)
+
+int aether_ui_style_loads_impl(void) { return css_loads; }
 
 static void global_css_flush(void) {
     if (css_flush_source) { g_source_remove(css_flush_source); css_flush_source = 0; }
@@ -3410,6 +3413,7 @@ static void global_css_flush(void) {
                 GTK_STYLE_PROVIDER_PRIORITY_USER);
         }
         gtk_css_provider_load_from_data(css_provider[b], now, -1);
+        css_loads++;
         g_free(css_loaded[b]);
         css_loaded[b] = g_strdup(now);
     }

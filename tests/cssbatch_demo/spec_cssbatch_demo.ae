@@ -1,14 +1,22 @@
 // spec_cssbatch_demo.ae -- restyling a page of widgets from one handler costs one
 // load of the style sheets per sheet touched, not one per rule.
 //
-// The demo reports the handler's own time and the time until the next timer
-// tick (after the backend has loaded what the handler changed): 500 labels on GTK4,
-// eight style properties each. Reloading per rule took 0.2 to 0.35 s on an Apple
-// core (GTK 4.6 in a container, the first round the quickest) and several seconds
-// on the x86_64 lab host; batched it is 16 to 21 ms on the one and tens of
-// milliseconds on the other, so 100 ms is a bound the old behaviour cannot meet
-// and the new one meets with room to spare. AppKit and Win32 have no sheets to
-// reload; they are held to the colours only.
+// The demo restyles 500 labels on GTK4 from one button's handler, eight style
+// calls a label, six of them sheet rules. GTK4 keeps the rules in 64 sheets
+// (AEUI_CSS_BUCKETS), so a round is held to at most 64 loads, counted by the
+// backend (GET /style_loads). Loading per rule set (global_css_reload
+// flushing at once, as before 223a78e9) is 3,000 loads a round here, and this
+// spec fails on it (checked on ae-x64, 2026-11-24), so the count tells the
+// two apart on any host, however busy.
+//
+// It used to be held to a time instead (the next timer tick within 100 ms of
+// the handler), and that failed on a busy lab host while the batching was
+// working: on ae-x64 (four cores, another agent's GPU benchmarks running)
+// the 64 loads took 20 to 70 ms of parsing, and waits for the CPU between
+// the handler, the loads and the tick added as much again, so rounds took
+// 40 to 220 ms; idle, the same build takes ~18 ms on cachyos (N100). Neither
+// time says how many loads there were. The times are still reported.
+// AppKit, Win32, UIKit and Android have no sheets: 0 loads a round there.
 //
 // Also asserted, so that batching has not dropped a rule: the colour the
 // driver reports on the first and last label after each round.
@@ -36,22 +44,31 @@ ms_after(body: string, marker: string) -> int {
     return n
 }
 
+// Style sheet loads so far, -1 if the driver does not say.
+style_loads() -> int {
+    n, err = string.to_int(between(uidriver.get_body("/style_loads"), "\"loads\":", "}"))
+    if string.length(err) > 0 { return -1 }
+    return n
+}
+
 round_(btn: int, n: int, bg: string) {
+    before = style_loads()
     uidriver.click_widget(btn)
     spec.assert_true(uidriver.wait_body_contains("/widgets", "restyle #${n} [", 200), "round ${n}: reported")
+    // The demo reports at the first timer tick after the handler, and the
+    // loads run before any timer (a high-priority idle), so they are done.
+    loads = style_loads() - before
     body = uidriver.get_body("/widgets")
     backend = between(body, "restyle #${n} [", "]")
     rows, _re = string.to_int(between(body, "]: ", " labels"))
     total = ms_after(body, "applied by ")
     handler = ms_after(body, "handler ")
-    // GTK4 reloaded a sheet per rule; AppKit and Win32 have no sheets, and
-    // Win32's own cost per style call (about 25 ms: 100 s for the GTK demo's
-    // 4,000) is not what this is about, so only GTK4 is held to a time. The
-    // others are held to the colours below.
+    spec.assert_true(before >= 0, "round ${n}: GET /style_loads answers")
     if string.equals(backend, "gtk4") == 1 {
-        spec.assert_true(total >= 0 && total < 100, "round ${n}: handler ${handler} ms, applied by ${total} ms (under 100)")
+        spec.assert_true(loads >= 1 && loads <= 64,
+            "round ${n}: ${loads} sheet loads for ${rows} labels (1 to 64; a load per rule set was 3,000), handler ${handler} ms, applied by ${total} ms")
     } else {
-        spec.assert_true(total >= 0, "round ${n} on ${backend}: applied after ${total} ms (no bound: no sheets to reload)")
+        spec.assert_true(loads == 0, "round ${n} on ${backend}: ${loads} sheet loads (no sheets), applied after ${total} ms")
     }
     first = uidriver.widget_id_of("text", "row 0")
     last = uidriver.widget_id_of("text", "row ${rows - 1}")
@@ -65,7 +82,7 @@ main() {
     uidriver.wait_server()
 
     spec.describe(fw, "restyling a page in one callback") {
-        spec.it("is applied soon after the handler returns, turned one way and the other") callback {
+        spec.it("is one load per sheet touched, not one per rule, turned one way and the other") callback {
             btn = uidriver.widget_id_of("button", "Restyle")
             spec.assert_true(btn > 0, "the Restyle button")
             round_(btn, 1, "#333333")

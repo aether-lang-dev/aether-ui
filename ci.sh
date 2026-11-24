@@ -1483,9 +1483,11 @@ fi
 
 echo
 echo "=== Phase 5e4a3: restyling a page in one callback is one load of the sheets ==="
-# 500 labels (eight properties each) restyled from one handler: the handler returns, and the next
-# timer tick runs, in tens of milliseconds, not a sheet reload per rule (GTK4:
-# 0.3-3 s, which is what turned a spreadsheet's dark mode into 2.4 s on ae-x64).
+# 500 labels (eight properties each) restyled from one handler: at most one load
+# of each of GTK4's 64 sheets a round, counted by the backend (GET /style_loads),
+# not a sheet reload per rule (3,000 loads, 0.3-3 s, which is what turned a
+# spreadsheet's dark mode into 2.4 s on ae-x64). Held to the count, not a time:
+# a busy host stretched the old 100 ms bound while the batching worked.
 if [ "$SPEC_OK" -eq 1 ]; then
     UI_SPEC=cssbatch_demo/spec_cssbatch_demo \
     run_server_test "$(EX_BIN cssbatch_demo)" \

@@ -1917,6 +1917,17 @@ static void handle_request_inner(AeuiReply* out,
                  aether_ui_frame_subscribers_impl(), aether_ui_frame_running_impl());
         send_http(out, 200, "OK", "application/json", body);
 
+    // --- /style_loads ---
+    // GET /style_loads -> {"loads":N}: how many times the sheets holding the
+    // widgets' style rules have been loaded (aether_ui_style_loads_impl; 0
+    // where a backend has no sheets). A spec reads it before and after a
+    // restyle to prove the rules were loaded once per sheet, not once per
+    // rule, which no wall-clock time can show on a loaded host.
+    } else if (method == 0 && strcmp(path, "/style_loads") == 0) {
+        char body[64];
+        snprintf(body, sizeof(body), "{\"loads\":%d}", aether_ui_style_loads_impl());
+        send_http(out, 200, "OK", "application/json", body);
+
     // --- /clipboard ---
     // GET /clipboard → the headless clipboard's text (text/plain);
     // POST /clipboard?text=T → set it (URL-decoded, as /prompts/answer's

@@ -263,6 +263,14 @@ const char* aether_ui_styled_font_family_impl(int handle);   // "" unset
 const char* aether_ui_styled_weight_impl(int handle);        // ""/"bold"/"normal"
 int aether_ui_styled_opacity_impl(int handle);               // 0..100, -1 unset
 int aether_ui_styled_border_impl(int handle);                // (w<<24)|flag|rgb, -1 unset
+/* Loads of the sheets that hold the widgets' own style rules (style_bg_color,
+ * style_border and the rest), since the process started: GTK4 keeps those
+ * rules in CSS sheets and counts each load of one (a load parses the sheet,
+ * and GTK restyles every widget on the display for it). AppKit, Win32, UIKit
+ * and Android style each widget directly and have no sheets: always 0. Read
+ * by the driver's GET /style_loads, so a spec can hold a restyle to its
+ * loads rather than to a wall-clock time. */
+int aether_ui_style_loads_impl(void);
 int aether_ui_state_style_impl(int handle, int state);       // 0=hover 1=active, rgb or -1
 
 // AeCS v1.2 — current sheet (use_styles: constructors consult it) +

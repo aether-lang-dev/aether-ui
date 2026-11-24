@@ -10,9 +10,10 @@
 //
 // This restyles 500 labels, eight properties each, from one button's handler and reports how long
 // the handler took, and how long until the next timer tick (which is after
-// the backend has loaded what the handler changed). The spec asserts a bound
-// a per-rule reload cannot meet on any host the toolkit is tested on and a
-// batched one meets on the slowest.
+// the backend has loaded what the handler changed). The spec holds each round
+// to the backend's count of sheet loads (GET /style_loads: at most one per
+// sheet, where a reload per rule was 3,000), not to those times, which a busy
+// host stretches whatever the count.
 import ui
 import ui (backend_name, window, vstack, text, btn, scrollview, timer, set_text,
     style_bg_color, style_text_color, style_font_size, style_border, style_corner_radius,
