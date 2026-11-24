@@ -263,7 +263,14 @@ jobs:
       # std.http.client's process-wide pool; the driver client in tests/lib/uidriver.ae
       # and the apps' few requests are plain requests to a loopback server and keep
       # them. Verified: see the commit.
-      AETHER_REF: ${{ vars.AETHER_REF || 'v0.939.0' }}
+      # v0.941.0 (2026-11-24): tracking-only, no new primitive needed and no source
+      # change (the floor stays bootstrap.sh's MIN_AE, 0.841.0). 0.940.0's HTTP client
+      # and reverse-proxy changes (a failed read retried only for idempotent methods,
+      # one timeout for a silent pooled connection, the reworded "... before the
+      # response arrived" errors) touch nothing here: the driver client in
+      # tests/lib/uidriver.ae only makes loopback requests and matches no error text.
+      # Verified: see the commit.
+      AETHER_REF: ${{ vars.AETHER_REF || 'v0.941.0' }}
       # v0.297 (2026-09-06), bumped alongside the aether v0.645.0 move and
       # verified building the whole fan-out under it (full matrix green).
       # Strict forward move from v0.296. aeb is not implicated in any of the
