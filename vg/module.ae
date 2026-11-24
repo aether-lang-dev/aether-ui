@@ -1,3 +1,32 @@
+// The DSL shape: a word as a live path element. All path modifiers apply.
+text_path(_ctx: ptr, x: float, y: float, size: float, txt: string) -> ptr {
+    n = path(_ctx, text_paths(txt, x, y, size))
+    _text_path_words(_ctx, txt)
+    return n
+}
+
+// text_path in a font of the caller's own (font_open).
+text_path_in(_ctx: ptr, fh: ptr, x: float, y: float, size: float, txt: string) -> ptr {
+    n = path(_ctx, text_paths_in(fh, txt, x, y, size))
+    _text_path_words(_ctx, txt)
+    return n
+}
+
+// Outlines are still words: a deferred scene keeps them with the path just
+// recorded, so the driver's GET /canvas/{id}/nodes reads them as it reads a
+// text().
+_text_path_words(_ctx: ptr, txt: string) {
+    scene = node_scene(_ctx)
+    if scene_is_deferred(scene) == 1 {
+        s = scene as *VgScene
+        last, _e = list.get(s.pending, list.size(s.pending) - 1)
+        p = last as *VgPending
+        cc = string.copy(txt)
+        string_retain(cc)
+        p.content = cc
+    }
+}
+
 // aevg/vg.ae — the SVG-like declarative drawing DSL ("DSL with Scope").
 //
 // `vg(view_box(…), w, h) { … }` opens a vector-graphics scene inside any
@@ -44,8 +73,9 @@ exports (
     // and the same three from anywhere later, by the node image() returned.
     image, image_pixels, image_bytes, image_bytes_str, image_fit, image_rendering,
     image_set_pixels, image_set_bytes, image_set_fit, image_pixel_w, image_pixel_h, image_box,
-    use_font, typeface, text_paths, text_paths_width, text_paths_ascent, text_paths_descent, text_path, text_path_anchored,
-    text_polypath,
+    use_font, typeface, text_paths, text_paths_width, text_paths_ascent, text_paths_descent,
+    font_open, text_paths_in, text_path_in, text_paths_width_in, text_paths_ascent_in, text_paths_descent_in, text_path, text_path_anchored,
+    text_polypath, text_polypath_in,
     fill, stroke, opacity, transform, linecap, linejoin,
     // Definitions and CSS for the scene; a shape's clip path, class and id.
     defs, css, clip_path, css_class, css_id,
@@ -849,12 +879,26 @@ typeface() -> string {
 // height `size`. Counters keep their winding — nonzero fill cuts the holes.
 // "" when no outline font could be loaded (callers degrade gracefully).
 text_paths(txt: string, x: float, y: float, size: float) -> string {
-    fh = _tp_font()
+    return text_paths_in(_tp_font(), txt, x, y, size)
+}
+
+// The same in a font of the caller's own, from font_open: an app of more
+// than one face holds each and names the one it draws in, where use_font
+// would change the one font of the process under every other caller.
+text_paths_in(fh: ptr, txt: string, x: float, y: float, size: float) -> string {
     if fh == null { return "" }
-    pp = text_polypath(txt, x, y, size)
+    pp = text_polypath_in(fh, txt, x, y, size)
     d = polypath.pp_to_path(pp)
     polypath.pp_free(pp)
     return d
+}
+
+// A TTF/TTC of the caller's, to draw text in with the _in calls: null when
+// it could not be read.
+font_open(path: string) -> ptr {
+    fh = font.font_load(path)
+    if font.font_ok(fh) == 1 { return fh }
+    return null
 }
 
 // The word as a POLYPATH — the same flattened glyph contours text_paths
@@ -864,8 +908,11 @@ text_paths(txt: string, x: float, y: float, size: float) -> string {
 // this once per (text, size) and map points each frame instead of
 // re-outlining the font. Caller frees with polypath.pp_free.
 text_polypath(txt: string, x: float, y: float, size: float) -> ptr {
+    return text_polypath_in(_tp_font(), txt, x, y, size)
+}
+
+text_polypath_in(fh: ptr, txt: string, x: float, y: float, size: float) -> ptr {
     pp = polypath.pp_new()
-    fh = _tp_font()
     if fh == null { return pp }
     sc = size / (font.font_upem(fh) * 1.0)
     ow = font.font_text_outlines(fh, txt, 4)
@@ -891,7 +938,10 @@ text_polypath(txt: string, x: float, y: float, size: float) -> ptr {
 // Advance width of txt at `size` (viewBox units), kerning included — the
 // layout companion to text_paths.
 text_paths_width(txt: string, size: float) -> float {
-    fh = _tp_font()
+    return text_paths_width_in(_tp_font(), txt, size)
+}
+
+text_paths_width_in(fh: ptr, txt: string, size: float) -> float {
     if fh == null { return 0.0 }
     return font.font_text_width(fh, txt) * size / (font.font_upem(fh) * 1.0)
 }
@@ -899,14 +949,16 @@ text_paths_width(txt: string, size: float) -> float {
 // How far the outline font rises above the baseline, and falls below it,
 // at `size` (viewBox units), from the face's own `hhea`: a line of
 // text_path type is their sum high, with its baseline the ascent down.
-text_paths_ascent(size: float) -> float {
-    fh = _tp_font()
+text_paths_ascent(size: float) -> float { return text_paths_ascent_in(_tp_font(), size) }
+
+text_paths_descent(size: float) -> float { return text_paths_descent_in(_tp_font(), size) }
+
+text_paths_ascent_in(fh: ptr, size: float) -> float {
     if fh == null { return 0.0 }
     return font.font_ascender(fh) * size / (font.font_upem(fh) * 1.0)
 }
 
-text_paths_descent(size: float) -> float {
-    fh = _tp_font()
+text_paths_descent_in(fh: ptr, size: float) -> float {
     if fh == null { return 0.0 }
     return font.font_descender(fh) * size / (font.font_upem(fh) * 1.0)
 }

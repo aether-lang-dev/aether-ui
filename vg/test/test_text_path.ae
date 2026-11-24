@@ -87,6 +87,17 @@ main() {
     assert_near("ascent at 2048 is the ascender", vg.text_paths_ascent(2048.0), 1901.0, 0.01)
     assert_near("descent at 2048 is the descender, as a depth", vg.text_paths_descent(2048.0), 483.0, 0.01)
 
+    println("-- a font of the caller's own: the same type, the process font left alone")
+    fh = vg.font_open("fonts/DejaVuSans-Bold.ttf")
+    assert_true("font_open reads the vendored face", fh != null)
+    assert_true("font_open of no file is null", vg.font_open("fonts/no-such.ttf") == null)
+    assert_near("width in it is the process font's", vg.text_paths_width_in(fh, "AV", 100.0),
+                vg.text_paths_width("AV", 100.0), 0.001)
+    assert_near("ascent in it", vg.text_paths_ascent_in(fh, 2048.0), 1901.0, 0.01)
+    assert_eq_str("outlines in it", vg.text_paths_in(fh, "Hi", 0.0, 0.0, 20.0),
+                  vg.text_paths("Hi", 0.0, 0.0, 20.0))
+    assert_eq_str("none when there is no font", vg.text_paths_in(null, "Hi", 0.0, 0.0, 20.0), "")
+
     println("-- the DSL element IS a path")
     id = transform.affine_identity()
     m = context.mapping_new(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0, id)
