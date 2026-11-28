@@ -1149,7 +1149,7 @@ css(_ctx: ptr, text: string) {
 attr_f(a: ptr, key: string) -> float {
     v, _af = map.get_string(a, key)
     if v == null { return 0.0 }
-    parsed, e = string.to_double(v)
+    parsed, e = string.to_float(v)
     if e != "" { return 0.0 }
     return parsed
 }

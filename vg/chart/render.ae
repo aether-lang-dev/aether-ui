@@ -146,7 +146,7 @@ theme_node(n: *cn.CtNode, letter0: int, pie: int) {
         if string.starts_with(st, "stroke-width:") == 1 {
             v = string.trim(string.substring(st, 13, string.length(st)))
             if string.ends_with(v, "px") == 1 { v = string.substring(v, 0, string.length(v) - 2) }
-            d, err = string.to_double(string.trim(v))
+            d, err = string.to_float(string.trim(v))
             if string.length(err) == 0 { sw = d }
         }
         set_if_absent(n, "stroke-width", jv.num(sw))
@@ -291,9 +291,9 @@ draw_node(_ctx: ptr, n: *cn.CtNode, hook: ptr, inherited: string) {
 // A dy value: "1.2em", "-0.6em" or px.
 em_of(v: string, size: float) -> float {
     if string.ends_with(v, "em") == 1 {
-        d, _e = string.to_double(string.substring(v, 0, string.length(v) - 2))
+        d, _e = string.to_float(string.substring(v, 0, string.length(v) - 2))
         return d * size
     }
-    d2, _e2 = string.to_double(v)
+    d2, _e2 = string.to_float(v)
     return d2
 }

@@ -114,7 +114,7 @@ refresh_element_bindings(ctx: ptr, el: ptr) -> int {
             width_v, _ = map.get_string(stroke_map, "width")
             sw = 0.0
             if string.length(width_v) > 0 {
-                sw_parsed, _ = string.to_double(width_v)
+                sw_parsed, _ = string.to_float(width_v)
                 sw = sw_parsed
             }
             element.element_set_stroke(el, color_v, sw)
@@ -257,7 +257,7 @@ recompute_bounds(ctx: ptr, el: ptr, pos_map: ptr) {
 merge_geo(el: ptr, pos_map: ptr, key: string, slot: int) {
     v, _ = map.get_string(pos_map, key)
     if string.length(v) > 0 {
-        parsed, e = string.to_double(v)
+        parsed, e = string.to_float(v)
         if e == "" {
             element.element_set_geo(el, slot, parsed)
         }

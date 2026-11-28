@@ -179,13 +179,13 @@ parse_color_to_rgba(css_color: string) -> *RGBA {
                     s0 = regex.find_all_start(fa, 0); e0 = regex.find_all_end(fa, 0)
                     s1 = regex.find_all_start(fa, 1); e1 = regex.find_all_end(fa, 1)
                     s2 = regex.find_all_start(fa, 2); e2 = regex.find_all_end(fa, 2)
-                    r_v, _ = string.to_double(string.substring(c, s0, e0))
-                    g_v, _ = string.to_double(string.substring(c, s1, e1))
-                    b_v, _ = string.to_double(string.substring(c, s2, e2))
+                    r_v, _ = string.to_float(string.substring(c, s0, e0))
+                    g_v, _ = string.to_float(string.substring(c, s1, e1))
+                    b_v, _ = string.to_float(string.substring(c, s2, e2))
                     a_v = 1.0
                     if ncomp >= 4 {
                         s3 = regex.find_all_start(fa, 3); e3 = regex.find_all_end(fa, 3)
-                        a_v, _ = string.to_double(string.substring(c, s3, e3))
+                        a_v, _ = string.to_float(string.substring(c, s3, e3))
                     }
                     regex.find_all_free(fa)
                     regex.free(re)
@@ -424,8 +424,8 @@ path_to_edges_scaled(path_str: string, off_x: float, off_y: float, scale: float,
             if n_nums >= 2 {
                 ns0 = regex.find_all_start(num_fa, 0); ne0 = regex.find_all_end(num_fa, 0)
                 ns1 = regex.find_all_start(num_fa, 1); ne1 = regex.find_all_end(num_fa, 1)
-                v0, _ = string.to_double(string.substring(args_str, ns0, ne0))
-                v1, _ = string.to_double(string.substring(args_str, ns1, ne1))
+                v0, _ = string.to_float(string.substring(args_str, ns0, ne0))
+                v1, _ = string.to_float(string.substring(args_str, ns1, ne1))
                 cx = v0 * scale + off_x; cy = v1 * scale + off_y
                 sx = cx; sy = cy
             }
@@ -434,8 +434,8 @@ path_to_edges_scaled(path_str: string, off_x: float, off_y: float, scale: float,
             if n_nums >= 2 {
                 ns0 = regex.find_all_start(num_fa, 0); ne0 = regex.find_all_end(num_fa, 0)
                 ns1 = regex.find_all_start(num_fa, 1); ne1 = regex.find_all_end(num_fa, 1)
-                v0, _ = string.to_double(string.substring(args_str, ns0, ne0))
-                v1, _ = string.to_double(string.substring(args_str, ns1, ne1))
+                v0, _ = string.to_float(string.substring(args_str, ns0, ne0))
+                v1, _ = string.to_float(string.substring(args_str, ns1, ne1))
                 ex = v0 * scale + off_x; ey = v1 * scale + off_y
                 append_edge(edges, count, cx, cy, ex, ey)
                 cx = ex; cy = ey
@@ -444,12 +444,12 @@ path_to_edges_scaled(path_str: string, off_x: float, off_y: float, scale: float,
         if cmd_char == 67 {   // 'C'
             if n_nums >= 6 {
                 read_at(args_str, num_fa, 0)
-                v0, _ = string.to_double(read_at(args_str, num_fa, 0))
-                v1, _ = string.to_double(read_at(args_str, num_fa, 1))
-                v2, _ = string.to_double(read_at(args_str, num_fa, 2))
-                v3, _ = string.to_double(read_at(args_str, num_fa, 3))
-                v4, _ = string.to_double(read_at(args_str, num_fa, 4))
-                v5, _ = string.to_double(read_at(args_str, num_fa, 5))
+                v0, _ = string.to_float(read_at(args_str, num_fa, 0))
+                v1, _ = string.to_float(read_at(args_str, num_fa, 1))
+                v2, _ = string.to_float(read_at(args_str, num_fa, 2))
+                v3, _ = string.to_float(read_at(args_str, num_fa, 3))
+                v4, _ = string.to_float(read_at(args_str, num_fa, 4))
+                v5, _ = string.to_float(read_at(args_str, num_fa, 5))
                 cp1x = v0 * scale + off_x; cp1y = v1 * scale + off_y
                 cp2x = v2 * scale + off_x; cp2y = v3 * scale + off_y
                 x3   = v4 * scale + off_x; y3   = v5 * scale + off_y

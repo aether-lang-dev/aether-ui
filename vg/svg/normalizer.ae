@@ -242,7 +242,7 @@ parse_path(d: string) -> ptr {
             fc = string_char_at(d, s2)
             if param_count(fc) >= 0 { ok = 0; break }  // hit a letter
             num_str = string.substring(d, s2, e2)
-            v, ve = string.to_double(num_str)
+            v, ve = string.to_float(num_str)
             if ve != "" { ok = 0; break }
             floatarr.set_unchecked(args, consumed, v)
             consumed = consumed + 1

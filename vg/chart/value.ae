@@ -333,12 +333,12 @@ bool_path(o: *JsValue, path: string) -> int {
 // ─── numbers ─────────────────────────────────────────────────────
 
 nan() -> float {
-    v, _e = string.to_double("NaN")
+    v, _e = string.to_float("NaN")
     return v
 }
 
 infinity() -> float {
-    v, _e = string.to_double("Infinity")
+    v, _e = string.to_float("Infinity")
     return v
 }
 
@@ -420,7 +420,7 @@ string_to_number(s0: string) -> float {
         i = i + 1
     }
     if digits == 0 { return nan() }
-    v, err = string.to_double(s)
+    v, err = string.to_float(s)
     if string.length(err) > 0 { return nan() }
     return v
 }
@@ -530,7 +530,7 @@ js_number(x: float) -> string {
             cpoint = point + 1
         }
         txt = layout_digits(strip_zeros(cdig), cpoint)
-        back, _be = string.to_double(txt)
+        back, _be = string.to_float(txt)
         if back == a {
             best = strip_zeros(cdig)
             point = cpoint

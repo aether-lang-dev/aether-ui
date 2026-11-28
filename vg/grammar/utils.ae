@@ -154,7 +154,7 @@ numeric_prefix(s: string) -> float {
         end = end + 1
     }
     if end == 0 { return 0.0 }
-    n, e = string.to_double(string.substring(s, 0, end))
+    n, e = string.to_float(string.substring(s, 0, end))
     if e != "" { return 0.0 }
     return n
 }
@@ -393,8 +393,8 @@ compute_path_bounds(path_str: string) -> *Bounds4 {
     while i + 1 < n {
         sx = regex.find_all_start(fa, i); ex = regex.find_all_end(fa, i)
         sy = regex.find_all_start(fa, i + 1); ey = regex.find_all_end(fa, i + 1)
-        px, _ = string.to_double(string.substring(path_str, sx, ex))
-        py, _ = string.to_double(string.substring(path_str, sy, ey))
+        px, _ = string.to_float(string.substring(path_str, sx, ex))
+        py, _ = string.to_float(string.substring(path_str, sy, ey))
         if has == 0 {
             mnx = px; mny = py; mxx = px; mxy = py
             has = 1

@@ -411,7 +411,7 @@ read_param(sc: *CtScan, flag: int) -> float {
         scan_fail(sc)
         return 0.0
     }
-    v, _e = string.to_double(string.substring(sc.s, sc.i, sc.i + l))
+    v, _e = string.to_float(string.substring(sc.s, sc.i, sc.i + l))
     sc.i = sc.i + l
     return v
 }

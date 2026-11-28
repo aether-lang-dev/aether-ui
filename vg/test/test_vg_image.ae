@@ -37,7 +37,7 @@ assert_near(label: string, got: float, want: float) {
     else { println("  FAIL: ${label}: got ${got} want ${want}"); exit(1) }
 }
 opt_f(bk: ptr, i: int, key: string) -> float {
-    v, e = string.to_double(record.backend_opt_get(bk, i, key))
+    v, e = string.to_float(record.backend_opt_get(bk, i, key))
     if e != "" { return -1.0 }
     return v
 }

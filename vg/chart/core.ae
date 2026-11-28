@@ -237,7 +237,7 @@ quantity(input: *jv.JsValue) -> *CtQuantity {
             q.value = 0.0
             return q
         }
-        v, _e = string.to_double(string.substring(s, 0, i))
+        v, _e = string.to_float(string.substring(s, 0, i))
         q.value = v
         j = i
         while j < n && jv.is_space(string.char_at(s, j)) == 1 { j = j + 1 }

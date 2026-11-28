@@ -206,7 +206,7 @@ opt_f(opts: ptr, key: string, dflt: float) -> float {
     v, _ = map.get_string(opts, key)
     if v == null { return dflt }
     if string.length(v) == 0 { return dflt }
-    parsed, e = string.to_double(v)
+    parsed, e = string.to_float(v)
     if e != "" { return dflt }
     return parsed
 }
@@ -448,11 +448,11 @@ apply_gradient(cid: int, opts: ptr, prefix: string, grad_type: string, line_widt
         if string.length(tok) > 0 {
             parts = string_split(tok, ",")
             if string_array_size(parts) >= 5 {
-                off, _  = string.to_double(string_array_get(parts, 0))
-                rr, _   = string.to_double(string_array_get(parts, 1))
-                gg, _   = string.to_double(string_array_get(parts, 2))
-                bb, _   = string.to_double(string_array_get(parts, 3))
-                aa, _   = string.to_double(string_array_get(parts, 4))
+                off, _  = string.to_float(string_array_get(parts, 0))
+                rr, _   = string.to_float(string_array_get(parts, 1))
+                gg, _   = string.to_float(string_array_get(parts, 2))
+                bb, _   = string.to_float(string_array_get(parts, 3))
+                aa, _   = string.to_float(string_array_get(parts, 4))
                 floatarr.set_unchecked(offsets, valid, off)
                 floatarr.set_unchecked(rgba, valid * 4 + 0, rr / 255.0)
                 floatarr.set_unchecked(rgba, valid * 4 + 1, gg / 255.0)
@@ -556,8 +556,8 @@ replay_path(cid: int, pts: string) {
         if comma > 0 {
             xs = string.substring(tok, 0, comma)
             ys = string.substring(tok, comma + 1, string.length(tok))
-            x, ex = string.to_double(xs)
-            y, ey = string.to_double(ys)
+            x, ex = string.to_float(xs)
+            y, ey = string.to_float(ys)
             if ex == "" {
                 if ey == "" {
                     if pen_down == 0 {

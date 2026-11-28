@@ -248,7 +248,7 @@ parse_one_stop(node: ptr) -> *GradientStop {
             opacity_str = "1"
         }
     }
-    opacity, _ = string.to_double(opacity_str)
+    opacity, _ = string.to_float(opacity_str)
     if opacity < 1.0 {
         color = utils.apply_opacity_to_color(color, opacity)
     }
@@ -426,13 +426,13 @@ parse_std_deviation(s: string, out: *FilterDef) {
     n = regex.find_all_count(fa)
     if n >= 1 {
         s0 = regex.find_all_start(fa, 0); e0 = regex.find_all_end(fa, 0)
-        sx, _ = string.to_double(string.substring(s, s0, e0))
+        sx, _ = string.to_float(string.substring(s, s0, e0))
         out.blur_sigma_x = sx
         out.blur_sigma_y = sx   // default y = x
     }
     if n >= 2 {
         s1 = regex.find_all_start(fa, 1); e1 = regex.find_all_end(fa, 1)
-        sy, _ = string.to_double(string.substring(s, s1, e1))
+        sy, _ = string.to_float(string.substring(s, s1, e1))
         out.blur_sigma_y = sy
     }
     regex.find_all_free(fa)

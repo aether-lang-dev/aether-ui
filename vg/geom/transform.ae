@@ -328,7 +328,7 @@ parse_arg_list(arg_str: string, out: *Affine) -> int {
         s = regex.find_all_start(fa, i)
         en = regex.find_all_end(fa, i)
         tok = string.substring(arg_str, s, en)
-        v, _ = string.to_double(tok)
+        v, _ = string.to_float(tok)
         if i == 0 { out.a = v }
         if i == 1 { out.b = v }
         if i == 2 { out.c = v }

@@ -51,7 +51,7 @@ mk_ctx_2x() -> ptr {
 
 parse_opt(bk: ptr, i: int, key: string) -> float {
     s = record.backend_opt_get(bk, i, key)
-    v, _ = string.to_double(s)
+    v, _ = string.to_float(s)
     return v
 }
 

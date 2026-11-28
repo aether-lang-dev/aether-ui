@@ -1263,7 +1263,7 @@ is_bold(fw: string) -> int {
     lower = string.to_lower(fw)
     if string.contains(lower, "bold") == 1 { return 1 }
     // Numeric: 600+ → bold.
-    n, e = string.to_double(fw)
+    n, e = string.to_float(fw)
     if e == "" {
         if n >= 600.0 { return 1 }
     }

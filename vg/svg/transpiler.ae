@@ -931,7 +931,7 @@ emit_text(sb: ptr, node: ptr, indent: int) {
 // when absent/unparseable (→ engine default).
 font_size_or_zero(fs: string) -> string {
     if string.length(fs) == 0 { return "0" }
-    v, e = string.to_double(string.trim(strip_px(fs)))
+    v, e = string.to_float(string.trim(strip_px(fs)))
     if e != "" { return "0" }
     return string.from_float(v)
 }
@@ -986,7 +986,7 @@ ellipse_d(node: ptr) -> string {
 
 ellipse_attr(node: ptr, key: string) -> float {
     if parser.node_has_attr(node, key) == 0 { return 0.0 }
-    v, e = string.to_double(string.trim(parser.node_attr(node, key)))
+    v, e = string.to_float(string.trim(parser.node_attr(node, key)))
     if e != "" { return 0.0 }
     return v
 }
@@ -1122,12 +1122,12 @@ compose_opacity(inherited: string, node: ptr) -> string {
     own = style_attr(node, "opacity")
     iv = 1.0
     if string.length(inherited) > 0 {
-        v, e = string.to_double(inherited)
+        v, e = string.to_float(inherited)
         if e == "" { iv = v }
     }
     ov = 1.0
     if string.length(own) > 0 {
-        v2, e2 = string.to_double(own)
+        v2, e2 = string.to_float(own)
         if e2 == "" { ov = v2 }
     }
     // Fold the shape's own fill-opacity into the element opacity. The flatten
@@ -1139,7 +1139,7 @@ compose_opacity(inherited: string, node: ptr) -> string {
     fov = 1.0
     fo = style_attr(node, "fill-opacity")
     if string.length(fo) > 0 {
-        v3, e3 = string.to_double(fo)
+        v3, e3 = string.to_float(fo)
         if e3 == "" { fov = v3 }
     }
     prod = iv * ov * fov
@@ -1318,7 +1318,7 @@ normalize_d_to_string(d: string) -> string {
 is_numeric(s: string) -> int {
     t = string.trim(s)
     if string.length(t) == 0 { return 0 }
-    _v, e = string.to_double(t)
+    _v, e = string.to_float(t)
     if e != "" { return 0 }
     return 1
 }

@@ -243,7 +243,7 @@ query_matches(query: string, width: float) -> int {
 px_value(s: string) -> float {
     t = string.trim(s)
     if string.ends_with(t, "px") == 1 { t = string.substring(t, 0, string.length(t) - 2) }
-    v, err = string.to_double(string.trim(t))
+    v, err = string.to_float(string.trim(t))
     if string.length(err) > 0 { return jv.nan() }
     return v
 }
@@ -1117,7 +1117,7 @@ css_width(c: *CtChart, slice_class: string) -> *jv.JsValue {
         if (ch < 48 || ch > 57) && ch != 46 { return jv.undef() }
         i = i + 1
     }
-    v, _e = string.to_double(body)
+    v, _e = string.to_float(body)
     return jv.num(v)
 }
 

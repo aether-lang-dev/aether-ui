@@ -24,7 +24,7 @@ assert_eq_str(label: string, got: string, want: string) {
 
 assert_opt_near(label: string, b: ptr, i: int, key: string, want: float) {
     s = record.backend_opt_get(b, i, key)
-    got, e = string.to_double(s)
+    got, e = string.to_float(s)
     if e != "" { println("  FAIL: ${label}: parse '${s}'"); exit(1) }
     d = got - want
     if d < 0.0 { d = 0.0 - d }

@@ -99,7 +99,7 @@ union_into(a: *Bounds, b: *Bounds) {
 parse_length_to_px(v: string) -> float {
     s = string.trim(v)
     if string.length(s) == 0 { return 0.0 }
-    // Extract the leading numeric prefix manually — string.to_double
+    // Extract the leading numeric prefix manually — string.to_float
     // is strict (rejects trailing garbage), but TS parseFloat is
     // lenient (consumes prefix). Walk while char is digit/./+/-/e/E.
     len = string.length(s)
@@ -118,7 +118,7 @@ parse_length_to_px(v: string) -> float {
     }
     if end == 0 { return 0.0 }
     num_part = string.substring(s, 0, end)
-    n, e = string.to_double(num_part)
+    n, e = string.to_float(num_part)
     if e != "" { return 0.0 }
     if string.ends_with(s, "cm") == 1 { return n * 37.7953 }
     if string.ends_with(s, "mm") == 1 { return n * 3.77953 }
@@ -305,8 +305,8 @@ poly_bounds(node: ptr, t: ptr, sw: float) -> *Bounds {
         e_x = std_regex_find_all_end_local(fa, i)
         s_y = std_regex_find_all_start_local(fa, i + 1)
         e_y = std_regex_find_all_end_local(fa, i + 1)
-        px, _ = string.to_double(string.substring(pts, s_x, e_x))
-        py, _ = string.to_double(string.substring(pts, s_y, e_y))
+        px, _ = string.to_float(string.substring(pts, s_x, e_x))
+        py, _ = string.to_float(string.substring(pts, s_y, e_y))
         if has == 0 {
             min_x = px; min_y = py; max_x = px; max_y = py
             has = 1

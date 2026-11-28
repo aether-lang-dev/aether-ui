@@ -17,7 +17,7 @@ main() {
     clock = analog_clock.clock_time()
     fixed = os_getenv("AEVG_CLOCK_SECS")
     if string.length(fixed) > 0 {
-        seconds, err = string.to_double(fixed)
+        seconds, err = string.to_float(fixed)
         if err == "" { clock.secs = seconds }
     }
 

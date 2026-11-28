@@ -158,7 +158,7 @@ numeric_prefix(s: string) -> float {
         end = end + 1
     }
     if end == 0 { return 0.0 }
-    n, e = string.to_double(string.substring(s, 0, end))
+    n, e = string.to_float(string.substring(s, 0, end))
     if e != "" { return 0.0 }
     return n
 }
